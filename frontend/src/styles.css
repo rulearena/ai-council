@@ -1,31 +1,254 @@
+@import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=JetBrains+Mono:wght@400;500;600&family=Noto+Sans+TC:wght@400;500;600;700&display=swap');
+
+:root {
+  /* Dark command-center surface layers, darkest to lightest. */
+  --color-bg: #0b0e14;
+  --color-sidebar-bg: #0e1218;
+  --color-input-bg: #0e1218;
+  --color-surface: #131722;
+  --color-surface-muted: #171c27;
+  --color-bg-elevated: #1a2029;
+
+  --color-border: #232b38;
+  --color-border-strong: #2e3848;
+  --color-border-faint: rgba(255, 255, 255, 0.06);
+
+  --color-text: #e6eaf2;
+  --color-text-secondary: #9aa5b5;
+  /* #67728a (the literal spec value) only clears 3.7:1 on --color-surface, short of
+     WCAG AA 4.5:1 for normal text; bumped one notch lighter so muted copy stays readable. */
+  --color-text-muted: #7e88a0;
+
+  --color-role-blue: #4d8dff;
+  --color-role-blue-glow: rgba(77, 141, 255, 0.35);
+  --color-role-blue-tint: rgba(77, 141, 255, 0.1);
+
+  --color-role-red: #ff6b5e;
+  --color-role-red-glow: rgba(255, 107, 94, 0.35);
+  --color-role-red-tint: rgba(255, 107, 94, 0.1);
+
+  --color-role-judge: #e8b44c;
+  --color-role-judge-glow: rgba(232, 180, 76, 0.35);
+  --color-role-judge-tint: rgba(232, 180, 76, 0.1);
+
+  --color-running: #4d8dff;
+  --color-running-tint: rgba(77, 141, 255, 0.14);
+  --color-running-glow: rgba(77, 141, 255, 0.6);
+  --color-completed: #3dd68c;
+  --color-completed-tint: rgba(61, 214, 140, 0.14);
+  --color-failed: #ff6b5e;
+  --color-failed-tint: rgba(255, 107, 94, 0.14);
+  --color-waiting: #67728a;
+  --color-waiting-tint: rgba(103, 114, 138, 0.16);
+
+  /* Spec calls for #3b82f6, but white button text on it only reaches 3.7:1 (fails
+     WCAG AA 4.5:1 for the 13px/600-weight button label). Using Tailwind's next step
+     down keeps the same "vivid blue primary" read while white text clears 5.2:1. */
+  --color-primary: #2563eb;
+  --color-primary-hover: #3b82f6;
+  --color-danger: #e5484d;
+  --color-danger-hover: #ff6169;
+  --color-danger-tint: rgba(229, 72, 77, 0.14);
+
+  --color-focus-ring: #4d8dff;
+  --color-pin: #f0c05a;
+
+  --radius-sm: 8px;
+  --radius-lg: 10px;
+  --radius-pill: 999px;
+
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3);
+  --shadow-md: 0 8px 24px rgba(0, 0, 0, 0.55);
+
+  --transition-fast: 160ms ease;
+
+  --font-display: "Space Grotesk", "Noto Sans TC", sans-serif;
+  --font-body: "Noto Sans TC", Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont,
+    "Segoe UI", sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
 * {
   box-sizing: border-box;
+  scrollbar-width: thin;
+  scrollbar-color: #2a3342 transparent;
+}
+
+*::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+*::-webkit-scrollbar-thumb {
+  background-color: #2a3342;
+  border-radius: var(--radius-pill);
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+
+*::-webkit-scrollbar-thumb:hover {
+  background-color: #3a4558;
+}
+
+::selection {
+  background: rgba(77, 141, 255, 0.35);
+  color: var(--color-text);
 }
 
 body {
   margin: 0;
-  font-family:
-    Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-  color: #172026;
-  background: #f4f6f8;
+  font-family: var(--font-body);
+  color: var(--color-text);
+  background: var(--color-bg);
 }
 
 button,
 input,
-select {
+select,
+textarea {
   font: inherit;
 }
 
-button {
-  border: 1px solid #c7d0d9;
-  background: #ffffff;
-  color: #172026;
+input,
+select,
+textarea {
+  min-width: 0;
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--color-input-bg);
+  color: var(--color-text);
+  padding: 8px 10px;
+  transition: border-color var(--transition-fast), box-shadow var(--transition-fast);
+}
+
+input::placeholder,
+textarea::placeholder {
+  color: var(--color-text-muted);
+}
+
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible {
+  outline: 2px solid var(--color-focus-ring);
+  outline-offset: 1px;
+  border-color: var(--color-focus-ring);
+}
+
+/* Button system: primary / secondary / danger / ghost, all with hover + focus-visible states. */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 36px;
+  padding: 7px 14px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  font-weight: 600;
+  font-size: 13px;
+  line-height: 1.3;
   cursor: pointer;
+  transition: color var(--transition-fast), background-color var(--transition-fast),
+    border-color var(--transition-fast), box-shadow var(--transition-fast);
+}
+
+.btn:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.btn:focus-visible {
+  outline: 2px solid var(--color-focus-ring);
+  outline-offset: 2px;
+}
+
+.btn-primary {
+  border-color: var(--color-primary);
+  background: var(--color-primary);
+  color: #f5f8ff;
+}
+
+.btn-primary:hover:not(:disabled) {
+  background: var(--color-primary-hover);
+  border-color: var(--color-primary-hover);
+}
+
+.btn-secondary {
+  border-color: var(--color-border-strong);
+  background: transparent;
+  color: var(--color-text);
+}
+
+.btn-secondary:hover:not(:disabled) {
+  background: var(--color-bg-elevated);
+  border-color: var(--color-text-muted);
+}
+
+.btn-danger {
+  border-color: rgba(229, 72, 77, 0.4);
+  background: var(--color-danger-tint);
+  color: var(--color-danger-hover);
+}
+
+.btn-danger:hover:not(:disabled) {
+  background: rgba(229, 72, 77, 0.24);
+  border-color: var(--color-danger);
+}
+
+.btn-ghost {
+  border-color: transparent;
+  background: transparent;
+  color: var(--color-text-secondary);
+}
+
+.btn-ghost:hover:not(:disabled) {
+  background: var(--color-bg-elevated);
+  color: var(--color-text);
+}
+
+.btn-sm {
+  min-height: 32px;
+  padding: 5px 10px;
+  font-size: 12px;
+}
+
+.btn-icon {
+  min-height: 32px;
+  min-width: 32px;
+  padding: 0;
+  border-radius: var(--radius-sm);
+}
+
+/* Buttons not yet migrated to explicit variants keep a sane default look. */
+button {
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface);
+  color: var(--color-text);
+  cursor: pointer;
+  transition: color var(--transition-fast), background-color var(--transition-fast),
+    border-color var(--transition-fast), box-shadow var(--transition-fast);
 }
 
 button:disabled {
   cursor: not-allowed;
-  opacity: 0.55;
+  opacity: 0.5;
+}
+
+button:focus-visible {
+  outline: 2px solid var(--color-focus-ring);
+  outline-offset: 2px;
 }
 
 .app-shell {
@@ -37,8 +260,8 @@ button:disabled {
 
 .sidebar {
   grid-row: 1 / span 2;
-  border-right: 1px solid #d6dde4;
-  background: #ffffff;
+  border-right: 1px solid var(--color-border);
+  background: var(--color-sidebar-bg);
   padding: 16px;
   overflow: auto;
 }
@@ -54,14 +277,18 @@ h1,
 h2 {
   margin: 0;
   letter-spacing: 0;
+  font-family: var(--font-display);
+  color: var(--color-text);
 }
 
 h1 {
   font-size: 20px;
+  font-weight: 700;
 }
 
 h2 {
-  font-size: 16px;
+  font-size: 15px;
+  font-weight: 600;
 }
 
 .create-box {
@@ -69,17 +296,6 @@ h2 {
   grid-template-columns: 1fr auto;
   gap: 8px;
   margin: 16px 0;
-}
-
-.create-box input,
-.meeting-filters input,
-.meeting-filters select,
-.toolbar select,
-.sequence-panel select {
-  min-width: 0;
-  border: 1px solid #c7d0d9;
-  background: #fff;
-  padding: 8px;
 }
 
 .meeting-filters {
@@ -91,9 +307,18 @@ h2 {
 .meeting-row {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
-  align-items: stretch;
+  align-items: start;
   gap: 6px;
   margin-bottom: 8px;
+}
+
+.meeting-row .pin-meeting-button {
+  margin-top: 2px;
+}
+
+.meeting-row .edit-tags-button,
+.meeting-row .delete-meeting-button {
+  width: 100%;
 }
 
 .meeting-item {
@@ -102,29 +327,51 @@ h2 {
   width: 100%;
   padding: 10px;
   text-align: left;
-  border-radius: 6px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: var(--color-surface);
+  position: relative;
+  transition: background-color var(--transition-fast), border-color var(--transition-fast),
+    box-shadow var(--transition-fast);
 }
 
-.delete-meeting-button {
-  align-self: stretch;
-  padding: 0 8px;
-  border-color: #d8a5a5;
-  border-radius: 6px;
-  color: #a52a2a;
+.meeting-item:hover:not(.active) {
+  background: var(--color-bg-elevated);
+  border-color: var(--color-border);
 }
 
 .meeting-item.active {
-  border-color: #3a4a5c;
-  background: #edf0f3;
+  border-color: transparent;
+  background: var(--color-role-blue-tint);
+  box-shadow: inset 3px 0 0 var(--color-role-blue);
+}
+
+.meeting-item-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 600;
+}
+
+.pin-indicator {
+  color: var(--color-pin);
+  flex-shrink: 0;
 }
 
 .meeting-item small {
-  color: #607080;
+  color: var(--color-text-muted);
   overflow-wrap: anywhere;
 }
 
+.meeting-id-text {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.01em;
+}
+
 .meeting-item strong {
-  color: #172026;
+  color: var(--color-text-secondary);
+  font-family: var(--font-display);
   font-size: 12px;
   font-weight: 600;
 }
@@ -134,14 +381,84 @@ h2 {
 }
 
 .status-badge {
-  border: 1px solid #c7d0d9;
-  border-radius: 999px;
-  padding: 2px 8px;
-  color: #4a5a68;
-  background: #f7f9fb;
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-pill);
+  padding: 2px 9px;
+  color: var(--color-text-secondary);
+  background: var(--color-bg-elevated);
+  font-family: var(--font-display);
   font-size: 12px;
   font-style: normal;
+  font-weight: 600;
   line-height: 1.4;
+}
+
+.status-badge[data-status="open"],
+.status-badge[data-status="completed"] {
+  border-color: transparent;
+  background: var(--color-completed-tint);
+  color: var(--color-completed);
+}
+
+.status-badge[data-status="closed"] {
+  border-color: transparent;
+  background: var(--color-waiting-tint);
+  color: var(--color-waiting);
+}
+
+.status-badge[data-status="cancelled"],
+.status-badge[data-status="failed"] {
+  border-color: transparent;
+  background: var(--color-failed-tint);
+  color: var(--color-failed);
+}
+
+.status-badge[data-status="running"] {
+  border-color: transparent;
+  background: var(--color-running-tint);
+  color: var(--color-running);
+}
+
+.status-badge[data-status="waiting"] {
+  border-color: transparent;
+  background: var(--color-waiting-tint);
+  color: var(--color-waiting);
+}
+
+/* Small colored dot indicator used next to model/operation status text. */
+.status-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  margin-right: 6px;
+  border-radius: 50%;
+  background: var(--color-waiting);
+  vertical-align: middle;
+}
+
+.status-dot[data-status="available"],
+.status-dot[data-status="completed"] {
+  background: var(--color-completed);
+}
+
+.status-dot[data-status="running"] {
+  background: var(--color-running);
+  animation: dot-glow-pulse 1.6s ease-in-out infinite;
+}
+
+.status-dot[data-status="unavailable"],
+.status-dot[data-status="failed"],
+.status-dot[data-status="cancelled"] {
+  background: var(--color-failed);
+}
+
+.status-dot[data-status="unknown"],
+.status-dot[data-status="idle"],
+.status-dot[data-status="waiting"],
+.status-dot[data-status="closed"] {
+  background: var(--color-waiting);
 }
 
 .transcript-search-panel {
@@ -151,19 +468,6 @@ h2 {
   gap: 8px;
   min-width: 0;
   padding: 16px 16px 0;
-}
-
-.transcript-search-panel input {
-  min-width: 0;
-  border: 1px solid #c7d0d9;
-  background: #ffffff;
-  padding: 8px;
-}
-
-.transcript-search-panel button {
-  min-height: 36px;
-  padding: 7px 12px;
-  border-radius: 6px;
 }
 
 .transcript-search-results {
@@ -185,16 +489,16 @@ h2 {
 }
 
 .transcript-search-results small {
-  color: #607080;
+  color: var(--color-text-muted);
   overflow-wrap: anywhere;
 }
 
 .workspace {
   display: grid;
-  grid-template-rows: auto auto auto auto auto auto 1fr auto;
-  gap: 12px;
+  grid-template-rows: auto auto auto auto auto auto auto auto 1fr auto;
+  gap: 16px;
   min-width: 0;
-  padding: 16px;
+  padding: 20px;
 }
 
 .toolbar {
@@ -202,16 +506,38 @@ h2 {
   flex-wrap: wrap;
   align-items: end;
   gap: 12px;
-  padding-bottom: 12px;
-  border-bottom: 1px solid #d6dde4;
+  padding: 16px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  background: var(--color-surface);
+  box-shadow: var(--shadow-sm);
 }
 
-.toolbar label {
+.model-slot {
   display: grid;
-  gap: 4px;
+  gap: 6px;
   min-width: 230px;
-  color: #4a5a68;
+  padding: 10px 12px;
+  border-left: 3px solid var(--color-border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface-muted);
+  color: var(--color-text-secondary);
   font-size: 13px;
+}
+
+.model-slot.role-blue {
+  border-left-color: var(--color-role-blue);
+  background: var(--color-role-blue-tint);
+}
+
+.model-slot.role-red {
+  border-left-color: var(--color-role-red);
+  background: var(--color-role-red-tint);
+}
+
+.model-slot.role-judge {
+  border-left-color: var(--color-role-judge);
+  background: var(--color-role-judge-tint);
 }
 
 .model-control {
@@ -220,42 +546,44 @@ h2 {
   gap: 6px;
 }
 
-.toolbar button,
-.create-box button,
-.sidebar-header button {
-  min-height: 36px;
-  padding: 7px 12px;
-  border-radius: 6px;
+.toolbar-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
 }
 
 .error {
   margin: 0;
   padding: 10px 12px;
-  border: 1px solid #e09a9a;
-  background: #fff1f1;
-  color: #8a1f1f;
+  border: 1px solid rgba(229, 72, 77, 0.4);
+  border-radius: var(--radius-sm);
+  background: var(--color-danger-tint);
+  color: #ff9a93;
 }
 
 .model-test-status {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
-  color: #4a5a68;
+  color: var(--color-text-secondary);
   font-size: 13px;
 }
 
 .model-test-status span {
-  display: grid;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
   gap: 3px;
-  border: 1px solid #d6dde4;
-  border-radius: 6px;
-  background: #ffffff;
-  padding: 6px 8px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface);
+  padding: 6px 10px;
 }
 
 .model-test-status small,
 .model-test-status em {
-  color: #607080;
+  color: var(--color-text-muted);
   font-size: 12px;
   font-style: normal;
   overflow-wrap: anywhere;
@@ -265,15 +593,148 @@ h2 {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
-  color: #4a5a68;
+  color: var(--color-text-secondary);
   font-size: 13px;
 }
 
 .operation-status span {
-  border: 1px solid #d6dde4;
-  border-radius: 6px;
-  background: #ffffff;
-  padding: 6px 8px;
+  display: flex;
+  align-items: center;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface);
+  padding: 6px 10px;
+}
+
+/* Role status cards: live, self-updating "who's thinking right now" row. The role accent
+   on the top edge is a permanent identity marker; only the "thinking" glow is animated,
+   to keep the dark theme from tipping into cyberpunk noise. */
+.role-status-row {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--space-4);
+}
+
+.role-status-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  min-width: 0;
+  padding: var(--space-4);
+  border: 1px solid var(--color-border);
+  border-top: 3px solid var(--role-accent, var(--color-border-strong));
+  border-radius: var(--radius-lg);
+  background: var(--color-surface);
+  box-shadow: var(--shadow-sm);
+  transition: border-color var(--transition-fast), box-shadow var(--transition-fast),
+    background-color var(--transition-fast);
+}
+
+.role-status-card.role-blue {
+  --role-accent: var(--color-role-blue);
+  --role-glow: var(--color-role-blue-glow);
+}
+
+.role-status-card.role-red {
+  --role-accent: var(--color-role-red);
+  --role-glow: var(--color-role-red-glow);
+}
+
+.role-status-card.role-judge {
+  --role-accent: var(--color-role-judge);
+  --role-glow: var(--color-role-judge-glow);
+}
+
+.role-status-card[data-status="waiting"] {
+  background: var(--color-surface-muted);
+  color: var(--color-text-muted);
+}
+
+.role-status-card[data-status="thinking"] {
+  animation: card-glow-breathe 2.5s ease-in-out infinite;
+}
+
+.role-status-card[data-status="failed"] {
+  border-color: var(--color-failed);
+  background: var(--color-failed-tint);
+}
+
+.role-status-card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.role-status-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border-radius: var(--radius-pill);
+  padding: 3px 10px;
+  font-family: var(--font-display);
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--color-waiting);
+  background: var(--color-waiting-tint);
+}
+
+.role-status-pill[data-status="thinking"] {
+  color: var(--color-running);
+  background: var(--color-running-tint);
+}
+
+.role-status-pill[data-status="completed"] {
+  color: var(--color-completed);
+  background: var(--color-completed-tint);
+}
+
+.role-status-pill[data-status="failed"] {
+  color: var(--color-failed);
+  background: var(--color-failed-tint);
+}
+
+.pill-check-icon {
+  flex-shrink: 0;
+}
+
+.role-status-card-body {
+  min-width: 0;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.role-status-summary {
+  margin: 0;
+  color: var(--color-text);
+  display: -webkit-box;
+  -webkit-line-clamp: 4;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+}
+
+.role-status-recommendation {
+  margin: 8px 0 0;
+  color: var(--color-text-secondary);
+  overflow-wrap: anywhere;
+}
+
+.role-status-time {
+  display: block;
+  margin-top: 8px;
+  color: var(--color-text-muted);
+}
+
+.role-status-error {
+  margin: 0 0 10px;
+  color: var(--color-failed);
+  overflow-wrap: anywhere;
+}
+
+.role-status-placeholder {
+  margin: 0;
+  color: var(--color-text-muted);
 }
 
 .chair-panel {
@@ -287,30 +748,13 @@ h2 {
   min-height: 74px;
   min-width: 0;
   resize: vertical;
-  border: 1px solid #c7d0d9;
-  border-radius: 6px;
   padding: 10px;
-  background: #ffffff;
-  color: #172026;
-  font: inherit;
-}
-
-.chair-panel button {
-  min-height: 40px;
-  padding: 8px 12px;
-  border-radius: 6px;
 }
 
 .role-actions {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
-}
-
-.role-actions button {
-  min-height: 36px;
-  padding: 7px 12px;
-  border-radius: 6px;
 }
 
 .sequence-panel {
@@ -324,21 +768,15 @@ h2 {
   display: grid;
   gap: 4px;
   min-width: 260px;
-  color: #4a5a68;
+  color: var(--color-text-secondary);
   font-size: 13px;
-}
-
-.sequence-panel button {
-  min-height: 36px;
-  padding: 7px 12px;
-  border-radius: 6px;
 }
 
 .main-grid {
   display: grid;
   grid-template-columns: minmax(300px, 1.1fr) minmax(300px, 0.9fr);
   min-height: 0;
-  gap: 12px;
+  gap: 16px;
 }
 
 .timeline,
@@ -346,17 +784,34 @@ h2 {
 .role-output-panel,
 .transcript {
   min-width: 0;
-  border: 1px solid #d6dde4;
-  border-radius: 8px;
-  background: #ffffff;
-  padding: 14px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  background: var(--color-surface);
+  box-shadow: var(--shadow-sm);
+  padding: 16px;
 }
 
 .section-title {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 8px;
   min-width: 0;
+}
+
+.meeting-id-pill {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--color-text-secondary);
+  background: var(--color-input-bg);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-pill);
+  padding: 3px 10px;
+  overflow-wrap: anywhere;
+}
+
+.copy-meeting-id-button svg {
+  flex-shrink: 0;
 }
 
 .timeline-row {
@@ -365,6 +820,20 @@ h2 {
   gap: 10px;
   width: 100%;
   margin-top: 8px;
+  border-left: 3px solid var(--color-border-strong);
+  border-radius: var(--radius-sm);
+}
+
+.timeline-row.role-blue {
+  border-left-color: var(--color-role-blue);
+}
+
+.timeline-row.role-red {
+  border-left-color: var(--color-role-red);
+}
+
+.timeline-row.role-judge {
+  border-left-color: var(--color-role-judge);
 }
 
 .timeline-main {
@@ -373,8 +842,15 @@ h2 {
   gap: 10px;
   width: 100%;
   padding: 10px;
-  border-radius: 6px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
   text-align: left;
+  transition: background-color var(--transition-fast);
+}
+
+.timeline-main:hover {
+  background: var(--color-bg-elevated);
 }
 
 .timeline-main strong,
@@ -383,22 +859,20 @@ h2 {
   overflow-wrap: anywhere;
 }
 
-.timeline-main em,
+.timeline-main strong {
+  color: var(--color-text);
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+
 .timeline-main small {
-  color: #607080;
+  color: var(--color-text-muted);
   font-style: normal;
 }
 
-.retry-button {
-  min-height: 36px;
-  align-self: stretch;
-  padding: 7px 12px;
-  border-radius: 6px;
-}
-
+.role-output-panel > .empty-state,
 .role-output-panel > p {
-  margin: 12px 0 0;
-  color: #607080;
+  margin-top: 12px;
 }
 
 .role-output-grid {
@@ -409,9 +883,23 @@ h2 {
 }
 
 .role-output-card {
-  border: 1px solid #d6dde4;
-  border-radius: 8px;
+  border: 1px solid var(--color-border);
+  border-left: 3px solid var(--color-border-strong);
+  border-radius: var(--radius-sm);
   padding: 12px;
+  background: var(--color-surface-muted);
+}
+
+.role-output-card.role-blue {
+  border-left-color: var(--color-role-blue);
+}
+
+.role-output-card.role-red {
+  border-left-color: var(--color-role-red);
+}
+
+.role-output-card.role-judge {
+  border-left-color: var(--color-role-judge);
 }
 
 .role-output-card header {
@@ -429,7 +917,8 @@ h2 {
 
 .role-output-card h3 {
   margin: 10px 0 6px;
-  color: #4a5a68;
+  color: var(--color-text-secondary);
+  font-family: var(--font-display);
   font-size: 13px;
 }
 
@@ -458,6 +947,11 @@ pre {
   overflow: auto;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
+  padding: 12px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--color-border);
+  background: var(--color-input-bg);
+  font-family: var(--font-mono);
   font-size: 13px;
   line-height: 1.45;
 }
@@ -470,13 +964,38 @@ pre {
 }
 
 .transcript a {
-  color: #3a4a5c;
+  color: var(--color-text);
+  text-decoration: none;
+}
+
+/* Centered icon + message used for "nothing here yet" panels. */
+.empty-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 32px 16px;
+  border: 1px dashed var(--color-border);
+  border-radius: var(--radius-sm);
+  color: var(--color-text-muted);
+  text-align: center;
+}
+
+.empty-state svg {
+  color: var(--color-border-strong);
+}
+
+.empty-state p {
+  margin: 0;
+  font-size: 13px;
 }
 
 .role-badge {
   display: inline-flex;
   align-items: center;
   gap: 6px;
+  font-family: var(--font-display);
   font-weight: 600;
 }
 
@@ -488,15 +1007,67 @@ pre {
 }
 
 .role-blue {
-  color: #2f6fed;
+  color: var(--color-role-blue);
 }
 
 .role-red {
-  color: #c0392b;
+  color: var(--color-role-red);
 }
 
 .role-judge {
-  color: #a9782f;
+  color: var(--color-role-judge);
+}
+
+/* Spinner used inside the "thinking" pill. Picks up the card's role accent so each
+   role's spinner matches its own color rather than a single generic blue. */
+.spinner {
+  display: inline-block;
+  width: 12px;
+  height: 12px;
+  border: 2px solid rgba(255, 255, 255, 0.12);
+  border-top-color: var(--role-accent, var(--color-running));
+  border-radius: 50%;
+  animation: spin 700ms linear infinite;
+}
+
+.icon-spin {
+  animation: spin 900ms linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* Breathing glow for a "thinking" role card - the only sustained animated glow in the UI. */
+@keyframes card-glow-breathe {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 transparent, var(--shadow-sm);
+  }
+  50% {
+    box-shadow: 0 0 24px 2px var(--role-glow, var(--color-running-glow)), var(--shadow-sm);
+  }
+}
+
+@keyframes dot-glow-pulse {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 rgba(0, 0, 0, 0);
+  }
+  50% {
+    box-shadow: 0 0 6px 2px var(--color-running-glow);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .spinner,
+  .icon-spin,
+  .status-dot[data-status="running"],
+  .role-status-card[data-status="thinking"] {
+    animation: none;
+  }
 }
 
 @media (max-width: 900px) {
@@ -508,10 +1079,18 @@ pre {
     grid-template-columns: 1fr;
   }
 
+  .role-status-row {
+    grid-template-columns: 1fr;
+  }
+
+  .toolbar-actions {
+    margin-left: 0;
+  }
+
   .sidebar {
     grid-row: auto;
     border-right: 0;
-    border-bottom: 1px solid #d6dde4;
+    border-bottom: 1px solid var(--color-border);
   }
 
   .transcript-search-panel {

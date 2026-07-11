@@ -7,6 +7,11 @@ models:
     extra_body:
       mock_delay_ms: 300
 
+  # Fails immediately (missing base_url/model) — used by the frontend e2e suite to
+  # exercise the failed / retry role-status-card states without any network call.
+  - id: mock-broken
+    adapter: openai-compatible-http
+
   - id: claude-subscription
     adapter: subscription-cli
     command: [claude, -p, "{prompt}"]
