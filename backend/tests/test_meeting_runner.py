@@ -47,6 +47,30 @@ def test_runner_completes_fixed_red_blue_judge_flow(tmp_path: Path) -> None:
     assert completed_steps[0]["parsed_output"]["summary"] == "OK"
 
 
+def test_runner_persists_model_token_usage_on_completed_events(tmp_path: Path) -> None:
+    runner = build_runner(
+        tmp_path,
+        adapter=FakeAdapter(
+            [VALID_OUTPUT],
+            token_usage={"prompt_tokens": 12, "completion_tokens": 8, "total_tokens": 20},
+        ),
+    )
+
+    runner.respond_as_role(
+        meeting_id="meeting-1",
+        topic="先做後端？",
+        role="Blue",
+        model_assignments={"Blue": ModelConfig(id="mock-blue", adapter="mock")},
+    )
+
+    event = runner.repository.read_events("meeting-1")[-1]
+    assert event["token_usage"] == {
+        "prompt_tokens": 12,
+        "completion_tokens": 8,
+        "total_tokens": 20,
+    }
+
+
 def test_runner_start_resumes_from_first_incomplete_step_after_restart(tmp_path: Path) -> None:
     adapter = FakeAdapter([VALID_OUTPUT] * 3)
     runner = build_runner(tmp_path, adapter=adapter)
@@ -555,13 +579,18 @@ def strip_created_at(events: list[dict[str, object]]) -> list[dict[str, object]]
 
 
 class FakeAdapter:
-    def __init__(self, outputs: list[str]) -> None:
+    def __init__(
+        self,
+        outputs: list[str],
+        token_usage: dict[str, int] | None = None,
+    ) -> None:
         self.outputs = outputs
+        self.token_usage = token_usage
         self.requests: list[ModelRequest] = []
 
     def complete(self, request: ModelRequest) -> ModelResponse:
         self.requests.append(request)
-        return ModelResponse(raw_output=self.outputs.pop(0))
+        return ModelResponse(raw_output=self.outputs.pop(0), token_usage=self.token_usage)
 
 
 class FailingAdapter:

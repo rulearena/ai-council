@@ -10,6 +10,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from dataclasses import dataclass
+from typing import TypedDict
 
 from ai_council.models.config import ModelConfig
 
@@ -27,9 +28,16 @@ class ModelRequest:
     meeting_id: str | None = None
 
 
+class TokenUsage(TypedDict):
+    prompt_tokens: int
+    completion_tokens: int
+    total_tokens: int
+
+
 @dataclass(frozen=True)
 class ModelResponse:
     raw_output: str
+    token_usage: TokenUsage | None = None
 
 
 class MockModelAdapter:
@@ -103,7 +111,7 @@ class SubscriptionCLIAdapter:
             raise AdapterError(
                 f"Subscription CLI exited with code {process.returncode}: {detail}"
             )
-        normalized_stdout = normalize_cli_output(stdout)
+        normalized_stdout = normalize_cli_output(stdout, config)
         if not normalized_stdout:
             raise AdapterError("Subscription CLI returned empty output")
         return ModelResponse(raw_output=normalized_stdout)
@@ -115,8 +123,29 @@ class SubscriptionCLIAdapter:
             process.kill()
 
 
-def normalize_cli_output(stdout: str) -> str:
-    return ANSI_ESCAPE_RE.sub("", stdout).strip()
+def normalize_cli_output(stdout: str, config: ModelConfig | None = None) -> str:
+    output = ANSI_ESCAPE_RE.sub("", stdout).strip()
+    provider = _cli_provider(config)
+    if provider == "codex":
+        return _normalize_codex_cli_output(output)
+    return output
+
+
+def _cli_provider(config: ModelConfig | None) -> str:
+    if config is None:
+        return ""
+    provider = config.extra_body.get("cli_provider")
+    if isinstance(provider, str):
+        return provider.strip().lower()
+    return ""
+
+
+def _normalize_codex_cli_output(stdout: str) -> str:
+    start_marker = "<codex-output>"
+    end_marker = "</codex-output>"
+    if start_marker not in stdout or end_marker not in stdout:
+        return stdout
+    return stdout.split(start_marker, 1)[1].split(end_marker, 1)[0].strip()
 
 
 def _resolve_api_key(api_key_env: str | None) -> str | None:
@@ -174,7 +203,10 @@ class OpenAICompatibleHTTPAdapter:
         body = _post_json(f"{config.base_url.rstrip('/')}/chat/completions", payload, headers)
 
         try:
-            return ModelResponse(raw_output=body["choices"][0]["message"]["content"])
+            return ModelResponse(
+                raw_output=body["choices"][0]["message"]["content"],
+                token_usage=_openai_token_usage(body),
+            )
         except (KeyError, IndexError, TypeError) as error:
             raise AdapterError("Malformed chat completion response") from error
 
@@ -217,7 +249,10 @@ class AnthropicHTTPAdapter:
         body = _post_json(f"{config.base_url.rstrip('/')}/messages", payload, headers)
 
         try:
-            return ModelResponse(raw_output=body["content"][0]["text"])
+            return ModelResponse(
+                raw_output=body["content"][0]["text"],
+                token_usage=_anthropic_token_usage(body),
+            )
         except (KeyError, IndexError, TypeError) as error:
             raise AdapterError("Malformed Anthropic response") from error
 
@@ -241,6 +276,65 @@ class GeminiHTTPAdapter:
         body = _post_json(url, payload, {"Content-Type": "application/json"})
 
         try:
-            return ModelResponse(raw_output=body["candidates"][0]["content"]["parts"][0]["text"])
+            return ModelResponse(
+                raw_output=body["candidates"][0]["content"]["parts"][0]["text"],
+                token_usage=_gemini_token_usage(body),
+            )
         except (KeyError, IndexError, TypeError) as error:
             raise AdapterError("Malformed Gemini response") from error
+
+
+def _openai_token_usage(body: dict[str, object]) -> TokenUsage | None:
+    usage = body.get("usage")
+    if not isinstance(usage, dict):
+        return None
+    return _token_usage(
+        prompt_tokens=usage.get("prompt_tokens"),
+        completion_tokens=usage.get("completion_tokens"),
+        total_tokens=usage.get("total_tokens"),
+    )
+
+
+def _anthropic_token_usage(body: dict[str, object]) -> TokenUsage | None:
+    usage = body.get("usage")
+    if not isinstance(usage, dict):
+        return None
+    prompt_tokens = usage.get("input_tokens")
+    completion_tokens = usage.get("output_tokens")
+    return _token_usage(
+        prompt_tokens=prompt_tokens,
+        completion_tokens=completion_tokens,
+        total_tokens=_sum_tokens(prompt_tokens, completion_tokens),
+    )
+
+
+def _gemini_token_usage(body: dict[str, object]) -> TokenUsage | None:
+    usage = body.get("usageMetadata")
+    if not isinstance(usage, dict):
+        return None
+    return _token_usage(
+        prompt_tokens=usage.get("promptTokenCount"),
+        completion_tokens=usage.get("candidatesTokenCount"),
+        total_tokens=usage.get("totalTokenCount"),
+    )
+
+
+def _token_usage(
+    *,
+    prompt_tokens: object,
+    completion_tokens: object,
+    total_tokens: object,
+) -> TokenUsage | None:
+    if not all(isinstance(value, int) for value in [prompt_tokens, completion_tokens, total_tokens]):
+        return None
+    return {
+        "prompt_tokens": prompt_tokens,
+        "completion_tokens": completion_tokens,
+        "total_tokens": total_tokens,
+    }
+
+
+def _sum_tokens(left: object, right: object) -> int | None:
+    if isinstance(left, int) and isinstance(right, int):
+        return left + right
+    return None

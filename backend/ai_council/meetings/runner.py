@@ -292,28 +292,31 @@ class MeetingRunner:
 
         if self._is_terminal(meeting_id):
             return False
+        completed_event = {
+            "event_id": f"{meeting_id}:{event_step_id}:attempt-{attempt}:completed",
+            "meeting_id": meeting_id,
+            "step_id": event_step_id,
+            "base_step_id": step.step_id,
+            "round": round_number,
+            "role": step.role,
+            "attempt": attempt,
+            "model_config_id": config.id,
+            "prompt_messages": [{"role": "user", "content": prompt}],
+            "raw_output": response.raw_output,
+            "parsed_output": {
+                "summary": parsed.summary,
+                "arguments": [item.__dict__ for item in parsed.arguments],
+                "risks": [item.__dict__ for item in parsed.risks],
+                "recommendation": parsed.recommendation,
+            },
+            "status": "completed",
+            **extra_event_fields,
+        }
+        if response.token_usage is not None:
+            completed_event["token_usage"] = response.token_usage
         self.repository.append_event(
             meeting_id,
-            {
-                "event_id": f"{meeting_id}:{event_step_id}:attempt-{attempt}:completed",
-                "meeting_id": meeting_id,
-                "step_id": event_step_id,
-                "base_step_id": step.step_id,
-                "round": round_number,
-                "role": step.role,
-                "attempt": attempt,
-                "model_config_id": config.id,
-                "prompt_messages": [{"role": "user", "content": prompt}],
-                "raw_output": response.raw_output,
-                "parsed_output": {
-                    "summary": parsed.summary,
-                    "arguments": [item.__dict__ for item in parsed.arguments],
-                    "risks": [item.__dict__ for item in parsed.risks],
-                    "recommendation": parsed.recommendation,
-                },
-                "status": "completed",
-                **extra_event_fields,
-            },
+            completed_event,
         )
         return True
 

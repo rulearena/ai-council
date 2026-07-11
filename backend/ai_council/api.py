@@ -27,6 +27,7 @@ from ai_council.models.adapters import (
     ModelRequest,
     OpenAICompatibleHTTPAdapter,
     SubscriptionCLIAdapter,
+    TokenUsage,
 )
 from ai_council.models.config import ModelConfig, ModelConfigError, ModelConfigRepository
 from ai_council.prompting.renderer import PromptRenderer
@@ -563,9 +564,23 @@ def project_meeting_summary(
         "status": project_meeting_status(events),
         "activity_status": activity_status or project_activity_status(events),
         "last_step_id": latest_event.get("step_id") if latest_event else None,
+        "token_usage": project_token_usage(events),
         "tags": metadata.get("tags") or [],
         "pinned": bool(metadata.get("pinned", False)),
     }
+
+
+def project_token_usage(events: list[dict[str, Any]]) -> TokenUsage:
+    totals: TokenUsage = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
+    for event in events:
+        usage = event.get("token_usage")
+        if not isinstance(usage, dict):
+            continue
+        for key in totals:
+            value = usage.get(key)
+            if isinstance(value, int):
+                totals[key] += value
+    return totals
 
 
 def now_iso() -> str:

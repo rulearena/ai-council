@@ -106,6 +106,34 @@ def test_subscription_cli_adapter_normalizes_ansi_wrapped_stdout(tmp_path) -> No
     assert response.raw_output.startswith("```json")
 
 
+def test_subscription_cli_adapter_uses_provider_specific_normalizer(tmp_path) -> None:
+    fake_cli = tmp_path / "codex_cli.py"
+    fake_cli.write_text(
+        "print('codex exec finished')\n"
+        "print('<codex-output>')\n"
+        "print('{\"summary\":\"OK\",\"arguments\":[],\"risks\":[],\"recommendation\":\"Go\"}')\n"
+        "print('</codex-output>')\n",
+        encoding="utf-8",
+    )
+
+    response = SubscriptionCLIAdapter().complete(
+        ModelRequest(
+            prompt="test",
+            model_config=ModelConfig(
+                id="codex-subscription",
+                adapter="subscription-cli",
+                command=[sys.executable, str(fake_cli), "{prompt}"],
+                timeout_seconds=5,
+                extra_body={"cli_provider": "codex"},
+            ),
+        )
+    )
+
+    assert response.raw_output == (
+        '{"summary":"OK","arguments":[],"risks":[],"recommendation":"Go"}'
+    )
+
+
 def test_subscription_cli_adapter_reports_nonzero_exit(tmp_path) -> None:
     fake_cli = tmp_path / "failing_cli.py"
     fake_cli.write_text(
@@ -194,6 +222,11 @@ def test_subscription_cli_adapter_cancel_kills_running_process(tmp_path) -> None
 def test_http_adapter_posts_chat_completion_request() -> None:
     server = RecordingServer(
         response={
+            "usage": {
+                "prompt_tokens": 12,
+                "completion_tokens": 8,
+                "total_tokens": 20,
+            },
             "choices": [
                 {
                     "message": {
@@ -220,6 +253,11 @@ def test_http_adapter_posts_chat_completion_request() -> None:
         )
 
     assert response.raw_output == '{"summary":"OK","arguments":[],"risks":[],"recommendation":"Go"}'
+    assert response.token_usage == {
+        "prompt_tokens": 12,
+        "completion_tokens": 8,
+        "total_tokens": 20,
+    }
     assert server.request_path == "/v1/chat/completions"
     assert server.request_body["model"] == "test-model"
     assert server.request_body["messages"] == [{"role": "user", "content": "Hello"}]
@@ -327,6 +365,7 @@ def test_anthropic_adapter_posts_messages_request(monkeypatch) -> None:
     monkeypatch.setenv("ANTHROPIC_KEY", "sk-ant-test")
     server = RecordingServer(
         response={
+            "usage": {"input_tokens": 11, "output_tokens": 7},
             "content": [
                 {
                     "type": "text",
@@ -352,6 +391,11 @@ def test_anthropic_adapter_posts_messages_request(monkeypatch) -> None:
         )
 
     assert response.raw_output == '{"summary":"OK","arguments":[],"risks":[],"recommendation":"Go"}'
+    assert response.token_usage == {
+        "prompt_tokens": 11,
+        "completion_tokens": 7,
+        "total_tokens": 18,
+    }
     assert server.request_path == "/v1/messages"
     assert server.request_headers["x-api-key"] == "sk-ant-test"
     assert server.request_headers["anthropic-version"] == "2023-06-01"
@@ -384,6 +428,11 @@ def test_gemini_adapter_posts_generate_content_request_with_api_key_query_param(
     monkeypatch.setenv("GEMINI_KEY", "gm-test-key")
     server = RecordingServer(
         response={
+            "usageMetadata": {
+                "promptTokenCount": 10,
+                "candidatesTokenCount": 6,
+                "totalTokenCount": 16,
+            },
             "candidates": [
                 {
                     "content": {
@@ -413,6 +462,11 @@ def test_gemini_adapter_posts_generate_content_request_with_api_key_query_param(
         )
 
     assert response.raw_output == '{"summary":"OK","arguments":[],"risks":[],"recommendation":"Go"}'
+    assert response.token_usage == {
+        "prompt_tokens": 10,
+        "completion_tokens": 6,
+        "total_tokens": 16,
+    }
     assert server.request_path == "/v1/models/gemini-2.5-pro:generateContent?key=gm-test-key"
     assert server.request_body["contents"] == [{"parts": [{"text": "Hello"}]}]
 
