@@ -1,0 +1,13 @@
+data/
+logs/
+
+.pytest_cache/
+**/__pycache__/
+
+.scratch/*.png
+.scratch/local-executor-canary/sandboxes/
+
+frontend/.cache/
+frontend/dist/
+frontend/node_modules/
+frontend/test-results/

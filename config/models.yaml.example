@@ -1,0 +1,23 @@
+models:
+  - id: mock-fast
+    adapter: mock
+
+  - id: qwen27
+    adapter: openai-compatible-http
+    base_url: http://192.168.50.80:8487/v1
+    model: bartowski/Qwen_Qwen3.6-27B-GGUF
+    api_key_env: null
+    supports_json_mode: true
+    extra_body:
+      chat_template_kwargs:
+        enable_thinking: false
+
+  - id: ornith
+    adapter: openai-compatible-http
+    base_url: http://192.168.50.81:8488/v1
+    model: deepreinforce-ai/Ornith-1.0-35B-GGUF
+    api_key_env: null
+    supports_json_mode: true
+    extra_body:
+      chat_template_kwargs:
+        enable_thinking: false
