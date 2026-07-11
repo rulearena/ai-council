@@ -47,6 +47,100 @@ def test_runner_completes_fixed_red_blue_judge_flow(tmp_path: Path) -> None:
     assert completed_steps[0]["parsed_output"]["summary"] == "OK"
 
 
+def test_runner_start_resumes_from_first_incomplete_step_after_restart(tmp_path: Path) -> None:
+    adapter = FakeAdapter([VALID_OUTPUT] * 3)
+    runner = build_runner(tmp_path, adapter=adapter)
+    runner.repository.append_event(
+        "meeting-1",
+        {
+            "event_id": "meeting-1:blue-propose:attempt-1:completed",
+            "meeting_id": "meeting-1",
+            "step_id": "blue-propose",
+            "base_step_id": "blue-propose",
+            "round": 1,
+            "role": "Blue",
+            "attempt": 1,
+            "model_config_id": "mock-blue",
+            "parsed_output": json.loads(VALID_OUTPUT),
+            "status": "completed",
+        },
+    )
+
+    runner.start(
+        meeting_id="meeting-1",
+        topic="先做後端？",
+        model_assignments={
+            "Blue": ModelConfig(id="mock-blue", adapter="mock"),
+            "Red": ModelConfig(id="mock-red", adapter="mock"),
+            "Judge": ModelConfig(id="mock-judge", adapter="mock"),
+        },
+    )
+
+    events = runner.repository.read_events("meeting-1")
+    completed_steps = [event for event in events if event["status"] == "completed"]
+    assert [event["step_id"] for event in completed_steps] == [
+        "blue-propose",
+        "red-critique",
+        "blue-revise",
+        "judge-decide",
+    ]
+    assert [request.model_config.id for request in adapter.requests] == [
+        "mock-red",
+        "mock-blue",
+        "mock-judge",
+    ]
+
+
+def test_runner_start_defers_to_explicit_retry_when_a_step_already_failed(
+    tmp_path: Path,
+) -> None:
+    adapter = FakeAdapter([VALID_OUTPUT] * 4)
+    runner = build_runner(tmp_path, adapter=adapter)
+    runner.repository.append_event(
+        "meeting-1",
+        {
+            "event_id": "meeting-1:blue-propose:attempt-1:completed",
+            "meeting_id": "meeting-1",
+            "step_id": "blue-propose",
+            "base_step_id": "blue-propose",
+            "round": 1,
+            "role": "Blue",
+            "attempt": 1,
+            "model_config_id": "mock-blue",
+            "parsed_output": json.loads(VALID_OUTPUT),
+            "status": "completed",
+        },
+    )
+    runner.repository.append_event(
+        "meeting-1",
+        {
+            "event_id": "meeting-1:red-critique:attempt-1:failed",
+            "meeting_id": "meeting-1",
+            "step_id": "red-critique",
+            "base_step_id": "red-critique",
+            "round": 1,
+            "role": "Red",
+            "attempt": 1,
+            "status": "failed",
+            "error": "adapter boom",
+        },
+    )
+
+    runner.start(
+        meeting_id="meeting-1",
+        topic="先做後端？",
+        model_assignments={
+            "Blue": ModelConfig(id="mock-blue", adapter="mock"),
+            "Red": ModelConfig(id="mock-red", adapter="mock"),
+            "Judge": ModelConfig(id="mock-judge", adapter="mock"),
+        },
+    )
+
+    assert adapter.requests == []
+    events = runner.repository.read_events("meeting-1")
+    assert len(events) == 2
+
+
 def test_runner_starts_follow_up_round_after_human_feedback(tmp_path: Path) -> None:
     adapter = FakeAdapter([VALID_OUTPUT] * 8)
     runner = build_runner(tmp_path, adapter=adapter)

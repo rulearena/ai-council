@@ -71,11 +71,14 @@ class MeetingRunner:
         if self._is_terminal(meeting_id):
             return
         round_number = self._next_round_number(meeting_id)
+        start_index = self._first_incomplete_step_index(meeting_id, round_number)
+        if start_index is None:
+            return
         self._run_from_step(
             meeting_id=meeting_id,
             topic=topic,
             model_assignments=model_assignments,
-            start_index=0,
+            start_index=start_index,
             attempt_override=None,
             round_number=round_number,
         )
@@ -327,6 +330,17 @@ class MeetingRunner:
             if event.get("step_id") == step_id or event.get("base_step_id") == step_id
         ]
         return matching_events[-1] if matching_events else None
+
+    def _first_incomplete_step_index(self, meeting_id: str, round_number: int) -> int | None:
+        events = self.repository.read_events(meeting_id)
+        for index, step in enumerate(STEPS):
+            event_step_id = self._event_step_id(step.step_id, round_number)
+            matching_events = [event for event in events if event.get("step_id") == event_step_id]
+            if not matching_events:
+                return index
+            if matching_events[-1].get("status") != "completed":
+                return None
+        return None
 
     def _next_round_number(self, meeting_id: str) -> int:
         completed_judge_events = [
