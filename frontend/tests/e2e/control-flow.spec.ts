@@ -63,6 +63,18 @@ test('user can run a mock meeting and add chair feedback', async ({ page }) => {
   await expect(page.getByTestId('role-output-panel')).toContainText('Role Outputs')
   await expect(page.getByTestId('role-output-panel')).toContainText('blue-propose')
   await expect(page.getByTestId('role-output-panel')).toContainText('Recommendation')
+
+  const toolbarRoleBadges = page.locator('.toolbar').getByTestId('role-badge')
+  await expect(toolbarRoleBadges.nth(0)).toHaveClass(/role-blue/)
+  await expect(toolbarRoleBadges.nth(0).locator('img')).toHaveAttribute('alt', 'Blue')
+  await expect(toolbarRoleBadges.nth(1)).toHaveClass(/role-red/)
+  await expect(toolbarRoleBadges.nth(2)).toHaveClass(/role-judge/)
+  const timelineRoleBadges = page.getByTestId('step-timeline').getByTestId('role-badge')
+  await expect(timelineRoleBadges.filter({ hasText: 'Blue' }).first()).toHaveClass(/role-blue/)
+  await expect(timelineRoleBadges.filter({ hasText: 'Red' }).first()).toHaveClass(/role-red/)
+  await expect(timelineRoleBadges.filter({ hasText: 'Judge' }).first()).toHaveClass(/role-judge/)
+  const outputRoleBadges = page.getByTestId('role-output-panel').getByTestId('role-badge')
+  await expect(outputRoleBadges.filter({ hasText: 'Blue' }).first().locator('img')).toHaveAttribute('alt', 'Blue')
   await expect(page.getByTestId('transcript-preview')).toContainText('## Blue - blue-propose')
   await expect(page.getByTestId('transcript-preview')).toContainText('## Judge - judge-decide')
 

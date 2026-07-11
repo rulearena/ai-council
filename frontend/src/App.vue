@@ -1,5 +1,8 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref } from 'vue'
+import roleBlueIcon from './assets/roles/blue.png'
+import roleRedIcon from './assets/roles/red.png'
+import roleJudgeIcon from './assets/roles/judge.png'
 import {
   addMeetingMessage,
   cancelMeeting,
@@ -334,6 +337,26 @@ function formatDateTime(value: string | undefined): string {
   return date.toLocaleString()
 }
 
+const ROLE_ICONS: Partial<Record<string, string>> = {
+  Blue: roleBlueIcon,
+  Red: roleRedIcon,
+  Judge: roleJudgeIcon,
+}
+
+const ROLE_CLASSES: Partial<Record<string, string>> = {
+  Blue: 'role-blue',
+  Red: 'role-red',
+  Judge: 'role-judge',
+}
+
+function roleIcon(role: string): string | undefined {
+  return ROLE_ICONS[role]
+}
+
+function roleClass(role: string): string {
+  return ROLE_CLASSES[role] ?? ''
+}
+
 async function runAction(action: () => Promise<void>) {
   loading.value = true
   error.value = ''
@@ -467,7 +490,10 @@ async function runAction(action: () => Promise<void>) {
     <section class="workspace">
       <header class="toolbar">
         <label>
-          Blue
+          <span class="role-badge role-blue" data-testid="role-badge">
+            <img :src="roleIcon('Blue')" class="role-icon" alt="Blue" />
+            Blue
+          </span>
           <span class="model-control">
             <select v-model="selectedModels.Blue" data-testid="blue-model-select">
               <option v-for="model in models" :key="model.id" :value="model.id">{{ model.id }}</option>
@@ -483,7 +509,10 @@ async function runAction(action: () => Promise<void>) {
           </span>
         </label>
         <label>
-          Red
+          <span class="role-badge role-red" data-testid="role-badge">
+            <img :src="roleIcon('Red')" class="role-icon" alt="Red" />
+            Red
+          </span>
           <span class="model-control">
             <select v-model="selectedModels.Red" data-testid="red-model-select">
               <option v-for="model in models" :key="model.id" :value="model.id">{{ model.id }}</option>
@@ -499,7 +528,10 @@ async function runAction(action: () => Promise<void>) {
           </span>
         </label>
         <label>
-          Judge
+          <span class="role-badge role-judge" data-testid="role-badge">
+            <img :src="roleIcon('Judge')" class="role-icon" alt="Judge" />
+            Judge
+          </span>
           <span class="model-control">
             <select v-model="selectedModels.Judge" data-testid="judge-model-select">
               <option v-for="model in models" :key="model.id" :value="model.id">{{ model.id }}</option>
@@ -647,7 +679,10 @@ async function runAction(action: () => Promise<void>) {
             class="timeline-row"
           >
             <button type="button" class="timeline-main" @click="selectedEvent = event">
-              <span>{{ event.role }}</span>
+              <span class="role-badge" :class="roleClass(event.role)" data-testid="role-badge">
+                <img v-if="roleIcon(event.role)" :src="roleIcon(event.role)" class="role-icon" :alt="event.role" />
+                {{ event.role }}
+              </span>
               <strong>{{ event.step_id }}</strong>
               <em>{{ event.status }}</em>
               <small>{{ formatDateTime(event.created_at) }}</small>
@@ -690,7 +725,10 @@ async function runAction(action: () => Promise<void>) {
             class="role-output-card"
           >
             <header>
-              <strong>{{ event.role }}</strong>
+              <strong class="role-badge" :class="roleClass(event.role)" data-testid="role-badge">
+                <img v-if="roleIcon(event.role)" :src="roleIcon(event.role)" class="role-icon" :alt="event.role" />
+                {{ event.role }}
+              </strong>
               <span>{{ event.step_id }}</span>
             </header>
             <p>{{ event.parsed_output?.summary }}</p>

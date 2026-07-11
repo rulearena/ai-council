@@ -114,8 +114,8 @@ h2 {
 }
 
 .meeting-item.active {
-  border-color: #2f6fed;
-  background: #eef4ff;
+  border-color: #3a4a5c;
+  background: #edf0f3;
 }
 
 .meeting-item small {
@@ -383,10 +383,6 @@ h2 {
   overflow-wrap: anywhere;
 }
 
-.timeline-main span {
-  color: #2f6fed;
-}
-
 .timeline-main em,
 .timeline-main small {
   color: #607080;
@@ -474,7 +470,33 @@ pre {
 }
 
 .transcript a {
+  color: #3a4a5c;
+}
+
+.role-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 600;
+}
+
+.role-icon {
+  width: 20px;
+  height: 20px;
+  object-fit: contain;
+  flex-shrink: 0;
+}
+
+.role-blue {
   color: #2f6fed;
+}
+
+.role-red {
+  color: #c0392b;
+}
+
+.role-judge {
+  color: #a9782f;
 }
 
 @media (max-width: 900px) {
