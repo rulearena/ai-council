@@ -9,5 +9,9 @@ Prior transcript:
 Task:
 Revise the proposal in response to Red's critique. Keep the plan concrete and address the most important objections.
 
+Language:
+Respond in the same language as the meeting topic.
+All JSON string values must use that language.
+
 Return exactly one JSON object matching this schema:
 {{ required_json_schema }}

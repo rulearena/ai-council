@@ -8,6 +8,33 @@ from ai_council.prompting.parser import OutputParseError, RoleOutputParser
 from ai_council.prompting.renderer import PromptRenderer
 
 
+@pytest.mark.parametrize(
+    ("template_name", "role"),
+    [
+        ("blue_propose", "Blue"),
+        ("red", "Red"),
+        ("blue_revise", "Blue"),
+        ("judge", "Judge"),
+    ],
+)
+def test_role_prompts_require_responses_to_follow_the_topic_language(
+    template_name: str,
+    role: str,
+) -> None:
+    prompt_dir = Path(__file__).parents[2] / "prompts"
+
+    rendered = PromptRenderer(prompt_dir).render(
+        template_name=template_name,
+        role=role,
+        topic="如何自動化開發？",
+        prior_transcript="尚未發言",
+        required_json_schema='{"summary":"string"}',
+    )
+
+    assert "Respond in the same language as the meeting topic." in rendered
+    assert "All JSON string values must use that language." in rendered
+
+
 def test_prompt_renderer_loads_template_and_injects_context(tmp_path: Path) -> None:
     prompt_dir = tmp_path / "prompts"
     prompt_dir.mkdir()
