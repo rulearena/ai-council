@@ -2,7 +2,7 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-PORT="${AI_COUNCIL_BACKEND_PORT:-8000}"
+PORT="${AI_COUNCIL_BACKEND_PORT:-5009}"
 MODEL_CONFIG_PATH="${AI_COUNCIL_MODEL_CONFIG_PATH:-$ROOT_DIR/config/models.yaml}"
 
 if [[ ! -f "$MODEL_CONFIG_PATH" ]]; then

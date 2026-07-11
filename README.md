@@ -60,10 +60,10 @@ npm install
 ../scripts/dev_frontend.sh
 ```
 
-The Vite app defaults to `http://localhost:8000` for API calls. Override it with:
+The Vite app defaults to `http://localhost:5009` for API calls. Override it with:
 
 ```bash
-VITE_API_BASE_URL=http://localhost:8000 npm run dev
+VITE_API_BASE_URL=http://localhost:5009 npm run dev
 ```
 
 Build the frontend:
