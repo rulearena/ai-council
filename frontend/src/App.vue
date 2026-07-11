@@ -176,9 +176,13 @@ function connectMeetingEvents(meetingId: string) {
 }
 
 async function refreshMeetingOutputs(meetingId: string, activityStatus: Meeting['activity_status']) {
-  transcript.value = await getTranscript(meetingId)
-  if (activityStatus !== 'running') {
-    meetings.value = await getMeetings()
+  try {
+    transcript.value = await getTranscript(meetingId)
+    if (activityStatus !== 'running') {
+      meetings.value = await getMeetings()
+    }
+  } catch (caught) {
+    error.value = caught instanceof Error ? caught.message : String(caught)
   }
 }
 

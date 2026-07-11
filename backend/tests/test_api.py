@@ -218,6 +218,21 @@ def test_start_returns_while_model_execution_continues_in_background(
         release_model.set()
 
 
+def test_start_rejects_missing_fixed_flow_model_assignments(tmp_path: Path) -> None:
+    app = create_test_app(tmp_path)
+    client = TestClient(app)
+    meeting_id = client.post("/meetings", json={"topic": "缺少角色"}).json()["meeting_id"]
+
+    response = client.post(
+        f"/meetings/{meeting_id}/start",
+        json={"models": {"Blue": "mock-fast", "Red": "mock-fast"}},
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "Missing model assignments: Judge"
+    assert client.get(f"/meetings/{meeting_id}").json()["activity_status"] == "idle"
+
+
 def test_meeting_activity_status_projects_failed_latest_step(tmp_path: Path) -> None:
     app = create_test_app(
         tmp_path,
@@ -232,7 +247,13 @@ models:
 
     response = client.post(
         f"/meetings/{meeting_id}/start",
-        json={"models": {"Blue": "broken-model"}},
+        json={
+            "models": {
+                "Blue": "broken-model",
+                "Red": "broken-model",
+                "Judge": "broken-model",
+            }
+        },
     )
 
     assert response.status_code == 202

@@ -121,17 +121,18 @@ def create_app(
 
     @app.get("/meetings")
     def list_meetings() -> list[dict[str, Any]]:
-        return [
-            project_meeting_summary(
-                metadata,
-                repository.read_events(metadata["meeting_id"]),
-                activity_status=live_activity_status(
-                    repository.read_events(metadata["meeting_id"]),
-                    jobs.is_running(metadata["meeting_id"]),
-                ),
+        summaries: list[dict[str, Any]] = []
+        for metadata in metadata_store.list():
+            meeting_id = metadata["meeting_id"]
+            events = repository.read_events(meeting_id)
+            summaries.append(
+                project_meeting_summary(
+                    metadata,
+                    events,
+                    activity_status=live_activity_status(events, jobs.is_running(meeting_id)),
+                )
             )
-            for metadata in metadata_store.list()
-        ]
+        return summaries
 
     @app.get("/meetings/{meeting_id}")
     def get_meeting(meeting_id: str) -> dict[str, Any]:
@@ -150,6 +151,12 @@ def create_app(
     def start_meeting(meeting_id: str, request: StartMeetingRequest) -> dict[str, str]:
         metadata = metadata_store.get(meeting_id)
         reject_terminal_meeting(repository, meeting_id)
+        missing_roles = sorted({"Blue", "Red", "Judge"} - request.models.keys())
+        if missing_roles:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Missing model assignments: {', '.join(missing_roles)}",
+            )
         model_assignments = {
             role: get_model(model_repository, model_id)
             for role, model_id in request.models.items()
@@ -294,17 +301,22 @@ def create_app(
             )
             event_count = len(events)
             while True:
-                await asyncio.sleep(0.1)
+                try:
+                    await asyncio.wait_for(websocket.receive_text(), timeout=0.1)
+                except TimeoutError:
+                    pass
                 events = repository.read_events(meeting_id)
-                activity_status = live_activity_status(events, jobs.is_running(meeting_id))
-                await websocket.send_json(
-                    {
-                        "type": "update",
-                        "events": events[event_count:],
-                        "activity_status": activity_status,
-                    }
-                )
-                event_count = len(events)
+                next_activity_status = live_activity_status(events, jobs.is_running(meeting_id))
+                if len(events) != event_count or next_activity_status != activity_status:
+                    await websocket.send_json(
+                        {
+                            "type": "update",
+                            "events": events[event_count:],
+                            "activity_status": next_activity_status,
+                        }
+                    )
+                    event_count = len(events)
+                    activity_status = next_activity_status
         except (WebSocketDisconnect, RuntimeError):
             return
 
