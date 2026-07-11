@@ -108,6 +108,11 @@ models:
         enable_thinking: false
 ```
 
+`api_key_env` names an environment variable, not a literal key. Leave it `null` for
+unauthenticated local endpoints. When set, the adapter reads that variable at request time
+and sends it as `Authorization: Bearer <value>`; a configured but unset variable fails the
+request with a clear `AdapterError` instead of calling the endpoint unauthenticated.
+
 Supported adapters in the MVP:
 
 - `mock` - deterministic local test adapter.

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import threading
 import time
@@ -123,10 +124,19 @@ class OpenAICompatibleHTTPAdapter:
             payload["response_format"] = {"type": "json_object"}
         payload.update(config.extra_body)
 
+        headers = {"Content-Type": "application/json"}
+        if config.api_key_env:
+            api_key = os.environ.get(config.api_key_env)
+            if not api_key:
+                raise AdapterError(
+                    f"Environment variable {config.api_key_env} is not set for API key"
+                )
+            headers["Authorization"] = f"Bearer {api_key}"
+
         http_request = urllib.request.Request(
             f"{config.base_url.rstrip('/')}/chat/completions",
             data=json.dumps(payload).encode("utf-8"),
-            headers={"Content-Type": "application/json"},
+            headers=headers,
             method="POST",
         )
         try:

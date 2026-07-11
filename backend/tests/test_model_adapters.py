@@ -199,6 +199,84 @@ def test_http_adapter_posts_chat_completion_request() -> None:
     assert server.request_body["chat_template_kwargs"] == {"enable_thinking": False}
 
 
+def test_http_adapter_adds_authorization_header_from_api_key_env(monkeypatch) -> None:
+    monkeypatch.setenv("TEST_API_KEY", "secret-key-123")
+    server = RecordingServer(
+        response={
+            "choices": [
+                {
+                    "message": {
+                        "content": '{"summary":"OK","arguments":[],"risks":[],"recommendation":"Go"}'
+                    }
+                }
+            ]
+        }
+    )
+    with server:
+        adapter = OpenAICompatibleHTTPAdapter()
+        adapter.complete(
+            ModelRequest(
+                prompt="Hello",
+                model_config=ModelConfig(
+                    id="cloud",
+                    adapter="openai-compatible-http",
+                    base_url=server.base_url,
+                    model="test-model",
+                    api_key_env="TEST_API_KEY",
+                ),
+            )
+        )
+
+    assert server.request_headers["Authorization"] == "Bearer secret-key-123"
+
+
+def test_http_adapter_omits_authorization_header_when_api_key_env_not_configured() -> None:
+    server = RecordingServer(
+        response={
+            "choices": [
+                {
+                    "message": {
+                        "content": '{"summary":"OK","arguments":[],"risks":[],"recommendation":"Go"}'
+                    }
+                }
+            ]
+        }
+    )
+    with server:
+        adapter = OpenAICompatibleHTTPAdapter()
+        adapter.complete(
+            ModelRequest(
+                prompt="Hello",
+                model_config=ModelConfig(
+                    id="local",
+                    adapter="openai-compatible-http",
+                    base_url=server.base_url,
+                    model="test-model",
+                ),
+            )
+        )
+
+    assert "Authorization" not in server.request_headers
+
+
+def test_http_adapter_raises_when_api_key_env_variable_is_unset(monkeypatch) -> None:
+    monkeypatch.delenv("MISSING_API_KEY", raising=False)
+
+    with pytest.raises(AdapterError, match="MISSING_API_KEY"):
+        OpenAICompatibleHTTPAdapter().complete(
+            ModelRequest(
+                prompt="Hello",
+                model_config=ModelConfig(
+                    id="cloud",
+                    adapter="openai-compatible-http",
+                    base_url="http://127.0.0.1:1/v1",
+                    model="test-model",
+                    api_key_env="MISSING_API_KEY",
+                ),
+            )
+        )
+
+
 def test_http_adapter_surfaces_http_errors_as_adapter_error() -> None:
     server = RecordingServer(status=500, response={"error": "boom"})
     with server:
@@ -222,6 +300,7 @@ class RecordingHandler(BaseHTTPRequestHandler):
         body = self.rfile.read(int(self.headers["Content-Length"]))
         self.server.request_path = self.path  # type: ignore[attr-defined]
         self.server.request_body = json.loads(body.decode("utf-8"))  # type: ignore[attr-defined]
+        self.server.request_headers = dict(self.headers)  # type: ignore[attr-defined]
         self.send_response(self.server.status)  # type: ignore[attr-defined]
         self.send_header("Content-Type", "application/json")
         self.end_headers()
@@ -251,6 +330,10 @@ class RecordingServer:
     @property
     def request_body(self) -> dict[str, object]:
         return self._server.request_body  # type: ignore[attr-defined]
+
+    @property
+    def request_headers(self) -> dict[str, str]:
+        return self._server.request_headers  # type: ignore[attr-defined]
 
     def __enter__(self) -> RecordingServer:
         self._thread.start()
