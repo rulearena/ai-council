@@ -12,6 +12,11 @@ models:
     command: [claude, -p, "{prompt}"]
     timeout_seconds: 300
 
+  - id: codex-subscription
+    adapter: subscription-cli
+    command: [codex, -p, "{prompt}"]
+    timeout_seconds: 300
+
   - id: agy-subscription
     adapter: subscription-cli
     command: [agy, -p, "{prompt}"]

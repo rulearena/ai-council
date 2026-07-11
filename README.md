@@ -122,6 +122,11 @@ Subscription CLI models use an argument list with a required `{prompt}` placehol
   command: [claude, -p, "{prompt}"]
   timeout_seconds: 300
 
+- id: codex-subscription
+  adapter: subscription-cli
+  command: [codex, -p, "{prompt}"]
+  timeout_seconds: 300
+
 - id: agy-subscription
   adapter: subscription-cli
   command: [agy, -p, "{prompt}"]
@@ -131,6 +136,7 @@ Subscription CLI models use an argument list with a required `{prompt}` placehol
 Install and authenticate each CLI separately before selecting it in AI Council. The app
 does not read or manage subscription credentials. Commands run directly without a shell;
 non-zero exits, missing executables, empty output, and timeouts are surfaced as model errors.
+Cancelling a meeting immediately terminates any subscription CLI process still running for it.
 
 The app does not manage or start local model services. It calls configured OpenAI-compatible
 HTTP endpoints or explicitly configured subscription CLI commands.

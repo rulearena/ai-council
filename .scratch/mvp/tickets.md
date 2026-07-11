@@ -392,7 +392,7 @@ Work the **frontier**: any ticket whose blockers are all done. For this MVP, sta
 - [x] A required `{prompt}` placeholder receives the rendered role prompt.
 - [x] Stdout is passed through the existing structured-output parser.
 - [x] Missing commands, non-zero exits, empty output, and timeout become adapter errors.
-- [x] Example configs include `claude -p` and `agy -p`.
+- [x] Example configs include `claude -p`, `codex -p`, and `agy -p`.
 - [x] README states that CLI installation and authentication remain user-managed.
-- [ ] Follow-up: terminate an active CLI subprocess immediately when a meeting is cancelled.
+- [x] Follow-up: terminate an active CLI subprocess immediately when a meeting is cancelled.
 - [ ] Follow-up: add provider/version-specific output normalizers if plain stdout changes.

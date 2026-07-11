@@ -342,6 +342,32 @@ def test_runner_cancel_records_cancellation_and_start_does_not_run_steps(
     ]
 
 
+def test_runner_start_tags_adapter_requests_with_meeting_id(tmp_path: Path) -> None:
+    adapter = FakeAdapter([VALID_OUTPUT] * 4)
+    runner = build_runner(tmp_path, adapter=adapter)
+
+    runner.start(
+        meeting_id="meeting-1",
+        topic="先做後端？",
+        model_assignments={
+            "Blue": ModelConfig(id="mock-blue", adapter="mock"),
+            "Red": ModelConfig(id="mock-red", adapter="mock"),
+            "Judge": ModelConfig(id="mock-judge", adapter="mock"),
+        },
+    )
+
+    assert [request.meeting_id for request in adapter.requests] == ["meeting-1"] * 4
+
+
+def test_runner_cancel_notifies_adapters_that_support_cancellation(tmp_path: Path) -> None:
+    adapter = CancellableFakeAdapter([VALID_OUTPUT] * 4)
+    runner = build_runner(tmp_path, adapter=adapter)
+
+    runner.cancel("meeting-1")
+
+    assert adapter.cancelled_meeting_ids == ["meeting-1"]
+
+
 def test_runner_close_records_closure_and_blocks_future_ai_steps(tmp_path: Path) -> None:
     adapter = FakeAdapter([VALID_OUTPUT] * 2)
     runner = build_runner(tmp_path, adapter=adapter)
@@ -447,3 +473,12 @@ class FakeAdapter:
 class FailingAdapter:
     def complete(self, request: ModelRequest) -> ModelResponse:
         raise AdapterError("adapter boom")
+
+
+class CancellableFakeAdapter(FakeAdapter):
+    def __init__(self, outputs: list[str]) -> None:
+        super().__init__(outputs)
+        self.cancelled_meeting_ids: list[str] = []
+
+    def cancel(self, meeting_id: str) -> None:
+        self.cancelled_meeting_ids.append(meeting_id)

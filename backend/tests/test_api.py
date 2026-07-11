@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import sys
 import threading
 import time
 import urllib.error
@@ -317,6 +318,50 @@ def test_cancelling_background_run_stays_cancelled_when_model_returns(
     time.sleep(0.1)
     events = client.get(f"/meetings/{meeting_id}").json()["events"]
     assert [event["status"] for event in events] == ["cancelled"]
+
+
+def test_cancel_terminates_running_subscription_cli_process(tmp_path: Path) -> None:
+    started_marker = tmp_path / "started"
+    completed_marker = tmp_path / "completed"
+    slow_cli = tmp_path / "slow_cli.py"
+    slow_cli.write_text(
+        "import pathlib, time\n"
+        f"pathlib.Path({str(started_marker)!r}).write_text('started')\n"
+        "time.sleep(10)\n"
+        f"pathlib.Path({str(completed_marker)!r}).write_text('completed')\n",
+        encoding="utf-8",
+    )
+    models_yaml = (
+        "models:\n"
+        "  - id: slow-subscription\n"
+        "    adapter: subscription-cli\n"
+        f"    command: [{sys.executable!r}, {str(slow_cli)!r}, \"{{prompt}}\"]\n"
+        "    timeout_seconds: 30\n"
+    )
+    app = create_test_app(tmp_path, models_yaml=models_yaml)
+    client = TestClient(app)
+    meeting_id = client.post("/meetings", json={"topic": "CLI 取消測試"}).json()["meeting_id"]
+
+    client.post(
+        f"/meetings/{meeting_id}/start",
+        json={
+            "models": {
+                "Blue": "slow-subscription",
+                "Red": "slow-subscription",
+                "Judge": "slow-subscription",
+            }
+        },
+    )
+    deadline = time.monotonic() + 2
+    while not started_marker.exists() and time.monotonic() < deadline:
+        time.sleep(0.01)
+    assert started_marker.exists(), "subscription CLI never started"
+
+    response = client.post(f"/meetings/{meeting_id}/cancel")
+    assert response.status_code == 200
+
+    time.sleep(0.5)
+    assert not completed_marker.exists(), "subscription CLI kept running after cancel"
 
 
 def test_meeting_close_endpoint_records_closure_and_projects_transcript(

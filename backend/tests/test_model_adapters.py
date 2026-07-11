@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 import json
-import subprocess
 import sys
+import time
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from threading import Thread
 
@@ -98,24 +98,69 @@ def test_subscription_cli_adapter_reports_nonzero_exit(tmp_path) -> None:
         )
 
 
-def test_subscription_cli_adapter_reports_timeout(monkeypatch) -> None:
-    def timeout(*args, **kwargs):
-        raise subprocess.TimeoutExpired(cmd=args[0], timeout=3)
+def test_subscription_cli_adapter_reports_timeout(tmp_path) -> None:
+    hanging_cli = tmp_path / "hanging_cli.py"
+    hanging_cli.write_text("import time\ntime.sleep(5)\n", encoding="utf-8")
 
-    monkeypatch.setattr("ai_council.models.adapters.subprocess.run", timeout)
-
-    with pytest.raises(AdapterError, match="timed out after 3 seconds"):
+    with pytest.raises(AdapterError, match="timed out after 0.1 seconds"):
         SubscriptionCLIAdapter().complete(
             ModelRequest(
                 prompt="test",
                 model_config=ModelConfig(
                     id="slow",
                     adapter="subscription-cli",
-                    command=["fake", "-p", "{prompt}"],
-                    timeout_seconds=3,
+                    command=[sys.executable, str(hanging_cli), "{prompt}"],
+                    timeout_seconds=0.1,
                 ),
             )
         )
+
+
+def test_subscription_cli_adapter_cancel_kills_running_process(tmp_path) -> None:
+    started_marker = tmp_path / "started"
+    completed_marker = tmp_path / "completed"
+    slow_cli = tmp_path / "slow_cli.py"
+    slow_cli.write_text(
+        "import pathlib, time\n"
+        f"pathlib.Path({str(started_marker)!r}).write_text('started')\n"
+        "time.sleep(10)\n"
+        f"pathlib.Path({str(completed_marker)!r}).write_text('completed')\n",
+        encoding="utf-8",
+    )
+
+    adapter = SubscriptionCLIAdapter()
+    request = ModelRequest(
+        prompt="test",
+        model_config=ModelConfig(
+            id="slow-subscription",
+            adapter="subscription-cli",
+            command=[sys.executable, str(slow_cli), "{prompt}"],
+            timeout_seconds=30,
+        ),
+        meeting_id="meeting-1",
+    )
+    outcome: dict[str, object] = {}
+
+    def run() -> None:
+        try:
+            outcome["response"] = adapter.complete(request)
+        except AdapterError as error:
+            outcome["error"] = error
+
+    thread = Thread(target=run)
+    thread.start()
+
+    deadline = time.monotonic() + 2
+    while not started_marker.exists() and time.monotonic() < deadline:
+        time.sleep(0.01)
+    assert started_marker.exists(), "subprocess never started"
+
+    adapter.cancel("meeting-1")
+    thread.join(timeout=3)
+
+    assert not thread.is_alive(), "complete() did not return after cancel"
+    assert "error" in outcome, "cancel should surface as an AdapterError"
+    assert not completed_marker.exists(), "subprocess kept running after cancel"
 
 
 def test_http_adapter_posts_chat_completion_request() -> None:

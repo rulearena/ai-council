@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import subprocess
+import threading
 import time
 import urllib.error
 import urllib.request
@@ -18,6 +19,7 @@ class AdapterError(RuntimeError):
 class ModelRequest:
     prompt: str
     model_config: ModelConfig
+    meeting_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -49,6 +51,10 @@ class MockModelAdapter:
 
 
 class SubscriptionCLIAdapter:
+    def __init__(self) -> None:
+        self._active_processes: dict[str, subprocess.Popen[str]] = {}
+        self._lock = threading.Lock()
+
     def complete(self, request: ModelRequest) -> ModelResponse:
         config = request.model_config
         if not config.command:
@@ -58,28 +64,49 @@ class SubscriptionCLIAdapter:
 
         command = [argument.replace("{prompt}", request.prompt) for argument in config.command]
         try:
-            completed = subprocess.run(
+            process = subprocess.Popen(
                 command,
-                capture_output=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
                 text=True,
-                timeout=config.timeout_seconds,
-                check=False,
             )
-        except subprocess.TimeoutExpired as error:
-            raise AdapterError(
-                f"Subscription CLI timed out after {config.timeout_seconds:g} seconds"
-            ) from error
         except OSError as error:
             raise AdapterError(f"Subscription CLI could not start: {error}") from error
 
-        if completed.returncode != 0:
-            detail = completed.stderr.strip() or completed.stdout.strip() or "no output"
+        if request.meeting_id is not None:
+            with self._lock:
+                self._active_processes[request.meeting_id] = process
+        try:
+            try:
+                stdout, stderr = process.communicate(timeout=config.timeout_seconds)
+            except subprocess.TimeoutExpired as error:
+                process.kill()
+                process.communicate()
+                raise AdapterError(
+                    f"Subscription CLI timed out after {config.timeout_seconds:g} seconds"
+                ) from error
+        finally:
+            if request.meeting_id is not None:
+                with self._lock:
+                    if self._active_processes.get(request.meeting_id) is process:
+                        del self._active_processes[request.meeting_id]
+
+        if process.returncode is not None and process.returncode < 0:
+            raise AdapterError("Subscription CLI was cancelled")
+        if process.returncode != 0:
+            detail = stderr.strip() or stdout.strip() or "no output"
             raise AdapterError(
-                f"Subscription CLI exited with code {completed.returncode}: {detail}"
+                f"Subscription CLI exited with code {process.returncode}: {detail}"
             )
-        if not completed.stdout.strip():
+        if not stdout.strip():
             raise AdapterError("Subscription CLI returned empty output")
-        return ModelResponse(raw_output=completed.stdout.strip())
+        return ModelResponse(raw_output=stdout.strip())
+
+    def cancel(self, meeting_id: str) -> None:
+        with self._lock:
+            process = self._active_processes.get(meeting_id)
+        if process is not None:
+            process.kill()
 
 
 class OpenAICompatibleHTTPAdapter:

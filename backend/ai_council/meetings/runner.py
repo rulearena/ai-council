@@ -191,6 +191,10 @@ class MeetingRunner:
                 "status": "cancelled",
             },
         )
+        for adapter in self.adapters.by_name.values():
+            cancel_active_call = getattr(adapter, "cancel", None)
+            if callable(cancel_active_call):
+                cancel_active_call(meeting_id)
 
     def close(self, meeting_id: str) -> None:
         if self._is_terminal(meeting_id):
@@ -260,7 +264,7 @@ class MeetingRunner:
         )
         try:
             response = self.adapters.by_name[config.adapter].complete(
-                ModelRequest(prompt=prompt, model_config=config)
+                ModelRequest(prompt=prompt, model_config=config, meeting_id=meeting_id)
             )
             parsed = self.output_parser.parse(response.raw_output)
         except (AdapterError, OutputParseError, KeyError) as error:
