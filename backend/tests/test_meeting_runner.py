@@ -330,7 +330,7 @@ def test_runner_cancel_records_cancellation_and_start_does_not_run_steps(
     )
 
     events = runner.repository.read_events("meeting-1")
-    assert events == [
+    assert strip_created_at(events) == [
         {
             "event_id": "meeting-1:cancelled",
             "meeting_id": "meeting-1",
@@ -373,7 +373,7 @@ def test_runner_close_records_closure_and_blocks_future_ai_steps(tmp_path: Path)
     )
 
     events = runner.repository.read_events("meeting-1")
-    assert events == [
+    assert strip_created_at(events) == [
         {
             "event_id": "meeting-1:closed",
             "meeting_id": "meeting-1",
@@ -394,7 +394,7 @@ def test_runner_terminal_events_are_idempotent(tmp_path: Path) -> None:
     runner.cancel("meeting-1")
 
     events = runner.repository.read_events("meeting-1")
-    assert events == [
+    assert strip_created_at(events) == [
         {
             "event_id": "meeting-1:closed",
             "meeting_id": "meeting-1",
@@ -425,6 +425,13 @@ def build_runner(tmp_path: Path, *, adapter: object) -> MeetingRunner:
             }
         ),
     )
+
+
+def strip_created_at(events: list[dict[str, object]]) -> list[dict[str, object]]:
+    return [
+        {key: value for key, value in event.items() if key != "created_at"}
+        for event in events
+    ]
 
 
 class FakeAdapter:

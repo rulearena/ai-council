@@ -8,17 +8,25 @@ test('user can run a mock meeting and add chair feedback', async ({ page }) => {
   await expect(page.getByTestId('red-model-select')).toBeVisible()
   await expect(page.getByTestId('judge-model-select')).toBeVisible()
 
-  await page.getByLabel('會議主題').fill(`E2E mock meeting ${Date.now()}`)
+  const topic = `E2E mock meeting ${Date.now()}`
+  await page.getByLabel('會議主題').fill(topic)
   await page.getByTestId('create-meeting-button').click()
 
   await expect(page.getByTestId('transcript-preview')).toContainText('No transcript yet')
   await expect(page.getByTestId('step-timeline')).toContainText('open')
+  await expect(page.getByTestId('operation-status')).toContainText('狀態：idle')
+
+  await page.getByTestId('meeting-search-input').fill(topic)
+  await expect(page.getByTestId('meeting-list')).toContainText(topic)
+  await page.getByTestId('meeting-status-filter').selectOption('open')
+  await expect(page.getByTestId('meeting-list')).toContainText('open')
 
   await page.getByTestId('blue-model-select').selectOption('mock-fast')
   await page.getByTestId('red-model-select').selectOption('mock-fast')
   await page.getByTestId('judge-model-select').selectOption('mock-fast')
   await page.getByTestId('test-blue-model-button').click()
   await expect(page.getByTestId('model-test-status')).toContainText('Blue: available')
+  await expect(page.getByTestId('model-test-status')).toContainText('測試')
   await page.getByTestId('start-meeting-button').click()
 
   await expect(page.getByTestId('step-timeline')).toContainText('blue-propose')
@@ -26,6 +34,11 @@ test('user can run a mock meeting and add chair feedback', async ({ page }) => {
   await expect(page.getByTestId('step-timeline')).toContainText('blue-revise')
   await expect(page.getByTestId('step-timeline')).toContainText('judge-decide')
   await expect(page.getByTestId('debug-panel')).toContainText('"status": "completed"')
+  await expect(page.getByTestId('operation-status')).toContainText('狀態：completed')
+  await expect(page.getByTestId('operation-status')).toContainText('最後步驟：judge-decide')
+  await expect(page.getByTestId('role-output-panel')).toContainText('Role Outputs')
+  await expect(page.getByTestId('role-output-panel')).toContainText('blue-propose')
+  await expect(page.getByTestId('role-output-panel')).toContainText('Recommendation')
   await expect(page.getByTestId('transcript-preview')).toContainText('## Blue - blue-propose')
   await expect(page.getByTestId('transcript-preview')).toContainText('## Judge - judge-decide')
 
@@ -36,6 +49,7 @@ test('user can run a mock meeting and add chair feedback', async ({ page }) => {
 
   await expect(page.getByTestId('step-timeline')).toContainText('human-message')
   await expect(page.getByTestId('debug-panel')).toContainText('"role": "Human"')
+  await expect(page.getByTestId('operation-status')).toContainText('狀態：waiting')
   await expect(page.getByTestId('transcript-preview')).toContainText(
     '主席補充：請先限制在一週可以完成的方案。',
   )
@@ -72,8 +86,10 @@ test('user can run a mock meeting and add chair feedback', async ({ page }) => {
 
   await page.getByTestId('close-meeting-button').click()
 
+  await page.getByTestId('meeting-status-filter').selectOption('all')
   await expect(page.getByTestId('step-timeline')).toContainText('closed')
   await expect(page.getByTestId('meeting-list')).toContainText('closed')
+  await expect(page.getByTestId('operation-status')).toContainText('狀態：closed')
   await expect(page.getByTestId('transcript-preview')).toContainText('**Status:** closed')
   await expect(page.getByTestId('start-meeting-button')).toBeDisabled()
   await expect(page.getByTestId('cancel-meeting-button')).toBeDisabled()

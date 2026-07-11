@@ -11,6 +11,7 @@ import {
   getTranscript,
   requestRoleResponse,
   requestRoleSequence,
+  retryStep,
   startMeeting,
   testModel,
   transcriptDownloadUrl,
@@ -24,6 +25,11 @@ type SequencePreset = {
   id: string
   label: string
   roles: CouncilRole[]
+}
+type ModelTestView = {
+  status: 'unknown' | 'available' | 'unavailable'
+  testedAt: string
+  error: string
 }
 
 const sequencePresets: SequencePreset[] = [
@@ -39,13 +45,15 @@ const selectedMeeting = ref<Meeting | null>(null)
 const selectedEvent = ref<MeetingEvent | null>(null)
 const topic = ref('先做後端核心流程')
 const selectedModels = ref({ Blue: '', Red: '', Judge: '' })
-const modelTestResults = ref<Record<CouncilRole, string>>({
-  Blue: 'unknown',
-  Red: 'unknown',
-  Judge: 'unknown',
+const modelTestResults = ref<Record<CouncilRole, ModelTestView>>({
+  Blue: { status: 'unknown', testedAt: '', error: '' },
+  Red: { status: 'unknown', testedAt: '', error: '' },
+  Judge: { status: 'unknown', testedAt: '', error: '' },
 })
 const chairMessage = ref('')
 const selectedSequencePresetId = ref(sequencePresets[0].id)
+const meetingSearch = ref('')
+const statusFilter = ref<'all' | Meeting['status']>('all')
 const transcript = ref('')
 const loading = ref(false)
 const error = ref('')
@@ -57,6 +65,23 @@ const isTerminalMeeting = computed(() =>
 const startButtonLabel = computed(() => (events.value.length ? '繼續討論' : '開始'))
 const selectedSequencePreset = computed(
   () => sequencePresets.find((preset) => preset.id === selectedSequencePresetId.value) ?? sequencePresets[0],
+)
+const operationStatus = computed(() => {
+  if (loading.value) return 'running'
+  return selectedMeeting.value?.activity_status ?? 'idle'
+})
+const filteredMeetings = computed(() => {
+  const query = meetingSearch.value.trim().toLowerCase()
+  return meetings.value
+    .filter((meeting) => {
+      const matchesStatus = statusFilter.value === 'all' || meeting.status === statusFilter.value
+      const searchable = `${meeting.topic} ${meeting.meeting_id} ${meeting.last_step_id ?? ''}`.toLowerCase()
+      return matchesStatus && (!query || searchable.includes(query))
+    })
+    .sort((left, right) => right.updated_at.localeCompare(left.updated_at))
+})
+const roleOutputEvents = computed(() =>
+  events.value.filter((event) => event.parsed_output),
 )
 const canRun = computed(
   () =>
@@ -129,9 +154,11 @@ async function testSelectedModel(role: CouncilRole) {
   if (!modelId) return
   await runAction(async () => {
     const result = await testModel(modelId)
-    modelTestResults.value[role] = result.error
-      ? `${result.status}: ${result.error}`
-      : result.status
+    modelTestResults.value[role] = {
+      status: result.status,
+      testedAt: result.tested_at,
+      error: result.error ?? '',
+    }
   })
 }
 
@@ -162,6 +189,21 @@ async function requestSelectedRoleSequence() {
     )
     await openMeeting(selectedMeeting.value!.meeting_id)
   })
+}
+
+async function retrySelectedStep(event: MeetingEvent) {
+  if (!selectedMeeting.value || !canRun.value || event.status !== 'failed') return
+  await runAction(async () => {
+    await retryStep(selectedMeeting.value!.meeting_id, event.step_id, selectedModels.value)
+    await openMeeting(selectedMeeting.value!.meeting_id)
+  })
+}
+
+function formatDateTime(value: string | undefined): string {
+  if (!value) return '-'
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return value
+  return date.toLocaleString()
 }
 
 async function runAction(action: () => Promise<void>) {
@@ -195,8 +237,22 @@ async function runAction(action: () => Promise<void>) {
           建立
         </button>
       </div>
+      <div class="meeting-filters" data-testid="meeting-filters">
+        <input
+          v-model="meetingSearch"
+          aria-label="搜尋會議"
+          placeholder="搜尋會議..."
+          data-testid="meeting-search-input"
+        />
+        <select v-model="statusFilter" data-testid="meeting-status-filter">
+          <option value="all">全部</option>
+          <option value="open">open</option>
+          <option value="closed">closed</option>
+          <option value="cancelled">cancelled</option>
+        </select>
+      </div>
       <button
-        v-for="meeting in meetings"
+        v-for="meeting in filteredMeetings"
         :key="meeting.meeting_id"
         type="button"
         class="meeting-item"
@@ -205,6 +261,8 @@ async function runAction(action: () => Promise<void>) {
       >
         <span>{{ meeting.topic }}</span>
         <em class="status-badge">{{ meeting.status }}</em>
+        <strong>{{ meeting.activity_status }}</strong>
+        <small>更新 {{ formatDateTime(meeting.updated_at) }}</small>
         <small>{{ meeting.meeting_id }}</small>
       </button>
     </aside>
@@ -288,9 +346,27 @@ async function runAction(action: () => Promise<void>) {
       <p v-if="error" class="error">{{ error }}</p>
 
       <section class="model-test-status" data-testid="model-test-status">
-        <span>Blue: {{ modelTestResults.Blue }}</span>
-        <span>Red: {{ modelTestResults.Red }}</span>
-        <span>Judge: {{ modelTestResults.Judge }}</span>
+        <span>
+          Blue: {{ modelTestResults.Blue.status }}
+          <small v-if="modelTestResults.Blue.testedAt">測試 {{ formatDateTime(modelTestResults.Blue.testedAt) }}</small>
+          <em v-if="modelTestResults.Blue.error">{{ modelTestResults.Blue.error }}</em>
+        </span>
+        <span>
+          Red: {{ modelTestResults.Red.status }}
+          <small v-if="modelTestResults.Red.testedAt">測試 {{ formatDateTime(modelTestResults.Red.testedAt) }}</small>
+          <em v-if="modelTestResults.Red.error">{{ modelTestResults.Red.error }}</em>
+        </span>
+        <span>
+          Judge: {{ modelTestResults.Judge.status }}
+          <small v-if="modelTestResults.Judge.testedAt">測試 {{ formatDateTime(modelTestResults.Judge.testedAt) }}</small>
+          <em v-if="modelTestResults.Judge.error">{{ modelTestResults.Judge.error }}</em>
+        </span>
+      </section>
+
+      <section class="operation-status" data-testid="operation-status">
+        <span>狀態：{{ operationStatus }}</span>
+        <span v-if="selectedMeeting?.last_step_id">最後步驟：{{ selectedMeeting.last_step_id }}</span>
+        <span v-if="selectedMeeting">更新：{{ formatDateTime(selectedMeeting.updated_at) }}</span>
       </section>
 
       <section class="chair-panel">
@@ -366,18 +442,30 @@ async function runAction(action: () => Promise<void>) {
           <div class="section-title">
             <h2>{{ selectedMeeting?.topic ?? '尚未選擇會議' }}</h2>
             <em v-if="selectedMeeting" class="status-badge">{{ selectedMeeting.status }}</em>
+            <em v-if="selectedMeeting" class="status-badge">{{ selectedMeeting.activity_status }}</em>
           </div>
-          <button
+          <div
             v-for="event in events"
             :key="event.event_id"
-            type="button"
             class="timeline-row"
-            @click="selectedEvent = event"
           >
-            <span>{{ event.role }}</span>
-            <strong>{{ event.step_id }}</strong>
-            <em>{{ event.status }}</em>
-          </button>
+            <button type="button" class="timeline-main" @click="selectedEvent = event">
+              <span>{{ event.role }}</span>
+              <strong>{{ event.step_id }}</strong>
+              <em>{{ event.status }}</em>
+              <small>{{ formatDateTime(event.created_at) }}</small>
+            </button>
+            <button
+              v-if="event.status === 'failed'"
+              type="button"
+              class="retry-button"
+              data-testid="retry-step-button"
+              @click="retrySelectedStep(event)"
+              :disabled="loading || !canRun"
+            >
+              Retry
+            </button>
+          </div>
         </section>
 
         <section class="debug" data-testid="debug-panel">
@@ -385,6 +473,40 @@ async function runAction(action: () => Promise<void>) {
           <pre>{{ selectedEvent ? JSON.stringify(selectedEvent, null, 2) : 'No event selected' }}</pre>
         </section>
       </div>
+
+      <section class="role-output-panel" data-testid="role-output-panel">
+        <h2>Role Outputs</h2>
+        <div v-if="roleOutputEvents.length" class="role-output-grid">
+          <article
+            v-for="event in roleOutputEvents"
+            :key="`${event.event_id}:output`"
+            class="role-output-card"
+          >
+            <header>
+              <strong>{{ event.role }}</strong>
+              <span>{{ event.step_id }}</span>
+            </header>
+            <p>{{ event.parsed_output?.summary }}</p>
+            <h3>Arguments</h3>
+            <ul>
+              <li v-for="argument in event.parsed_output?.arguments" :key="argument.title">
+                <strong>{{ argument.title }}</strong>
+                <span>{{ argument.detail }}</span>
+              </li>
+            </ul>
+            <h3>Risks</h3>
+            <ul>
+              <li v-for="risk in event.parsed_output?.risks" :key="risk.title">
+                <strong>{{ risk.title }}</strong>
+                <span>{{ risk.detail }}</span>
+              </li>
+            </ul>
+            <h3>Recommendation</h3>
+            <p>{{ event.parsed_output?.recommendation }}</p>
+          </article>
+        </div>
+        <p v-else>No role output yet</p>
+      </section>
 
       <section class="transcript" data-testid="transcript-preview">
         <div class="transcript-header">

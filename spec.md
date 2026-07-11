@@ -331,13 +331,16 @@ MVP 前端採操作台 / 除錯台風格，不做華麗會議室視覺化。
 上方：create meeting + Blue/Red/Judge model selectors
 中央：step timeline
 右側：raw/debug panel
-底部：transcript preview
+底部：role output cards + transcript preview
 ```
 
 前端必須使用穩定 `data-testid` contract，以利未來測試：
 
 ```text
 meeting-list
+meeting-filters
+meeting-search-input
+meeting-status-filter
 create-meeting-button
 blue-model-select
 red-model-select
@@ -347,6 +350,8 @@ cancel-meeting-button
 close-meeting-button
 step-timeline
 debug-panel
+operation-status
+role-output-panel
 transcript-preview
 ```
 
@@ -377,6 +382,7 @@ cancelled
 - 第二輪起使用 `round-N-*` step id，例如 `round-2-blue-propose`
 - 事件同時保留 `base_step_id` 與 `round`，讓前端顯示與後續 retry/投影能分辨回合
 - retry 可接受 round-scoped failed step，例如 `round-2-red-critique`，並用 `base_step_id` 回到固定步驟序列後繼續該輪
+- 前端會在 failed timeline event 顯示 retry 按鈕，成功後重新整理 meeting 與 transcript
 - 主席也可以指定單一角色回應，不必跑完整四步流程
 - 指定角色回應使用 API `POST /meetings/{meeting_id}/roles/{role}/respond`
 - 指定角色回應 step id 使用 `directed-N-{role}-response`，例如 `directed-1-blue-response`
@@ -394,9 +400,14 @@ cancelled
 - 前端在 terminal state 下會停用開始、取消、結案、主席發言、指定角色回應、角色序列等會新增事件的操作
 - API 在 terminal state 下會以 `409 Conflict` 拒絕 start、主席發言、指定角色回應、角色序列、retry 等會新增事件的操作
 - API 會投影 meeting status：`open`、`closed`、`cancelled`
-- 前端 meeting list 與選中會議標題會顯示 status badge
+- API 會投影 `activity_status`：`idle`、`waiting`、`completed`、`failed`、`closed`、`cancelled`
+- API 會在 meeting read model 投影 `created_at`、`updated_at`、`last_step_id`
+- 前端 meeting list 與選中會議標題會顯示 status badge 與 activity status
+- 前端 meeting list 支援搜尋、status 篩選，並依 `updated_at` 由新到舊排序
+- model test response 會回傳 `tested_at`，前端顯示最後測試時間與錯誤訊息
+- 前端提供 role output cards，把 `summary`、`arguments`、`risks`、`recommendation` 從 raw JSON 中拆出顯示
 
-這個切片已支援主席發言、固定回合續跑、指定單一角色回應、預設角色序列自動接續與結案。尚未實作的是更完整的拓撲編輯，例如自訂 Agent 數量、拖拉排序、條件式分支、暫停/恢復佇列與可視化 speaking order。
+這個切片已支援主席發言、固定回合續跑、指定單一角色回應、預設角色序列自動接續、失敗 retry、列表搜尋/篩選、角色輸出卡片與結案。尚未實作的是更完整的拓撲編輯，例如自訂 Agent 數量、拖拉排序、條件式分支、暫停/恢復佇列與可視化 speaking order。
 
 新增前端測試 id：
 
@@ -410,6 +421,7 @@ request-judge-response-button
 role-sequence-controls
 sequence-preset-select
 run-sequence-button
+retry-step-button
 ```
 
 ## 13. Testing Strategy
@@ -432,7 +444,7 @@ MVP 一開始就加測試，後端核心測試優先。
 前端 MVP 要求：
 
 - 主要互動元件與狀態區塊有穩定 `data-testid`
-- Playwright E2E 覆蓋建立會議、mock model test、開始固定回合、主席發言、指定角色回應、預設角色序列、續跑第二回合、結案與 terminal disabled state
+- Playwright E2E 覆蓋建立會議、列表搜尋/篩選、mock model test、狀態投影、角色輸出卡片、開始固定回合、主席發言、指定角色回應、預設角色序列、續跑第二回合、結案與 terminal disabled state
 
 前端 component tests、真實 provider integration tests、跨瀏覽器/視覺回歸完整 gate 進 backlog。
 
@@ -466,7 +478,7 @@ config/models.yaml.example
 11. Regex purifier
 12. LLM fallback purifier
 13. Anonymization layer
-14. Meeting search
+14. Advanced meeting search
 15. Meeting tags/folders
 16. Favorites/pinning
 17. Share links/export views

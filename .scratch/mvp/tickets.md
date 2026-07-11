@@ -298,3 +298,60 @@ Work the **frontier**: any ticket whose blockers are all done. For this MVP, sta
 - [x] `scripts/dev_frontend.sh` starts Vite with the configured API base URL.
 - [x] `scripts/test_all.sh` runs backend tests and frontend build.
 - [x] README documents the scripts and E2E validation flow.
+
+## 25 - Meeting Activity Projection
+
+**What to build:** Expose richer meeting state so the UI can show whether the latest meeting activity is idle, waiting, completed, failed, closed, or cancelled.
+
+**Blocked by:** 18 - Meeting Status Projection.
+
+- [x] Events receive `created_at` timestamps when appended.
+- [x] Meeting create/list/get responses include `created_at` and `updated_at`.
+- [x] Meeting create/list/get responses include `activity_status`.
+- [x] Meeting create/list/get responses include `last_step_id`.
+- [x] Action endpoints return projected activity status after execution.
+
+## 26 - Frontend Failed Step Retry
+
+**What to build:** Let the user retry failed steps directly from the timeline.
+
+**Blocked by:** 19 - Round Scoped Retry; 25 - Meeting Activity Projection.
+
+- [x] Frontend API client exposes retry step.
+- [x] Failed timeline events show a retry button.
+- [x] Retry refreshes meeting state and transcript after completion.
+- [x] Retry controls are disabled for terminal meetings or missing model selections.
+- [x] Retry API returns `400` for non-failed steps instead of leaking a server error.
+
+## 27 - Model Test Detail Display
+
+**What to build:** Make model test results more useful during local model validation.
+
+**Blocked by:** 20 - Model Connection Test.
+
+- [x] Model test response includes `tested_at`.
+- [x] Frontend displays status per role.
+- [x] Frontend displays last tested time.
+- [x] Frontend displays adapter error text when unavailable.
+
+## 28 - Meeting List Usability
+
+**What to build:** Improve meeting navigation once the user has more than a few meetings.
+
+**Blocked by:** 18 - Meeting Status Projection; 25 - Meeting Activity Projection.
+
+- [x] Meeting list supports text search.
+- [x] Meeting list supports status filter.
+- [x] Meeting list sorts by `updated_at` descending.
+- [x] Meeting rows show status, activity status, last updated time, and id.
+
+## 29 - Role Output Cards
+
+**What to build:** Add a readable role-output view so users do not have to inspect raw JSON for normal review.
+
+**Blocked by:** 09 - Vue Control And Debug UI; 23 - Expanded E2E Flow.
+
+- [x] Frontend renders parsed role outputs as cards.
+- [x] Cards show role and step id.
+- [x] Cards separate summary, arguments, risks, and recommendation.
+- [x] E2E verifies role-output cards update after a mock round.

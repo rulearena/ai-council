@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import re
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -15,8 +16,12 @@ class MeetingRepository:
     def append_event(self, meeting_id: str, event: dict[str, Any]) -> None:
         event_log = self._event_log_path(meeting_id)
         event_log.parent.mkdir(parents=True, exist_ok=True)
+        stored_event = {
+            "created_at": datetime.now(UTC).isoformat(),
+            **event,
+        }
         with event_log.open("a", encoding="utf-8") as file:
-            file.write(json.dumps(event, ensure_ascii=False) + "\n")
+            file.write(json.dumps(stored_event, ensure_ascii=False) + "\n")
 
     def read_events(self, meeting_id: str) -> list[dict[str, Any]]:
         event_log = self._event_log_path(meeting_id)

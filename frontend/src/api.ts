@@ -11,6 +11,7 @@ export type ModelConfig = {
 
 export type ModelTestResult = {
   status: 'available' | 'unavailable'
+  tested_at: string
   error?: string
 }
 
@@ -18,6 +19,10 @@ export type Meeting = {
   meeting_id: string
   topic: string
   status: 'open' | 'closed' | 'cancelled'
+  activity_status: 'idle' | 'waiting' | 'completed' | 'failed' | 'closed' | 'cancelled'
+  created_at: string
+  updated_at: string
+  last_step_id: string | null
   events?: MeetingEvent[]
 }
 
@@ -31,6 +36,7 @@ export type MeetingEvent = {
   base_step_id?: string
   round?: number
   content?: string
+  created_at?: string
   interaction_type?: 'directed-role-response' | 'role-sequence-response'
   directed_sequence?: number
   sequence?: number
@@ -107,6 +113,14 @@ export async function requestRoleSequence(
   models: Record<'Blue' | 'Red' | 'Judge', string>,
 ): Promise<void> {
   await postJson(`/meetings/${meetingId}/sequences`, { roles, models })
+}
+
+export async function retryStep(
+  meetingId: string,
+  stepId: string,
+  models: Record<'Blue' | 'Red' | 'Judge', string>,
+): Promise<void> {
+  await postJson(`/meetings/${meetingId}/steps/${stepId}/retry`, { models })
 }
 
 export async function getTranscript(meetingId: string): Promise<string> {

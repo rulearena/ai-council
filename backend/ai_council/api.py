@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import uuid
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -82,8 +83,13 @@ def create_app(
     def test_model(model_config_id: str) -> dict[str, str]:
         model = get_model(model_repository, model_config_id)
         adapter = model_adapters.get(model.adapter)
+        tested_at = now_iso()
         if adapter is None:
-            return {"status": "unavailable", "error": f"Unknown adapter: {model.adapter}"}
+            return {
+                "status": "unavailable",
+                "tested_at": tested_at,
+                "error": f"Unknown adapter: {model.adapter}",
+            }
         try:
             adapter.complete(
                 ModelRequest(
@@ -92,23 +98,28 @@ def create_app(
                 )
             )
         except AdapterError as error:
-            return {"status": "unavailable", "error": str(error)}
-        return {"status": "available"}
+            return {"status": "unavailable", "tested_at": tested_at, "error": str(error)}
+        return {"status": "available", "tested_at": tested_at}
 
     @app.post("/meetings")
-    def create_meeting(request: CreateMeetingRequest) -> dict[str, str]:
+    def create_meeting(request: CreateMeetingRequest) -> dict[str, Any]:
         meeting_id = f"meeting-{uuid.uuid4().hex}"
-        metadata = {"meeting_id": meeting_id, "topic": request.topic}
+        created_at = now_iso()
+        metadata = {
+            "meeting_id": meeting_id,
+            "topic": request.topic,
+            "created_at": created_at,
+        }
         metadata_store.save(metadata)
-        return {**metadata, "status": "open"}
+        return project_meeting_summary(metadata, [])
 
     @app.get("/meetings")
-    def list_meetings() -> list[dict[str, str]]:
+    def list_meetings() -> list[dict[str, Any]]:
         return [
-            {
-                **metadata,
-                "status": project_meeting_status(repository.read_events(metadata["meeting_id"])),
-            }
+            project_meeting_summary(
+                metadata,
+                repository.read_events(metadata["meeting_id"]),
+            )
             for metadata in metadata_store.list()
         ]
 
@@ -117,8 +128,7 @@ def create_app(
         metadata = metadata_store.get(meeting_id)
         events = repository.read_events(meeting_id)
         return {
-            **metadata,
-            "status": project_meeting_status(events),
+            **project_meeting_summary(metadata, events),
             "events": events,
         }
 
@@ -134,7 +144,7 @@ def create_app(
                 for role, model_id in request.models.items()
             },
         )
-        return {"status": "completed"}
+        return {"status": project_activity_status(repository.read_events(meeting_id))}
 
     @app.post("/meetings/{meeting_id}/cancel")
     def cancel_meeting(meeting_id: str) -> dict[str, str]:
@@ -187,7 +197,7 @@ def create_app(
             )
         except ValueError as error:
             raise HTTPException(status_code=400, detail=str(error)) from error
-        return {"status": "completed"}
+        return {"status": project_activity_status(repository.read_events(meeting_id))}
 
     @app.post("/meetings/{meeting_id}/sequences")
     def respond_as_sequence(
@@ -208,7 +218,7 @@ def create_app(
             )
         except ValueError as error:
             raise HTTPException(status_code=400, detail=str(error)) from error
-        return {"status": "completed"}
+        return {"status": project_activity_status(repository.read_events(meeting_id))}
 
     @app.post("/meetings/{meeting_id}/steps/{step_id}/retry")
     def retry_step(
@@ -218,16 +228,19 @@ def create_app(
     ) -> dict[str, str]:
         metadata = metadata_store.get(meeting_id)
         reject_terminal_meeting(repository, meeting_id)
-        runner.retry_failed_step(
-            meeting_id=meeting_id,
-            step_id=step_id,
-            topic=metadata["topic"],
-            model_assignments={
-                role: get_model(model_repository, model_id)
-                for role, model_id in request.models.items()
-            },
-        )
-        return {"status": "completed"}
+        try:
+            runner.retry_failed_step(
+                meeting_id=meeting_id,
+                step_id=step_id,
+                topic=metadata["topic"],
+                model_assignments={
+                    role: get_model(model_repository, model_id)
+                    for role, model_id in request.models.items()
+                },
+            )
+        except ValueError as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
+        return {"status": project_activity_status(repository.read_events(meeting_id))}
 
     @app.get("/meetings/{meeting_id}/transcript.md")
     def get_transcript(meeting_id: str) -> PlainTextResponse:
@@ -273,6 +286,41 @@ def project_meeting_status(events: list[dict[str, Any]]) -> str:
         if status in {"closed", "cancelled"}:
             return str(status)
     return "open"
+
+
+def project_activity_status(events: list[dict[str, Any]]) -> str:
+    if not events:
+        return "idle"
+    terminal_status = project_meeting_status(events)
+    if terminal_status in {"closed", "cancelled"}:
+        return terminal_status
+    latest_event = events[-1]
+    if latest_event.get("status") == "failed":
+        return "failed"
+    if latest_event.get("role") == "Human":
+        return "waiting"
+    return "completed"
+
+
+def project_meeting_summary(
+    metadata: dict[str, str],
+    events: list[dict[str, Any]],
+) -> dict[str, Any]:
+    created_at = metadata.get("created_at", "")
+    updated_at = str(events[-1].get("created_at", created_at)) if events else created_at
+    latest_event = events[-1] if events else None
+    return {
+        **metadata,
+        "created_at": created_at,
+        "updated_at": updated_at,
+        "status": project_meeting_status(events),
+        "activity_status": project_activity_status(events),
+        "last_step_id": latest_event.get("step_id") if latest_event else None,
+    }
+
+
+def now_iso() -> str:
+    return datetime.now(UTC).isoformat()
 
 
 class MeetingMetadataStore:

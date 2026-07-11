@@ -64,7 +64,9 @@ models:
     response = client.post("/models/http-ok/test")
 
     assert response.status_code == 200
-    assert response.json() == {"status": "available"}
+    payload = response.json()
+    assert payload["status"] == "available"
+    assert payload["tested_at"]
 
 
 def test_http_model_test_endpoint_marks_unavailable_on_adapter_error(
@@ -94,10 +96,10 @@ models:
     response = client.post("/models/http-down/test")
 
     assert response.status_code == 200
-    assert response.json() == {
-        "status": "unavailable",
-        "error": "<urlopen error connection refused>",
-    }
+    payload = response.json()
+    assert payload["status"] == "unavailable"
+    assert payload["tested_at"]
+    assert payload["error"] == "<urlopen error connection refused>"
 
 
 def test_meeting_create_list_get_start_and_transcript(tmp_path: Path) -> None:
@@ -108,12 +110,18 @@ def test_meeting_create_list_get_start_and_transcript(tmp_path: Path) -> None:
 
     assert created["topic"] == "先做後端？"
     assert created["status"] == "open"
+    assert created["activity_status"] == "idle"
+    assert created["created_at"]
+    assert created["updated_at"] == created["created_at"]
+    assert created["last_step_id"] is None
     meeting_id = created["meeting_id"]
     listed = client.get("/meetings").json()[0]
     assert listed["meeting_id"] == meeting_id
     assert listed["status"] == "open"
+    assert listed["activity_status"] == "idle"
     fetched = client.get(f"/meetings/{meeting_id}").json()
     assert fetched["status"] == "open"
+    assert fetched["activity_status"] == "idle"
     assert fetched["events"] == []
 
     start_response = client.post(
@@ -128,7 +136,12 @@ def test_meeting_create_list_get_start_and_transcript(tmp_path: Path) -> None:
     )
 
     assert start_response.status_code == 200
+    assert start_response.json()["status"] == "completed"
     meeting = client.get(f"/meetings/{meeting_id}").json()
+    assert meeting["status"] == "open"
+    assert meeting["activity_status"] == "completed"
+    assert meeting["last_step_id"] == "judge-decide"
+    assert meeting["updated_at"] >= meeting["created_at"]
     completed_steps = [
         event["step_id"]
         for event in meeting["events"]
@@ -144,6 +157,30 @@ def test_meeting_create_list_get_start_and_transcript(tmp_path: Path) -> None:
     assert transcript.status_code == 200
     assert transcript.text.startswith("# 先做後端？\n")
     assert "## Blue - blue-propose" in transcript.text
+
+
+def test_meeting_activity_status_projects_failed_latest_step(tmp_path: Path) -> None:
+    app = create_test_app(
+        tmp_path,
+        models_yaml="""
+models:
+  - id: broken-model
+    adapter: missing-adapter
+""".strip(),
+    )
+    client = TestClient(app)
+    meeting_id = client.post("/meetings", json={"topic": "失敗測試"}).json()["meeting_id"]
+
+    response = client.post(
+        f"/meetings/{meeting_id}/start",
+        json={"models": {"Blue": "broken-model"}},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "failed"
+    meeting = client.get(f"/meetings/{meeting_id}").json()
+    assert meeting["activity_status"] == "failed"
+    assert meeting["last_step_id"] == "blue-propose"
 
 
 def test_meeting_cancel_endpoint_records_cancellation(tmp_path: Path) -> None:
@@ -365,6 +402,20 @@ def test_chair_role_response_requires_model_for_requested_role(tmp_path: Path) -
 
     assert response.status_code == 400
     assert response.json()["detail"] == "Missing model assignment for role: Blue"
+
+
+def test_retry_step_returns_bad_request_when_step_is_not_failed(tmp_path: Path) -> None:
+    app = create_test_app(tmp_path)
+    client = TestClient(app)
+    meeting_id = client.post("/meetings", json={"topic": "retry 邊界"}).json()["meeting_id"]
+
+    response = client.post(
+        f"/meetings/{meeting_id}/steps/blue-propose/retry",
+        json={"models": {"Blue": "mock-fast", "Red": "mock-fast", "Judge": "mock-fast"}},
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "Step is not failed: blue-propose"
 
 
 def test_local_frontend_origin_can_call_api(tmp_path: Path) -> None:

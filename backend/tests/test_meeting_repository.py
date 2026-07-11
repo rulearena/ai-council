@@ -23,7 +23,9 @@ def test_append_event_creates_meeting_directory_and_event_log(
 
     event_log = tmp_path / "meetings" / "meeting-1" / "events.jsonl"
     assert event_log.exists()
-    assert json.loads(event_log.read_text(encoding="utf-8").strip()) == event
+    stored_event = json.loads(event_log.read_text(encoding="utf-8").strip())
+    assert stored_event["created_at"]
+    assert {key: value for key, value in stored_event.items() if key != "created_at"} == event
 
 
 def test_read_events_returns_empty_list_when_event_log_is_missing(
@@ -42,7 +44,9 @@ def test_appended_events_round_trip_in_order(repository: MeetingRepository) -> N
     for event in events:
         repository.append_event("meeting-1", event)
 
-    assert repository.read_events("meeting-1") == events
+    stored_events = repository.read_events("meeting-1")
+    assert [event["event_id"] for event in stored_events] == ["evt-1", "evt-2", "evt-3"]
+    assert all(event["created_at"] for event in stored_events)
 
 
 def test_repository_data_dir_can_be_injected(tmp_path: Path) -> None:

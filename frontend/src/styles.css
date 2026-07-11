@@ -70,12 +70,20 @@ h2 {
 }
 
 .create-box input,
+.meeting-filters input,
+.meeting-filters select,
 .toolbar select,
 .sequence-panel select {
   min-width: 0;
   border: 1px solid #c7d0d9;
   background: #fff;
   padding: 8px;
+}
+
+.meeting-filters {
+  display: grid;
+  gap: 8px;
+  margin-bottom: 12px;
 }
 
 .meeting-item {
@@ -96,6 +104,12 @@ h2 {
 .meeting-item small {
   color: #607080;
   overflow-wrap: anywhere;
+}
+
+.meeting-item strong {
+  color: #172026;
+  font-size: 12px;
+  font-weight: 600;
 }
 
 .meeting-item .status-badge {
@@ -169,6 +183,31 @@ h2 {
 }
 
 .model-test-status span {
+  display: grid;
+  gap: 3px;
+  border: 1px solid #d6dde4;
+  border-radius: 6px;
+  background: #ffffff;
+  padding: 6px 8px;
+}
+
+.model-test-status small,
+.model-test-status em {
+  color: #607080;
+  font-size: 12px;
+  font-style: normal;
+  overflow-wrap: anywhere;
+}
+
+.operation-status {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  color: #4a5a68;
+  font-size: 13px;
+}
+
+.operation-status span {
   border: 1px solid #d6dde4;
   border-radius: 6px;
   background: #ffffff;
@@ -242,6 +281,7 @@ h2 {
 
 .timeline,
 .debug,
+.role-output-panel,
 .transcript {
   min-width: 0;
   border: 1px solid #d6dde4;
@@ -259,27 +299,99 @@ h2 {
 
 .timeline-row {
   display: grid;
-  grid-template-columns: 80px minmax(0, 1fr) 110px;
+  grid-template-columns: minmax(0, 1fr) auto;
   gap: 10px;
   width: 100%;
-  margin-top: 10px;
+  margin-top: 8px;
+}
+
+.timeline-main {
+  display: grid;
+  grid-template-columns: 80px minmax(0, 1fr) 90px 150px;
+  gap: 10px;
+  width: 100%;
   padding: 10px;
   border-radius: 6px;
   text-align: left;
 }
 
-.timeline-row strong,
-.timeline-row em {
+.timeline-main strong,
+.timeline-main em,
+.timeline-main small {
   overflow-wrap: anywhere;
 }
 
-.timeline-row span {
+.timeline-main span {
   color: #2f6fed;
 }
 
-.timeline-row em {
+.timeline-main em,
+.timeline-main small {
   color: #607080;
   font-style: normal;
+}
+
+.retry-button {
+  min-height: 36px;
+  align-self: stretch;
+  padding: 7px 12px;
+  border-radius: 6px;
+}
+
+.role-output-panel > p {
+  margin: 12px 0 0;
+  color: #607080;
+}
+
+.role-output-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.role-output-card {
+  border: 1px solid #d6dde4;
+  border-radius: 8px;
+  padding: 12px;
+}
+
+.role-output-card header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.role-output-card header span,
+.role-output-card p,
+.role-output-card li span {
+  overflow-wrap: anywhere;
+}
+
+.role-output-card h3 {
+  margin: 10px 0 6px;
+  color: #4a5a68;
+  font-size: 13px;
+}
+
+.role-output-card p {
+  margin: 8px 0 0;
+}
+
+.role-output-card ul {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  padding-left: 18px;
+}
+
+.role-output-card li {
+  line-height: 1.4;
+}
+
+.role-output-card li strong {
+  display: block;
 }
 
 pre {
@@ -306,7 +418,8 @@ pre {
 @media (max-width: 900px) {
   .app-shell,
   .main-grid,
-  .chair-panel {
+  .chair-panel,
+  .timeline-main {
     grid-template-columns: 1fr;
   }
 
