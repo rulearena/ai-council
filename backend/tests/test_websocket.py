@@ -73,7 +73,12 @@ def test_meeting_websocket_streams_background_run_status_and_events(
             },
         )
 
-        assert snapshot == {"type": "snapshot", "events": [], "activity_status": "idle"}
+        assert snapshot == {
+            "type": "snapshot",
+            "events": [],
+            "stream_events": [],
+            "activity_status": "idle",
+        }
         assert response.status_code == 202
         running = websocket.receive_json()
         assert running["activity_status"] == "running"
@@ -94,17 +99,71 @@ def test_meeting_websocket_streams_background_run_status_and_events(
     ]
 
 
-def create_test_app(tmp_path: Path):
-    config_dir = tmp_path / "config"
-    config_dir.mkdir()
-    (config_dir / "models.yaml").write_text(
-        """
+def test_meeting_websocket_streams_ephemeral_token_deltas(tmp_path: Path) -> None:
+    app = create_test_app(
+        tmp_path,
+        models_yaml="""
+models:
+  - id: mock-streaming
+    adapter: mock
+    extra_body:
+      mock_stream_chunks:
+        - Hel
+        - lo
+""".strip(),
+    )
+    client = TestClient(app)
+    meeting_id = client.post("/meetings", json={"topic": "WS token streaming"}).json()[
+        "meeting_id"
+    ]
+
+    with client.websocket_connect(f"/meetings/{meeting_id}/events") as websocket:
+        snapshot = websocket.receive_json()
+        response = client.post(
+            f"/meetings/{meeting_id}/start",
+            json={
+                "models": {
+                    "Blue": "mock-streaming",
+                    "Red": "mock-streaming",
+                    "Judge": "mock-streaming",
+                }
+            },
+        )
+
+        assert snapshot == {
+            "type": "snapshot",
+            "events": [],
+            "stream_events": [],
+            "activity_status": "idle",
+        }
+        assert response.status_code == 202
+
+        stream_events = []
+        while True:
+            update = websocket.receive_json()
+            stream_events.extend(update.get("stream_events", []))
+            if update["activity_status"] == "completed":
+                break
+
+    assert [event["content"] for event in stream_events[:2]] == ["Hel", "lo"]
+    assert stream_events[0]["type"] == "token_delta"
+    assert stream_events[0]["step_id"] == "blue-propose"
+    persisted_events = client.get(f"/meetings/{meeting_id}").json()["events"]
+    assert all(event.get("type") != "token_delta" for event in persisted_events)
+
+
+def create_test_app(
+    tmp_path: Path,
+    *,
+    models_yaml: str = """
 models:
   - id: mock-fast
     adapter: mock
 """.strip(),
-        encoding="utf-8",
-    )
+):
+    config_dir = tmp_path / "config"
+    config_dir.mkdir()
+    (config_dir / "models.yaml").write_text(models_yaml, encoding="utf-8")
     prompt_dir = tmp_path / "prompts"
     prompt_dir.mkdir()
     for template in ["blue_propose", "red", "blue_revise", "judge"]:

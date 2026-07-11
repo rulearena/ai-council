@@ -55,6 +55,17 @@ export type MeetingEvent = {
   corrects_event_id?: string
 }
 
+export type MeetingStreamEvent = {
+  type: 'token_delta'
+  meeting_id: string
+  step_id: string
+  role: string
+  attempt: number
+  content: string
+  base_step_id?: string
+  round?: number
+}
+
 export type TokenUsage = {
   prompt_tokens: number
   completion_tokens: number
@@ -71,6 +82,7 @@ export type RoleOutput = {
 export type MeetingEventStreamMessage = {
   type: 'snapshot' | 'update'
   events: MeetingEvent[]
+  stream_events: MeetingStreamEvent[]
   activity_status: Meeting['activity_status']
 }
 

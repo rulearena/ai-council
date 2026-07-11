@@ -472,3 +472,16 @@ Work the **frontier**: any ticket whose blockers are all done. For this MVP, sta
 - [x] Terminal meetings reject message corrections with `409`.
 - [x] Transcript projection marks correction entries clearly.
 - [x] Frontend API types and controls support correcting human chair messages.
+
+## 39 - Token Streaming Backend Foundation
+
+**What to build:** Let model adapters emit non-persistent token deltas during a running step and expose them through the existing meeting WebSocket.
+
+**Blocked by:** 08 - WebSocket Event Feed; 30 - Background Meeting Progress.
+
+- [x] `ModelRequest` can carry an optional token-delta callback.
+- [x] Mock model configs can emit deterministic `mock_stream_chunks` for tests.
+- [x] Runner converts token deltas into step-scoped stream events.
+- [x] WebSocket snapshot/update payloads include `stream_events`.
+- [x] Token delta stream events are not persisted to `events.jsonl`.
+- [x] Frontend API types include token-delta stream event payloads.
