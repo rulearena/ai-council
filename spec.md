@@ -40,7 +40,7 @@ MVP 不做：
 - 自訂 Agent 數量、角色、回合拓撲
 - Deep Dive 追問與二次總結
 - token streaming 逐字輸出
-- CLI adapter 正式支援
+- 訂閱制模型 CLI provider（例如以 `claude -p` 呼叫）正式支援
 - Ollama 專用 adapter
 - 前端模型設定管理 UI
 - 前端 prompt editor
@@ -90,7 +90,7 @@ openai-compatible-http
 保留 interface，但 MVP 不正式支援：
 
 ```text
-cli-subprocess
+subscription-cli-subprocess
 ```
 
 `openai-compatible-http` 同時支援雲端 API 與本地 HTTP endpoint，例如：
@@ -470,7 +470,7 @@ config/models.yaml.example
 3. 自動恢復執行中任務：後端重啟或 API 呼叫中斷時判斷是否能安全重送
 4. Markdown 反向解析：從 `transcript.md` 還原狀態
 5. 更多 provider adapters：Anthropic、Gemini 等
-6. Subscription CLI bridge 穩定化
+6. Subscription model CLI bridge 穩定化（透過已登入的 CLI 使用訂閱 quota）
 7. Parallel brainstorming mode
 8. Custom roster and topology
 9. Drag-and-drop sequence/topology builder
@@ -485,10 +485,10 @@ config/models.yaml.example
 18. Permissions and collaboration
 19. Frontend model config management
 20. Secret management
-21. CLI adapter implementation
-22. CLI session and timeout management
-23. CLI output normalization
-24. Subscription CLI compliance review
+21. Subscription model CLI provider implementation（例如 `claude -p`、`agy -p`）
+22. Subscription model CLI subprocess session and timeout management
+23. Subscription model CLI output normalization
+24. Subscription model CLI compliance review
 25. Visual meeting room UI
 26. Agent character cards
 27. Drag-and-drop roster builder
