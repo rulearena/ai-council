@@ -31,10 +31,12 @@ button:disabled {
 .app-shell {
   display: grid;
   grid-template-columns: 300px minmax(0, 1fr);
+  grid-template-rows: auto 1fr;
   min-height: 100vh;
 }
 
 .sidebar {
+  grid-row: 1 / span 2;
   border-right: 1px solid #d6dde4;
   background: #ffffff;
   padding: 16px;
@@ -140,6 +142,51 @@ h2 {
   font-size: 12px;
   font-style: normal;
   line-height: 1.4;
+}
+
+.transcript-search-panel {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 8px;
+  min-width: 0;
+  padding: 16px 16px 0;
+}
+
+.transcript-search-panel input {
+  min-width: 0;
+  border: 1px solid #c7d0d9;
+  background: #ffffff;
+  padding: 8px;
+}
+
+.transcript-search-panel button {
+  min-height: 36px;
+  padding: 7px 12px;
+  border-radius: 6px;
+}
+
+.transcript-search-results {
+  grid-column: 1 / -1;
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.transcript-search-results li {
+  min-width: 0;
+}
+
+.transcript-search-results button {
+  width: 100%;
+  text-align: left;
+}
+
+.transcript-search-results small {
+  color: #607080;
+  overflow-wrap: anywhere;
 }
 
 .workspace {
@@ -434,12 +481,18 @@ pre {
   .app-shell,
   .main-grid,
   .chair-panel,
-  .timeline-main {
+  .timeline-main,
+  .transcript-search-panel {
     grid-template-columns: 1fr;
   }
 
   .sidebar {
+    grid-row: auto;
     border-right: 0;
     border-bottom: 1px solid #d6dde4;
+  }
+
+  .transcript-search-panel {
+    padding-top: 12px;
   }
 }
