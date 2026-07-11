@@ -101,7 +101,7 @@ const canRun = computed(
 )
 
 onMounted(async () => {
-  await refreshAll()
+  await runAction(refreshAll)
 })
 
 onUnmounted(() => closeEventStream?.())
@@ -292,7 +292,7 @@ async function runAction(action: () => Promise<void>) {
     <aside class="sidebar" data-testid="meeting-list">
       <div class="sidebar-header">
         <h1>AI 眾議院</h1>
-        <button type="button" @click="refreshAll" :disabled="loading">↻</button>
+        <button type="button" @click="runAction(refreshAll)" :disabled="loading">↻</button>
       </div>
       <div class="create-box">
         <input v-model="topic" aria-label="會議主題" />
@@ -426,7 +426,7 @@ async function runAction(action: () => Promise<void>) {
         </button>
       </header>
 
-      <p v-if="error" class="error">{{ error }}</p>
+      <p v-if="error" class="error" data-testid="app-error">{{ error }}</p>
 
       <section class="model-test-status" data-testid="model-test-status">
         <span>

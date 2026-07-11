@@ -113,3 +113,12 @@ test('user can run a mock meeting and add chair feedback', async ({ page }) => {
   await expect(page.getByTestId('meeting-list')).not.toContainText(topic)
   await expect(page.getByTestId('step-timeline')).toContainText('尚未選擇會議')
 })
+
+test('shows a connection error banner when the backend is unreachable on load', async ({ page }) => {
+  await page.route('**/models', (route) => route.abort('connectionrefused'))
+
+  await page.goto('/')
+
+  await expect(page.getByTestId('app-error')).toBeVisible()
+  await expect(page.getByTestId('meeting-list')).toBeVisible()
+})
