@@ -392,7 +392,45 @@ Work the **frontier**: any ticket whose blockers are all done. For this MVP, sta
 - [x] A required `{prompt}` placeholder receives the rendered role prompt.
 - [x] Stdout is passed through the existing structured-output parser.
 - [x] Missing commands, non-zero exits, empty output, and timeout become adapter errors.
-- [x] Example configs include `claude -p`, `codex -p`, and `agy -p`.
+- [x] Example configs include `claude -p`, `codex exec`, and `agy -p`.
 - [x] README states that CLI installation and authentication remain user-managed.
 - [x] Follow-up: terminate an active CLI subprocess immediately when a meeting is cancelled.
+- [x] Follow-up: strip ANSI control codes from subscription CLI stdout before parsing.
 - [ ] Follow-up: add provider/version-specific output normalizers if plain stdout changes.
+
+## 33 - Backend Model Config Management API
+
+**What to build:** Add backend-only model config management so a future frontend settings page can edit `config/models.yaml` through supported APIs.
+
+**Blocked by:** 03 - Model Config Repository; 20 - Model Connection Test.
+
+- [x] Repository can add a new model config and persist it to YAML.
+- [x] Repository can update an existing model config without reordering other entries.
+- [x] Repository can delete an existing model config.
+- [x] Repository validates adapter-specific required fields before writing YAML.
+- [x] API exposes `PUT /models/{model_config_id}`.
+- [x] API exposes `DELETE /models/{model_config_id}`.
+- [x] Invalid model config writes return `400`.
+
+## 34 - Backend Credential Readiness Projection
+
+**What to build:** Let the backend report whether an API-backed model's configured environment variable exists without exposing the secret value.
+
+**Blocked by:** 33 - Backend Model Config Management API.
+
+- [x] `GET /models` includes credential readiness for `api_key_env` configs.
+- [x] Credential readiness object returns env var name and configured boolean only.
+- [x] Credential readiness never returns secret values.
+- [x] Existing `api_key_env` config metadata remains visible because it is an env var name, not a secret value.
+- [x] Local/no-key models return no credential requirement.
+
+## 35 - OpenAI-Compatible Model Discovery
+
+**What to build:** Allow OpenAI-compatible HTTP configs to list available model ids from their endpoint.
+
+**Blocked by:** 05 - Model Adapter Contract With Mock And OpenAI-Compatible HTTP.
+
+- [x] OpenAI-compatible adapter can call `GET /models`.
+- [x] API exposes `GET /models/{model_config_id}/available-models`.
+- [x] Discovery returns available model ids.
+- [x] Unsupported adapters return a clear error instead of pretending discovery works.

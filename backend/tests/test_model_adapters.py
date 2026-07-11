@@ -81,6 +81,31 @@ def test_subscription_cli_adapter_passes_prompt_and_returns_stdout(tmp_path) -> 
     assert json.loads(response.raw_output)["summary"] == "請用訂閱額度回答"
 
 
+def test_subscription_cli_adapter_normalizes_ansi_wrapped_stdout(tmp_path) -> None:
+    fake_cli = tmp_path / "ansi_cli.py"
+    fake_cli.write_text(
+        "print('\\x1b[32m```json\\x1b[0m')\n"
+        "print('{\"summary\":\"OK\",\"arguments\":[],\"risks\":[],\"recommendation\":\"Go\"}')\n"
+        "print('\\x1b[32m```\\x1b[0m')\n",
+        encoding="utf-8",
+    )
+
+    response = SubscriptionCLIAdapter().complete(
+        ModelRequest(
+            prompt="test",
+            model_config=ModelConfig(
+                id="ansi-subscription",
+                adapter="subscription-cli",
+                command=[sys.executable, str(fake_cli), "{prompt}"],
+                timeout_seconds=5,
+            ),
+        )
+    )
+
+    assert "\x1b" not in response.raw_output
+    assert response.raw_output.startswith("```json")
+
+
 def test_subscription_cli_adapter_reports_nonzero_exit(tmp_path) -> None:
     fake_cli = tmp_path / "failing_cli.py"
     fake_cli.write_text(
