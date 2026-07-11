@@ -217,6 +217,12 @@ textarea:focus-visible {
   color: var(--color-text);
 }
 
+.btn-ghost.active,
+.records-tab.active {
+  background: var(--color-bg-elevated);
+  color: var(--color-text);
+}
+
 .btn-sm {
   min-height: 32px;
   padding: 5px 10px;
@@ -251,28 +257,6 @@ button:focus-visible {
   outline-offset: 2px;
 }
 
-.app-shell {
-  display: grid;
-  grid-template-columns: 300px minmax(0, 1fr);
-  grid-template-rows: auto 1fr;
-  min-height: 100vh;
-}
-
-.sidebar {
-  grid-row: 1 / span 2;
-  border-right: 1px solid var(--color-border);
-  background: var(--color-sidebar-bg);
-  padding: 16px;
-  overflow: auto;
-}
-
-.sidebar-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-}
-
 h1,
 h2 {
   margin: 0;
@@ -282,7 +266,7 @@ h2 {
 }
 
 h1 {
-  font-size: 20px;
+  font-size: 18px;
   font-weight: 700;
 }
 
@@ -291,11 +275,606 @@ h2 {
   font-weight: 600;
 }
 
+/* ---------- App shell: top bar / stage / action bar, stacked vertically ---------- */
+
+.app-shell {
+  display: flex;
+  flex-direction: column;
+  min-height: 100vh;
+}
+
+.top-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 10px;
+  padding: 12px 20px;
+  border-bottom: 1px solid var(--color-border);
+  background: var(--color-surface);
+}
+
+.top-bar-left,
+.top-bar-right {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+/* ---------- Council stage: the scene + seats ---------- */
+
+.council-stage {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  padding: 20px;
+}
+
+.stage-scene {
+  position: relative;
+  /* height:100% doesn't work here: .app-shell only has min-height:100vh (not height),
+     which CSS treats as an indefinite size, so it can't be percentage-resolved down
+     the flex chain (verified - it collapsed the scene to ~0). Anchoring directly to
+     the viewport with dvh sidesteps that chain entirely. 260px ~= top bar (57) +
+     action bar (144) + council-stage's own padding (40), plus a little slack for the
+     error banner adding a line when present. width:auto + aspect-ratio then derives
+     the width from whichever of that height or max-width ends up binding - the same
+     "contain" behavior max-width/max-height:100% gives an <img>, generalized to a
+     block element. This is what lets the scene shrink by *height* first on a short
+     viewport (e.g. a 1280x720 laptop, where .council-stage only has ~460px to work
+     with) instead of overflowing past the action bar. */
+  width: auto;
+  height: min(720px, calc(100dvh - 260px));
+  max-width: min(960px, 100%);
+  aspect-ratio: 4 / 3;
+  container-type: size;
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--color-border);
+  background-size: cover;
+  background-position: center;
+  /* No overflow:hidden: border-radius already clips the background image to rounded
+     corners on its own (background-clip defaults to the border box). Actually hiding
+     overflow here would clip the chairman speech bubble and, near the bottom edge,
+     the Judge seat's nameplate/queue-label - both legitimately extend past the scene
+     box at some seat positions/content lengths. */
+}
+
+.stage-scene:not(.stage-scene-placeholder) {
+  /* meeting-room.webp is genuine low-res pixel art upscaled with hard edges - smooth
+     (default) resampling on resize blurs that into mush, so keep it crisp. Doesn't
+     apply to the CSS gradient placeholder, which has no such pixels to preserve. */
+  image-rendering: pixelated;
+}
+
+.stage-scene-placeholder {
+  background-image: radial-gradient(ellipse at 50% 12%, rgba(77, 141, 255, 0.1), transparent 55%),
+    linear-gradient(180deg, #10141d 0%, #0c0f16 55%, #090b10 100%);
+}
+
+.stage-table {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  max-width: 60%;
+  padding: 14px 22px;
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--color-border);
+  background: rgba(19, 23, 34, 0.85);
+  text-align: center;
+}
+
+.stage-table-topic {
+  font-family: var(--font-display);
+  font-weight: 600;
+  color: var(--color-text);
+  overflow-wrap: anywhere;
+}
+
+.stage-table-hint {
+  font-size: 12px;
+  color: var(--color-text-muted);
+}
+
+.seat {
+  position: absolute;
+  transform: translate(-50%, -50%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 5px;
+  padding: 8px;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  transition: transform var(--transition-fast);
+}
+
+.seat:hover:not(:disabled) {
+  transform: translate(-50%, -50%) translateY(-3px);
+}
+
+.seat:disabled {
+  cursor: not-allowed;
+}
+
+.seat:focus-visible {
+  outline: 2px solid var(--color-focus-ring);
+  outline-offset: 4px;
+  border-radius: var(--radius-lg);
+}
+
+/* Portrait seats are anchored by their foot position rather than their center - see
+   scenes.ts's SeatConfig doc comment. The (-100%) transform lands on .seat's own
+   bottom edge, so the nameplate/queue-label are pulled out of flow (via
+   .seat-below-anchor below) to hang past that line instead of pushing it down -
+   otherwise the coordinate would mark the bottom of the nameplate, not the feet. */
+.seat.seat-anchor-bottom {
+  padding-bottom: 0;
+  transform: translate(-50%, -100%);
+}
+
+.seat.seat-anchor-bottom:hover:not(:disabled) {
+  transform: translate(-50%, -100%) translateY(-3px);
+}
+
+.seat-below-anchor {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 5px;
+}
+
+.seat.seat-anchor-bottom .seat-below-anchor {
+  position: absolute;
+  top: 100%;
+  left: 50%;
+  transform: translateX(-50%);
+  margin-top: 5px;
+}
+
+.seat-visual {
+  position: relative;
+  display: flex;
+  justify-content: center;
+}
+
+.seat-avatar {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 64px;
+  height: 64px;
+  border-radius: 50%;
+  border: 2px solid var(--color-border-strong);
+  background: var(--color-surface);
+  transition: border-color var(--transition-fast), opacity var(--transition-fast);
+}
+
+.seat-avatar-img {
+  width: 34px;
+  height: 34px;
+  object-fit: contain;
+}
+
+/* Hidden whenever the seat has a scene portrait to show instead; the @media block
+   below flips this back on below 640px, where portraits are dropped in favor of the
+   compact avatar card (see .seat-portrait, .seat-ground-glow). */
+.seat-avatar-fallback {
+  display: none;
+}
+
+.seat.role-blue .seat-avatar {
+  border-color: var(--color-role-blue);
+}
+
+.seat.role-red .seat-avatar {
+  border-color: var(--color-role-red);
+}
+
+.seat.role-judge .seat-avatar {
+  border-color: var(--color-role-judge);
+}
+
+.seat.seat-chairman .seat-avatar {
+  border-color: var(--color-text-secondary);
+  color: var(--color-text-secondary);
+}
+
+.seat.role-blue.seat-status-thinking {
+  --role-glow: var(--color-role-blue-glow);
+}
+
+.seat.role-red.seat-status-thinking {
+  --role-glow: var(--color-role-red-glow);
+}
+
+.seat.role-judge.seat-status-thinking {
+  --role-glow: var(--color-role-judge-glow);
+}
+
+.seat-status-thinking .seat-avatar {
+  animation: seat-glow-breathe 2.5s ease-in-out infinite;
+}
+
+.seat-status-failed .seat-avatar {
+  border-color: var(--color-failed);
+}
+
+.seat-status-waiting .seat-avatar {
+  opacity: 0.55;
+}
+
+/* Full-body portrait. Sized in cqh (percent of .stage-scene's rendered height, thanks
+   to container-type: size on .stage-scene above) rather than a plain percentage,
+   because .seat-visual itself is an auto-height flex box - a plain % height would
+   resolve against that auto height (i.e. against nothing) instead of the scene. */
+.seat-portrait {
+  display: block;
+  height: calc(22cqh * var(--seat-scale, 1));
+  width: auto;
+  object-fit: contain;
+  image-rendering: pixelated;
+  filter: drop-shadow(0 6px 8px rgba(0, 0, 0, 0.45));
+  transition: filter var(--transition-fast), opacity var(--transition-fast);
+}
+
+.seat-status-waiting .seat-portrait {
+  opacity: 0.6;
+}
+
+.seat-status-failed .seat-portrait {
+  filter: drop-shadow(0 6px 8px rgba(0, 0, 0, 0.45)) drop-shadow(0 0 10px var(--color-failed));
+}
+
+.seat.role-blue.seat-status-thinking .seat-portrait,
+.seat.role-red.seat-status-thinking .seat-portrait,
+.seat.role-judge.seat-status-thinking .seat-portrait {
+  animation: portrait-glow-breathe 2.5s ease-in-out infinite;
+}
+
+/* Grounding shadow/glow ellipse under the portrait's feet - the primary role-color
+   signal on the bright photo background, since the old circular box-shadow glow reads
+   poorly against a busy image. The breathing box-shadow above is kept as a secondary
+   accent on the portrait itself. */
+.seat-ground-glow {
+  position: absolute;
+  left: 50%;
+  bottom: -4%;
+  transform: translate(-50%, 0) scale(1);
+  width: calc(15cqh * var(--seat-scale, 1));
+  height: calc(4.5cqh * var(--seat-scale, 1));
+  border-radius: 50%;
+  background: radial-gradient(ellipse at center, var(--role-tint-strong, rgba(10, 10, 14, 0.5)) 0%, transparent 72%);
+  opacity: 0.65;
+  pointer-events: none;
+  z-index: 0;
+}
+
+.seat.role-blue .seat-ground-glow {
+  --role-tint-strong: rgba(77, 141, 255, 0.55);
+}
+
+.seat.role-red .seat-ground-glow {
+  --role-tint-strong: rgba(255, 107, 94, 0.55);
+}
+
+.seat.role-judge .seat-ground-glow {
+  --role-tint-strong: rgba(232, 180, 76, 0.55);
+}
+
+.seat.seat-chairman .seat-ground-glow {
+  --role-tint-strong: rgba(255, 255, 255, 0.45);
+}
+
+.seat.seat-status-failed .seat-ground-glow {
+  --role-tint-strong: rgba(255, 107, 94, 0.7);
+}
+
+.seat-status-thinking .seat-ground-glow {
+  animation: ground-glow-breathe 2.5s ease-in-out infinite;
+}
+
+.seat-badge {
+  position: absolute;
+  right: -2px;
+  bottom: -2px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  border: 2px solid var(--color-bg);
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.seat-badge-failed {
+  background: var(--color-failed);
+  color: #2a0704;
+}
+
+.seat-badge-completed {
+  background: var(--color-completed);
+  color: #04241a;
+}
+
+/* The default badge position (bottom-right of the 64px avatar circle) reads wrong
+   against a tall portrait - move it up near the head instead. */
+.seat-badge.seat-badge-portrait {
+  right: 8%;
+  bottom: auto;
+  top: 4%;
+}
+
+.seat-nameplate {
+  font-family: var(--font-display);
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--color-text);
+  padding: 2px 9px;
+  border-radius: var(--radius-pill);
+  background: rgba(26, 32, 41, 0.9);
+  border: 1px solid var(--color-border);
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.4);
+  white-space: nowrap;
+}
+
+.seat-queue-label {
+  font-size: 11px;
+  color: var(--color-text-muted);
+  white-space: nowrap;
+}
+
+.speech-bubble {
+  position: absolute;
+  bottom: 100%;
+  left: 50%;
+  transform: translateX(-50%);
+  /* Absolutely positioned + width:auto + left:50% makes the browser shrink-to-fit
+     against the *available* width (containing block minus the left offset), which for
+     a narrow seat button collapses to just a few px and wraps CJK text one glyph per
+     line. width:max-content forces the natural single-line width instead, still capped
+     by max-width for long messages. */
+  width: max-content;
+  margin-bottom: 10px;
+  padding: 6px 10px;
+  border-radius: var(--radius-sm);
+  background: var(--color-bg-elevated);
+  border: 1px solid var(--color-border-strong);
+  font-size: 12px;
+  color: var(--color-text);
+  max-width: 220px;
+  overflow-wrap: anywhere;
+}
+
+.speech-bubble::after {
+  content: "";
+  position: absolute;
+  top: 100%;
+  left: 50%;
+  transform: translateX(-50%);
+  border: 6px solid transparent;
+  border-top-color: var(--color-bg-elevated);
+}
+
+.thinking-bubble {
+  display: flex;
+  gap: 4px;
+  padding: 9px 11px;
+}
+
+.thinking-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--color-text-secondary);
+  animation: thinking-bounce 1.2s ease-in-out infinite;
+}
+
+.thinking-dot:nth-child(2) {
+  animation-delay: 0.15s;
+}
+
+.thinking-dot:nth-child(3) {
+  animation-delay: 0.3s;
+}
+
+.chairman-bubble {
+  max-width: 260px;
+  white-space: normal;
+}
+
+/* ---------- Action bar (bottom): chair input, CTA, advanced options ---------- */
+
+.action-bar {
+  display: grid;
+  gap: 10px;
+  padding: 14px 20px 20px;
+  border-top: 1px solid var(--color-border);
+  background: var(--color-surface);
+}
+
+.action-bar-status {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--color-text-secondary);
+}
+
+.action-bar-status span {
+  display: flex;
+  align-items: center;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface-muted);
+  padding: 6px 10px;
+}
+
+.action-bar-row {
+  display: flex;
+  align-items: end;
+  gap: 10px;
+}
+
+.action-bar-row textarea {
+  flex: 1;
+  min-width: 0;
+  min-height: 48px;
+  max-height: 140px;
+  resize: vertical;
+}
+
+.action-bar-cta {
+  white-space: nowrap;
+}
+
+.continue-hint {
+  align-self: center;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--color-completed);
+  white-space: nowrap;
+}
+
+.action-bar-cta-hint {
+  animation: cta-hint-pulse 1.8s ease-in-out infinite;
+}
+
+.advanced-options {
+  position: relative;
+}
+
+.advanced-options-panel {
+  position: absolute;
+  bottom: calc(100% + 8px);
+  right: 0;
+  width: min(300px, 80vw);
+  padding: 14px;
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--color-border);
+  background: var(--color-surface);
+  box-shadow: var(--shadow-md);
+  display: grid;
+  gap: 12px;
+  z-index: 20;
+}
+
+.advanced-options-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.sequence-panel {
+  display: grid;
+  gap: 10px;
+}
+
+.sequence-panel label {
+  display: grid;
+  gap: 4px;
+  color: var(--color-text-secondary);
+  font-size: 13px;
+}
+
+/* ---------- Settings modal ---------- */
+
+.settings-role-grid {
+  display: grid;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.model-slot {
+  display: grid;
+  gap: 6px;
+  padding: 10px 12px;
+  border-left: 3px solid var(--color-border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface-muted);
+  color: var(--color-text-secondary);
+  font-size: 13px;
+}
+
+.model-slot.role-blue {
+  border-left-color: var(--color-role-blue);
+  background: var(--color-role-blue-tint);
+}
+
+.model-slot.role-red {
+  border-left-color: var(--color-role-red);
+  background: var(--color-role-red-tint);
+}
+
+.model-slot.role-judge {
+  border-left-color: var(--color-role-judge);
+  background: var(--color-role-judge-tint);
+}
+
+.model-control {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 6px;
+}
+
+.model-test-status {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  color: var(--color-text-secondary);
+  font-size: 13px;
+}
+
+.model-test-status span {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 3px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface);
+  padding: 6px 10px;
+}
+
+.model-test-status small,
+.model-test-status em {
+  color: var(--color-text-muted);
+  font-size: 12px;
+  font-style: normal;
+  overflow-wrap: anywhere;
+}
+
+.dev-mode-row {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--color-border);
+}
+
+.dev-mode-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--color-text-secondary);
+}
+
+/* ---------- Meetings modal (Past Topics) ---------- */
+
 .create-box {
   display: grid;
   grid-template-columns: 1fr auto;
   gap: 8px;
-  margin: 16px 0;
 }
 
 .meeting-filters {
@@ -304,12 +883,19 @@ h2 {
   margin-bottom: 12px;
 }
 
+.meeting-list {
+  display: grid;
+  gap: 8px;
+  max-height: 40vh;
+  overflow: auto;
+  margin-bottom: 16px;
+}
+
 .meeting-row {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   align-items: start;
   gap: 6px;
-  margin-bottom: 8px;
 }
 
 .meeting-row .pin-meeting-button {
@@ -378,6 +964,39 @@ h2 {
 
 .meeting-item .status-badge {
   justify-self: start;
+}
+
+.transcript-search-panel {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 8px;
+  min-width: 0;
+  padding-top: 16px;
+  border-top: 1px solid var(--color-border);
+}
+
+.transcript-search-results {
+  grid-column: 1 / -1;
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.transcript-search-results li {
+  min-width: 0;
+}
+
+.transcript-search-results button {
+  width: 100%;
+  text-align: left;
+}
+
+.transcript-search-results small {
+  color: var(--color-text-muted);
+  overflow-wrap: anywhere;
 }
 
 .status-badge {
@@ -461,425 +1080,10 @@ h2 {
   background: var(--color-waiting);
 }
 
-.transcript-search-panel {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  align-items: start;
-  gap: 8px;
+/* ---------- Role drawer ---------- */
+
+.role-output-panel {
   min-width: 0;
-  padding: 16px 16px 0;
-}
-
-.transcript-search-results {
-  grid-column: 1 / -1;
-  display: grid;
-  gap: 6px;
-  margin: 0;
-  padding: 0;
-  list-style: none;
-}
-
-.transcript-search-results li {
-  min-width: 0;
-}
-
-.transcript-search-results button {
-  width: 100%;
-  text-align: left;
-}
-
-.transcript-search-results small {
-  color: var(--color-text-muted);
-  overflow-wrap: anywhere;
-}
-
-.workspace {
-  display: grid;
-  grid-template-rows: auto auto auto auto auto auto auto auto 1fr auto;
-  gap: 16px;
-  min-width: 0;
-  padding: 20px;
-}
-
-.toolbar {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: end;
-  gap: 12px;
-  padding: 16px;
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-lg);
-  background: var(--color-surface);
-  box-shadow: var(--shadow-sm);
-}
-
-.model-slot {
-  display: grid;
-  gap: 6px;
-  min-width: 230px;
-  padding: 10px 12px;
-  border-left: 3px solid var(--color-border-strong);
-  border-radius: var(--radius-sm);
-  background: var(--color-surface-muted);
-  color: var(--color-text-secondary);
-  font-size: 13px;
-}
-
-.model-slot.role-blue {
-  border-left-color: var(--color-role-blue);
-  background: var(--color-role-blue-tint);
-}
-
-.model-slot.role-red {
-  border-left-color: var(--color-role-red);
-  background: var(--color-role-red-tint);
-}
-
-.model-slot.role-judge {
-  border-left-color: var(--color-role-judge);
-  background: var(--color-role-judge-tint);
-}
-
-.model-control {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  gap: 6px;
-}
-
-.toolbar-actions {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin-left: auto;
-}
-
-.error {
-  margin: 0;
-  padding: 10px 12px;
-  border: 1px solid rgba(229, 72, 77, 0.4);
-  border-radius: var(--radius-sm);
-  background: var(--color-danger-tint);
-  color: #ff9a93;
-}
-
-.model-test-status {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  color: var(--color-text-secondary);
-  font-size: 13px;
-}
-
-.model-test-status span {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 3px;
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-sm);
-  background: var(--color-surface);
-  padding: 6px 10px;
-}
-
-.model-test-status small,
-.model-test-status em {
-  color: var(--color-text-muted);
-  font-size: 12px;
-  font-style: normal;
-  overflow-wrap: anywhere;
-}
-
-.operation-status {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  color: var(--color-text-secondary);
-  font-size: 13px;
-}
-
-.operation-status span {
-  display: flex;
-  align-items: center;
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-sm);
-  background: var(--color-surface);
-  padding: 6px 10px;
-}
-
-/* Role status cards: live, self-updating "who's thinking right now" row. The role accent
-   on the top edge is a permanent identity marker; only the "thinking" glow is animated,
-   to keep the dark theme from tipping into cyberpunk noise. */
-.role-status-row {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: var(--space-4);
-}
-
-.role-status-card {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-3);
-  min-width: 0;
-  padding: var(--space-4);
-  border: 1px solid var(--color-border);
-  border-top: 3px solid var(--role-accent, var(--color-border-strong));
-  border-radius: var(--radius-lg);
-  background: var(--color-surface);
-  box-shadow: var(--shadow-sm);
-  transition: border-color var(--transition-fast), box-shadow var(--transition-fast),
-    background-color var(--transition-fast);
-}
-
-.role-status-card.role-blue {
-  --role-accent: var(--color-role-blue);
-  --role-glow: var(--color-role-blue-glow);
-}
-
-.role-status-card.role-red {
-  --role-accent: var(--color-role-red);
-  --role-glow: var(--color-role-red-glow);
-}
-
-.role-status-card.role-judge {
-  --role-accent: var(--color-role-judge);
-  --role-glow: var(--color-role-judge-glow);
-}
-
-.role-status-card[data-status="waiting"] {
-  background: var(--color-surface-muted);
-  color: var(--color-text-muted);
-}
-
-.role-status-card[data-status="thinking"] {
-  animation: card-glow-breathe 2.5s ease-in-out infinite;
-}
-
-.role-status-card[data-status="failed"] {
-  border-color: var(--color-failed);
-  background: var(--color-failed-tint);
-}
-
-.role-status-card-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-}
-
-.role-status-pill {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  border-radius: var(--radius-pill);
-  padding: 3px 10px;
-  font-family: var(--font-display);
-  font-size: 12px;
-  font-weight: 600;
-  color: var(--color-waiting);
-  background: var(--color-waiting-tint);
-}
-
-.role-status-pill[data-status="thinking"] {
-  color: var(--color-running);
-  background: var(--color-running-tint);
-}
-
-.role-status-pill[data-status="completed"] {
-  color: var(--color-completed);
-  background: var(--color-completed-tint);
-}
-
-.role-status-pill[data-status="failed"] {
-  color: var(--color-failed);
-  background: var(--color-failed-tint);
-}
-
-.pill-check-icon {
-  flex-shrink: 0;
-}
-
-.role-status-card-body {
-  min-width: 0;
-  font-size: 13px;
-  line-height: 1.5;
-}
-
-.role-status-summary {
-  margin: 0;
-  color: var(--color-text);
-  display: -webkit-box;
-  -webkit-line-clamp: 4;
-  -webkit-box-orient: vertical;
-  overflow: hidden;
-  overflow-wrap: anywhere;
-}
-
-.role-status-recommendation {
-  margin: 8px 0 0;
-  color: var(--color-text-secondary);
-  overflow-wrap: anywhere;
-}
-
-.role-status-time {
-  display: block;
-  margin-top: 8px;
-  color: var(--color-text-muted);
-}
-
-.role-status-error {
-  margin: 0 0 10px;
-  color: var(--color-failed);
-  overflow-wrap: anywhere;
-}
-
-.role-status-placeholder {
-  margin: 0;
-  color: var(--color-text-muted);
-}
-
-.chair-panel {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  gap: 10px;
-  align-items: end;
-}
-
-.chair-panel textarea {
-  min-height: 74px;
-  min-width: 0;
-  resize: vertical;
-  padding: 10px;
-}
-
-.role-actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-}
-
-.sequence-panel {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: end;
-  gap: 10px;
-}
-
-.sequence-panel label {
-  display: grid;
-  gap: 4px;
-  min-width: 260px;
-  color: var(--color-text-secondary);
-  font-size: 13px;
-}
-
-.main-grid {
-  display: grid;
-  grid-template-columns: minmax(300px, 1.1fr) minmax(300px, 0.9fr);
-  min-height: 0;
-  gap: 16px;
-}
-
-.timeline,
-.debug,
-.role-output-panel,
-.transcript {
-  min-width: 0;
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-lg);
-  background: var(--color-surface);
-  box-shadow: var(--shadow-sm);
-  padding: 16px;
-}
-
-.section-title {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 8px;
-  min-width: 0;
-}
-
-.meeting-id-pill {
-  font-family: var(--font-mono);
-  font-size: 12px;
-  color: var(--color-text-secondary);
-  background: var(--color-input-bg);
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-pill);
-  padding: 3px 10px;
-  overflow-wrap: anywhere;
-}
-
-.copy-meeting-id-button svg {
-  flex-shrink: 0;
-}
-
-.timeline-row {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  gap: 10px;
-  width: 100%;
-  margin-top: 8px;
-  border-left: 3px solid var(--color-border-strong);
-  border-radius: var(--radius-sm);
-}
-
-.timeline-row.role-blue {
-  border-left-color: var(--color-role-blue);
-}
-
-.timeline-row.role-red {
-  border-left-color: var(--color-role-red);
-}
-
-.timeline-row.role-judge {
-  border-left-color: var(--color-role-judge);
-}
-
-.timeline-main {
-  display: grid;
-  grid-template-columns: 80px minmax(0, 1fr) 90px 150px;
-  gap: 10px;
-  width: 100%;
-  padding: 10px;
-  border: none;
-  border-radius: var(--radius-sm);
-  background: transparent;
-  text-align: left;
-  transition: background-color var(--transition-fast);
-}
-
-.timeline-main:hover {
-  background: var(--color-bg-elevated);
-}
-
-.timeline-main strong,
-.timeline-main em,
-.timeline-main small {
-  overflow-wrap: anywhere;
-}
-
-.timeline-main strong {
-  color: var(--color-text);
-  font-family: var(--font-mono);
-  font-size: 12px;
-}
-
-.timeline-main small {
-  color: var(--color-text-muted);
-  font-style: normal;
-}
-
-.role-output-panel > .empty-state,
-.role-output-panel > p {
-  margin-top: 12px;
-}
-
-.role-output-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
-  gap: 10px;
-  margin-top: 12px;
 }
 
 .role-output-card {
@@ -941,9 +1145,177 @@ h2 {
   display: block;
 }
 
+.role-status-error {
+  margin: 0 0 10px;
+  color: var(--color-failed);
+  overflow-wrap: anywhere;
+}
+
+.role-drawer-respond-button {
+  width: 100%;
+  margin-top: 12px;
+}
+
+.role-history {
+  margin-top: 16px;
+  border-top: 1px solid var(--color-border);
+  padding-top: 12px;
+}
+
+.role-history summary {
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--color-text-secondary);
+}
+
+.role-history summary:focus-visible {
+  outline: 2px solid var(--color-focus-ring);
+  outline-offset: 2px;
+}
+
+.role-history-card {
+  margin-top: 8px;
+}
+
+.role-history-card header {
+  justify-content: space-between;
+  font-size: 12px;
+  color: var(--color-text-muted);
+}
+
+.chairman-history {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 10px;
+}
+
+.chairman-history-item {
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  padding: 10px;
+  background: var(--color-surface-muted);
+  overflow-wrap: anywhere;
+}
+
+.chairman-history-meta {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  color: var(--color-text-muted);
+  font-size: 12px;
+  margin: 6px 0;
+}
+
+/* ---------- Records drawer ---------- */
+
+.records-tabs {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 14px;
+  border-bottom: 1px solid var(--color-border);
+  padding-bottom: 10px;
+}
+
+.section-title {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  min-width: 0;
+  margin-bottom: 10px;
+}
+
+.timeline-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+  width: 100%;
+  margin-top: 8px;
+  border-left: 3px solid var(--color-border-strong);
+  border-radius: var(--radius-sm);
+}
+
+.timeline-row.role-blue {
+  border-left-color: var(--color-role-blue);
+}
+
+.timeline-row.role-red {
+  border-left-color: var(--color-role-red);
+}
+
+.timeline-row.role-judge {
+  border-left-color: var(--color-role-judge);
+}
+
+/* flex-wrap (not a fixed-column grid) so this reflows correctly inside both the wide
+   desktop viewport and the ~420px records drawer - a 4-column grid with fixed pixel
+   tracks squeezes its 1fr column to ~0 in the drawer and wraps the step_id one
+   character per line. */
+.timeline-main {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 12px;
+  width: 100%;
+  padding: 10px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  text-align: left;
+  transition: background-color var(--transition-fast);
+}
+
+.timeline-main:hover {
+  background: var(--color-bg-elevated);
+}
+
+.timeline-main .role-badge {
+  flex-shrink: 0;
+}
+
+.timeline-main strong,
+.timeline-main em,
+.timeline-main small {
+  overflow-wrap: anywhere;
+}
+
+.timeline-main strong {
+  flex: 1 1 100px;
+  min-width: 0;
+  color: var(--color-text);
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+
+.timeline-main .status-badge,
+.timeline-main small {
+  flex-shrink: 0;
+}
+
+.timeline-main small {
+  color: var(--color-text-muted);
+  font-style: normal;
+}
+
+.transcript-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 6px;
+}
+
+.transcript a {
+  color: var(--color-text);
+  text-decoration: none;
+}
+
 pre {
-  margin: 12px 0 0;
-  max-height: 42vh;
+  margin: 0;
+  max-height: 55vh;
   overflow: auto;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
@@ -954,18 +1326,6 @@ pre {
   font-family: var(--font-mono);
   font-size: 13px;
   line-height: 1.45;
-}
-
-.transcript-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-}
-
-.transcript a {
-  color: var(--color-text);
-  text-decoration: none;
 }
 
 /* Centered icon + message used for "nothing here yet" panels. */
@@ -1018,8 +1378,21 @@ pre {
   color: var(--color-role-judge);
 }
 
-/* Spinner used inside the "thinking" pill. Picks up the card's role accent so each
-   role's spinner matches its own color rather than a single generic blue. */
+.tag-badge {
+  display: inline-flex;
+  align-items: center;
+  border-radius: var(--radius-pill);
+  padding: 1px 8px;
+  margin-right: 4px;
+  font-size: 11px;
+  font-style: normal;
+  background: var(--color-bg-elevated);
+  border: 1px solid var(--color-border);
+  color: var(--color-text-secondary);
+}
+
+/* Spinner used inside the thinking indicators. Picks up the seat/card's role accent so
+   each role's spinner matches its own color rather than a single generic blue. */
 .spinner {
   display: inline-block;
   width: 12px;
@@ -1040,14 +1413,50 @@ pre {
   }
 }
 
-/* Breathing glow for a "thinking" role card - the only sustained animated glow in the UI. */
-@keyframes card-glow-breathe {
+/* Breathing glow for a "thinking" seat - the only sustained animated glow in the UI. */
+@keyframes seat-glow-breathe {
   0%,
   100% {
-    box-shadow: 0 0 0 0 transparent, var(--shadow-sm);
+    box-shadow: 0 0 0 0 transparent;
   }
   50% {
-    box-shadow: 0 0 24px 2px var(--role-glow, var(--color-running-glow)), var(--shadow-sm);
+    box-shadow: 0 0 20px 4px var(--role-glow, var(--color-running-glow));
+  }
+}
+
+/* Gentle nudge on the primary CTA after a chair message lands on an idle meeting -
+   see .action-bar-cta-hint / showContinueHint. */
+@keyframes cta-hint-pulse {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 transparent;
+  }
+  50% {
+    box-shadow: 0 0 0 4px var(--color-completed-tint);
+  }
+}
+
+/* Secondary accent on a thinking portrait - the primary signal is the ground-glow
+   ellipse below (see ground-glow-breathe), which reads better on a bright photo. */
+@keyframes portrait-glow-breathe {
+  0%,
+  100% {
+    filter: drop-shadow(0 6px 8px rgba(0, 0, 0, 0.45)) drop-shadow(0 0 0 transparent);
+  }
+  50% {
+    filter: drop-shadow(0 6px 8px rgba(0, 0, 0, 0.45)) drop-shadow(0 0 16px var(--role-glow, transparent));
+  }
+}
+
+@keyframes ground-glow-breathe {
+  0%,
+  100% {
+    opacity: 0.55;
+    transform: translate(-50%, 0) scale(1);
+  }
+  50% {
+    opacity: 1;
+    transform: translate(-50%, 0) scale(1.3);
   }
 }
 
@@ -1061,39 +1470,204 @@ pre {
   }
 }
 
+@keyframes thinking-bounce {
+  0%,
+  60%,
+  100% {
+    transform: translateY(0);
+    opacity: 0.5;
+  }
+  30% {
+    transform: translateY(-4px);
+    opacity: 1;
+  }
+}
+
+/* ---------- Modal / Drawer primitives ---------- */
+
+.overlay,
+.drawer-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(5, 7, 11, 0.6);
+  display: flex;
+  z-index: 50;
+}
+
+.overlay {
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+}
+
+.drawer-overlay {
+  justify-content: flex-end;
+}
+
+.modal {
+  width: min(560px, 100%);
+  max-height: 85vh;
+  overflow: auto;
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--color-border);
+  background: var(--color-surface);
+  box-shadow: var(--shadow-md);
+}
+
+.modal-header,
+.drawer-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 16px 20px;
+  border-bottom: 1px solid var(--color-border);
+  position: sticky;
+  top: 0;
+  background: var(--color-surface);
+}
+
+.modal-body,
+.drawer-body {
+  padding: 20px;
+}
+
+.drawer {
+  width: min(420px, 100%);
+  height: 100%;
+  overflow: auto;
+  border-left: 1px solid var(--color-border);
+  background: var(--color-surface);
+  box-shadow: var(--shadow-md);
+  animation: drawer-slide-in 200ms ease;
+}
+
+@keyframes drawer-slide-in {
+  from {
+    transform: translateX(24px);
+    opacity: 0;
+  }
+  to {
+    transform: translateX(0);
+    opacity: 1;
+  }
+}
+
+.error {
+  margin: 0;
+  padding: 10px 12px;
+  border: 1px solid rgba(229, 72, 77, 0.4);
+  border-radius: var(--radius-sm);
+  background: var(--color-danger-tint);
+  color: #ff9a93;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .spinner,
   .icon-spin,
   .status-dot[data-status="running"],
-  .role-status-card[data-status="thinking"] {
+  .seat-status-thinking .seat-avatar,
+  .seat-status-thinking .seat-portrait,
+  .seat-status-thinking .seat-ground-glow,
+  .thinking-dot,
+  .action-bar-cta-hint,
+  .drawer {
     animation: none;
   }
 }
 
 @media (max-width: 900px) {
-  .app-shell,
-  .main-grid,
-  .chair-panel,
-  .timeline-main,
-  .transcript-search-panel {
-    grid-template-columns: 1fr;
+  .modal,
+  .drawer {
+    width: 100%;
   }
 
-  .role-status-row {
-    grid-template-columns: 1fr;
+  .drawer {
+    height: 90vh;
+    border-radius: var(--radius-lg) var(--radius-lg) 0 0;
+    border-left: none;
+    border-top: 1px solid var(--color-border);
   }
 
-  .toolbar-actions {
-    margin-left: 0;
-  }
-
-  .sidebar {
-    grid-row: auto;
-    border-right: 0;
-    border-bottom: 1px solid var(--color-border);
+  .drawer-overlay {
+    align-items: flex-end;
   }
 
   .transcript-search-panel {
-    padding-top: 12px;
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 640px) {
+  .council-stage {
+    padding: 12px;
+  }
+
+  .stage-scene {
+    min-height: 0;
+    /* Stacked mode drops the aspect ratio and the container-query sizing it enables
+       (see .seat-portrait) in favor of plain content-driven height - and drops the
+       photo background entirely, keeping only the compact avatar cards below. */
+    width: 100%;
+    height: auto;
+    max-height: none;
+    aspect-ratio: auto;
+    container-type: normal;
+    background-image: none !important;
+    padding: 16px 12px 20px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 16px;
+  }
+
+  .stage-table {
+    position: static;
+    transform: none;
+    max-width: 100%;
+    order: -1;
+  }
+
+  .seat,
+  .seat.seat-anchor-bottom {
+    position: static !important;
+    transform: none !important;
+  }
+
+  .seat:hover:not(:disabled),
+  .seat.seat-anchor-bottom:hover:not(:disabled) {
+    transform: none !important;
+  }
+
+  .seat-portrait,
+  .seat-ground-glow {
+    display: none;
+  }
+
+  .seat-avatar-fallback {
+    display: flex;
+  }
+
+  /* The portrait-specific badge/nameplate placement (head-height badge, foot-anchored
+     nameplate) only makes sense around a tall portrait. Stacked mode always shows the
+     small round avatar instead, so both revert to the plain avatar-card positioning. */
+  .seat-badge.seat-badge-portrait {
+    top: auto;
+    right: -2px;
+    bottom: -2px;
+  }
+
+  .seat.seat-anchor-bottom .seat-below-anchor {
+    position: static;
+    transform: none;
+    margin-top: 0;
+  }
+
+  .action-bar-row {
+    flex-wrap: wrap;
+  }
+
+  .action-bar-row textarea {
+    flex-basis: 100%;
   }
 }
