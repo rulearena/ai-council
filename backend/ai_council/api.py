@@ -19,6 +19,8 @@ from ai_council.meetings.runner import MeetingRunner, RunnerAdapters
 from ai_council.meetings.transcript import TranscriptProjector
 from ai_council.models.adapters import (
     AdapterError,
+    AnthropicHTTPAdapter,
+    GeminiHTTPAdapter,
     MockModelAdapter,
     ModelRequest,
     OpenAICompatibleHTTPAdapter,
@@ -73,6 +75,8 @@ def create_app(
     model_adapters = {
         "mock": MockModelAdapter(),
         "openai-compatible-http": OpenAICompatibleHTTPAdapter(),
+        "anthropic-http": AnthropicHTTPAdapter(),
+        "gemini-http": GeminiHTTPAdapter(),
         "subscription-cli": SubscriptionCLIAdapter(),
     }
     runner = MeetingRunner(

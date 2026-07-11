@@ -110,14 +110,34 @@ models:
 
 `api_key_env` names an environment variable, not a literal key. Leave it `null` for
 unauthenticated local endpoints. When set, the adapter reads that variable at request time
-and sends it as `Authorization: Bearer <value>`; a configured but unset variable fails the
-request with a clear `AdapterError` instead of calling the endpoint unauthenticated.
+and sends it in the header/query param that provider expects (`Authorization: Bearer` for
+`openai-compatible-http`, `x-api-key` for `anthropic-http`, a `?key=` query param for
+`gemini-http`); a configured but unset variable fails the request with a clear `AdapterError`
+instead of calling the endpoint unauthenticated.
 
 Supported adapters in the MVP:
 
 - `mock` - deterministic local test adapter.
 - `openai-compatible-http` - calls `/v1/chat/completions` on an OpenAI-compatible server.
+- `anthropic-http` - calls `/v1/messages` on the Anthropic Messages API.
+- `gemini-http` - calls `/v1beta/models/{model}:generateContent` on the Gemini API.
 - `subscription-cli` - runs an already authenticated CLI process without an API token.
+
+```yaml
+- id: claude-api
+  adapter: anthropic-http
+  base_url: https://api.anthropic.com/v1
+  model: claude-sonnet-4-5
+  api_key_env: ANTHROPIC_API_KEY
+  extra_body:
+    max_tokens: 4096
+
+- id: gemini-api
+  adapter: gemini-http
+  base_url: https://generativelanguage.googleapis.com/v1beta
+  model: gemini-2.5-pro
+  api_key_env: GEMINI_API_KEY
+```
 
 Subscription CLI models use an argument list with a required `{prompt}` placeholder:
 

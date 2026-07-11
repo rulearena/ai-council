@@ -6,6 +6,7 @@ import subprocess
 import threading
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from dataclasses import dataclass
 
@@ -110,6 +111,29 @@ class SubscriptionCLIAdapter:
             process.kill()
 
 
+def _resolve_api_key(api_key_env: str | None) -> str | None:
+    if not api_key_env:
+        return None
+    api_key = os.environ.get(api_key_env)
+    if not api_key:
+        raise AdapterError(f"Environment variable {api_key_env} is not set for API key")
+    return api_key
+
+
+def _post_json(url: str, payload: dict[str, object], headers: dict[str, str]) -> dict[str, object]:
+    http_request = urllib.request.Request(
+        url,
+        data=json.dumps(payload).encode("utf-8"),
+        headers=headers,
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(http_request, timeout=120) as response:
+            return json.loads(response.read().decode("utf-8"))
+    except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as error:
+        raise AdapterError(str(error)) from error
+
+
 class OpenAICompatibleHTTPAdapter:
     def complete(self, request: ModelRequest) -> ModelResponse:
         config = request.model_config
@@ -125,27 +149,63 @@ class OpenAICompatibleHTTPAdapter:
         payload.update(config.extra_body)
 
         headers = {"Content-Type": "application/json"}
-        if config.api_key_env:
-            api_key = os.environ.get(config.api_key_env)
-            if not api_key:
-                raise AdapterError(
-                    f"Environment variable {config.api_key_env} is not set for API key"
-                )
+        api_key = _resolve_api_key(config.api_key_env)
+        if api_key:
             headers["Authorization"] = f"Bearer {api_key}"
 
-        http_request = urllib.request.Request(
-            f"{config.base_url.rstrip('/')}/chat/completions",
-            data=json.dumps(payload).encode("utf-8"),
-            headers=headers,
-            method="POST",
-        )
-        try:
-            with urllib.request.urlopen(http_request, timeout=120) as response:
-                body = json.loads(response.read().decode("utf-8"))
-        except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as error:
-            raise AdapterError(str(error)) from error
+        body = _post_json(f"{config.base_url.rstrip('/')}/chat/completions", payload, headers)
 
         try:
             return ModelResponse(raw_output=body["choices"][0]["message"]["content"])
         except (KeyError, IndexError, TypeError) as error:
             raise AdapterError("Malformed chat completion response") from error
+
+
+class AnthropicHTTPAdapter:
+    def complete(self, request: ModelRequest) -> ModelResponse:
+        config = request.model_config
+        if not config.base_url or not config.model:
+            raise AdapterError("HTTP model config requires base_url and model")
+
+        payload: dict[str, object] = {
+            "model": config.model,
+            "max_tokens": 4096,
+            "messages": [{"role": "user", "content": request.prompt}],
+        }
+        payload.update(config.extra_body)
+
+        headers = {"Content-Type": "application/json", "anthropic-version": "2023-06-01"}
+        api_key = _resolve_api_key(config.api_key_env)
+        if api_key:
+            headers["x-api-key"] = api_key
+
+        body = _post_json(f"{config.base_url.rstrip('/')}/messages", payload, headers)
+
+        try:
+            return ModelResponse(raw_output=body["content"][0]["text"])
+        except (KeyError, IndexError, TypeError) as error:
+            raise AdapterError("Malformed Anthropic response") from error
+
+
+class GeminiHTTPAdapter:
+    def complete(self, request: ModelRequest) -> ModelResponse:
+        config = request.model_config
+        if not config.base_url or not config.model:
+            raise AdapterError("HTTP model config requires base_url and model")
+
+        payload: dict[str, object] = {
+            "contents": [{"parts": [{"text": request.prompt}]}],
+        }
+        payload.update(config.extra_body)
+
+        url = f"{config.base_url.rstrip('/')}/models/{config.model}:generateContent"
+        api_key = _resolve_api_key(config.api_key_env)
+        if api_key:
+            url = f"{url}?key={urllib.parse.quote(api_key, safe='')}"
+
+        body = _post_json(url, payload, {"Content-Type": "application/json"})
+
+        try:
+            return ModelResponse(raw_output=body["candidates"][0]["content"]["parts"][0]["text"])
+        except (KeyError, IndexError, TypeError) as error:
+            raise AdapterError("Malformed Gemini response") from error

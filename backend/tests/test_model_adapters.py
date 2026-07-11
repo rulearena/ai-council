@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import sys
 import time
+from email.message import Message
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from threading import Thread
 
@@ -10,6 +11,8 @@ import pytest
 
 from ai_council.models.adapters import (
     AdapterError,
+    AnthropicHTTPAdapter,
+    GeminiHTTPAdapter,
     ModelRequest,
     MockModelAdapter,
     OpenAICompatibleHTTPAdapter,
@@ -295,12 +298,124 @@ def test_http_adapter_surfaces_http_errors_as_adapter_error() -> None:
             )
 
 
+def test_anthropic_adapter_posts_messages_request(monkeypatch) -> None:
+    monkeypatch.setenv("ANTHROPIC_KEY", "sk-ant-test")
+    server = RecordingServer(
+        response={
+            "content": [
+                {
+                    "type": "text",
+                    "text": '{"summary":"OK","arguments":[],"risks":[],"recommendation":"Go"}',
+                }
+            ]
+        }
+    )
+    with server:
+        adapter = AnthropicHTTPAdapter()
+        response = adapter.complete(
+            ModelRequest(
+                prompt="Hello",
+                model_config=ModelConfig(
+                    id="claude-api",
+                    adapter="anthropic-http",
+                    base_url=server.base_url,
+                    model="claude-sonnet-test",
+                    api_key_env="ANTHROPIC_KEY",
+                    extra_body={"max_tokens": 2048},
+                ),
+            )
+        )
+
+    assert response.raw_output == '{"summary":"OK","arguments":[],"risks":[],"recommendation":"Go"}'
+    assert server.request_path == "/v1/messages"
+    assert server.request_headers["x-api-key"] == "sk-ant-test"
+    assert server.request_headers["anthropic-version"] == "2023-06-01"
+    assert server.request_body["model"] == "claude-sonnet-test"
+    assert server.request_body["messages"] == [{"role": "user", "content": "Hello"}]
+    assert server.request_body["max_tokens"] == 2048
+
+
+def test_anthropic_adapter_surfaces_http_errors_as_adapter_error() -> None:
+    server = RecordingServer(status=500, response={"error": "boom"})
+    with server:
+        adapter = AnthropicHTTPAdapter()
+        with pytest.raises(AdapterError):
+            adapter.complete(
+                ModelRequest(
+                    prompt="Hello",
+                    model_config=ModelConfig(
+                        id="bad",
+                        adapter="anthropic-http",
+                        base_url=server.base_url,
+                        model="test-model",
+                    ),
+                )
+            )
+
+
+def test_gemini_adapter_posts_generate_content_request_with_api_key_query_param(
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("GEMINI_KEY", "gm-test-key")
+    server = RecordingServer(
+        response={
+            "candidates": [
+                {
+                    "content": {
+                        "parts": [
+                            {
+                                "text": '{"summary":"OK","arguments":[],"risks":[],"recommendation":"Go"}'
+                            }
+                        ]
+                    }
+                }
+            ]
+        }
+    )
+    with server:
+        adapter = GeminiHTTPAdapter()
+        response = adapter.complete(
+            ModelRequest(
+                prompt="Hello",
+                model_config=ModelConfig(
+                    id="gemini-api",
+                    adapter="gemini-http",
+                    base_url=server.base_url,
+                    model="gemini-2.5-pro",
+                    api_key_env="GEMINI_KEY",
+                ),
+            )
+        )
+
+    assert response.raw_output == '{"summary":"OK","arguments":[],"risks":[],"recommendation":"Go"}'
+    assert server.request_path == "/v1/models/gemini-2.5-pro:generateContent?key=gm-test-key"
+    assert server.request_body["contents"] == [{"parts": [{"text": "Hello"}]}]
+
+
+def test_gemini_adapter_surfaces_http_errors_as_adapter_error() -> None:
+    server = RecordingServer(status=500, response={"error": "boom"})
+    with server:
+        adapter = GeminiHTTPAdapter()
+        with pytest.raises(AdapterError):
+            adapter.complete(
+                ModelRequest(
+                    prompt="Hello",
+                    model_config=ModelConfig(
+                        id="bad",
+                        adapter="gemini-http",
+                        base_url=server.base_url,
+                        model="test-model",
+                    ),
+                )
+            )
+
+
 class RecordingHandler(BaseHTTPRequestHandler):
     def do_POST(self) -> None:
         body = self.rfile.read(int(self.headers["Content-Length"]))
         self.server.request_path = self.path  # type: ignore[attr-defined]
         self.server.request_body = json.loads(body.decode("utf-8"))  # type: ignore[attr-defined]
-        self.server.request_headers = dict(self.headers)  # type: ignore[attr-defined]
+        self.server.request_headers = self.headers  # type: ignore[attr-defined]
         self.send_response(self.server.status)  # type: ignore[attr-defined]
         self.send_header("Content-Type", "application/json")
         self.end_headers()
@@ -332,7 +447,7 @@ class RecordingServer:
         return self._server.request_body  # type: ignore[attr-defined]
 
     @property
-    def request_headers(self) -> dict[str, str]:
+    def request_headers(self) -> Message:
         return self._server.request_headers  # type: ignore[attr-defined]
 
     def __enter__(self) -> RecordingServer:
