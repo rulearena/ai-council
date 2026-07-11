@@ -25,6 +25,7 @@ export type Meeting = {
   created_at: string
   updated_at: string
   last_step_id: string | null
+  tags: string[]
   events?: MeetingEvent[]
 }
 
@@ -106,6 +107,10 @@ export async function deleteMeeting(meetingId: string): Promise<void> {
   if (!response.ok) throw new Error(`DELETE /meetings/${meetingId} failed: ${response.status}`)
 }
 
+export async function updateMeetingTags(meetingId: string, tags: string[]): Promise<Meeting> {
+  return putJson(`/meetings/${meetingId}/tags`, { tags })
+}
+
 export async function addMeetingMessage(
   meetingId: string,
   content: string,
@@ -181,6 +186,16 @@ async function postJson<T>(path: string, body: unknown): Promise<T> {
     body: JSON.stringify(body),
   })
   if (!response.ok) throw new Error(`POST ${path} failed: ${response.status}`)
+  return response.json()
+}
+
+async function putJson<T>(path: string, body: unknown): Promise<T> {
+  const response = await fetch(`${API_BASE}${path}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  })
+  if (!response.ok) throw new Error(`PUT ${path} failed: ${response.status}`)
   return response.json()
 }
 

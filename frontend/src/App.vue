@@ -18,6 +18,7 @@ import {
   subscribeMeetingEvents,
   testModel,
   transcriptDownloadUrl,
+  updateMeetingTags,
   type Meeting,
   type MeetingEvent,
   type ModelConfig,
@@ -83,7 +84,7 @@ const filteredMeetings = computed(() => {
   return meetings.value
     .filter((meeting) => {
       const matchesStatus = statusFilter.value === 'all' || meeting.status === statusFilter.value
-      const searchable = `${meeting.topic} ${meeting.meeting_id} ${meeting.last_step_id ?? ''}`.toLowerCase()
+      const searchable = `${meeting.topic} ${meeting.meeting_id} ${meeting.last_step_id ?? ''} ${meeting.tags.join(' ')}`.toLowerCase()
       return matchesStatus && (!query || searchable.includes(query))
     })
     .sort((left, right) => right.updated_at.localeCompare(left.updated_at))
@@ -218,6 +219,22 @@ async function deleteExistingMeeting(meeting: Meeting) {
   })
 }
 
+async function editMeetingTags(meeting: Meeting) {
+  const input = window.prompt('編輯標籤（用逗號分隔）：', meeting.tags.join(', '))
+  if (input === null) return
+  const tags = input
+    .split(',')
+    .map((tag) => tag.trim())
+    .filter((tag) => tag.length > 0)
+  await runAction(async () => {
+    await updateMeetingTags(meeting.meeting_id, tags)
+    meetings.value = await getMeetings()
+    if (selectedMeeting.value?.meeting_id === meeting.meeting_id) {
+      selectedMeeting.value = meetings.value.find((m) => m.meeting_id === meeting.meeting_id) ?? null
+    }
+  })
+}
+
 async function testSelectedModel(role: CouncilRole) {
   const modelId = selectedModels.value[role]
   if (!modelId) return
@@ -349,6 +366,19 @@ async function runAction(action: () => Promise<void>) {
           <strong>{{ meeting.activity_status }}</strong>
           <small>更新 {{ formatDateTime(meeting.updated_at) }}</small>
           <small>{{ meeting.meeting_id }}</small>
+          <span class="meeting-tags" data-testid="meeting-tags">
+            <em v-for="tag in meeting.tags" :key="tag" class="tag-badge">{{ tag }}</em>
+          </span>
+        </button>
+        <button
+          type="button"
+          class="edit-tags-button"
+          data-testid="edit-tags-button"
+          :aria-label="`編輯 ${meeting.topic} 的標籤`"
+          :disabled="loading"
+          @click="editMeetingTags(meeting)"
+        >
+          標籤
         </button>
         <button
           type="button"

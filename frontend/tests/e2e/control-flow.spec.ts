@@ -114,11 +114,23 @@ test('user can run a mock meeting and add chair feedback', async ({ page }) => {
   await expect(page.getByTestId('run-sequence-button')).toBeDisabled()
   await expect(page.getByTestId('edit-message-button').first()).toBeDisabled()
 
+  const meetingRow = page.getByTestId('meeting-list-item').filter({ hasText: topic })
+  page.once('dialog', async (dialog) => {
+    expect(dialog.type()).toBe('prompt')
+    await dialog.accept('urgent, backend')
+  })
+  await meetingRow.getByTestId('edit-tags-button').click()
+  await expect(meetingRow.getByTestId('meeting-tags')).toContainText('urgent')
+  await expect(meetingRow.getByTestId('meeting-tags')).toContainText('backend')
+
+  await page.getByTestId('meeting-search-input').fill('urgent')
+  await expect(page.getByTestId('meeting-list')).toContainText(topic)
+  await page.getByTestId('meeting-search-input').fill('')
+
   page.once('dialog', async (dialog) => {
     expect(dialog.message()).toContain('無法復原')
     await dialog.accept()
   })
-  const meetingRow = page.getByTestId('meeting-list-item').filter({ hasText: topic })
   await meetingRow.getByTestId('delete-meeting-button').click()
   await expect(page.getByTestId('meeting-list')).not.toContainText(topic)
   await expect(page.getByTestId('step-timeline')).toContainText('尚未選擇會議')

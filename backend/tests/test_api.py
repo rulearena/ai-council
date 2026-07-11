@@ -120,6 +120,7 @@ def test_meeting_create_list_get_start_and_transcript(tmp_path: Path) -> None:
     assert created["created_at"]
     assert created["updated_at"] == created["created_at"]
     assert created["last_step_id"] is None
+    assert created["tags"] == []
     meeting_id = created["meeting_id"]
     listed = client.get("/meetings").json()[0]
     assert listed["meeting_id"] == meeting_id
@@ -381,6 +382,45 @@ def test_meeting_close_endpoint_records_closure_and_projects_transcript(
     transcript = client.get(f"/meetings/{meeting_id}/transcript.md").text
     assert "## System - meeting" in transcript
     assert "**Status:** closed" in transcript
+
+
+def test_update_meeting_tags_replaces_tag_list(tmp_path: Path) -> None:
+    app = create_test_app(tmp_path)
+    client = TestClient(app)
+    meeting_id = client.post("/meetings", json={"topic": "標籤測試"}).json()["meeting_id"]
+
+    response = client.put(f"/meetings/{meeting_id}/tags", json={"tags": ["urgent", "backend"]})
+
+    assert response.status_code == 200
+    assert response.json()["tags"] == ["urgent", "backend"]
+    assert client.get(f"/meetings/{meeting_id}").json()["tags"] == ["urgent", "backend"]
+    assert [meeting["tags"] for meeting in client.get("/meetings").json()] == [
+        ["urgent", "backend"]
+    ]
+
+    replaced = client.put(f"/meetings/{meeting_id}/tags", json={"tags": ["backend"]})
+    assert replaced.json()["tags"] == ["backend"]
+
+
+def test_update_meeting_tags_returns_404_for_unknown_meeting(tmp_path: Path) -> None:
+    app = create_test_app(tmp_path)
+    client = TestClient(app)
+
+    response = client.put("/meetings/does-not-exist/tags", json={"tags": ["x"]})
+
+    assert response.status_code == 404
+
+
+def test_update_meeting_tags_allowed_on_terminal_meeting(tmp_path: Path) -> None:
+    app = create_test_app(tmp_path)
+    client = TestClient(app)
+    meeting_id = client.post("/meetings", json={"topic": "已結案"}).json()["meeting_id"]
+    client.post(f"/meetings/{meeting_id}/close")
+
+    response = client.put(f"/meetings/{meeting_id}/tags", json={"tags": ["archived"]})
+
+    assert response.status_code == 200
+    assert response.json()["tags"] == ["archived"]
 
 
 def test_meeting_delete_removes_meeting_and_derived_transcript(tmp_path: Path) -> None:

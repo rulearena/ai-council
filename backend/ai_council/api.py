@@ -47,6 +47,10 @@ class CorrectMeetingMessageRequest(BaseModel):
     content: str
 
 
+class UpdateMeetingTagsRequest(BaseModel):
+    tags: list[str]
+
+
 class AddMeetingMessageRequest(BaseModel):
     content: str
 
@@ -123,6 +127,7 @@ def create_app(
             "meeting_id": meeting_id,
             "topic": request.topic,
             "created_at": created_at,
+            "tags": [],
         }
         metadata_store.save(metadata)
         return project_meeting_summary(metadata, [])
@@ -154,6 +159,18 @@ def create_app(
             ),
             "events": events,
         }
+
+    @app.put("/meetings/{meeting_id}/tags")
+    def update_meeting_tags(meeting_id: str, request: UpdateMeetingTagsRequest) -> dict[str, Any]:
+        metadata = metadata_store.get(meeting_id)
+        metadata["tags"] = request.tags
+        metadata_store.save(metadata)
+        events = repository.read_events(meeting_id)
+        return project_meeting_summary(
+            metadata,
+            events,
+            activity_status=live_activity_status(events, jobs.is_running(meeting_id)),
+        )
 
     @app.post("/meetings/{meeting_id}/start", status_code=202)
     def start_meeting(meeting_id: str, request: StartMeetingRequest) -> dict[str, str]:
@@ -423,6 +440,7 @@ def project_meeting_summary(
         "status": project_meeting_status(events),
         "activity_status": activity_status or project_activity_status(events),
         "last_step_id": latest_event.get("step_id") if latest_event else None,
+        "tags": metadata.get("tags") or [],
     }
 
 
