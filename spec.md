@@ -379,6 +379,9 @@ cancelled
 - `TranscriptProjector` 會把主席發言渲染進 Markdown transcript
 - 後續 AI role prompt 的 `prior_transcript` 會包含主席發言
 - 前端有主席發言輸入框與送出按鈕
+- 主席可以修正已送出的主席發言，API 為 `POST /meetings/{meeting_id}/messages/{event_id}/correct`
+- 修正會以新的 append-only Human event 保存，並用 `corrects_event_id` 指向原始主席發言
+- transcript 會清楚標示主席發言修正項目
 - 主席發言後再次開始/繼續討論時，後端會產生新的 AI 回合
 - 第一輪維持原本 step id：`blue-propose`、`red-critique`、`blue-revise`、`judge-decide`
 - 第二輪起使用 `round-N-*` step id，例如 `round-2-blue-propose`
@@ -467,7 +470,7 @@ config/models.yaml.example
 
 ## 15. Backlog
 
-1. Human message editing/correction：主席發言送出後的修正策略與事件記錄
+1. Human message editing/correction：主席發言送出後的修正策略與事件記錄（已落地為 append-only correction event）
 2. Token streaming：Agent 逐字輸出到前端
 3. 自動恢復執行中任務：後端重啟或 API 呼叫中斷時判斷是否能安全重送
 4. Markdown 反向解析：從 `transcript.md` 還原狀態
