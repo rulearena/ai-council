@@ -51,6 +51,10 @@ class UpdateMeetingTagsRequest(BaseModel):
     tags: list[str]
 
 
+class UpdateMeetingPinnedRequest(BaseModel):
+    pinned: bool
+
+
 class AddMeetingMessageRequest(BaseModel):
     content: str
 
@@ -128,6 +132,7 @@ def create_app(
             "topic": request.topic,
             "created_at": created_at,
             "tags": [],
+            "pinned": False,
         }
         metadata_store.save(metadata)
         return project_meeting_summary(metadata, [])
@@ -164,6 +169,21 @@ def create_app(
     def update_meeting_tags(meeting_id: str, request: UpdateMeetingTagsRequest) -> dict[str, Any]:
         metadata = metadata_store.get(meeting_id)
         metadata["tags"] = request.tags
+        metadata_store.save(metadata)
+        events = repository.read_events(meeting_id)
+        return project_meeting_summary(
+            metadata,
+            events,
+            activity_status=live_activity_status(events, jobs.is_running(meeting_id)),
+        )
+
+    @app.put("/meetings/{meeting_id}/pinned")
+    def update_meeting_pinned(
+        meeting_id: str,
+        request: UpdateMeetingPinnedRequest,
+    ) -> dict[str, Any]:
+        metadata = metadata_store.get(meeting_id)
+        metadata["pinned"] = request.pinned
         metadata_store.save(metadata)
         events = repository.read_events(meeting_id)
         return project_meeting_summary(
@@ -441,6 +461,7 @@ def project_meeting_summary(
         "activity_status": activity_status or project_activity_status(events),
         "last_step_id": latest_event.get("step_id") if latest_event else None,
         "tags": metadata.get("tags") or [],
+        "pinned": bool(metadata.get("pinned", False)),
     }
 
 

@@ -127,6 +127,10 @@ test('user can run a mock meeting and add chair feedback', async ({ page }) => {
   await expect(page.getByTestId('meeting-list')).toContainText(topic)
   await page.getByTestId('meeting-search-input').fill('')
 
+  await expect(meetingRow.getByTestId('pin-meeting-button')).toContainText('☆')
+  await meetingRow.getByTestId('pin-meeting-button').click()
+  await expect(meetingRow.getByTestId('pin-meeting-button')).toContainText('★')
+
   page.once('dialog', async (dialog) => {
     expect(dialog.message()).toContain('無法復原')
     await dialog.accept()

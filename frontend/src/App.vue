@@ -18,6 +18,7 @@ import {
   subscribeMeetingEvents,
   testModel,
   transcriptDownloadUrl,
+  updateMeetingPinned,
   updateMeetingTags,
   type Meeting,
   type MeetingEvent,
@@ -87,7 +88,11 @@ const filteredMeetings = computed(() => {
       const searchable = `${meeting.topic} ${meeting.meeting_id} ${meeting.last_step_id ?? ''} ${meeting.tags.join(' ')}`.toLowerCase()
       return matchesStatus && (!query || searchable.includes(query))
     })
-    .sort((left, right) => right.updated_at.localeCompare(left.updated_at))
+    .sort(
+      (left, right) =>
+        Number(right.pinned) - Number(left.pinned) ||
+        right.updated_at.localeCompare(left.updated_at),
+    )
 })
 const roleOutputEvents = computed(() =>
   events.value.filter((event) => event.parsed_output),
@@ -235,6 +240,16 @@ async function editMeetingTags(meeting: Meeting) {
   })
 }
 
+async function toggleMeetingPinned(meeting: Meeting) {
+  await runAction(async () => {
+    await updateMeetingPinned(meeting.meeting_id, !meeting.pinned)
+    meetings.value = await getMeetings()
+    if (selectedMeeting.value?.meeting_id === meeting.meeting_id) {
+      selectedMeeting.value = meetings.value.find((m) => m.meeting_id === meeting.meeting_id) ?? null
+    }
+  })
+}
+
 async function testSelectedModel(role: CouncilRole) {
   const modelId = selectedModels.value[role]
   if (!modelId) return
@@ -369,6 +384,17 @@ async function runAction(action: () => Promise<void>) {
           <span class="meeting-tags" data-testid="meeting-tags">
             <em v-for="tag in meeting.tags" :key="tag" class="tag-badge">{{ tag }}</em>
           </span>
+        </button>
+        <button
+          type="button"
+          class="pin-meeting-button"
+          data-testid="pin-meeting-button"
+          :class="{ active: meeting.pinned }"
+          :aria-label="`${meeting.pinned ? '取消釘選' : '釘選'} ${meeting.topic}`"
+          :disabled="loading"
+          @click="toggleMeetingPinned(meeting)"
+        >
+          {{ meeting.pinned ? '★' : '☆' }}
         </button>
         <button
           type="button"

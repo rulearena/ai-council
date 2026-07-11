@@ -121,6 +121,7 @@ def test_meeting_create_list_get_start_and_transcript(tmp_path: Path) -> None:
     assert created["updated_at"] == created["created_at"]
     assert created["last_step_id"] is None
     assert created["tags"] == []
+    assert created["pinned"] is False
     meeting_id = created["meeting_id"]
     listed = client.get("/meetings").json()[0]
     assert listed["meeting_id"] == meeting_id
@@ -421,6 +422,44 @@ def test_update_meeting_tags_allowed_on_terminal_meeting(tmp_path: Path) -> None
 
     assert response.status_code == 200
     assert response.json()["tags"] == ["archived"]
+
+
+def test_update_meeting_pinned_toggles_and_persists(tmp_path: Path) -> None:
+    app = create_test_app(tmp_path)
+    client = TestClient(app)
+    meeting_id = client.post("/meetings", json={"topic": "釘選測試"}).json()["meeting_id"]
+    assert client.get(f"/meetings/{meeting_id}").json()["pinned"] is False
+
+    response = client.put(f"/meetings/{meeting_id}/pinned", json={"pinned": True})
+
+    assert response.status_code == 200
+    assert response.json()["pinned"] is True
+    assert client.get(f"/meetings/{meeting_id}").json()["pinned"] is True
+    assert [meeting["pinned"] for meeting in client.get("/meetings").json()] == [True]
+
+    unpinned = client.put(f"/meetings/{meeting_id}/pinned", json={"pinned": False})
+    assert unpinned.json()["pinned"] is False
+
+
+def test_update_meeting_pinned_returns_404_for_unknown_meeting(tmp_path: Path) -> None:
+    app = create_test_app(tmp_path)
+    client = TestClient(app)
+
+    response = client.put("/meetings/does-not-exist/pinned", json={"pinned": True})
+
+    assert response.status_code == 404
+
+
+def test_update_meeting_pinned_allowed_on_terminal_meeting(tmp_path: Path) -> None:
+    app = create_test_app(tmp_path)
+    client = TestClient(app)
+    meeting_id = client.post("/meetings", json={"topic": "已結案"}).json()["meeting_id"]
+    client.post(f"/meetings/{meeting_id}/close")
+
+    response = client.put(f"/meetings/{meeting_id}/pinned", json={"pinned": True})
+
+    assert response.status_code == 200
+    assert response.json()["pinned"] is True
 
 
 def test_meeting_delete_removes_meeting_and_derived_transcript(tmp_path: Path) -> None:

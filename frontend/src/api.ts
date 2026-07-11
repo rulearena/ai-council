@@ -26,6 +26,7 @@ export type Meeting = {
   updated_at: string
   last_step_id: string | null
   tags: string[]
+  pinned: boolean
   events?: MeetingEvent[]
 }
 
@@ -109,6 +110,10 @@ export async function deleteMeeting(meetingId: string): Promise<void> {
 
 export async function updateMeetingTags(meetingId: string, tags: string[]): Promise<Meeting> {
   return putJson(`/meetings/${meetingId}/tags`, { tags })
+}
+
+export async function updateMeetingPinned(meetingId: string, pinned: boolean): Promise<Meeting> {
+  return putJson(`/meetings/${meetingId}/pinned`, { pinned })
 }
 
 export async function addMeetingMessage(
