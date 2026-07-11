@@ -18,8 +18,11 @@ class TranscriptProjector:
         role = event.get("role", "Unknown")
         step_id = event.get("step_id", "unknown-step")
         status = event.get("status", "unknown")
+        heading = f"## {role} - {step_id}"
+        if event.get("corrects_event_id"):
+            heading += "（訂正）"
         lines = [
-            f"## {role} - {step_id}",
+            heading,
             "",
             f"**Status:** {status}",
         ]

@@ -58,6 +58,15 @@ test('user can run a mock meeting and add chair feedback', async ({ page }) => {
   )
   await expect(page.getByTestId('chair-message-input')).toHaveValue('')
 
+  page.once('dialog', async (dialog) => {
+    expect(dialog.type()).toBe('prompt')
+    await dialog.accept('主席修正：限制放寬到兩週。')
+  })
+  await page.getByTestId('edit-message-button').click()
+  await expect(page.getByTestId('step-timeline')).toContainText('human-message')
+  await expect(page.getByTestId('transcript-preview')).toContainText('主席修正：限制放寬到兩週。')
+  await expect(page.getByTestId('transcript-preview')).toContainText('（訂正）')
+
   await page.getByTestId('request-blue-response-button').click()
 
   await expect(page.getByTestId('step-timeline')).toContainText('directed-1-blue-response')
@@ -103,6 +112,7 @@ test('user can run a mock meeting and add chair feedback', async ({ page }) => {
   await expect(page.getByTestId('request-red-response-button')).toBeDisabled()
   await expect(page.getByTestId('request-judge-response-button')).toBeDisabled()
   await expect(page.getByTestId('run-sequence-button')).toBeDisabled()
+  await expect(page.getByTestId('edit-message-button').first()).toBeDisabled()
 
   page.once('dialog', async (dialog) => {
     expect(dialog.message()).toContain('無法復原')

@@ -299,6 +299,7 @@ POST   /meetings/{meeting_id}/start   # 202 Accepted，背景執行
 POST   /meetings/{meeting_id}/cancel
 POST   /meetings/{meeting_id}/close
 POST   /meetings/{meeting_id}/messages
+POST   /meetings/{meeting_id}/messages/{event_id}/correct
 POST   /meetings/{meeting_id}/roles/{role}/respond
 POST   /meetings/{meeting_id}/sequences
 POST   /meetings/{meeting_id}/steps/{step_id}/retry

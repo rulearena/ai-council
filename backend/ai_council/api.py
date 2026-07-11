@@ -41,6 +41,10 @@ class RunRoleSequenceRequest(BaseModel):
     models: dict[str, str]
 
 
+class CorrectMeetingMessageRequest(BaseModel):
+    content: str
+
+
 class AddMeetingMessageRequest(BaseModel):
     content: str
 
@@ -210,6 +214,39 @@ def create_app(
         }
         repository.append_event(meeting_id, event)
         return event
+
+    @app.post("/meetings/{meeting_id}/messages/{event_id}/correct")
+    def correct_meeting_message(
+        meeting_id: str,
+        event_id: str,
+        request: CorrectMeetingMessageRequest,
+    ) -> dict[str, Any]:
+        metadata_store.get(meeting_id)
+        reject_terminal_meeting(repository, meeting_id)
+        original_event = next(
+            (
+                event
+                for event in repository.read_events(meeting_id)
+                if event.get("event_id") == event_id
+            ),
+            None,
+        )
+        if original_event is None:
+            raise HTTPException(status_code=404, detail=f"Unknown event: {event_id}")
+        if original_event.get("role") != "Human" or original_event.get("step_id") != "human-message":
+            raise HTTPException(status_code=400, detail="Only human messages can be corrected")
+        correction = {
+            "event_id": f"{meeting_id}:human-message-correction:{uuid.uuid4().hex}",
+            "meeting_id": meeting_id,
+            "step_id": "human-message",
+            "role": "Human",
+            "attempt": 1,
+            "status": "completed",
+            "content": request.content,
+            "corrects_event_id": event_id,
+        }
+        repository.append_event(meeting_id, correction)
+        return correction
 
     @app.post("/meetings/{meeting_id}/roles/{role}/respond")
     def respond_as_role(

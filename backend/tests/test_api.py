@@ -484,6 +484,96 @@ def test_human_chair_message_is_persisted_and_projected(tmp_path: Path) -> None:
     assert "我先補充限制：只能花一週做 MVP。" in transcript
 
 
+def test_chair_can_correct_a_human_message(tmp_path: Path) -> None:
+    app = create_test_app(tmp_path)
+    client = TestClient(app)
+    meeting_id = client.post("/meetings", json={"topic": "互動會議"}).json()["meeting_id"]
+    original = client.post(
+        f"/meetings/{meeting_id}/messages",
+        json={"content": "只能花一週做 MVP。"},
+    ).json()
+
+    response = client.post(
+        f"/meetings/{meeting_id}/messages/{original['event_id']}/correct",
+        json={"content": "只能花兩週做 MVP，之前打錯字了。"},
+    )
+
+    assert response.status_code == 200
+    correction = response.json()
+    assert correction["role"] == "Human"
+    assert correction["step_id"] == "human-message"
+    assert correction["status"] == "completed"
+    assert correction["content"] == "只能花兩週做 MVP，之前打錯字了。"
+    assert correction["corrects_event_id"] == original["event_id"]
+
+    events = client.get(f"/meetings/{meeting_id}").json()["events"]
+    assert [event["content"] for event in events if event["role"] == "Human"] == [
+        "只能花一週做 MVP。",
+        "只能花兩週做 MVP，之前打錯字了。",
+    ]
+    transcript = client.get(f"/meetings/{meeting_id}/transcript.md").text
+    assert "只能花一週做 MVP。" in transcript
+    assert "只能花兩週做 MVP，之前打錯字了。" in transcript
+    assert "訂正" in transcript
+
+
+def test_correct_human_message_returns_404_for_unknown_event(tmp_path: Path) -> None:
+    app = create_test_app(tmp_path)
+    client = TestClient(app)
+    meeting_id = client.post("/meetings", json={"topic": "互動會議"}).json()["meeting_id"]
+
+    response = client.post(
+        f"/meetings/{meeting_id}/messages/does-not-exist/correct",
+        json={"content": "修正內容"},
+    )
+
+    assert response.status_code == 404
+
+
+def test_correct_human_message_rejects_non_human_message_event(tmp_path: Path) -> None:
+    app = create_test_app(tmp_path)
+    client = TestClient(app)
+    meeting_id = client.post("/meetings", json={"topic": "互動會議"}).json()["meeting_id"]
+    client.post(
+        f"/meetings/{meeting_id}/start",
+        json={
+            "models": {
+                "Blue": "mock-fast",
+                "Red": "mock-fast",
+                "Judge": "mock-fast",
+            }
+        },
+    )
+    meeting = wait_for_activity(client, meeting_id, "completed")
+    blue_step = next(event for event in meeting["events"] if event["step_id"] == "blue-propose")
+
+    response = client.post(
+        f"/meetings/{meeting_id}/messages/{blue_step['event_id']}/correct",
+        json={"content": "不能修正 AI 的回應"},
+    )
+
+    assert response.status_code == 400
+
+
+def test_correct_human_message_rejects_on_terminal_meeting(tmp_path: Path) -> None:
+    app = create_test_app(tmp_path)
+    client = TestClient(app)
+    meeting_id = client.post("/meetings", json={"topic": "已結案"}).json()["meeting_id"]
+    original = client.post(
+        f"/meetings/{meeting_id}/messages",
+        json={"content": "結案前的補充。"},
+    ).json()
+    client.post(f"/meetings/{meeting_id}/close")
+
+    response = client.post(
+        f"/meetings/{meeting_id}/messages/{original['event_id']}/correct",
+        json={"content": "結案後想修正。"},
+    )
+
+    assert response.status_code == 409
+    assert response.json()["detail"] == "Meeting is terminal: closed"
+
+
 def test_chair_can_request_single_role_response(tmp_path: Path) -> None:
     app = create_test_app(tmp_path)
     client = TestClient(app)

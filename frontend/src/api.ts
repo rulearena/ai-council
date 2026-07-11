@@ -48,6 +48,7 @@ export type MeetingEvent = {
   raw_output?: string
   parsed_output?: RoleOutput
   error?: string
+  corrects_event_id?: string
 }
 
 export type RoleOutput = {
@@ -110,6 +111,14 @@ export async function addMeetingMessage(
   content: string,
 ): Promise<MeetingEvent> {
   return postJson(`/meetings/${meetingId}/messages`, { content })
+}
+
+export async function correctMeetingMessage(
+  meetingId: string,
+  eventId: string,
+  content: string,
+): Promise<MeetingEvent> {
+  return postJson(`/meetings/${meetingId}/messages/${eventId}/correct`, { content })
 }
 
 export async function requestRoleResponse(

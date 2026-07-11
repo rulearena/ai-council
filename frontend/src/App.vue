@@ -4,6 +4,7 @@ import {
   addMeetingMessage,
   cancelMeeting,
   closeMeeting,
+  correctMeetingMessage,
   createMeeting,
   deleteMeeting,
   getMeeting,
@@ -235,6 +236,18 @@ async function sendChairMessage() {
   await runAction(async () => {
     await addMeetingMessage(selectedMeeting.value!.meeting_id, chairMessage.value.trim())
     chairMessage.value = ''
+    await openMeeting(selectedMeeting.value!.meeting_id)
+  })
+}
+
+async function correctSelectedMessage(event: MeetingEvent) {
+  if (!selectedMeeting.value) return
+  const corrected = window.prompt('修正主席發言：', event.content ?? '')
+  if (corrected === null) return
+  const trimmed = corrected.trim()
+  if (!trimmed || trimmed === event.content) return
+  await runAction(async () => {
+    await correctMeetingMessage(selectedMeeting.value!.meeting_id, event.event_id, trimmed)
     await openMeeting(selectedMeeting.value!.meeting_id)
   })
 }
@@ -547,6 +560,16 @@ async function runAction(action: () => Promise<void>) {
               :disabled="loading || !canRun"
             >
               Retry
+            </button>
+            <button
+              v-if="event.role === 'Human' && event.step_id === 'human-message' && !event.corrects_event_id"
+              type="button"
+              class="edit-message-button"
+              data-testid="edit-message-button"
+              @click="correctSelectedMessage(event)"
+              :disabled="loading || isTerminalMeeting"
+            >
+              編輯
             </button>
           </div>
         </section>
