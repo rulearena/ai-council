@@ -24,13 +24,12 @@ The backend stores meeting events as JSONL under `data/meetings/<meeting_id>/eve
 
 ## Backend Setup
 
-Use Python 3.11 or newer.
+Use Python 3.11 or newer. Backend dependency management is standardized on `uv`,
+which creates and uses the project virtual environment for you.
 
 ```bash
 cd backend
-python -m venv .venv
-source .venv/bin/activate
-pip install -e ".[dev]"
+uv sync --extra dev
 ```
 
 Create a local model config:
@@ -50,7 +49,7 @@ Run backend tests:
 
 ```bash
 cd backend
-python -m pytest
+uv run pytest
 ```
 
 ## Frontend Setup

@@ -10,7 +10,13 @@ if [[ ! -f "$MODEL_CONFIG_PATH" ]]; then
 fi
 
 cd "$ROOT_DIR/backend"
+if command -v uv >/dev/null 2>&1; then
+  PYTHON_RUNNER=(uv run)
+else
+  PYTHON_RUNNER=(python -m)
+fi
+
 AI_COUNCIL_DATA_DIR="${AI_COUNCIL_DATA_DIR:-$ROOT_DIR/data}" \
 AI_COUNCIL_MODEL_CONFIG_PATH="$MODEL_CONFIG_PATH" \
 AI_COUNCIL_PROMPT_DIR="${AI_COUNCIL_PROMPT_DIR:-$ROOT_DIR/prompts}" \
-python -m uvicorn ai_council.main:app --reload --host 127.0.0.1 --port "$PORT"
+"${PYTHON_RUNNER[@]}" uvicorn ai_council.main:app --reload --host 127.0.0.1 --port "$PORT"

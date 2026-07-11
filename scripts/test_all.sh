@@ -4,7 +4,11 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 cd "$ROOT_DIR/backend"
-python -m pytest
+if command -v uv >/dev/null 2>&1; then
+  uv run pytest
+else
+  python -m pytest
+fi
 
 cd "$ROOT_DIR/frontend"
 npm run build
