@@ -25,6 +25,7 @@ export type Meeting = {
   created_at: string
   updated_at: string
   last_step_id: string | null
+  token_usage: TokenUsage
   tags: string[]
   pinned: boolean
   events?: MeetingEvent[]
@@ -49,8 +50,15 @@ export type MeetingEvent = {
   prompt_messages?: Array<{ role: string; content: string }>
   raw_output?: string
   parsed_output?: RoleOutput
+  token_usage?: TokenUsage
   error?: string
   corrects_event_id?: string
+}
+
+export type TokenUsage = {
+  prompt_tokens: number
+  completion_tokens: number
+  total_tokens: number
 }
 
 export type RoleOutput = {

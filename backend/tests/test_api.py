@@ -283,6 +283,11 @@ def test_meeting_create_list_get_start_and_transcript(tmp_path: Path) -> None:
     assert created["created_at"]
     assert created["updated_at"] == created["created_at"]
     assert created["last_step_id"] is None
+    assert created["token_usage"] == {
+        "prompt_tokens": 0,
+        "completion_tokens": 0,
+        "total_tokens": 0,
+    }
     assert created["tags"] == []
     assert created["pinned"] is False
     meeting_id = created["meeting_id"]
@@ -328,6 +333,41 @@ def test_meeting_create_list_get_start_and_transcript(tmp_path: Path) -> None:
     assert transcript.status_code == 200
     assert transcript.text.startswith("# 先做後端？\n")
     assert "## Blue - blue-propose" in transcript.text
+
+
+def test_meeting_read_models_include_total_token_usage(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    def complete_with_usage(self, request):
+        return ModelResponse(
+            raw_output='{"summary":"OK","arguments":[],"risks":[],"recommendation":"Go"}',
+            token_usage={"prompt_tokens": 2, "completion_tokens": 3, "total_tokens": 5},
+        )
+
+    monkeypatch.setattr(MockModelAdapter, "complete", complete_with_usage)
+    app = create_test_app(tmp_path)
+    client = TestClient(app)
+    meeting_id = client.post("/meetings", json={"topic": "usage test"}).json()["meeting_id"]
+
+    client.post(
+        f"/meetings/{meeting_id}/start",
+        json={
+            "models": {
+                "Blue": "mock-fast",
+                "Red": "mock-fast",
+                "Judge": "mock-fast",
+            }
+        },
+    )
+    meeting = wait_for_activity(client, meeting_id, "completed")
+
+    assert meeting["token_usage"] == {
+        "prompt_tokens": 8,
+        "completion_tokens": 12,
+        "total_tokens": 20,
+    }
+    assert client.get("/meetings").json()[0]["token_usage"] == meeting["token_usage"]
 
 
 def test_start_returns_while_model_execution_continues_in_background(

@@ -16,6 +16,8 @@ models:
     adapter: subscription-cli
     command: [codex, exec, "{prompt}"]
     timeout_seconds: 300
+    extra_body:
+      cli_provider: codex
 
   - id: agy-subscription
     adapter: subscription-cli

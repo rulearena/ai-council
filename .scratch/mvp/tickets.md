@@ -396,7 +396,7 @@ Work the **frontier**: any ticket whose blockers are all done. For this MVP, sta
 - [x] README states that CLI installation and authentication remain user-managed.
 - [x] Follow-up: terminate an active CLI subprocess immediately when a meeting is cancelled.
 - [x] Follow-up: strip ANSI control codes from subscription CLI stdout before parsing.
-- [ ] Follow-up: add provider/version-specific output normalizers if plain stdout changes.
+- [x] Follow-up: add provider/version-specific output normalizers if plain stdout changes.
 
 ## 33 - Backend Model Config Management API
 
@@ -434,3 +434,28 @@ Work the **frontier**: any ticket whose blockers are all done. For this MVP, sta
 - [x] API exposes `GET /models/{model_config_id}/available-models`.
 - [x] Discovery returns available model ids.
 - [x] Unsupported adapters return a clear error instead of pretending discovery works.
+
+## 36 - Provider-Specific CLI Output Normalization
+
+**What to build:** Let subscription CLI configs opt into provider-specific stdout cleanup without changing the core parser.
+
+**Blocked by:** 32 - Subscription CLI Provider.
+
+- [x] `subscription-cli` still strips ANSI control codes for all providers.
+- [x] Model configs can declare a CLI provider through `extra_body.cli_provider`.
+- [x] Codex provider normalization can extract content wrapped in `<codex-output>...</codex-output>`.
+- [x] Unknown providers fall back to safe generic normalization.
+- [x] `config/models.yaml.example` marks `codex-subscription` with `cli_provider: codex`.
+
+## 37 - Token Usage Metadata Tracking
+
+**What to build:** Preserve provider token usage metadata in completed events and expose meeting-level totals.
+
+**Blocked by:** 05 - Model Adapter Contract With Mock And OpenAI-Compatible HTTP; 18 - Meeting Status Projection.
+
+- [x] OpenAI-compatible responses map `usage` into normalized token usage.
+- [x] Anthropic responses map `usage.input_tokens` / `usage.output_tokens`.
+- [x] Gemini responses map `usageMetadata`.
+- [x] Runner persists `token_usage` on completed model events when available.
+- [x] Meeting read models include cumulative `token_usage` totals.
+- [x] Frontend API types include the new `token_usage` fields.
