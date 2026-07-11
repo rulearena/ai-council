@@ -76,8 +76,9 @@ export async function testModel(modelId: string): Promise<ModelTestResult> {
   return postJson(`/models/${modelId}/test`, {})
 }
 
-export async function getMeetings(): Promise<Meeting[]> {
-  return getJson('/meetings')
+export async function getMeetings(query?: string): Promise<Meeting[]> {
+  const trimmed = query?.trim()
+  return getJson(trimmed ? `/meetings?q=${encodeURIComponent(trimmed)}` : '/meetings')
 }
 
 export async function createMeeting(topic: string): Promise<Meeting> {

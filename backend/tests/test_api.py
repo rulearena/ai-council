@@ -236,6 +236,49 @@ def test_start_rejects_missing_fixed_flow_model_assignments(tmp_path: Path) -> N
     assert client.get(f"/meetings/{meeting_id}").json()["activity_status"] == "idle"
 
 
+def test_list_meetings_filters_by_transcript_content(tmp_path: Path) -> None:
+    app = create_test_app(tmp_path)
+    client = TestClient(app)
+    matching_id = client.post("/meetings", json={"topic": "後端優先"}).json()["meeting_id"]
+    other_id = client.post("/meetings", json={"topic": "前端優先"}).json()["meeting_id"]
+    client.post(
+        f"/meetings/{matching_id}/messages",
+        json={"content": "請鎖定在一週內完成 postgres 遷移的獨特關鍵字 xyzzy123。"},
+    )
+
+    response = client.get("/meetings", params={"q": "xyzzy123"})
+
+    assert response.status_code == 200
+    returned_ids = [meeting["meeting_id"] for meeting in response.json()]
+    assert returned_ids == [matching_id]
+    assert other_id not in returned_ids
+
+
+def test_list_meetings_query_matches_tags(tmp_path: Path) -> None:
+    app = create_test_app(tmp_path)
+    client = TestClient(app)
+    tagged_id = client.post("/meetings", json={"topic": "會議 A"}).json()["meeting_id"]
+    other_id = client.post("/meetings", json={"topic": "會議 B"}).json()["meeting_id"]
+    client.put(f"/meetings/{tagged_id}/tags", json={"tags": ["needs-review"]})
+
+    response = client.get("/meetings", params={"q": "needs-review"})
+
+    returned_ids = [meeting["meeting_id"] for meeting in response.json()]
+    assert returned_ids == [tagged_id]
+    assert other_id not in returned_ids
+
+
+def test_list_meetings_without_query_returns_everything(tmp_path: Path) -> None:
+    app = create_test_app(tmp_path)
+    client = TestClient(app)
+    client.post("/meetings", json={"topic": "會議 A"})
+    client.post("/meetings", json={"topic": "會議 B"})
+
+    response = client.get("/meetings")
+
+    assert len(response.json()) == 2
+
+
 def test_meeting_activity_status_projects_failed_latest_step(tmp_path: Path) -> None:
     app = create_test_app(
         tmp_path,

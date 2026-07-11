@@ -138,11 +138,14 @@ def create_app(
         return project_meeting_summary(metadata, [])
 
     @app.get("/meetings")
-    def list_meetings() -> list[dict[str, Any]]:
+    def list_meetings(q: str | None = None) -> list[dict[str, Any]]:
+        query = (q or "").strip().lower()
         summaries: list[dict[str, Any]] = []
         for metadata in metadata_store.list():
             meeting_id = metadata["meeting_id"]
             events = repository.read_events(meeting_id)
+            if query and not _meeting_matches_query(projector, metadata, events, query):
+                continue
             summaries.append(
                 project_meeting_summary(
                     metadata,
@@ -406,6 +409,18 @@ def get_model(repository: ModelConfigRepository, model_id: str) -> ModelConfig:
         if model.id == model_id:
             return model
     raise HTTPException(status_code=404, detail=f"Unknown model: {model_id}")
+
+
+def _meeting_matches_query(
+    projector: TranscriptProjector,
+    metadata: dict[str, Any],
+    events: list[dict[str, Any]],
+    query: str,
+) -> bool:
+    transcript = projector.project(events, title=str(metadata.get("topic", "")))
+    tags = " ".join(metadata.get("tags") or [])
+    haystack = f"{transcript}\n{metadata.get('meeting_id', '')}\n{tags}".lower()
+    return query in haystack
 
 
 def reject_terminal_meeting(repository: MeetingRepository, meeting_id: str) -> None:

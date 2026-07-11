@@ -59,6 +59,8 @@ const chairMessage = ref('')
 const selectedSequencePresetId = ref(sequencePresets[0].id)
 const meetingSearch = ref('')
 const statusFilter = ref<'all' | Meeting['status']>('all')
+const transcriptSearchQuery = ref('')
+const transcriptSearchResults = ref<Meeting[] | null>(null)
 const transcript = ref('')
 const loading = ref(false)
 const error = ref('')
@@ -221,6 +223,11 @@ async function deleteExistingMeeting(meeting: Meeting) {
       transcript.value = ''
     }
     meetings.value = await getMeetings()
+    if (transcriptSearchResults.value) {
+      transcriptSearchResults.value = transcriptSearchResults.value.filter(
+        (candidate) => candidate.meeting_id !== meeting.meeting_id,
+      )
+    }
   })
 }
 
@@ -247,6 +254,14 @@ async function toggleMeetingPinned(meeting: Meeting) {
     if (selectedMeeting.value?.meeting_id === meeting.meeting_id) {
       selectedMeeting.value = meetings.value.find((m) => m.meeting_id === meeting.meeting_id) ?? null
     }
+  })
+}
+
+async function searchTranscripts() {
+  const query = transcriptSearchQuery.value.trim()
+  if (!query) return
+  await runAction(async () => {
+    transcriptSearchResults.value = await getMeetings(query)
   })
 }
 
@@ -417,6 +432,36 @@ async function runAction(action: () => Promise<void>) {
           刪除
         </button>
       </div>
+    </aside>
+
+    <aside class="transcript-search-panel" data-testid="transcript-search">
+      <input
+        v-model="transcriptSearchQuery"
+        aria-label="搜尋逐字稿內容"
+        placeholder="搜尋逐字稿內容...（含主席發言、角色回應、標籤）"
+        data-testid="transcript-search-input"
+        @keyup.enter="searchTranscripts"
+      />
+      <button
+        type="button"
+        data-testid="transcript-search-button"
+        :disabled="loading || !transcriptSearchQuery.trim()"
+        @click="searchTranscripts"
+      >
+        搜尋
+      </button>
+      <ul
+        v-if="transcriptSearchResults !== null"
+        class="transcript-search-results"
+        data-testid="transcript-search-results"
+      >
+        <li v-if="transcriptSearchResults.length === 0">沒有符合的會議</li>
+        <li v-for="meeting in transcriptSearchResults" :key="meeting.meeting_id">
+          <button type="button" @click="openMeeting(meeting.meeting_id)">
+            {{ meeting.topic }} <small>{{ meeting.meeting_id }}</small>
+          </button>
+        </li>
+      </ul>
     </aside>
 
     <section class="workspace">

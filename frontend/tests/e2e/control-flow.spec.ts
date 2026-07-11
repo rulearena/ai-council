@@ -58,6 +58,10 @@ test('user can run a mock meeting and add chair feedback', async ({ page }) => {
   )
   await expect(page.getByTestId('chair-message-input')).toHaveValue('')
 
+  await page.getByTestId('transcript-search-input').fill('一週可以完成的方案')
+  await page.getByTestId('transcript-search-button').click()
+  await expect(page.getByTestId('transcript-search-results')).toContainText(topic)
+
   page.once('dialog', async (dialog) => {
     expect(dialog.type()).toBe('prompt')
     await dialog.accept('主席修正：限制放寬到兩週。')
