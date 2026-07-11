@@ -2,7 +2,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from ai_council.models.config import ModelConfigRepository
+import pytest
+
+from ai_council.models.config import ModelConfig, ModelConfigError, ModelConfigRepository
 
 
 def test_repository_loads_models_yaml(tmp_path: Path) -> None:
@@ -86,3 +88,107 @@ models:
 
     assert model.command == ["claude", "-p", "{prompt}"]
     assert model.timeout_seconds == 300
+
+
+def test_repository_saves_new_model_to_yaml(tmp_path: Path) -> None:
+    config_path = tmp_path / "models.yaml"
+    config_path.write_text("models: []\n", encoding="utf-8")
+    repository = ModelConfigRepository(config_path)
+
+    repository.save_model(
+        ModelConfig(
+            id="qwen27",
+            adapter="openai-compatible-http",
+            base_url="http://192.168.50.80:8487/v1",
+            model="bartowski/Qwen_Qwen3.6-27B-GGUF",
+            supports_json_mode=True,
+            extra_body={"chat_template_kwargs": {"enable_thinking": False}},
+        )
+    )
+
+    reloaded = ModelConfigRepository(config_path).list_models()
+    assert [model.id for model in reloaded] == ["qwen27"]
+    assert reloaded[0].base_url == "http://192.168.50.80:8487/v1"
+    assert reloaded[0].extra_body == {"chat_template_kwargs": {"enable_thinking": False}}
+
+
+def test_repository_updates_existing_model_without_reordering(tmp_path: Path) -> None:
+    config_path = tmp_path / "models.yaml"
+    config_path.write_text(
+        """
+models:
+  - id: mock-fast
+    adapter: mock
+  - id: qwen27
+    adapter: openai-compatible-http
+    base_url: http://old.example/v1
+    model: old-model
+""".strip(),
+        encoding="utf-8",
+    )
+    repository = ModelConfigRepository(config_path)
+
+    repository.save_model(
+        ModelConfig(
+            id="qwen27",
+            adapter="openai-compatible-http",
+            base_url="http://new.example/v1",
+            model="new-model",
+            supports_json_mode=True,
+        )
+    )
+
+    models = repository.list_models()
+    assert [model.id for model in models] == ["mock-fast", "qwen27"]
+    assert models[1].base_url == "http://new.example/v1"
+    assert models[1].model == "new-model"
+    assert models[1].supports_json_mode is True
+
+
+def test_repository_deletes_model_from_yaml(tmp_path: Path) -> None:
+    config_path = tmp_path / "models.yaml"
+    config_path.write_text(
+        """
+models:
+  - id: mock-fast
+    adapter: mock
+  - id: qwen27
+    adapter: openai-compatible-http
+    base_url: http://example.test/v1
+    model: qwen
+""".strip(),
+        encoding="utf-8",
+    )
+    repository = ModelConfigRepository(config_path)
+
+    assert repository.delete_model("qwen27") is True
+    assert repository.delete_model("missing") is False
+
+    assert [model.id for model in repository.list_models()] == ["mock-fast"]
+
+
+def test_repository_rejects_invalid_model_config(tmp_path: Path) -> None:
+    repository = ModelConfigRepository(tmp_path / "models.yaml")
+
+    with pytest.raises(ModelConfigError, match="base_url and model"):
+        repository.save_model(ModelConfig(id="broken-http", adapter="openai-compatible-http"))
+
+    with pytest.raises(ModelConfigError, match="command"):
+        repository.save_model(ModelConfig(id="broken-cli", adapter="subscription-cli"))
+
+    with pytest.raises(ModelConfigError, match="Unknown adapter"):
+        repository.save_model(ModelConfig(id="broken-adapter", adapter="unknown"))
+
+
+def test_repository_reports_invalid_existing_yaml(tmp_path: Path) -> None:
+    config_path = tmp_path / "models.yaml"
+    config_path.write_text(
+        """
+models:
+  - adapter: mock
+""".strip(),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ModelConfigError, match="Model entry requires id and adapter"):
+        ModelConfigRepository(config_path).list_models()

@@ -1,5 +1,26 @@
 import { expect, test } from '@playwright/test'
 
+test('keeps transcript search and workspace in the main column', async ({ page }) => {
+  await page.goto('/')
+
+  await expect(page.getByTestId('meeting-list')).toBeVisible()
+  await expect(page.getByTestId('transcript-search')).toBeVisible()
+  await expect(page.getByTestId('step-timeline')).toBeVisible()
+
+  const sidebar = await page.getByTestId('meeting-list').boundingBox()
+  const search = await page.getByTestId('transcript-search').boundingBox()
+  const timeline = await page.getByTestId('step-timeline').boundingBox()
+  expect(sidebar).not.toBeNull()
+  expect(search).not.toBeNull()
+  expect(timeline).not.toBeNull()
+
+  expect(search!.x).toBeGreaterThanOrEqual(sidebar!.x + sidebar!.width - 1)
+  expect(timeline!.x).toBeGreaterThanOrEqual(sidebar!.x + sidebar!.width - 1)
+  await expect
+    .poll(() => page.evaluate(() => document.documentElement.scrollWidth))
+    .toBe(await page.evaluate(() => document.documentElement.clientWidth))
+})
+
 test('user can run a mock meeting and add chair feedback', async ({ page }) => {
   await page.goto('/')
 

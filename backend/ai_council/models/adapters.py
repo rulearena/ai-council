@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 import threading
 import time
@@ -11,6 +12,8 @@ import urllib.request
 from dataclasses import dataclass
 
 from ai_council.models.config import ModelConfig
+
+ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
 
 
 class AdapterError(RuntimeError):
@@ -100,15 +103,20 @@ class SubscriptionCLIAdapter:
             raise AdapterError(
                 f"Subscription CLI exited with code {process.returncode}: {detail}"
             )
-        if not stdout.strip():
+        normalized_stdout = normalize_cli_output(stdout)
+        if not normalized_stdout:
             raise AdapterError("Subscription CLI returned empty output")
-        return ModelResponse(raw_output=stdout.strip())
+        return ModelResponse(raw_output=normalized_stdout)
 
     def cancel(self, meeting_id: str) -> None:
         with self._lock:
             process = self._active_processes.get(meeting_id)
         if process is not None:
             process.kill()
+
+
+def normalize_cli_output(stdout: str) -> str:
+    return ANSI_ESCAPE_RE.sub("", stdout).strip()
 
 
 def _resolve_api_key(api_key_env: str | None) -> str | None:
@@ -120,18 +128,28 @@ def _resolve_api_key(api_key_env: str | None) -> str | None:
     return api_key
 
 
-def _post_json(url: str, payload: dict[str, object], headers: dict[str, str]) -> dict[str, object]:
+def _request_json(
+    url: str,
+    *,
+    method: str,
+    headers: dict[str, str],
+    payload: dict[str, object] | None = None,
+) -> dict[str, object]:
     http_request = urllib.request.Request(
         url,
-        data=json.dumps(payload).encode("utf-8"),
+        data=json.dumps(payload).encode("utf-8") if payload is not None else None,
         headers=headers,
-        method="POST",
+        method=method,
     )
     try:
         with urllib.request.urlopen(http_request, timeout=120) as response:
             return json.loads(response.read().decode("utf-8"))
     except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as error:
         raise AdapterError(str(error)) from error
+
+
+def _post_json(url: str, payload: dict[str, object], headers: dict[str, str]) -> dict[str, object]:
+    return _request_json(url, method="POST", payload=payload, headers=headers)
 
 
 class OpenAICompatibleHTTPAdapter:
@@ -159,6 +177,23 @@ class OpenAICompatibleHTTPAdapter:
             return ModelResponse(raw_output=body["choices"][0]["message"]["content"])
         except (KeyError, IndexError, TypeError) as error:
             raise AdapterError("Malformed chat completion response") from error
+
+    def discover_models(self, config: ModelConfig) -> list[str]:
+        if not config.base_url:
+            raise AdapterError("HTTP model config requires base_url")
+        headers = {"Content-Type": "application/json"}
+        api_key = _resolve_api_key(config.api_key_env)
+        if api_key:
+            headers["Authorization"] = f"Bearer {api_key}"
+        body = _request_json(
+            f"{config.base_url.rstrip('/')}/models",
+            method="GET",
+            headers=headers,
+        )
+        try:
+            return [str(model["id"]) for model in body["data"]]
+        except (KeyError, TypeError) as error:
+            raise AdapterError("Malformed models response") from error
 
 
 class AnthropicHTTPAdapter:

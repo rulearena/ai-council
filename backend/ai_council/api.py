@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import threading
 import uuid
 from concurrent.futures import Future, ThreadPoolExecutor
@@ -9,10 +10,11 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Callable
 
-from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import PlainTextResponse, Response
-from pydantic import BaseModel
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse, PlainTextResponse, Response
+from pydantic import BaseModel, Field
 
 from ai_council.meetings.repository import MeetingRepository
 from ai_council.meetings.runner import MeetingRunner, RunnerAdapters
@@ -26,7 +28,7 @@ from ai_council.models.adapters import (
     OpenAICompatibleHTTPAdapter,
     SubscriptionCLIAdapter,
 )
-from ai_council.models.config import ModelConfig, ModelConfigRepository
+from ai_council.models.config import ModelConfig, ModelConfigError, ModelConfigRepository
 from ai_council.prompting.renderer import PromptRenderer
 
 
@@ -59,6 +61,17 @@ class AddMeetingMessageRequest(BaseModel):
     content: str
 
 
+class UpsertModelConfigRequest(BaseModel):
+    adapter: str
+    base_url: str | None = None
+    model: str | None = None
+    api_key_env: str | None = None
+    supports_json_mode: bool = False
+    extra_body: dict[str, Any] = Field(default_factory=dict)
+    command: list[str] | None = None
+    timeout_seconds: float = 120
+
+
 def create_app(
     *,
     data_dir: Path | str,
@@ -76,6 +89,16 @@ def create_app(
         allow_methods=["*"],
         allow_headers=["*"],
     )
+
+    @app.exception_handler(RequestValidationError)
+    async def request_validation_error_handler(
+        request: Request,
+        exc: RequestValidationError,
+    ) -> JSONResponse:
+        if request.method == "PUT" and request.url.path.startswith("/models/"):
+            return JSONResponse(status_code=400, content={"detail": exc.errors()})
+        return JSONResponse(status_code=422, content={"detail": exc.errors()})
+
     data_path = Path(data_dir)
     metadata_store = MeetingMetadataStore(data_path)
     repository = MeetingRepository(data_path)
@@ -99,7 +122,37 @@ def create_app(
 
     @app.get("/models")
     def list_models() -> list[dict[str, Any]]:
-        return [model.__dict__ for model in model_repository.list_models()]
+        try:
+            models = model_repository.list_models()
+        except ModelConfigError as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
+        return [project_model_config(model) for model in models]
+
+    @app.put("/models/{model_config_id}")
+    def upsert_model(model_config_id: str, request: UpsertModelConfigRequest) -> dict[str, Any]:
+        try:
+            model = model_repository.save_model(
+                ModelConfig(
+                    id=model_config_id,
+                    adapter=request.adapter,
+                    base_url=request.base_url,
+                    model=request.model,
+                    api_key_env=request.api_key_env,
+                    supports_json_mode=request.supports_json_mode,
+                    extra_body=request.extra_body,
+                    command=request.command,
+                    timeout_seconds=request.timeout_seconds,
+                )
+            )
+        except ModelConfigError as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
+        return project_model_config(model)
+
+    @app.delete("/models/{model_config_id}", status_code=204)
+    def delete_model(model_config_id: str) -> Response:
+        if not model_repository.delete_model(model_config_id):
+            raise HTTPException(status_code=404, detail=f"Unknown model: {model_config_id}")
+        return Response(status_code=204)
 
     @app.post("/models/{model_config_id}/test")
     def test_model(model_config_id: str) -> dict[str, str]:
@@ -122,6 +175,20 @@ def create_app(
         except AdapterError as error:
             return {"status": "unavailable", "tested_at": tested_at, "error": str(error)}
         return {"status": "available", "tested_at": tested_at}
+
+    @app.get("/models/{model_config_id}/available-models")
+    def discover_available_models(model_config_id: str) -> dict[str, list[str]]:
+        model = get_model(model_repository, model_config_id)
+        adapter = model_adapters.get(model.adapter)
+        if not isinstance(adapter, OpenAICompatibleHTTPAdapter):
+            raise HTTPException(
+                status_code=400,
+                detail=f"Model discovery is not supported for adapter: {model.adapter}",
+            )
+        try:
+            return {"models": adapter.discover_models(model)}
+        except AdapterError as error:
+            raise HTTPException(status_code=502, detail=str(error)) from error
 
     @app.post("/meetings")
     def create_meeting(request: CreateMeetingRequest) -> dict[str, Any]:
@@ -405,10 +472,31 @@ def create_app(
 
 
 def get_model(repository: ModelConfigRepository, model_id: str) -> ModelConfig:
-    for model in repository.list_models():
+    try:
+        models = repository.list_models()
+    except ModelConfigError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+    for model in models:
         if model.id == model_id:
             return model
     raise HTTPException(status_code=404, detail=f"Unknown model: {model_id}")
+
+
+def project_model_config(model: ModelConfig) -> dict[str, Any]:
+    return {
+        **model.__dict__,
+        "credential": project_model_credential(model),
+    }
+
+
+def project_model_credential(model: ModelConfig) -> dict[str, Any] | None:
+    if not model.api_key_env:
+        return None
+    return {
+        "type": "env",
+        "env_var": model.api_key_env,
+        "configured": bool(os.environ.get(model.api_key_env)),
+    }
 
 
 def _meeting_matches_query(

@@ -32,8 +32,171 @@ def test_models_endpoint_lists_configured_models(tmp_path: Path) -> None:
             "command": None,
             "timeout_seconds": 120.0,
             "status": "unknown",
+            "credential": None,
         }
     ]
+
+
+def test_model_config_crud_endpoints_update_models_yaml(tmp_path: Path) -> None:
+    app = create_test_app(tmp_path)
+    client = TestClient(app)
+
+    created = client.put(
+        "/models/qwen27",
+        json={
+            "adapter": "openai-compatible-http",
+            "base_url": "http://192.168.50.80:8487/v1",
+            "model": "bartowski/Qwen_Qwen3.6-27B-GGUF",
+            "api_key_env": None,
+            "supports_json_mode": True,
+            "extra_body": {"chat_template_kwargs": {"enable_thinking": False}},
+        },
+    )
+
+    assert created.status_code == 200
+    assert created.json()["id"] == "qwen27"
+    assert created.json()["supports_json_mode"] is True
+    assert [model["id"] for model in client.get("/models").json()] == ["mock-fast", "qwen27"]
+
+    updated = client.put(
+        "/models/qwen27",
+        json={
+            "adapter": "openai-compatible-http",
+            "base_url": "http://127.0.0.1:8487/v1",
+            "model": "updated-model",
+            "supports_json_mode": False,
+        },
+    )
+
+    assert updated.status_code == 200
+    assert updated.json()["base_url"] == "http://127.0.0.1:8487/v1"
+    assert updated.json()["model"] == "updated-model"
+
+    deleted = client.delete("/models/qwen27")
+
+    assert deleted.status_code == 204
+    assert [model["id"] for model in client.get("/models").json()] == ["mock-fast"]
+
+
+def test_model_config_crud_reports_validation_errors(tmp_path: Path) -> None:
+    app = create_test_app(tmp_path)
+    client = TestClient(app)
+
+    response = client.put(
+        "/models/broken",
+        json={"adapter": "openai-compatible-http"},
+    )
+
+    assert response.status_code == 400
+    assert "base_url and model" in response.json()["detail"]
+
+    missing_adapter = client.put("/models/broken", json={})
+
+    assert missing_adapter.status_code == 400
+
+
+def test_models_endpoint_reports_invalid_config_file(tmp_path: Path) -> None:
+    app = create_test_app(
+        tmp_path,
+        models_yaml="""
+models:
+  - adapter: mock
+""".strip(),
+    )
+    client = TestClient(app)
+
+    response = client.get("/models")
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "Model entry requires id and adapter"
+
+
+def test_models_endpoint_reports_env_credential_status_without_secret(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("PRESENT_API_KEY", "secret-value")
+    app = create_test_app(
+        tmp_path,
+        models_yaml="""
+models:
+  - id: cloud-ready
+    adapter: openai-compatible-http
+    base_url: http://example.test/v1
+    model: cloud-model
+    api_key_env: PRESENT_API_KEY
+  - id: cloud-missing
+    adapter: openai-compatible-http
+    base_url: http://example.test/v1
+    model: cloud-model
+    api_key_env: MISSING_API_KEY
+""".strip(),
+    )
+    client = TestClient(app)
+
+    models = client.get("/models").json()
+
+    assert models[0]["credential"] == {
+        "type": "env",
+        "env_var": "PRESENT_API_KEY",
+        "configured": True,
+    }
+    assert models[1]["credential"] == {
+        "type": "env",
+        "env_var": "MISSING_API_KEY",
+        "configured": False,
+    }
+    assert "secret-value" not in json.dumps(models)
+
+
+def test_openai_compatible_model_discovery_lists_endpoint_models(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    app = create_test_app(
+        tmp_path,
+        models_yaml="""
+models:
+  - id: local-endpoint
+    adapter: openai-compatible-http
+    base_url: http://example.test/v1
+    model: configured-model
+""".strip(),
+    )
+    client = TestClient(app)
+
+    def fake_urlopen(request, timeout):
+        assert request.full_url == "http://example.test/v1/models"
+        return FakeHTTPResponse(
+            {
+                "data": [
+                    {"id": "bartowski/Qwen_Qwen3.6-27B-GGUF"},
+                    {"id": "deepreinforce-ai/Ornith-1.0-35B-GGUF"},
+                ]
+            }
+        )
+
+    monkeypatch.setattr("ai_council.models.adapters.urllib.request.urlopen", fake_urlopen)
+
+    response = client.get("/models/local-endpoint/available-models")
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "models": [
+            "bartowski/Qwen_Qwen3.6-27B-GGUF",
+            "deepreinforce-ai/Ornith-1.0-35B-GGUF",
+        ]
+    }
+
+
+def test_model_discovery_rejects_unsupported_adapters(tmp_path: Path) -> None:
+    app = create_test_app(tmp_path)
+    client = TestClient(app)
+
+    response = client.get("/models/mock-fast/available-models")
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "Model discovery is not supported for adapter: mock"
 
 
 def test_http_model_test_endpoint_marks_available(
