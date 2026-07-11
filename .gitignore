@@ -1,5 +1,6 @@
 data/
 logs/
+.worktrees/
 
 .pytest_cache/
 **/__pycache__/

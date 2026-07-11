@@ -149,7 +149,7 @@ Subscription CLI models use an argument list with a required `{prompt}` placehol
 
 - id: codex-subscription
   adapter: subscription-cli
-  command: [codex, -p, "{prompt}"]
+  command: [codex, exec, "{prompt}"]
   timeout_seconds: 300
 
 - id: agy-subscription
