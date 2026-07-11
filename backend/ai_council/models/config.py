@@ -18,6 +18,8 @@ class ModelConfig:
     api_key_env: str | None = None
     supports_json_mode: bool = False
     extra_body: dict[str, Any] = field(default_factory=dict)
+    command: list[str] | None = None
+    timeout_seconds: float = 120
     status: ModelStatus = "unknown"
 
 
@@ -39,6 +41,8 @@ class ModelConfigRepository:
                 api_key_env=raw_model.get("api_key_env"),
                 supports_json_mode=raw_model.get("supports_json_mode", False),
                 extra_body=raw_model.get("extra_body") or {},
+                command=raw_model.get("command"),
+                timeout_seconds=float(raw_model.get("timeout_seconds", 120)),
             )
             for raw_model in raw_config.get("models", [])
         ]

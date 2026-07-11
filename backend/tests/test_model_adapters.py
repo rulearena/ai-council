@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import subprocess
+import sys
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from threading import Thread
 
@@ -11,6 +13,7 @@ from ai_council.models.adapters import (
     ModelRequest,
     MockModelAdapter,
     OpenAICompatibleHTTPAdapter,
+    SubscriptionCLIAdapter,
 )
 from ai_council.models.config import ModelConfig
 
@@ -31,6 +34,88 @@ def test_mock_adapter_returns_deterministic_valid_json() -> None:
         "risks": [],
         "recommendation": "Use this response for tests.",
     }
+
+
+def test_mock_adapter_supports_configurable_delay(monkeypatch) -> None:
+    delays: list[float] = []
+    monkeypatch.setattr("ai_council.models.adapters.time.sleep", delays.append)
+
+    MockModelAdapter().complete(
+        ModelRequest(
+            prompt="slow test",
+            model_config=ModelConfig(
+                id="mock-slow",
+                adapter="mock",
+                extra_body={"mock_delay_ms": 250},
+            ),
+        )
+    )
+
+    assert delays == [0.25]
+
+
+def test_subscription_cli_adapter_passes_prompt_and_returns_stdout(tmp_path) -> None:
+    fake_cli = tmp_path / "fake_cli.py"
+    fake_cli.write_text(
+        "import json, sys\n"
+        "print(json.dumps({\"summary\": sys.argv[1], \"arguments\": [], "
+        "\"risks\": [], \"recommendation\": \"OK\"}))\n",
+        encoding="utf-8",
+    )
+
+    response = SubscriptionCLIAdapter().complete(
+        ModelRequest(
+            prompt="請用訂閱額度回答",
+            model_config=ModelConfig(
+                id="fake-subscription",
+                adapter="subscription-cli",
+                command=[sys.executable, str(fake_cli), "{prompt}"],
+                timeout_seconds=5,
+            ),
+        )
+    )
+
+    assert json.loads(response.raw_output)["summary"] == "請用訂閱額度回答"
+
+
+def test_subscription_cli_adapter_reports_nonzero_exit(tmp_path) -> None:
+    fake_cli = tmp_path / "failing_cli.py"
+    fake_cli.write_text(
+        "import sys\nprint('login required', file=sys.stderr)\nraise SystemExit(7)\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(AdapterError, match="exited with code 7: login required"):
+        SubscriptionCLIAdapter().complete(
+            ModelRequest(
+                prompt="test",
+                model_config=ModelConfig(
+                    id="failing",
+                    adapter="subscription-cli",
+                    command=[sys.executable, str(fake_cli), "{prompt}"],
+                ),
+            )
+        )
+
+
+def test_subscription_cli_adapter_reports_timeout(monkeypatch) -> None:
+    def timeout(*args, **kwargs):
+        raise subprocess.TimeoutExpired(cmd=args[0], timeout=3)
+
+    monkeypatch.setattr("ai_council.models.adapters.subprocess.run", timeout)
+
+    with pytest.raises(AdapterError, match="timed out after 3 seconds"):
+        SubscriptionCLIAdapter().complete(
+            ModelRequest(
+                prompt="test",
+                model_config=ModelConfig(
+                    id="slow",
+                    adapter="subscription-cli",
+                    command=["fake", "-p", "{prompt}"],
+                    timeout_seconds=3,
+                ),
+            )
+        )
 
 
 def test_http_adapter_posts_chat_completion_request() -> None:

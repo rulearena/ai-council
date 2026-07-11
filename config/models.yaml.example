@@ -2,6 +2,21 @@ models:
   - id: mock-fast
     adapter: mock
 
+  - id: mock-slow
+    adapter: mock
+    extra_body:
+      mock_delay_ms: 300
+
+  - id: claude-subscription
+    adapter: subscription-cli
+    command: [claude, -p, "{prompt}"]
+    timeout_seconds: 300
+
+  - id: agy-subscription
+    adapter: subscription-cli
+    command: [agy, -p, "{prompt}"]
+    timeout_seconds: 300
+
   - id: qwen27
     adapter: openai-compatible-http
     base_url: http://192.168.50.80:8487/v1

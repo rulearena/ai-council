@@ -264,6 +264,8 @@ class MeetingRunner:
             )
             parsed = self.output_parser.parse(response.raw_output)
         except (AdapterError, OutputParseError, KeyError) as error:
+            if self._is_terminal(meeting_id):
+                return False
             self.repository.append_event(
                 meeting_id,
                 {
@@ -281,6 +283,8 @@ class MeetingRunner:
             )
             return False
 
+        if self._is_terminal(meeting_id):
+            return False
         self.repository.append_event(
             meeting_id,
             {

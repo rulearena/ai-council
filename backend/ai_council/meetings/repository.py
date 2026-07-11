@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import re
+import shutil
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -36,7 +37,15 @@ class MeetingRepository:
                     events.append(json.loads(stripped))
         return events
 
+    def delete(self, meeting_id: str) -> None:
+        meeting_dir = self._meeting_dir(meeting_id)
+        if meeting_dir.exists():
+            shutil.rmtree(meeting_dir)
+
     def _event_log_path(self, meeting_id: str) -> Path:
+        return self._meeting_dir(meeting_id) / "events.jsonl"
+
+    def _meeting_dir(self, meeting_id: str) -> Path:
         if not SAFE_MEETING_ID.fullmatch(meeting_id):
             raise ValueError(f"Unsafe meeting_id: {meeting_id!r}")
-        return self.data_dir / "meetings" / meeting_id / "events.jsonl"
+        return self.data_dir / "meetings" / meeting_id

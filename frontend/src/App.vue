@@ -1,10 +1,11 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, onUnmounted, ref } from 'vue'
 import {
   addMeetingMessage,
   cancelMeeting,
   closeMeeting,
   createMeeting,
+  deleteMeeting,
   getMeeting,
   getMeetings,
   getModels,
@@ -13,6 +14,7 @@ import {
   requestRoleSequence,
   retryStep,
   startMeeting,
+  subscribeMeetingEvents,
   testModel,
   transcriptDownloadUrl,
   type Meeting,
@@ -57,12 +59,17 @@ const statusFilter = ref<'all' | Meeting['status']>('all')
 const transcript = ref('')
 const loading = ref(false)
 const error = ref('')
+let closeEventStream: (() => void) | null = null
 
 const events = computed(() => selectedMeeting.value?.events ?? [])
 const isTerminalMeeting = computed(() =>
   events.value.some((event) => event.status === 'closed' || event.status === 'cancelled'),
 )
-const startButtonLabel = computed(() => (events.value.length ? '繼續討論' : '開始'))
+const isMeetingRunning = computed(() => selectedMeeting.value?.activity_status === 'running')
+const startButtonLabel = computed(() => {
+  if (isMeetingRunning.value) return '執行中...'
+  return events.value.length ? '繼續討論' : '開始'
+})
 const selectedSequencePreset = computed(
   () => sequencePresets.find((preset) => preset.id === selectedSequencePresetId.value) ?? sequencePresets[0],
 )
@@ -87,6 +94,7 @@ const canRun = computed(
   () =>
     selectedMeeting.value &&
     !isTerminalMeeting.value &&
+    !isMeetingRunning.value &&
     selectedModels.value.Blue &&
     selectedModels.value.Red &&
     selectedModels.value.Judge,
@@ -95,6 +103,8 @@ const canRun = computed(
 onMounted(async () => {
   await refreshAll()
 })
+
+onUnmounted(() => closeEventStream?.())
 
 async function refreshAll() {
   error.value = ''
@@ -123,14 +133,53 @@ async function openMeeting(meetingId: string) {
   selectedMeeting.value = await getMeeting(meetingId)
   selectedEvent.value = selectedMeeting.value.events?.at(-1) ?? null
   transcript.value = await getTranscript(meetingId)
+  connectMeetingEvents(meetingId)
 }
 
 async function startSelectedMeeting() {
   if (!selectedMeeting.value || !canRun.value) return
+  const meetingId = selectedMeeting.value.meeting_id
+  connectMeetingEvents(meetingId)
   await runAction(async () => {
-    await startMeeting(selectedMeeting.value!.meeting_id, selectedModels.value)
-    await openMeeting(selectedMeeting.value!.meeting_id)
+    await startMeeting(meetingId, selectedModels.value)
+    if (selectedMeeting.value?.meeting_id === meetingId) {
+      selectedMeeting.value = { ...selectedMeeting.value, activity_status: 'running' }
+    }
   })
+}
+
+function connectMeetingEvents(meetingId: string) {
+  closeEventStream?.()
+  closeEventStream = subscribeMeetingEvents(
+    meetingId,
+    (message) => {
+      if (selectedMeeting.value?.meeting_id !== meetingId) return
+      const currentEvents = message.type === 'snapshot' ? [] : (selectedMeeting.value.events ?? [])
+      const nextEvents = [...currentEvents, ...message.events]
+      const latestEvent = nextEvents.at(-1)
+      selectedMeeting.value = {
+        ...selectedMeeting.value,
+        events: nextEvents,
+        activity_status: message.activity_status,
+        last_step_id: latestEvent?.step_id ?? null,
+        updated_at: latestEvent?.created_at ?? selectedMeeting.value.updated_at,
+      }
+      if (message.events.length) {
+        selectedEvent.value = latestEvent ?? null
+        void refreshMeetingOutputs(meetingId, message.activity_status)
+      }
+    },
+    () => {
+      error.value = 'Meeting event stream disconnected.'
+    },
+  )
+}
+
+async function refreshMeetingOutputs(meetingId: string, activityStatus: Meeting['activity_status']) {
+  transcript.value = await getTranscript(meetingId)
+  if (activityStatus !== 'running') {
+    meetings.value = await getMeetings()
+  }
 }
 
 async function cancelSelectedMeeting() {
@@ -146,6 +195,21 @@ async function closeSelectedMeeting() {
   await runAction(async () => {
     await closeMeeting(selectedMeeting.value!.meeting_id)
     await openMeeting(selectedMeeting.value!.meeting_id)
+  })
+}
+
+async function deleteExistingMeeting(meeting: Meeting) {
+  if (!window.confirm(`確定刪除「${meeting.topic}」？此操作無法復原。`)) return
+  await runAction(async () => {
+    await deleteMeeting(meeting.meeting_id)
+    if (selectedMeeting.value?.meeting_id === meeting.meeting_id) {
+      closeEventStream?.()
+      closeEventStream = null
+      selectedMeeting.value = null
+      selectedEvent.value = null
+      transcript.value = ''
+    }
+    meetings.value = await getMeetings()
   })
 }
 
@@ -251,20 +315,35 @@ async function runAction(action: () => Promise<void>) {
           <option value="cancelled">cancelled</option>
         </select>
       </div>
-      <button
+      <div
         v-for="meeting in filteredMeetings"
         :key="meeting.meeting_id"
-        type="button"
-        class="meeting-item"
-        :class="{ active: selectedMeeting?.meeting_id === meeting.meeting_id }"
-        @click="openMeeting(meeting.meeting_id)"
+        class="meeting-row"
+        data-testid="meeting-list-item"
       >
-        <span>{{ meeting.topic }}</span>
-        <em class="status-badge">{{ meeting.status }}</em>
-        <strong>{{ meeting.activity_status }}</strong>
-        <small>更新 {{ formatDateTime(meeting.updated_at) }}</small>
-        <small>{{ meeting.meeting_id }}</small>
-      </button>
+        <button
+          type="button"
+          class="meeting-item"
+          :class="{ active: selectedMeeting?.meeting_id === meeting.meeting_id }"
+          @click="openMeeting(meeting.meeting_id)"
+        >
+          <span>{{ meeting.topic }}</span>
+          <em class="status-badge">{{ meeting.status }}</em>
+          <strong>{{ meeting.activity_status }}</strong>
+          <small>更新 {{ formatDateTime(meeting.updated_at) }}</small>
+          <small>{{ meeting.meeting_id }}</small>
+        </button>
+        <button
+          type="button"
+          class="delete-meeting-button"
+          data-testid="delete-meeting-button"
+          :aria-label="`刪除 ${meeting.topic}`"
+          :disabled="loading || meeting.activity_status === 'running'"
+          @click="deleteExistingMeeting(meeting)"
+        >
+          刪除
+        </button>
+      </div>
     </aside>
 
     <section class="workspace">

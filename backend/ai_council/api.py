@@ -1,14 +1,17 @@
 from __future__ import annotations
 
+import asyncio
 import json
+import threading
 import uuid
+from concurrent.futures import Future, ThreadPoolExecutor
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
-from fastapi import FastAPI, HTTPException, WebSocket
+from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import PlainTextResponse
+from fastapi.responses import PlainTextResponse, Response
 from pydantic import BaseModel
 
 from ai_council.meetings.repository import MeetingRepository
@@ -19,6 +22,7 @@ from ai_council.models.adapters import (
     MockModelAdapter,
     ModelRequest,
     OpenAICompatibleHTTPAdapter,
+    SubscriptionCLIAdapter,
 )
 from ai_council.models.config import ModelConfig, ModelConfigRepository
 from ai_council.prompting.renderer import PromptRenderer
@@ -65,6 +69,7 @@ def create_app(
     model_adapters = {
         "mock": MockModelAdapter(),
         "openai-compatible-http": OpenAICompatibleHTTPAdapter(),
+        "subscription-cli": SubscriptionCLIAdapter(),
     }
     runner = MeetingRunner(
         repository=repository,
@@ -74,6 +79,7 @@ def create_app(
         ),
     )
     projector = TranscriptProjector()
+    jobs = MeetingJobManager()
 
     @app.get("/models")
     def list_models() -> list[dict[str, Any]]:
@@ -119,6 +125,10 @@ def create_app(
             project_meeting_summary(
                 metadata,
                 repository.read_events(metadata["meeting_id"]),
+                activity_status=live_activity_status(
+                    repository.read_events(metadata["meeting_id"]),
+                    jobs.is_running(metadata["meeting_id"]),
+                ),
             )
             for metadata in metadata_store.list()
         ]
@@ -128,23 +138,32 @@ def create_app(
         metadata = metadata_store.get(meeting_id)
         events = repository.read_events(meeting_id)
         return {
-            **project_meeting_summary(metadata, events),
+            **project_meeting_summary(
+                metadata,
+                events,
+                activity_status=live_activity_status(events, jobs.is_running(meeting_id)),
+            ),
             "events": events,
         }
 
-    @app.post("/meetings/{meeting_id}/start")
+    @app.post("/meetings/{meeting_id}/start", status_code=202)
     def start_meeting(meeting_id: str, request: StartMeetingRequest) -> dict[str, str]:
         metadata = metadata_store.get(meeting_id)
         reject_terminal_meeting(repository, meeting_id)
-        runner.start(
-            meeting_id=meeting_id,
-            topic=metadata["topic"],
-            model_assignments={
-                role: get_model(model_repository, model_id)
-                for role, model_id in request.models.items()
-            },
-        )
-        return {"status": project_activity_status(repository.read_events(meeting_id))}
+        model_assignments = {
+            role: get_model(model_repository, model_id)
+            for role, model_id in request.models.items()
+        }
+        if not jobs.start(
+            meeting_id,
+            lambda: runner.start(
+                meeting_id=meeting_id,
+                topic=metadata["topic"],
+                model_assignments=model_assignments,
+            ),
+        ):
+            raise HTTPException(status_code=409, detail="Meeting is already running")
+        return {"status": "running"}
 
     @app.post("/meetings/{meeting_id}/cancel")
     def cancel_meeting(meeting_id: str) -> dict[str, str]:
@@ -157,6 +176,14 @@ def create_app(
         metadata_store.get(meeting_id)
         runner.close(meeting_id)
         return {"status": "closed"}
+
+    @app.delete("/meetings/{meeting_id}", status_code=204)
+    def delete_meeting(meeting_id: str) -> Response:
+        metadata_store.get(meeting_id)
+        if jobs.is_running(meeting_id):
+            raise HTTPException(status_code=409, detail="Cannot delete a running meeting")
+        repository.delete(meeting_id)
+        return Response(status_code=204)
 
     @app.post("/meetings/{meeting_id}/messages")
     def add_meeting_message(
@@ -255,13 +282,31 @@ def create_app(
     async def meeting_events(websocket: WebSocket, meeting_id: str) -> None:
         metadata_store.get(meeting_id)
         await websocket.accept()
-        await websocket.send_json(
-            {
-                "type": "snapshot",
-                "events": repository.read_events(meeting_id),
-            }
-        )
-        await websocket.close()
+        events = repository.read_events(meeting_id)
+        activity_status = live_activity_status(events, jobs.is_running(meeting_id))
+        try:
+            await websocket.send_json(
+                {
+                    "type": "snapshot",
+                    "events": events,
+                    "activity_status": activity_status,
+                }
+            )
+            event_count = len(events)
+            while True:
+                await asyncio.sleep(0.1)
+                events = repository.read_events(meeting_id)
+                activity_status = live_activity_status(events, jobs.is_running(meeting_id))
+                await websocket.send_json(
+                    {
+                        "type": "update",
+                        "events": events[event_count:],
+                        "activity_status": activity_status,
+                    }
+                )
+                event_count = len(events)
+        except (WebSocketDisconnect, RuntimeError):
+            return
 
     return app
 
@@ -302,9 +347,18 @@ def project_activity_status(events: list[dict[str, Any]]) -> str:
     return "completed"
 
 
+def live_activity_status(events: list[dict[str, Any]], is_running: bool) -> str:
+    projected = project_activity_status(events)
+    if projected in {"closed", "cancelled"}:
+        return projected
+    return "running" if is_running else projected
+
+
 def project_meeting_summary(
     metadata: dict[str, str],
     events: list[dict[str, Any]],
+    *,
+    activity_status: str | None = None,
 ) -> dict[str, Any]:
     created_at = metadata.get("created_at", "")
     updated_at = str(events[-1].get("created_at", created_at)) if events else created_at
@@ -314,13 +368,40 @@ def project_meeting_summary(
         "created_at": created_at,
         "updated_at": updated_at,
         "status": project_meeting_status(events),
-        "activity_status": project_activity_status(events),
+        "activity_status": activity_status or project_activity_status(events),
         "last_step_id": latest_event.get("step_id") if latest_event else None,
     }
 
 
 def now_iso() -> str:
     return datetime.now(UTC).isoformat()
+
+
+class MeetingJobManager:
+    def __init__(self) -> None:
+        self._executor = ThreadPoolExecutor(max_workers=4, thread_name_prefix="ai-council")
+        self._running: dict[str, Future[None]] = {}
+        self._lock = threading.Lock()
+
+    def start(self, meeting_id: str, operation: Callable[[], None]) -> bool:
+        with self._lock:
+            current = self._running.get(meeting_id)
+            if current is not None and not current.done():
+                return False
+            future = self._executor.submit(operation)
+            self._running[meeting_id] = future
+        future.add_done_callback(lambda completed: self._finish(meeting_id, completed))
+        return True
+
+    def is_running(self, meeting_id: str) -> bool:
+        with self._lock:
+            future = self._running.get(meeting_id)
+            return future is not None and not future.done()
+
+    def _finish(self, meeting_id: str, completed: Future[None]) -> None:
+        with self._lock:
+            if self._running.get(meeting_id) is completed:
+                self._running.pop(meeting_id, None)
 
 
 class MeetingMetadataStore:

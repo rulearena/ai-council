@@ -355,3 +355,44 @@ Work the **frontier**: any ticket whose blockers are all done. For this MVP, sta
 - [x] Cards show role and step id.
 - [x] Cards separate summary, arguments, risks, and recommendation.
 - [x] E2E verifies role-output cards update after a mock round.
+
+## 30 - Background Meeting Progress
+
+**What to build:** Return from meeting start immediately and stream real execution progress to the browser.
+
+**Blocked by:** 08 - WebSocket Event Feed; 25 - Meeting Activity Projection.
+
+- [x] `POST /meetings/{meeting_id}/start` returns `202` with `running`.
+- [x] Duplicate starts for an active meeting return `409`.
+- [x] WebSocket connections remain open and stream status plus new events.
+- [x] Frontend displays running state and incremental timeline updates.
+- [x] Cancellation remains terminal when an in-flight model call returns.
+- [x] Slow-mock E2E verifies running, incremental steps, and completion.
+
+## 31 - Meeting Deletion
+
+**What to build:** Permanently delete a meeting and its local event data after explicit confirmation.
+
+**Blocked by:** 28 - Meeting List Usability.
+
+- [x] `DELETE /meetings/{meeting_id}` returns `204`.
+- [x] Running meetings reject deletion with `409`.
+- [x] Meeting metadata, events, and derived transcript become unavailable.
+- [x] Frontend requires an irreversible-action confirmation.
+- [x] Deleting the selected meeting clears transcript, timeline, and event selection.
+- [x] E2E verifies deletion removes the meeting from the list.
+
+## 32 - Subscription CLI Provider
+
+**What to build:** Use already authenticated subscription CLIs as model providers without API tokens.
+
+**Blocked by:** 05 - Model Adapter Interface; 30 - Background Meeting Progress.
+
+- [x] `subscription-cli` executes configured argument arrays without a shell.
+- [x] A required `{prompt}` placeholder receives the rendered role prompt.
+- [x] Stdout is passed through the existing structured-output parser.
+- [x] Missing commands, non-zero exits, empty output, and timeout become adapter errors.
+- [x] Example configs include `claude -p` and `agy -p`.
+- [x] README states that CLI installation and authentication remain user-managed.
+- [ ] Follow-up: terminate an active CLI subprocess immediately when a meeting is cancelled.
+- [ ] Follow-up: add provider/version-specific output normalizers if plain stdout changes.

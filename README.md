@@ -112,8 +112,28 @@ Supported adapters in the MVP:
 
 - `mock` - deterministic local test adapter.
 - `openai-compatible-http` - calls `/v1/chat/completions` on an OpenAI-compatible server.
+- `subscription-cli` - runs an already authenticated CLI process without an API token.
 
-The app does not manage or start local model services. It only calls configured OpenAI-compatible HTTP endpoints.
+Subscription CLI models use an argument list with a required `{prompt}` placeholder:
+
+```yaml
+- id: claude-subscription
+  adapter: subscription-cli
+  command: [claude, -p, "{prompt}"]
+  timeout_seconds: 300
+
+- id: agy-subscription
+  adapter: subscription-cli
+  command: [agy, -p, "{prompt}"]
+  timeout_seconds: 300
+```
+
+Install and authenticate each CLI separately before selecting it in AI Council. The app
+does not read or manage subscription credentials. Commands run directly without a shell;
+non-zero exits, missing executables, empty output, and timeouts are surfaced as model errors.
+
+The app does not manage or start local model services. It calls configured OpenAI-compatible
+HTTP endpoints or explicitly configured subscription CLI commands.
 
 ## Prompt Templates
 

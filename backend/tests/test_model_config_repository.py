@@ -67,3 +67,22 @@ models:
     assert models[0].supports_json_mode is False
     assert models[0].status == "unknown"
     assert models[1].api_key_env is None
+
+
+def test_repository_loads_subscription_cli_command_and_timeout(tmp_path: Path) -> None:
+    config_path = tmp_path / "models.yaml"
+    config_path.write_text(
+        """
+models:
+  - id: claude-subscription
+    adapter: subscription-cli
+    command: [claude, -p, "{prompt}"]
+    timeout_seconds: 300
+""".strip(),
+        encoding="utf-8",
+    )
+
+    model = ModelConfigRepository(config_path).list_models()[0]
+
+    assert model.command == ["claude", "-p", "{prompt}"]
+    assert model.timeout_seconds == 300

@@ -6,6 +6,8 @@ export type ModelConfig = {
   api_key_env: string | null
   supports_json_mode: boolean
   extra_body: Record<string, unknown>
+  command: string[] | null
+  timeout_seconds: number
   status: 'unknown' | 'available' | 'unavailable'
 }
 
@@ -19,7 +21,7 @@ export type Meeting = {
   meeting_id: string
   topic: string
   status: 'open' | 'closed' | 'cancelled'
-  activity_status: 'idle' | 'waiting' | 'completed' | 'failed' | 'closed' | 'cancelled'
+  activity_status: 'idle' | 'running' | 'waiting' | 'completed' | 'failed' | 'closed' | 'cancelled'
   created_at: string
   updated_at: string
   last_step_id: string | null
@@ -53,6 +55,12 @@ export type RoleOutput = {
   arguments: Array<{ title: string; detail: string }>
   risks: Array<{ title: string; detail: string }>
   recommendation: string
+}
+
+export type MeetingEventStreamMessage = {
+  type: 'snapshot' | 'update'
+  events: MeetingEvent[]
+  activity_status: Meeting['activity_status']
 }
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:5009'
@@ -92,6 +100,11 @@ export async function closeMeeting(meetingId: string): Promise<void> {
   await postJson(`/meetings/${meetingId}/close`, {})
 }
 
+export async function deleteMeeting(meetingId: string): Promise<void> {
+  const response = await fetch(`${API_BASE}/meetings/${meetingId}`, { method: 'DELETE' })
+  if (!response.ok) throw new Error(`DELETE /meetings/${meetingId} failed: ${response.status}`)
+}
+
 export async function addMeetingMessage(
   meetingId: string,
   content: string,
@@ -127,6 +140,23 @@ export async function getTranscript(meetingId: string): Promise<string> {
   const response = await fetch(`${API_BASE}/meetings/${meetingId}/transcript.md`)
   if (!response.ok) throw new Error(`Transcript request failed: ${response.status}`)
   return response.text()
+}
+
+export function subscribeMeetingEvents(
+  meetingId: string,
+  onMessage: (message: MeetingEventStreamMessage) => void,
+  onError: () => void,
+): () => void {
+  const base = new URL(API_BASE)
+  base.protocol = base.protocol === 'https:' ? 'wss:' : 'ws:'
+  base.pathname = `/meetings/${meetingId}/events`
+  base.search = ''
+  const socket = new WebSocket(base)
+  socket.addEventListener('message', (event) => {
+    onMessage(JSON.parse(event.data) as MeetingEventStreamMessage)
+  })
+  socket.addEventListener('error', onError)
+  return () => socket.close()
 }
 
 async function getJson<T>(path: string): Promise<T> {

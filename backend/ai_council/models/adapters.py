@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import subprocess
+import time
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
@@ -25,6 +27,9 @@ class ModelResponse:
 
 class MockModelAdapter:
     def complete(self, request: ModelRequest) -> ModelResponse:
+        delay_ms = request.model_config.extra_body.get("mock_delay_ms", 0)
+        if isinstance(delay_ms, (int, float)) and delay_ms > 0:
+            time.sleep(delay_ms / 1000)
         return ModelResponse(
             raw_output=json.dumps(
                 {
@@ -41,6 +46,40 @@ class MockModelAdapter:
                 ensure_ascii=False,
             )
         )
+
+
+class SubscriptionCLIAdapter:
+    def complete(self, request: ModelRequest) -> ModelResponse:
+        config = request.model_config
+        if not config.command:
+            raise AdapterError("Subscription CLI config requires command")
+        if not any("{prompt}" in argument for argument in config.command):
+            raise AdapterError("Subscription CLI command requires a {prompt} placeholder")
+
+        command = [argument.replace("{prompt}", request.prompt) for argument in config.command]
+        try:
+            completed = subprocess.run(
+                command,
+                capture_output=True,
+                text=True,
+                timeout=config.timeout_seconds,
+                check=False,
+            )
+        except subprocess.TimeoutExpired as error:
+            raise AdapterError(
+                f"Subscription CLI timed out after {config.timeout_seconds:g} seconds"
+            ) from error
+        except OSError as error:
+            raise AdapterError(f"Subscription CLI could not start: {error}") from error
+
+        if completed.returncode != 0:
+            detail = completed.stderr.strip() or completed.stdout.strip() or "no output"
+            raise AdapterError(
+                f"Subscription CLI exited with code {completed.returncode}: {detail}"
+            )
+        if not completed.stdout.strip():
+            raise AdapterError("Subscription CLI returned empty output")
+        return ModelResponse(raw_output=completed.stdout.strip())
 
 
 class OpenAICompatibleHTTPAdapter:

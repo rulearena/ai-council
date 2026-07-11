@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 import json
+import threading
+import time
 import urllib.error
 from pathlib import Path
 
 from fastapi.testclient import TestClient
 
 from ai_council.api import create_app
+from ai_council.models.adapters import MockModelAdapter, ModelResponse
 
 
 def test_models_endpoint_lists_configured_models(tmp_path: Path) -> None:
@@ -25,6 +28,8 @@ def test_models_endpoint_lists_configured_models(tmp_path: Path) -> None:
             "api_key_env": None,
             "supports_json_mode": False,
             "extra_body": {},
+            "command": None,
+            "timeout_seconds": 120.0,
             "status": "unknown",
         }
     ]
@@ -135,9 +140,9 @@ def test_meeting_create_list_get_start_and_transcript(tmp_path: Path) -> None:
         },
     )
 
-    assert start_response.status_code == 200
-    assert start_response.json()["status"] == "completed"
-    meeting = client.get(f"/meetings/{meeting_id}").json()
+    assert start_response.status_code == 202
+    assert start_response.json()["status"] == "running"
+    meeting = wait_for_activity(client, meeting_id, "completed")
     assert meeting["status"] == "open"
     assert meeting["activity_status"] == "completed"
     assert meeting["last_step_id"] == "judge-decide"
@@ -159,6 +164,60 @@ def test_meeting_create_list_get_start_and_transcript(tmp_path: Path) -> None:
     assert "## Blue - blue-propose" in transcript.text
 
 
+def test_start_returns_while_model_execution_continues_in_background(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    model_entered = threading.Event()
+    release_model = threading.Event()
+
+    def slow_complete(self, request):
+        model_entered.set()
+        release_model.wait(timeout=2)
+        return ModelResponse(
+            raw_output='{"summary":"OK","arguments":[],"risks":[],"recommendation":"Go"}'
+        )
+
+    monkeypatch.setattr(MockModelAdapter, "complete", slow_complete)
+    app = create_test_app(tmp_path)
+    client = TestClient(app)
+    meeting_id = client.post("/meetings", json={"topic": "背景執行"}).json()["meeting_id"]
+
+    try:
+        response = client.post(
+            f"/meetings/{meeting_id}/start",
+            json={
+                "models": {
+                    "Blue": "mock-fast",
+                    "Red": "mock-fast",
+                    "Judge": "mock-fast",
+                }
+            },
+        )
+
+        assert response.status_code == 202
+        assert response.json() == {"status": "running"}
+        assert model_entered.wait(timeout=1)
+        assert client.get(f"/meetings/{meeting_id}").json()["activity_status"] == "running"
+        duplicate = client.post(
+            f"/meetings/{meeting_id}/start",
+            json={
+                "models": {
+                    "Blue": "mock-fast",
+                    "Red": "mock-fast",
+                    "Judge": "mock-fast",
+                }
+            },
+        )
+        assert duplicate.status_code == 409
+        assert duplicate.json()["detail"] == "Meeting is already running"
+        delete_response = client.delete(f"/meetings/{meeting_id}")
+        assert delete_response.status_code == 409
+        assert delete_response.json()["detail"] == "Cannot delete a running meeting"
+    finally:
+        release_model.set()
+
+
 def test_meeting_activity_status_projects_failed_latest_step(tmp_path: Path) -> None:
     app = create_test_app(
         tmp_path,
@@ -176,9 +235,9 @@ models:
         json={"models": {"Blue": "broken-model"}},
     )
 
-    assert response.status_code == 200
-    assert response.json()["status"] == "failed"
-    meeting = client.get(f"/meetings/{meeting_id}").json()
+    assert response.status_code == 202
+    assert response.json()["status"] == "running"
+    meeting = wait_for_activity(client, meeting_id, "failed")
     assert meeting["activity_status"] == "failed"
     assert meeting["last_step_id"] == "blue-propose"
 
@@ -193,6 +252,50 @@ def test_meeting_cancel_endpoint_records_cancellation(tmp_path: Path) -> None:
     assert response.status_code == 200
     events = client.get(f"/meetings/{meeting_id}").json()["events"]
     assert events[-1]["status"] == "cancelled"
+
+
+def test_cancelling_background_run_stays_cancelled_when_model_returns(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    model_entered = threading.Event()
+    release_model = threading.Event()
+
+    def slow_complete(self, request):
+        model_entered.set()
+        release_model.wait(timeout=2)
+        return ModelResponse(
+            raw_output='{"summary":"OK","arguments":[],"risks":[],"recommendation":"Go"}'
+        )
+
+    monkeypatch.setattr(MockModelAdapter, "complete", slow_complete)
+    app = create_test_app(tmp_path)
+    client = TestClient(app)
+    meeting_id = client.post("/meetings", json={"topic": "背景取消"}).json()["meeting_id"]
+    client.post(
+        f"/meetings/{meeting_id}/start",
+        json={
+            "models": {
+                "Blue": "mock-fast",
+                "Red": "mock-fast",
+                "Judge": "mock-fast",
+            }
+        },
+    )
+    assert model_entered.wait(timeout=1)
+
+    try:
+        response = client.post(f"/meetings/{meeting_id}/cancel")
+        meeting = client.get(f"/meetings/{meeting_id}").json()
+
+        assert response.status_code == 200
+        assert meeting["activity_status"] == "cancelled"
+    finally:
+        release_model.set()
+
+    time.sleep(0.1)
+    events = client.get(f"/meetings/{meeting_id}").json()["events"]
+    assert [event["status"] for event in events] == ["cancelled"]
 
 
 def test_meeting_close_endpoint_records_closure_and_projects_transcript(
@@ -212,6 +315,30 @@ def test_meeting_close_endpoint_records_closure_and_projects_transcript(
     transcript = client.get(f"/meetings/{meeting_id}/transcript.md").text
     assert "## System - meeting" in transcript
     assert "**Status:** closed" in transcript
+
+
+def test_meeting_delete_removes_meeting_and_derived_transcript(tmp_path: Path) -> None:
+    app = create_test_app(tmp_path)
+    client = TestClient(app)
+    meeting_id = client.post("/meetings", json={"topic": "刪除測試"}).json()["meeting_id"]
+    client.post(
+        f"/meetings/{meeting_id}/start",
+        json={
+            "models": {
+                "Blue": "mock-fast",
+                "Red": "mock-fast",
+                "Judge": "mock-fast",
+            }
+        },
+    )
+    wait_for_activity(client, meeting_id, "completed")
+
+    response = client.delete(f"/meetings/{meeting_id}")
+
+    assert response.status_code == 204
+    assert all(item["meeting_id"] != meeting_id for item in client.get("/meetings").json())
+    assert client.get(f"/meetings/{meeting_id}").status_code == 404
+    assert client.get(f"/meetings/{meeting_id}/transcript.md").status_code == 404
 
 
 def test_terminal_meeting_rejects_event_creating_api_calls(tmp_path: Path) -> None:
@@ -488,3 +615,18 @@ class FakeHTTPResponse:
 
     def __exit__(self, *args: object) -> None:
         return None
+
+
+def wait_for_activity(
+    client: TestClient,
+    meeting_id: str,
+    expected_status: str,
+    timeout: float = 2,
+) -> dict[str, object]:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        meeting = client.get(f"/meetings/{meeting_id}").json()
+        if meeting["activity_status"] == expected_status:
+            return meeting
+        time.sleep(0.01)
+    raise AssertionError(f"Meeting did not reach activity status: {expected_status}")

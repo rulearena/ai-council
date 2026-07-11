@@ -86,14 +86,29 @@ h2 {
   margin-bottom: 12px;
 }
 
+.meeting-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: stretch;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+
 .meeting-item {
   display: grid;
   gap: 4px;
   width: 100%;
   padding: 10px;
-  margin-bottom: 8px;
   text-align: left;
   border-radius: 6px;
+}
+
+.delete-meeting-button {
+  align-self: stretch;
+  padding: 0 8px;
+  border-color: #d8a5a5;
+  border-radius: 6px;
+  color: #a52a2a;
 }
 
 .meeting-item.active {
