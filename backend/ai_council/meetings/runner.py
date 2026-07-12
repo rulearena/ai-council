@@ -47,6 +47,12 @@ class StepDefinition:
     template_name: str
 
 
+@dataclass(frozen=True)
+class RelayPlan:
+    steps: list[StepDefinition]
+    directed_steps: dict[str, StepDefinition]
+
+
 STEPS = [
     StepDefinition("blue-propose", "Blue", "blue_propose"),
     StepDefinition("red-critique", "Red", "red_critique"),
