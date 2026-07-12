@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import shutil
 import threading
 import time
 from pathlib import Path
@@ -8,6 +9,8 @@ from fastapi.testclient import TestClient
 
 from ai_council.api import create_app
 from ai_council.models.adapters import MockModelAdapter, ModelResponse
+
+PROJECT_CONFIG_DIR = Path(__file__).resolve().parents[2] / "config"
 
 
 def test_meeting_websocket_replays_existing_events(tmp_path: Path) -> None:
@@ -164,6 +167,7 @@ models:
     config_dir = tmp_path / "config"
     config_dir.mkdir()
     (config_dir / "models.yaml").write_text(models_yaml, encoding="utf-8")
+    shutil.copy(PROJECT_CONFIG_DIR / "modes.yaml", config_dir / "modes.yaml")
     prompt_dir = tmp_path / "prompts"
     prompt_dir.mkdir()
     for template in ["blue_propose", "red_critique", "blue_revise", "judge_decide"]:
@@ -174,6 +178,7 @@ models:
     return create_app(
         data_dir=tmp_path / "data",
         model_config_path=config_dir / "models.yaml",
+        modes_config_path=config_dir / "modes.yaml",
         prompt_dir=prompt_dir,
     )
 

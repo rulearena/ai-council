@@ -23,6 +23,12 @@ from ai_council.meetings.execution_state import (
     MeetingExecutionStateStore,
     interrupted_execution_event,
 )
+from ai_council.meetings.modes import (
+    ModeCatalogRepository,
+    ModeConfigError,
+    ModeDefinition,
+    relay_plan,
+)
 from ai_council.meetings.repository import MeetingRepository
 from ai_council.meetings.runner import MeetingRunner, RunnerAdapters, TokenStreamEvent
 from ai_council.meetings.transcript import TranscriptProjector
@@ -43,8 +49,18 @@ from ai_council.prompting.renderer import PromptRenderer
 MODEL_TEST_PROMPT = 'Return {"summary":"OK","arguments":[],"risks":[],"recommendation":"OK"}'
 
 
+class MeetingParticipantRequest(BaseModel):
+    role_id: str
+    model_config_id: str | None = None
+    display_name: str | None = None
+    instance_prompt: str | None = None
+
+
 class CreateMeetingRequest(BaseModel):
     topic: str
+    mode_id: str = "red-blue"
+    participants: list[MeetingParticipantRequest] = Field(default_factory=list)
+    inputs: dict[str, str] = Field(default_factory=dict)
 
 
 class StartMeetingRequest(BaseModel):
@@ -94,6 +110,7 @@ def create_app(
     *,
     data_dir: Path | str,
     model_config_path: Path | str,
+    modes_config_path: Path | str,
     prompt_dir: Path | str,
     start_model_health_checks: bool = True,
 ) -> FastAPI:
@@ -123,6 +140,7 @@ def create_app(
     repository = MeetingRepository(data_path)
     execution_state_store = MeetingExecutionStateStore(data_path)
     model_repository = ModelConfigRepository(model_config_path)
+    mode_catalog = ModeCatalogRepository(modes_config_path)
     stream_bus = MeetingStreamBus()
     model_adapters = {
         "mock": MockModelAdapter(),
@@ -206,8 +224,53 @@ def create_app(
         except AdapterError as error:
             raise HTTPException(status_code=502, detail=str(error)) from error
 
+    @app.get("/modes")
+    def list_modes_catalog() -> list[dict[str, Any]]:
+        try:
+            modes = mode_catalog.list_modes()
+        except ModeConfigError as error:
+            raise HTTPException(status_code=500, detail=str(error)) from error
+        return [project_mode(mode) for mode in modes]
+
     @app.post("/meetings")
     def create_meeting(request: CreateMeetingRequest) -> dict[str, Any]:
+        mode = get_mode_or_400(mode_catalog, request.mode_id)
+        if not mode.available:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Mode is not yet supported: {mode.id}",
+            )
+        role_ids = set(mode.role_ids())
+        seen_role_ids: set[str] = set()
+        for participant in request.participants:
+            if participant.role_id not in role_ids:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Unknown role for mode {mode.id}: {participant.role_id}",
+                )
+            if participant.role_id in seen_role_ids:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Duplicate participant role: {participant.role_id}",
+                )
+            seen_role_ids.add(participant.role_id)
+            if participant.model_config_id is not None:
+                get_model(model_repository, participant.model_config_id)
+
+        declared_input_ids = {item.id for item in mode.inputs}
+        unknown_inputs = sorted(set(request.inputs.keys()) - declared_input_ids)
+        if unknown_inputs:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Unknown input for mode {mode.id}: {', '.join(unknown_inputs)}",
+            )
+        for item in mode.inputs:
+            if item.kind == "text" and not request.inputs.get(item.id, "").strip():
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Missing required input: {item.id}",
+                )
+
         meeting_id = f"meeting-{uuid.uuid4().hex}"
         created_at = now_iso()
         metadata = {
@@ -216,9 +279,12 @@ def create_app(
             "created_at": created_at,
             "tags": [],
             "pinned": False,
+            "mode_id": mode.id,
+            "participants": [participant.model_dump() for participant in request.participants],
+            "inputs": request.inputs,
         }
         metadata_store.save(metadata)
-        return project_meeting_summary(metadata, [], model_pricing={})
+        return project_meeting_summary(metadata, [], mode=mode, model_pricing={})
 
     @app.get("/meetings")
     def list_meetings(q: str | None = None) -> list[dict[str, Any]]:
@@ -234,6 +300,7 @@ def create_app(
                 project_meeting_summary(
                     metadata,
                     events,
+                    mode=meeting_mode(mode_catalog, metadata),
                     model_pricing=pricing,
                     activity_status=live_activity_status(events, jobs.is_running(meeting_id)),
                 )
@@ -248,6 +315,7 @@ def create_app(
             **project_meeting_summary(
                 metadata,
                 events,
+                mode=meeting_mode(mode_catalog, metadata),
                 model_pricing=model_pricing_by_id(model_repository),
                 activity_status=live_activity_status(events, jobs.is_running(meeting_id)),
             ),
@@ -263,6 +331,7 @@ def create_app(
         return project_meeting_summary(
             metadata,
             events,
+            mode=meeting_mode(mode_catalog, metadata),
             model_pricing=model_pricing_by_id(model_repository),
             activity_status=live_activity_status(events, jobs.is_running(meeting_id)),
         )
@@ -279,6 +348,7 @@ def create_app(
         return project_meeting_summary(
             metadata,
             events,
+            mode=meeting_mode(mode_catalog, metadata),
             model_pricing=model_pricing_by_id(model_repository),
             activity_status=live_activity_status(events, jobs.is_running(meeting_id)),
         )
@@ -287,7 +357,8 @@ def create_app(
     def start_meeting(meeting_id: str, request: StartMeetingRequest) -> dict[str, str]:
         metadata = metadata_store.get(meeting_id)
         reject_terminal_meeting(repository, meeting_id)
-        missing_roles = sorted({"Blue", "Red", "Judge"} - request.models.keys())
+        mode = meeting_mode(mode_catalog, metadata)
+        missing_roles = sorted(set(mode.role_ids()) - request.models.keys())
         if missing_roles:
             raise HTTPException(
                 status_code=400,
@@ -303,6 +374,8 @@ def create_app(
                 meeting_id=meeting_id,
                 topic=metadata["topic"],
                 model_assignments=model_assignments,
+                plan=relay_plan(mode),
+                inputs=metadata.get("inputs") or {},
             ),
         ):
             raise HTTPException(status_code=409, detail="Meeting is already running")
@@ -388,6 +461,7 @@ def create_app(
     ) -> dict[str, str]:
         metadata = metadata_store.get(meeting_id)
         reject_terminal_meeting(repository, meeting_id)
+        mode = meeting_mode(mode_catalog, metadata)
         try:
             runner.respond_as_role(
                 meeting_id=meeting_id,
@@ -397,6 +471,8 @@ def create_app(
                     role_name: get_model(model_repository, model_id)
                     for role_name, model_id in request.models.items()
                 },
+                plan=relay_plan(mode),
+                inputs=metadata.get("inputs") or {},
             )
         except ValueError as error:
             raise HTTPException(status_code=400, detail=str(error)) from error
@@ -409,6 +485,7 @@ def create_app(
     ) -> dict[str, str]:
         metadata = metadata_store.get(meeting_id)
         reject_terminal_meeting(repository, meeting_id)
+        mode = meeting_mode(mode_catalog, metadata)
         try:
             runner.respond_as_sequence(
                 meeting_id=meeting_id,
@@ -418,6 +495,8 @@ def create_app(
                     role_name: get_model(model_repository, model_id)
                     for role_name, model_id in request.models.items()
                 },
+                plan=relay_plan(mode),
+                inputs=metadata.get("inputs") or {},
             )
         except ValueError as error:
             raise HTTPException(status_code=400, detail=str(error)) from error
@@ -431,6 +510,7 @@ def create_app(
     ) -> dict[str, str]:
         metadata = metadata_store.get(meeting_id)
         reject_terminal_meeting(repository, meeting_id)
+        mode = meeting_mode(mode_catalog, metadata)
         try:
             runner.retry_failed_step(
                 meeting_id=meeting_id,
@@ -440,6 +520,8 @@ def create_app(
                     role: get_model(model_repository, model_id)
                     for role, model_id in request.models.items()
                 },
+                plan=relay_plan(mode),
+                inputs=metadata.get("inputs") or {},
             )
         except ValueError as error:
             raise HTTPException(status_code=400, detail=str(error)) from error
@@ -499,6 +581,91 @@ def create_app(
             return
 
     return app
+
+
+def get_mode_or_400(catalog: ModeCatalogRepository, mode_id: str) -> ModeDefinition:
+    try:
+        mode = catalog.get_mode(mode_id)
+    except ModeConfigError as error:
+        raise HTTPException(status_code=500, detail=str(error)) from error
+    if mode is None:
+        raise HTTPException(status_code=400, detail=f"Unknown mode: {mode_id}")
+    return mode
+
+
+def meeting_mode(catalog: ModeCatalogRepository, metadata: dict[str, Any]) -> ModeDefinition:
+    return get_mode_or_400(catalog, str(metadata.get("mode_id", "red-blue")))
+
+
+def project_mode(mode: ModeDefinition) -> dict[str, Any]:
+    result: dict[str, Any] = {
+        "id": mode.id,
+        "name": mode.name,
+        "category": mode.category,
+        "tagline": mode.tagline,
+        "when_to_use": mode.when_to_use,
+        "sop": list(mode.sop),
+        "default_scene": mode.default_scene,
+        "available": mode.available,
+        "inputs": [
+            {"id": item.id, "label": item.label, "kind": item.kind} for item in mode.inputs
+        ],
+        "roles": [
+            {
+                "id": role.id,
+                "name": role.name,
+                "color": role.color,
+                "kind": role.kind,
+                "portrait": role.portrait,
+            }
+            for role in mode.roles
+        ],
+    }
+    if mode.steps:
+        result["steps"] = [
+            {"role": step.role, "template": step.template, "label": step.label}
+            for step in mode.steps
+        ]
+    if mode.fanout is not None:
+        result["fanout"] = {
+            "role": mode.fanout.role,
+            "template": mode.fanout.template,
+            "label": mode.fanout.label,
+            "min_instances": mode.fanout.min_instances,
+            "max_instances": mode.fanout.max_instances,
+            "instance_prompt": mode.fanout.instance_prompt,
+        }
+    if mode.synthesis is not None:
+        result["synthesis"] = {
+            "role": mode.synthesis.role,
+            "template": mode.synthesis.template,
+            "label": mode.synthesis.label,
+        }
+    return result
+
+
+def project_participants(mode: ModeDefinition, metadata: dict[str, Any]) -> list[dict[str, Any]]:
+    stored = {
+        str(item.get("role_id")): item
+        for item in (metadata.get("participants") or [])
+        if isinstance(item, dict)
+    }
+    projected = []
+    for role in mode.roles:
+        entry = stored.get(role.id, {})
+        projected.append(
+            {
+                "role_id": role.id,
+                "name": role.name,
+                "color": role.color,
+                "kind": role.kind,
+                "portrait": role.portrait,
+                "model_config_id": entry.get("model_config_id"),
+                "display_name": entry.get("display_name") or role.name,
+                "instance_prompt": entry.get("instance_prompt"),
+            }
+        )
+    return projected
 
 
 def get_model(repository: ModelConfigRepository, model_id: str) -> ModelConfig:
@@ -642,6 +809,7 @@ def project_meeting_summary(
     metadata: dict[str, str],
     events: list[dict[str, Any]],
     *,
+    mode: ModeDefinition,
     model_pricing: dict[str, ConfigModelPricing | None] | None = None,
     activity_status: str | None = None,
 ) -> dict[str, Any]:
@@ -659,6 +827,8 @@ def project_meeting_summary(
         "estimated_cost": project_estimated_cost(events, model_pricing or {}),
         "tags": metadata.get("tags") or [],
         "pinned": bool(metadata.get("pinned", False)),
+        "mode_id": mode.id,
+        "participants": project_participants(mode, metadata),
     }
 
 

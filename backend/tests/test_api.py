@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import shutil
 import sys
 import threading
 import time
@@ -1263,6 +1264,319 @@ def test_retry_step_returns_bad_request_when_step_is_not_failed(tmp_path: Path) 
     assert response.json()["detail"] == "Step is not failed: blue-propose"
 
 
+def test_modes_endpoint_returns_catalog(tmp_path: Path) -> None:
+    app = create_test_app(tmp_path)
+    client = TestClient(app)
+
+    response = client.get("/modes")
+
+    assert response.status_code == 200
+    modes = response.json()
+    assert [mode["id"] for mode in modes] == [
+        "red-blue",
+        "courtroom",
+        "debate",
+        "brainstorm",
+        "six-hats",
+        "persona-testing",
+    ]
+    red_blue = next(mode for mode in modes if mode["id"] == "red-blue")
+    assert red_blue["available"] is True
+    assert red_blue["steps"] == [
+        {"role": "Blue", "template": "blue_propose", "label": "藍軍提案"},
+        {"role": "Red", "template": "red_critique", "label": "紅軍質詢"},
+        {"role": "Blue", "template": "blue_revise", "label": "藍軍修訂"},
+        {"role": "Judge", "template": "judge_decide", "label": "裁判裁決"},
+    ]
+    brainstorm = next(mode for mode in modes if mode["id"] == "brainstorm")
+    assert brainstorm["available"] is False
+    assert brainstorm["fanout"]["min_instances"] == 2
+
+
+def test_create_meeting_defaults_to_red_blue(tmp_path: Path) -> None:
+    app = create_test_app(tmp_path)
+    client = TestClient(app)
+
+    response = client.post("/meetings", json={"topic": "舊版建立會議"})
+
+    assert response.status_code == 200
+    created = response.json()
+    assert created["mode_id"] == "red-blue"
+    assert created["participants"] == [
+        {
+            "role_id": "Blue",
+            "name": "藍軍",
+            "color": "#4d8dff",
+            "kind": "member",
+            "portrait": "blue",
+            "model_config_id": None,
+            "display_name": "藍軍",
+            "instance_prompt": None,
+        },
+        {
+            "role_id": "Red",
+            "name": "紅軍",
+            "color": "#ff6b5e",
+            "kind": "member",
+            "portrait": "red",
+            "model_config_id": None,
+            "display_name": "紅軍",
+            "instance_prompt": None,
+        },
+        {
+            "role_id": "Judge",
+            "name": "裁判",
+            "color": "#e8b44c",
+            "kind": "adjudicator",
+            "portrait": "judge",
+            "model_config_id": None,
+            "display_name": "裁判",
+            "instance_prompt": None,
+        },
+    ]
+
+
+def test_create_meeting_with_courtroom_mode(tmp_path: Path) -> None:
+    app = create_test_app(tmp_path)
+    client = TestClient(app)
+
+    response = client.post(
+        "/meetings",
+        json={"topic": "法庭審理案例", "mode_id": "courtroom"},
+    )
+
+    assert response.status_code == 200
+    participants = response.json()["participants"]
+    assert [p["role_id"] for p in participants] == ["Prosecutor", "Defense", "Judge"]
+
+
+def test_create_meeting_rejects_unknown_mode(tmp_path: Path) -> None:
+    app = create_test_app(tmp_path)
+    client = TestClient(app)
+
+    response = client.post("/meetings", json={"topic": "T", "mode_id": "does-not-exist"})
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "Unknown mode: does-not-exist"
+
+
+def test_create_meeting_rejects_parallel_mode(tmp_path: Path) -> None:
+    app = create_test_app(tmp_path)
+    client = TestClient(app)
+
+    response = client.post("/meetings", json={"topic": "T", "mode_id": "brainstorm"})
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "Mode is not yet supported: brainstorm"
+
+
+def test_create_meeting_requires_debate_positions(tmp_path: Path) -> None:
+    app = create_test_app(tmp_path)
+    client = TestClient(app)
+
+    missing_both = client.post("/meetings", json={"topic": "辯論", "mode_id": "debate"})
+    assert missing_both.status_code == 400
+    assert missing_both.json()["detail"] == "Missing required input: position_a"
+
+    missing_one = client.post(
+        "/meetings",
+        json={
+            "topic": "辯論",
+            "mode_id": "debate",
+            "inputs": {"position_a": "先做後端"},
+        },
+    )
+    assert missing_one.status_code == 400
+    assert missing_one.json()["detail"] == "Missing required input: position_b"
+
+    ok = client.post(
+        "/meetings",
+        json={
+            "topic": "辯論",
+            "mode_id": "debate",
+            "inputs": {"position_a": "先做後端", "position_b": "先做前端"},
+        },
+    )
+    assert ok.status_code == 200
+    assert ok.json()["inputs"] == {"position_a": "先做後端", "position_b": "先做前端"}
+
+
+def test_create_meeting_rejects_unknown_input_keys(tmp_path: Path) -> None:
+    app = create_test_app(tmp_path)
+    client = TestClient(app)
+
+    response = client.post("/meetings", json={"topic": "T", "inputs": {"x": "y"}})
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "Unknown input for mode red-blue: x"
+
+
+def test_create_meeting_rejects_participant_role_not_in_mode(tmp_path: Path) -> None:
+    app = create_test_app(tmp_path)
+    client = TestClient(app)
+
+    response = client.post(
+        "/meetings",
+        json={
+            "topic": "T",
+            "mode_id": "courtroom",
+            "participants": [{"role_id": "Blue", "model_config_id": "mock-fast"}],
+        },
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "Unknown role for mode courtroom: Blue"
+
+
+def test_create_meeting_stores_participant_models(tmp_path: Path) -> None:
+    app = create_test_app(tmp_path)
+    client = TestClient(app)
+
+    created = client.post(
+        "/meetings",
+        json={
+            "topic": "T",
+            "mode_id": "courtroom",
+            "participants": [{"role_id": "Prosecutor", "model_config_id": "mock-fast"}],
+        },
+    ).json()
+
+    fetched = client.get(f"/meetings/{created['meeting_id']}").json()
+    prosecutor = next(p for p in fetched["participants"] if p["role_id"] == "Prosecutor")
+    assert prosecutor["model_config_id"] == "mock-fast"
+
+
+def test_legacy_meeting_projects_red_blue_participants(tmp_path: Path) -> None:
+    app = create_test_app(tmp_path)
+    client = TestClient(app)
+    meeting_id = "meeting-legacy"
+    metadata_path = tmp_path / "data" / "meetings" / meeting_id / "metadata.json"
+    metadata_path.parent.mkdir(parents=True)
+    metadata_path.write_text(
+        json.dumps(
+            {
+                "meeting_id": meeting_id,
+                "topic": "舊資料",
+                "created_at": "2026-01-01T00:00:00+00:00",
+                "tags": [],
+                "pinned": False,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    fetched = client.get(f"/meetings/{meeting_id}").json()
+
+    assert fetched["mode_id"] == "red-blue"
+    assert [p["role_id"] for p in fetched["participants"]] == ["Blue", "Red", "Judge"]
+
+
+def test_start_courtroom_meeting_runs_courtroom_steps(tmp_path: Path) -> None:
+    app = create_test_app(tmp_path)
+    client = TestClient(app)
+    meeting_id = client.post(
+        "/meetings",
+        json={"topic": "法庭審理", "mode_id": "courtroom"},
+    ).json()["meeting_id"]
+
+    response = client.post(
+        f"/meetings/{meeting_id}/start",
+        json={
+            "models": {
+                "Prosecutor": "mock-fast",
+                "Defense": "mock-fast",
+                "Judge": "mock-fast",
+            }
+        },
+    )
+
+    assert response.status_code == 202
+    meeting = wait_for_activity(client, meeting_id, "completed")
+    completed_steps = [
+        event["step_id"] for event in meeting["events"] if event["status"] == "completed"
+    ]
+    assert completed_steps == [
+        "courtroom-charge",
+        "courtroom-defense",
+        "courtroom-rebuttal",
+        "courtroom-verdict",
+    ]
+
+
+def test_start_rejects_missing_roles_for_mode(tmp_path: Path) -> None:
+    app = create_test_app(tmp_path)
+    client = TestClient(app)
+    meeting_id = client.post(
+        "/meetings",
+        json={"topic": "法庭審理", "mode_id": "courtroom"},
+    ).json()["meeting_id"]
+
+    response = client.post(
+        f"/meetings/{meeting_id}/start",
+        json={"models": {"Judge": "mock-fast"}},
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "Missing model assignments: Defense, Prosecutor"
+
+
+def test_debate_inputs_reach_prompts(tmp_path: Path) -> None:
+    app = create_test_app(tmp_path)
+    client = TestClient(app)
+    meeting_id = client.post(
+        "/meetings",
+        json={
+            "topic": "辯論",
+            "mode_id": "debate",
+            "inputs": {"position_a": "先做後端", "position_b": "先做前端"},
+        },
+    ).json()["meeting_id"]
+
+    client.post(
+        f"/meetings/{meeting_id}/start",
+        json={
+            "models": {
+                "Pro": "mock-fast",
+                "Con": "mock-fast",
+                "Arbiter": "mock-fast",
+            }
+        },
+    )
+    meeting = wait_for_activity(client, meeting_id, "completed")
+
+    first_completed = next(event for event in meeting["events"] if event["status"] == "completed")
+    assert "先做後端" in first_completed["prompt_messages"][0]["content"]
+
+
+def test_respond_as_role_accepts_mode_roles(tmp_path: Path) -> None:
+    app = create_test_app(tmp_path)
+    client = TestClient(app)
+    meeting_id = client.post(
+        "/meetings",
+        json={"topic": "法庭審理", "mode_id": "courtroom"},
+    ).json()["meeting_id"]
+
+    response = client.post(
+        f"/meetings/{meeting_id}/roles/Prosecutor/respond",
+        json={
+            "models": {
+                "Prosecutor": "mock-fast",
+                "Defense": "mock-fast",
+                "Judge": "mock-fast",
+            }
+        },
+    )
+    assert response.status_code == 200
+    events = client.get(f"/meetings/{meeting_id}").json()["events"]
+    assert events[-1]["step_id"] == "directed-1-prosecutor-response"
+
+    rejected = client.post(
+        f"/meetings/{meeting_id}/roles/Blue/respond",
+        json={"models": {"Blue": "mock-fast"}},
+    )
+    assert rejected.status_code == 400
+
+
 def test_local_frontend_origin_can_call_api(tmp_path: Path) -> None:
     app = create_test_app(tmp_path)
     client = TestClient(app)
@@ -1295,6 +1609,33 @@ def test_alternate_local_frontend_origin_can_call_api(tmp_path: Path) -> None:
     assert response.headers["access-control-allow-origin"] == "http://127.0.0.1:5174"
 
 
+PROJECT_CONFIG_DIR = Path(__file__).resolve().parents[2] / "config"
+
+RELAY_PROMPT_TEMPLATES = [
+    "blue_propose",
+    "red_critique",
+    "blue_revise",
+    "judge_decide",
+    "courtroom_charge",
+    "courtroom_defense",
+    "courtroom_rebuttal",
+    "courtroom_verdict",
+    "debate_statement_pro",
+    "debate_statement_con",
+    "debate_cross_pro",
+    "debate_cross_con",
+    "debate_verdict",
+]
+
+DEBATE_PROMPT_TEMPLATES = {
+    "debate_statement_pro",
+    "debate_statement_con",
+    "debate_cross_pro",
+    "debate_cross_con",
+    "debate_verdict",
+}
+
+
 def create_test_app(
     tmp_path: Path,
     *,
@@ -1308,17 +1649,21 @@ models:
     config_dir = tmp_path / "config"
     config_dir.mkdir(exist_ok=True)
     (config_dir / "models.yaml").write_text(models_yaml, encoding="utf-8")
+    shutil.copy(PROJECT_CONFIG_DIR / "modes.yaml", config_dir / "modes.yaml")
     prompt_dir = tmp_path / "prompts"
     prompt_dir.mkdir(exist_ok=True)
-    for template in ["blue_propose", "red_critique", "blue_revise", "judge_decide"]:
-        (prompt_dir / f"{template}.md").write_text(
+    for template in RELAY_PROMPT_TEMPLATES:
+        content = (
             f"{template} {{{{ role }}}} {{{{ topic }}}} "
-            "{{ prior_transcript }} {{ required_json_schema }}",
-            encoding="utf-8",
+            "{{ prior_transcript }} {{ required_json_schema }}"
         )
+        if template in DEBATE_PROMPT_TEMPLATES:
+            content += " {{ position_a }} {{ position_b }}"
+        (prompt_dir / f"{template}.md").write_text(content, encoding="utf-8")
     return create_app(
         data_dir=tmp_path / "data",
         model_config_path=config_dir / "models.yaml",
+        modes_config_path=config_dir / "modes.yaml",
         prompt_dir=prompt_dir,
         start_model_health_checks=start_model_health_checks,
     )
