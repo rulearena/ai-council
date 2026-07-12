@@ -41,11 +41,19 @@ function hasPortrait(role: SeatRole): boolean {
   return portraitSrc(role) !== undefined
 }
 
-const sceneStyle = computed(() =>
-  props.scene.background
-    ? { backgroundImage: `url(${props.scene.background})` }
-    : {},
-)
+const sceneStyle = computed(() => ({
+  ...(props.scene.background ? { backgroundImage: `url(${props.scene.background})` } : {}),
+  // Set as a custom property, not `aspectRatio` directly - the ≤640px breakpoint resets
+  // aspect-ratio to `auto` in the stylesheet (see .stage-scene's media query), and an
+  // inline style always wins over that regardless of specificity. Routing it through
+  // `var(--scene-aspect-ratio, 4 / 3)` in the desktop rule keeps that override working.
+  ...(props.scene.aspectRatio ? { '--scene-aspect-ratio': String(props.scene.aspectRatio) } : {}),
+}))
+
+const topicStyle = computed(() => {
+  const { x, y } = props.scene.topicCard ?? { x: 50, y: 50 }
+  return { left: `${x}%`, top: `${y}%` }
+})
 
 const latestChairMessage = computed(() => chairmanEvents.value.at(-1)?.content ?? '')
 </script>
@@ -58,7 +66,7 @@ const latestChairMessage = computed(() => chairmanEvents.value.at(-1)?.content ?
       :style="sceneStyle"
       :data-scene="scene.id"
     >
-      <div class="stage-table">
+      <div class="stage-table" :style="topicStyle">
         <span class="stage-table-topic">{{ selectedMeeting?.topic ?? '尚未選擇會議' }}</span>
         <span v-if="!selectedMeeting" class="stage-table-hint">從右上角 New Case 建立，或 Past Topics 選擇會議</span>
       </div>
