@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { provide, ref } from 'vue'
 import { councilKey, useCouncil, type CouncilRole } from './composables/useCouncil'
-import { meetingRoomScene } from './scenes'
+import { useScenePreference } from './scenes'
 import TopBar from './components/TopBar.vue'
 import CouncilStage from './components/CouncilStage.vue'
 import ActionBar from './components/ActionBar.vue'
@@ -13,6 +13,8 @@ import RecordsDrawer from './components/RecordsDrawer.vue'
 
 const store = useCouncil()
 provide(councilKey, store)
+
+const { currentScene } = useScenePreference()
 
 type ModalName = 'settings' | 'past-topics' | 'new-case'
 const openModal = ref<ModalName | null>(null)
@@ -38,7 +40,7 @@ function onSeatClick(role: CouncilRole | 'Chairman') {
       @open-records="recordsOpen = true"
     />
 
-    <CouncilStage :scene="meetingRoomScene" @seat-click="onSeatClick" />
+    <CouncilStage :scene="currentScene" @seat-click="onSeatClick" />
 
     <ActionBar />
 

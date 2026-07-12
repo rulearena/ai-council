@@ -209,6 +209,16 @@ export function useCouncil() {
       selectedModels.value.Red &&
       selectedModels.value.Judge,
   )
+  // The role whose latest event is a failure, if any. Both /start and /sequences are a
+  // known silent no-op once a step has failed (confirmed against the real backend: it
+  // returns 200 "running" but appends zero events and never clears activity_status -
+  // see runner.py's _first_incomplete_step_index returning None for a non-completed
+  // latest event). Retrying the specific step via retrySelectedStep is the only way
+  // forward, so callers use this to disable the round-level actions and point the user
+  // at the failed seat instead of letting them hit that trap.
+  const failedRole = computed<CouncilRole | null>(
+    () => councilRoles.find((role) => roleSeatStatus(role) === 'failed') ?? null,
+  )
 
   onMounted(async () => {
     await runAction(refreshAll)
@@ -588,6 +598,7 @@ export function useCouncil() {
     chairmanEvents,
     canRun,
     isFixedRoundComplete,
+    failedRole,
     // actions
     refreshAll,
     createNewMeeting,
