@@ -52,7 +52,12 @@ const latestChairMessage = computed(() => chairmanEvents.value.at(-1)?.content ?
 
 <template>
   <section class="council-stage" data-testid="council-stage">
-    <div class="stage-scene" :class="{ 'stage-scene-placeholder': !scene.background }" :style="sceneStyle">
+    <div
+      class="stage-scene"
+      :class="{ 'stage-scene-placeholder': !scene.background }"
+      :style="sceneStyle"
+      :data-scene="scene.id"
+    >
       <div class="stage-table">
         <span class="stage-table-topic">{{ selectedMeeting?.topic ?? '尚未選擇會議' }}</span>
         <span v-if="!selectedMeeting" class="stage-table-hint">從右上角 New Case 建立，或 Past Topics 選擇會議</span>

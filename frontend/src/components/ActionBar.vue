@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { inject, ref } from 'vue'
+import { computed, inject, ref } from 'vue'
 import { councilKey, formatDateTime, sequencePresets } from '../composables/useCouncil'
 
 const store = inject(councilKey)!
@@ -14,8 +14,10 @@ const {
   error,
   operationStatus,
   showContinueHint,
+  failedRole,
   sendChairMessage,
   startOrContinueMeeting,
+  startSelectedMeeting,
   cancelSelectedMeeting,
   closeSelectedMeeting,
   requestSelectedRoleSequence,
@@ -26,6 +28,10 @@ const advancedOpen = ref(false)
 function onKeydown(event: KeyboardEvent) {
   if (event.key === 'Escape') advancedOpen.value = false
 }
+
+const failedStepTitle = computed(() =>
+  failedRole.value ? `${failedRole.value} 的回應失敗了，請點擊席位重試該步驟` : undefined,
+)
 </script>
 
 <template>
@@ -37,6 +43,15 @@ function onKeydown(event: KeyboardEvent) {
       <span v-if="selectedMeeting?.last_step_id">最後步驟：{{ selectedMeeting.last_step_id }}</span>
       <span v-if="selectedMeeting">更新：{{ formatDateTime(selectedMeeting.updated_at) }}</span>
     </div>
+
+    <p v-if="failedRole && !isTerminalMeeting" class="failed-step-hint" data-testid="failed-step-hint">
+      <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0Z" />
+        <line x1="12" y1="9" x2="12" y2="13" />
+        <line x1="12" y1="17" x2="12.01" y2="17" />
+      </svg>
+      {{ failedRole }} 的回應失敗了，點擊席位可重試
+    </p>
 
     <div class="action-bar-row">
       <textarea
@@ -62,7 +77,8 @@ function onKeydown(event: KeyboardEvent) {
         :class="{ 'action-bar-cta-hint': showContinueHint }"
         data-testid="start-meeting-button"
         @click="startOrContinueMeeting"
-        :disabled="loading || !canRun"
+        :disabled="loading || !canRun || !!failedRole"
+        :title="failedStepTitle"
       >
         {{ startButtonLabel }}
       </button>
@@ -98,6 +114,19 @@ function onKeydown(event: KeyboardEvent) {
             >
               執行序列
             </button>
+          </section>
+          <section class="new-round-panel" data-testid="new-round-panel">
+            <button
+              type="button"
+              class="btn btn-secondary"
+              data-testid="start-new-round-button"
+              @click="startSelectedMeeting"
+              :disabled="loading || !canRun || !!failedRole"
+              :title="failedStepTitle"
+            >
+              開始新回合
+            </button>
+            <small>重新跑完整流程：Blue 提案 → Red 質詢 → Blue 修訂 → Judge 裁決</small>
           </section>
           <div class="advanced-options-actions">
             <button
