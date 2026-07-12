@@ -151,8 +151,8 @@ Prompt templates 放在檔案，不寫死在 Python code。
 ```text
 prompts/blue_propose.md
 prompts/blue_revise.md
-prompts/red.md
-prompts/judge.md
+prompts/red_critique.md
+prompts/judge_decide.md
 ```
 
 Blue 有兩種發言階段，任務不同，各用獨立 template：

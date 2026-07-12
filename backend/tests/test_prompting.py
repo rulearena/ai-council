@@ -12,9 +12,9 @@ from ai_council.prompting.renderer import PromptRenderer
     ("template_name", "role"),
     [
         ("blue_propose", "Blue"),
-        ("red", "Red"),
+        ("red_critique", "Red"),
         ("blue_revise", "Blue"),
-        ("judge", "Judge"),
+        ("judge_decide", "Judge"),
     ],
 )
 def test_role_prompts_require_responses_to_follow_the_topic_language(

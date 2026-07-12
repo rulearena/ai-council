@@ -1310,7 +1310,7 @@ models:
     (config_dir / "models.yaml").write_text(models_yaml, encoding="utf-8")
     prompt_dir = tmp_path / "prompts"
     prompt_dir.mkdir(exist_ok=True)
-    for template in ["blue_propose", "red", "blue_revise", "judge"]:
+    for template in ["blue_propose", "red_critique", "blue_revise", "judge_decide"]:
         (prompt_dir / f"{template}.md").write_text(
             f"{template} {{{{ role }}}} {{{{ topic }}}} "
             "{{ prior_transcript }} {{ required_json_schema }}",

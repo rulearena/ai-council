@@ -49,15 +49,15 @@ class StepDefinition:
 
 STEPS = [
     StepDefinition("blue-propose", "Blue", "blue_propose"),
-    StepDefinition("red-critique", "Red", "red"),
+    StepDefinition("red-critique", "Red", "red_critique"),
     StepDefinition("blue-revise", "Blue", "blue_revise"),
-    StepDefinition("judge-decide", "Judge", "judge"),
+    StepDefinition("judge-decide", "Judge", "judge_decide"),
 ]
 
 DIRECTED_RESPONSE_STEPS = {
     "Blue": StepDefinition("blue-response", "Blue", "blue_revise"),
-    "Red": StepDefinition("red-response", "Red", "red"),
-    "Judge": StepDefinition("judge-response", "Judge", "judge"),
+    "Red": StepDefinition("red-response", "Red", "red_critique"),
+    "Judge": StepDefinition("judge-response", "Judge", "judge_decide"),
 }
 
 

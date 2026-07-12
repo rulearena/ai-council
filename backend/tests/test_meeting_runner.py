@@ -22,9 +22,9 @@ VALID_OUTPUT = json.dumps(
 )
 TEST_PROMPT_TEMPLATE_HASHES = {
     "blue_propose": "81abba70bd2c176005a3fd28dd13ef9bda68f441de574976e8d7161e23fb5f9d",
-    "red": "e8e7aa14eecc6c7a6c54dbc4caa7efcaabba10fb2630545a57f13c621df99df7",
+    "red_critique": "604dfa9b918ab543afbde7e2098e0eb560967abb658c3ef9e06534bf37dcfb24",
     "blue_revise": "572aea2442be4b659e3cd7f4d02afc1b6e9ae485a2b1972dc40757c0fa64e06e",
-    "judge": "9a1c84336b6f749f388bfc0d4458475efdb0ecefd08e67aca75d125b25345d32",
+    "judge_decide": "b804a5f1bb3893a45854d48085dc2ffc8496e9b61819c4a4c31ea4192b847e25",
 }
 TEST_OUTPUT_SCHEMA_HASH = "15a45919652be5c70d3fd1690a10d37f876f19a14b2a76cc0f21765def281377"
 
@@ -106,8 +106,8 @@ def test_runner_persists_prompt_metadata_on_failed_events(tmp_path: Path) -> Non
 
     event = runner.repository.read_events("meeting-1")[-1]
     assert event["status"] == "failed"
-    assert event["prompt_template_name"] == "red"
-    assert event["prompt_template_hash"] == TEST_PROMPT_TEMPLATE_HASHES["red"]
+    assert event["prompt_template_name"] == "red_critique"
+    assert event["prompt_template_hash"] == TEST_PROMPT_TEMPLATE_HASHES["red_critique"]
     assert event["output_schema_hash"] == TEST_OUTPUT_SCHEMA_HASH
 
 
@@ -127,15 +127,15 @@ def test_runner_persists_prompt_template_names_for_fixed_flow(tmp_path: Path) ->
     events = runner.repository.read_events("meeting-1")
     assert [event["prompt_template_name"] for event in events] == [
         "blue_propose",
-        "red",
+        "red_critique",
         "blue_revise",
-        "judge",
+        "judge_decide",
     ]
     assert [event["prompt_template_hash"] for event in events] == [
         TEST_PROMPT_TEMPLATE_HASHES["blue_propose"],
-        TEST_PROMPT_TEMPLATE_HASHES["red"],
+        TEST_PROMPT_TEMPLATE_HASHES["red_critique"],
         TEST_PROMPT_TEMPLATE_HASHES["blue_revise"],
-        TEST_PROMPT_TEMPLATE_HASHES["judge"],
+        TEST_PROMPT_TEMPLATE_HASHES["judge_decide"],
     ]
     assert {event["output_schema_hash"] for event in events} == {TEST_OUTPUT_SCHEMA_HASH}
 
@@ -622,7 +622,7 @@ def test_runner_terminal_events_are_idempotent(tmp_path: Path) -> None:
 def build_runner(tmp_path: Path, *, adapter: object) -> MeetingRunner:
     prompt_dir = tmp_path / "prompts"
     prompt_dir.mkdir()
-    for template in ["blue_propose", "red", "blue_revise", "judge"]:
+    for template in ["blue_propose", "red_critique", "blue_revise", "judge_decide"]:
         (prompt_dir / f"{template}.md").write_text(
             f"{template} {{{{ role }}}} {{{{ topic }}}} "
             "{{ prior_transcript }} {{ required_json_schema }}",

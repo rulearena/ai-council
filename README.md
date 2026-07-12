@@ -171,9 +171,9 @@ HTTP endpoints or explicitly configured subscription CLI commands.
 The runner reads these files from `AI_COUNCIL_PROMPT_DIR`:
 
 - `blue_propose.md`
-- `red.md`
+- `red_critique.md`
 - `blue_revise.md`
-- `judge.md`
+- `judge_decide.md`
 
 Available template variables:
 
