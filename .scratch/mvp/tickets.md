@@ -459,3 +459,29 @@ Work the **frontier**: any ticket whose blockers are all done. For this MVP, sta
 - [x] Runner persists `token_usage` on completed model events when available.
 - [x] Meeting read models include cumulative `token_usage` totals.
 - [x] Frontend API types include the new `token_usage` fields.
+
+## 38 - Human Chair Message Correction
+
+**What to build:** Allow the chair to correct a previously submitted human message while preserving the event log as the source of truth.
+
+**Blocked by:** 11 - Human Chair Message Slice; 17 - Terminal API Conflicts.
+
+- [x] API exposes `POST /meetings/{meeting_id}/messages/{event_id}/correct`.
+- [x] Correction events preserve the original human message and reference it through `corrects_event_id`.
+- [x] Corrections reject unknown events and non-human message events.
+- [x] Terminal meetings reject message corrections with `409`.
+- [x] Transcript projection marks correction entries clearly.
+- [x] Frontend API types and controls support correcting human chair messages.
+
+## 39 - Token Streaming Backend Foundation
+
+**What to build:** Let model adapters emit non-persistent token deltas during a running step and expose them through the existing meeting WebSocket.
+
+**Blocked by:** 08 - WebSocket Event Feed; 30 - Background Meeting Progress.
+
+- [x] `ModelRequest` can carry an optional token-delta callback.
+- [x] Mock model configs can emit deterministic `mock_stream_chunks` for tests.
+- [x] Runner converts token deltas into step-scoped stream events.
+- [x] WebSocket snapshot/update payloads include `stream_events`.
+- [x] Token delta stream events are not persisted to `events.jsonl`.
+- [x] Frontend API types include token-delta stream event payloads.

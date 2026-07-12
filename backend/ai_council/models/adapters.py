@@ -10,7 +10,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from dataclasses import dataclass
-from typing import TypedDict
+from typing import Callable, TypedDict
 
 from ai_council.models.config import ModelConfig
 
@@ -26,6 +26,7 @@ class ModelRequest:
     prompt: str
     model_config: ModelConfig
     meeting_id: str | None = None
+    on_token_delta: Callable[[str], None] | None = None
 
 
 class TokenUsage(TypedDict):
@@ -42,6 +43,11 @@ class ModelResponse:
 
 class MockModelAdapter:
     def complete(self, request: ModelRequest) -> ModelResponse:
+        chunks = request.model_config.extra_body.get("mock_stream_chunks", [])
+        if request.on_token_delta is not None and isinstance(chunks, list):
+            for chunk in chunks:
+                if isinstance(chunk, str):
+                    request.on_token_delta(chunk)
         delay_ms = request.model_config.extra_body.get("mock_delay_ms", 0)
         if isinstance(delay_ms, (int, float)) and delay_ms > 0:
             time.sleep(delay_ms / 1000)

@@ -379,6 +379,9 @@ cancelled
 - `TranscriptProjector` 會把主席發言渲染進 Markdown transcript
 - 後續 AI role prompt 的 `prior_transcript` 會包含主席發言
 - 前端有主席發言輸入框與送出按鈕
+- 主席可以修正已送出的主席發言，API 為 `POST /meetings/{meeting_id}/messages/{event_id}/correct`
+- 修正會以新的 append-only Human event 保存，並用 `corrects_event_id` 指向原始主席發言
+- transcript 會清楚標示主席發言修正項目
 - 主席發言後再次開始/繼續討論時，後端會產生新的 AI 回合
 - 第一輪維持原本 step id：`blue-propose`、`red-critique`、`blue-revise`、`judge-decide`
 - 第二輪起使用 `round-N-*` step id，例如 `round-2-blue-propose`
@@ -408,6 +411,7 @@ cancelled
 - 前端 meeting list 支援搜尋、status 篩選，並依 `updated_at` 由新到舊排序
 - model test response 會回傳 `tested_at`，前端顯示最後測試時間與錯誤訊息
 - 前端提供 role output cards，把 `summary`、`arguments`、`risks`、`recommendation` 從 raw JSON 中拆出顯示
+- WebSocket 已支援非持久化 `stream_events`，讓 adapter 可在模型執行期間送出 token delta；目前已用 mock stream chunks 覆蓋後端測試，真 provider streaming 與 UI 顯示仍屬後續切片
 
 這個切片已支援主席發言、固定回合續跑、指定單一角色回應、預設角色序列自動接續、失敗 retry、列表搜尋/篩選、角色輸出卡片與結案。尚未實作的是更完整的拓撲編輯，例如自訂 Agent 數量、拖拉排序、條件式分支、暫停/恢復佇列與可視化 speaking order。
 
@@ -467,8 +471,8 @@ config/models.yaml.example
 
 ## 15. Backlog
 
-1. Human message editing/correction：主席發言送出後的修正策略與事件記錄
-2. Token streaming：Agent 逐字輸出到前端
+1. Human message editing/correction：主席發言送出後的修正策略與事件記錄（已落地為 append-only correction event）
+2. Token streaming：Agent 逐字輸出到前端（backend WebSocket foundation 已落地；真 provider streaming 與 UI 顯示待後續）
 3. 自動恢復執行中任務：後端重啟或 API 呼叫中斷時判斷是否能安全重送
 4. Markdown 反向解析：從 `transcript.md` 還原狀態
 5. 更多 provider adapters：Anthropic、Gemini 等

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Protocol
+from typing import Callable, Literal, Protocol, TypedDict
 
 from ai_council.meetings.repository import MeetingRepository
 from ai_council.meetings.transcript import TranscriptProjector
@@ -19,6 +19,17 @@ REQUIRED_JSON_SCHEMA = (
 class ModelAdapter(Protocol):
     def complete(self, request: ModelRequest) -> ModelResponse:
         ...
+
+
+class TokenStreamEvent(TypedDict):
+    type: Literal["token_delta"]
+    meeting_id: str
+    step_id: str
+    base_step_id: str
+    round: int
+    role: str
+    attempt: int
+    content: str
 
 
 @dataclass(frozen=True)
@@ -54,10 +65,12 @@ class MeetingRunner:
         repository: MeetingRepository,
         prompt_renderer: PromptRenderer,
         adapters: RunnerAdapters,
+        stream_sink: Callable[[str, TokenStreamEvent], None] | None = None,
     ) -> None:
         self.repository = repository
         self.prompt_renderer = prompt_renderer
         self.adapters = adapters
+        self.stream_sink = stream_sink
         self.output_parser = RoleOutputParser()
         self.transcript_projector = TranscriptProjector()
 
@@ -265,9 +278,32 @@ class MeetingRunner:
             ),
             required_json_schema=REQUIRED_JSON_SCHEMA,
         )
+
+        def emit_token_delta(content: str) -> None:
+            if self.stream_sink is None:
+                return
+            self.stream_sink(
+                meeting_id,
+                {
+                    "type": "token_delta",
+                    "meeting_id": meeting_id,
+                    "step_id": event_step_id,
+                    "base_step_id": step.step_id,
+                    "round": round_number,
+                    "role": step.role,
+                    "attempt": attempt,
+                    "content": content,
+                },
+            )
+
         try:
             response = self.adapters.by_name[config.adapter].complete(
-                ModelRequest(prompt=prompt, model_config=config, meeting_id=meeting_id)
+                ModelRequest(
+                    prompt=prompt,
+                    model_config=config,
+                    meeting_id=meeting_id,
+                    on_token_delta=emit_token_delta,
+                )
             )
             parsed = self.output_parser.parse(response.raw_output)
         except (AdapterError, OutputParseError, KeyError) as error:

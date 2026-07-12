@@ -17,7 +17,7 @@ from fastapi.responses import JSONResponse, PlainTextResponse, Response
 from pydantic import BaseModel, Field
 
 from ai_council.meetings.repository import MeetingRepository
-from ai_council.meetings.runner import MeetingRunner, RunnerAdapters
+from ai_council.meetings.runner import MeetingRunner, RunnerAdapters, TokenStreamEvent
 from ai_council.meetings.transcript import TranscriptProjector
 from ai_council.models.adapters import (
     AdapterError,
@@ -104,6 +104,7 @@ def create_app(
     metadata_store = MeetingMetadataStore(data_path)
     repository = MeetingRepository(data_path)
     model_repository = ModelConfigRepository(model_config_path)
+    stream_bus = MeetingStreamBus()
     model_adapters = {
         "mock": MockModelAdapter(),
         "openai-compatible-http": OpenAICompatibleHTTPAdapter(),
@@ -117,6 +118,7 @@ def create_app(
         adapters=RunnerAdapters(
             by_name=model_adapters,
         ),
+        stream_sink=stream_bus.publish,
     )
     projector = TranscriptProjector()
     jobs = MeetingJobManager()
@@ -445,26 +447,35 @@ def create_app(
                 {
                     "type": "snapshot",
                     "events": events,
+                    "stream_events": [],
                     "activity_status": activity_status,
                 }
             )
             event_count = len(events)
+            stream_cursor = stream_bus.cursor(meeting_id)
             while True:
                 try:
                     await asyncio.wait_for(websocket.receive_text(), timeout=0.1)
                 except TimeoutError:
                     pass
                 events = repository.read_events(meeting_id)
+                stream_events = stream_bus.events_since(meeting_id, stream_cursor)
                 next_activity_status = live_activity_status(events, jobs.is_running(meeting_id))
-                if len(events) != event_count or next_activity_status != activity_status:
+                if (
+                    len(events) != event_count
+                    or stream_events
+                    or next_activity_status != activity_status
+                ):
                     await websocket.send_json(
                         {
                             "type": "update",
                             "events": events[event_count:],
+                            "stream_events": stream_events,
                             "activity_status": next_activity_status,
                         }
                     )
                     event_count = len(events)
+                    stream_cursor += len(stream_events)
                     activity_status = next_activity_status
         except (WebSocketDisconnect, RuntimeError):
             return
@@ -612,6 +623,24 @@ class MeetingJobManager:
         with self._lock:
             if self._running.get(meeting_id) is completed:
                 self._running.pop(meeting_id, None)
+
+
+class MeetingStreamBus:
+    def __init__(self) -> None:
+        self._events: dict[str, list[TokenStreamEvent]] = {}
+        self._lock = threading.Lock()
+
+    def publish(self, meeting_id: str, event: TokenStreamEvent) -> None:
+        with self._lock:
+            self._events.setdefault(meeting_id, []).append(event)
+
+    def cursor(self, meeting_id: str) -> int:
+        with self._lock:
+            return len(self._events.get(meeting_id, []))
+
+    def events_since(self, meeting_id: str, index: int) -> list[TokenStreamEvent]:
+        with self._lock:
+            return list(self._events.get(meeting_id, [])[index:])
 
 
 class MeetingMetadataStore:
