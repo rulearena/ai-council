@@ -912,3 +912,55 @@ test('keeps the New Case mode picker within a 375px viewport without horizontal 
 
   await page.getByTestId('new-case-close-button').click()
 })
+
+test('seat nameplate shows the selected model, with a placeholder when unset, and updates live from Settings', async ({
+  page,
+}) => {
+  // Force an empty model catalog first - every real /models response is non-empty and
+  // Settings' <select> has no blank option of its own, so this is the only reliable way
+  // to observe the "未選模型" placeholder (selectedModels' auto-pick-the-first-model
+  // fallback in useCouncil.ts's refreshAll has nothing to pick from).
+  await page.route('**/models', (route) => route.fulfill({ json: [] }))
+  await page.goto('/')
+
+  const topic = `E2E seat model label ${Date.now()}`
+  await createMeetingViaNewCase(page, topic)
+
+  await expect(page.getByTestId('seat-model-label-blue')).toHaveText('未選模型')
+  await expect(page.getByTestId('seat-model-label-blue')).toHaveClass(/seat-model-label-empty/)
+  // Chairman is the fixed human seat, not a mode role - it never gets a model label.
+  await expect(
+    page.getByTestId('role-seat-chairman').locator('[data-testid^="seat-model-label"]'),
+  ).toHaveCount(0)
+
+  // Reload against the real (unmocked) backend and reopen the same meeting - every role
+  // auto-picks the catalog's first model on load, so the placeholder should be gone.
+  await page.unroute('**/models')
+  await page.reload()
+  await page.getByTestId('past-topics-button').click()
+  await page.getByTestId('meeting-list-item').filter({ hasText: topic }).locator('.meeting-item').click()
+  await expect(page.getByTestId('seat-model-label-blue')).not.toHaveText('未選模型')
+
+  await setModelsInSettings(page, { blue: 'mock-slow', red: 'mock-fast', judge: 'mock-broken' })
+  await closeSettings(page)
+
+  await expect(page.getByTestId('seat-model-label-blue')).toHaveText('mock-slow')
+  await expect(page.getByTestId('seat-model-label-red')).toHaveText('mock-fast')
+  await expect(page.getByTestId('seat-model-label-judge')).toHaveText('mock-broken')
+  await expect(page.getByTestId('seat-model-label-blue')).toHaveAttribute('title', 'mock-slow')
+
+  // Changing the model again in Settings must update the seat immediately -
+  // selectedModels is the same reactive ref both surfaces read, no reload/reopen needed.
+  await page.getByTestId('settings-button').click()
+  await page.getByTestId('blue-model-select').selectOption('mock-fast')
+  await page.getByTestId('settings-close-button').click()
+  await expect(page.getByTestId('seat-model-label-blue')).toHaveText('mock-fast')
+
+  await page.getByTestId('past-topics-button').click()
+  page.once('dialog', (dialog) => dialog.accept())
+  await page
+    .getByTestId('meeting-list-item')
+    .filter({ hasText: topic })
+    .getByTestId('delete-meeting-button')
+    .click()
+})
