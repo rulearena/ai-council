@@ -1,7 +1,17 @@
 <script setup lang="ts">
 import { computed, inject } from 'vue'
-import { councilKey, councilRoles, roleClass, roleIcon, type CouncilRole } from '../composables/useCouncil'
-import type { SceneConfig, SeatRole } from '../scenes'
+import {
+  activeModeRoles,
+  councilKey,
+  councilRoles,
+  roleClass,
+  roleColor,
+  roleColorVars,
+  roleIcon,
+  type CouncilRole,
+} from '../composables/useCouncil'
+import RoleSilhouette from './RoleSilhouette.vue'
+import { resolveSceneSeats, type SceneConfig, type SeatRole, type SeatRosterEntry } from '../scenes'
 
 const props = defineProps<{ scene: SceneConfig }>()
 defineEmits<{ 'seat-click': [role: CouncilRole | 'Chairman'] }>()
@@ -9,14 +19,29 @@ defineEmits<{ 'seat-click': [role: CouncilRole | 'Chairman'] }>()
 const store = inject(councilKey)!
 const { selectedMeeting, pendingRoles, roleSeatStatus, chairmanSpeaking, chairmanEvents } = store
 
-const seatRoles: SeatRole[] = ['Chairman', 'Blue', 'Red', 'Judge']
+// Chairman first (a fixed seat, not a mode role) then every AI role in the active
+// mode's roster - replaces the old hardcoded ['Chairman', 'Blue', 'Red', 'Judge']
+// literal, so a mode with a different roster renders however many seats it has.
+const seatRoles = computed<SeatRole[]>(() => ['Chairman', ...councilRoles])
+
+const roster = computed<SeatRosterEntry[]>(() => [
+  { id: 'Chairman', kind: 'chair' },
+  ...activeModeRoles.map((role) => ({ id: role.id, kind: role.kind })),
+])
+
+// Resolves the scene's slot groups (adjudicator/chair/podium[]/ring[]) against the
+// current roster - e.g. Judge (kind: 'adjudicator') always lands on scene.seats.adjudicator
+// regardless of which scene is active, reproducing each scene's original hand-tuned
+// coordinates exactly (see scenes.ts's resolveSceneSeats + each SceneConfig's seats).
+const seatPositions = computed(() => resolveSceneSeats(props.scene, roster.value))
 
 function seatStyle(role: SeatRole) {
-  const seat = props.scene.seats[role]
+  const seat = seatPositions.value[role]
   return {
     left: `${seat.x}%`,
     top: `${seat.y}%`,
     '--seat-scale': String(seat.scale ?? 1),
+    ...(role === 'Chairman' ? {} : roleColorVars(role)),
   }
 }
 
@@ -103,11 +128,8 @@ const latestChairMessage = computed(() => chairmanEvents.value.at(-1)?.content ?
           </template>
 
           <span class="seat-avatar" :class="{ 'seat-avatar-fallback': hasPortrait(role) }">
-            <img v-if="role !== 'Chairman'" :src="roleIcon(role)" :alt="role" class="seat-avatar-img" />
-            <svg v-else viewBox="0 0 24 24" width="28" height="28" fill="currentColor" aria-hidden="true">
-              <circle cx="12" cy="8" r="4" />
-              <path d="M4 21c0-4.4 3.6-8 8-8s8 3.6 8 8" />
-            </svg>
+            <img v-if="role !== 'Chairman' && roleIcon(role)" :src="roleIcon(role)" :alt="role" class="seat-avatar-img" />
+            <RoleSilhouette v-else :color="role === 'Chairman' ? 'currentColor' : roleColor(role)" :size="28" />
           </span>
 
           <span

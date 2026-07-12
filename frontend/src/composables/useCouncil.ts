@@ -2,6 +2,7 @@ import { computed, onMounted, onUnmounted, ref, type InjectionKey } from 'vue'
 import roleBlueIcon from '../assets/roles/blue.png'
 import roleRedIcon from '../assets/roles/red.png'
 import roleJudgeIcon from '../assets/roles/judge.png'
+import { DEFAULT_MODE_ID, getModeById, type ModeRoleDefinition } from '../modes'
 import {
   addMeetingMessage,
   cancelMeeting,
@@ -27,7 +28,12 @@ import {
   type ModelConfig,
 } from '../api'
 
-export type CouncilRole = 'Blue' | 'Red' | 'Judge'
+// A role id as it appears in events.jsonl's `role` field. Used to be a hardcoded
+// 'Blue' | 'Red' | 'Judge' union; every meeting is still actually red-blue in slice A (no
+// backend mode_id yet - spec.md 16.7), but the type itself no longer bakes that in, so
+// seat rendering/pendingRoles/drawers/event bucketing generalize to any mode's roster
+// once slice B/C add real participants.
+export type CouncilRole = string
 export type SeatOccupant = CouncilRole | 'Chairman'
 export type SequencePreset = {
   id: string
@@ -41,6 +47,20 @@ export type ModelTestView = {
 }
 export type RoleSeatStatus = 'waiting' | 'thinking' | 'completed' | 'failed'
 
+// The only mode slice A can actually create meetings for (spec.md 16.7). Every meeting
+// today is implicitly this mode - there's no per-meeting mode_id from the backend yet -
+// so this is the single source of truth for "which roles exist" until slice B ships
+// GET /modes and a real participants list per meeting. Exported so the step-progress
+// indicator (ActionBar.vue) can read its `steps`/`category` for display purposes.
+export const activeMode = getModeById(DEFAULT_MODE_ID)!
+
+// The active mode's roster (id + kind), for anything that needs to know each role's
+// *kind* rather than just its id - currently just CouncilStage.vue, to resolve which
+// scene slot (adjudicator/podium/ring) each role occupies (see scenes.ts's
+// resolveSceneSeats). Kept as its own export rather than making callers reach into
+// modes.ts directly, so there's one place that says "this is the mode running right now".
+export const activeModeRoles: ModeRoleDefinition[] = activeMode.roles
+
 export const sequencePresets: SequencePreset[] = [
   { id: 'red-blue-judge', label: 'Red -> Blue -> Judge', roles: ['Red', 'Blue', 'Judge'] },
   { id: 'blue-red-judge', label: 'Blue -> Red -> Judge', roles: ['Blue', 'Red', 'Judge'] },
@@ -48,10 +68,17 @@ export const sequencePresets: SequencePreset[] = [
   { id: 'judge-only', label: 'Judge only', roles: ['Judge'] },
 ]
 
-export const councilRoles: CouncilRole[] = ['Blue', 'Red', 'Judge']
+// Every AI role id in the active mode's roster, in display order - replaces the old
+// hardcoded `['Blue', 'Red', 'Judge']` literal with the same three ids, sourced from
+// modes.ts so there's exactly one place that spells out red-blue's roster.
+export const councilRoles: CouncilRole[] = activeMode.roles.map((role) => role.id)
 
 // Backend fixed round flow (backend/ai_council/meetings/runner.py STEPS): retrying a
-// failed step re-runs it plus every step after it, in the same synchronous call.
+// failed step re-runs it plus every step after it, in the same synchronous call. This
+// stays hand-written (not derived from modes.ts's steps[]) on purpose: the backend is
+// unchanged in slice A and only ever emits these four red-blue base_step_ids, so
+// deriving this from catalog data would add a mapping layer with no runtime benefit and
+// a real risk of silently drifting from what the backend actually does.
 const FIXED_ROUND_STEP_ROLES: Record<string, CouncilRole[]> = {
   'blue-propose': ['Blue', 'Red', 'Blue', 'Judge'],
   'red-critique': ['Red', 'Blue', 'Judge'],
@@ -65,28 +92,74 @@ const FIXED_ROUND_STEP_ROLES: Record<string, CouncilRole[]> = {
 // only a genuine blue-propose/red-critique/blue-revise/judge-decide completion does.
 const FIXED_ROUND_BASE_STEPS = ['blue-propose', 'red-critique', 'blue-revise', 'judge-decide'] as const
 
-const ROLE_ICONS: Partial<Record<string, string>> = {
-  Blue: roleBlueIcon,
-  Red: roleRedIcon,
-  Judge: roleJudgeIcon,
+// Maps modes.ts's abstract `portrait` key (the small-icon identity, not the scene's
+// full-body art) to the actual asset. Only three exist by hand today; any role without a
+// matching key (every non-red-blue mode's roles, by design - see modes.ts) falls back to
+// RoleSilhouette instead, tinted with that role's catalog color.
+const ROLE_ICON_ASSETS: Partial<Record<string, string>> = {
+  blue: roleBlueIcon,
+  red: roleRedIcon,
+  judge: roleJudgeIcon,
 }
 
-const ROLE_CLASSES: Partial<Record<string, string>> = {
-  Blue: 'role-blue',
-  Red: 'role-red',
-  Judge: 'role-judge',
+const NEUTRAL_ROLE_COLOR = '#9aa5b5'
+
+function activeRoleDefinition(role: string): ModeRoleDefinition | undefined {
+  return activeMode.roles.find((candidate) => candidate.id === role)
 }
 
 export function isCouncilRole(role: string): role is CouncilRole {
-  return role === 'Blue' || role === 'Red' || role === 'Judge'
+  return councilRoles.includes(role)
 }
 
+// undefined => no hand-drawn icon asset for this role; callers render RoleSilhouette
+// (tinted via roleColor) instead. Never true for 'Human'/'Chairman', which aren't
+// members of any mode's roster and always go through their own dedicated UI branch.
 export function roleIcon(role: string): string | undefined {
-  return ROLE_ICONS[role]
+  const portraitKey = activeRoleDefinition(role)?.portrait
+  return portraitKey ? ROLE_ICON_ASSETS[portraitKey] : undefined
 }
 
+// Generic 'role-<id>' class, e.g. 'role-blue' - still literal-matches the CSS/e2e
+// expectations for today's three roles, but now derived from the role id itself rather
+// than an enumerated map, so it generalizes to any future role without edits here.
+// Empty string (no class) for anything outside the active mode's roster (e.g. 'Human'),
+// matching the old ROLE_CLASSES map's behavior of leaving those un-styled.
 export function roleClass(role: string): string {
-  return ROLE_CLASSES[role] ?? ''
+  return isCouncilRole(role) ? `role-${role.toLowerCase()}` : ''
+}
+
+// The role's catalog color (modes.ts), or a neutral grey for anything outside the active
+// mode's roster - used as the fallback so a stray role id never renders as pure black.
+export function roleColor(role: string): string {
+  return activeRoleDefinition(role)?.color ?? NEUTRAL_ROLE_COLOR
+}
+
+function hexToRgbTriplet(hex: string): string {
+  const clean = hex.replace('#', '')
+  const r = parseInt(clean.slice(0, 2), 16)
+  const g = parseInt(clean.slice(2, 4), 16)
+  const b = parseInt(clean.slice(4, 6), 16)
+  return `${r}, ${g}, ${b}`
+}
+
+// CSS custom properties consumed by styles.css's seat/badge/card rules (--role-color,
+// --role-tint, --role-glow, --role-tint-strong) - computed from the catalog hex exactly
+// the way the old hardcoded --color-role-{blue,red,judge}-{glow,tint} constants were
+// (same alpha steps), so swapping a static class-keyed rule for an inline-bound one
+// reproduces identical colors for Blue/Red/Judge. Returns {} for roles outside the active
+// mode's roster (e.g. 'Human'/'Chairman') so those elements keep using the CSS rule's own
+// fallback instead of being forced into the neutral color.
+export function roleColorVars(role: string): Record<string, string> {
+  if (!isCouncilRole(role)) return {}
+  const color = roleColor(role)
+  const rgb = hexToRgbTriplet(color)
+  return {
+    '--role-color': color,
+    '--role-tint': `rgba(${rgb}, 0.1)`,
+    '--role-glow': `rgba(${rgb}, 0.35)`,
+    '--role-tint-strong': `rgba(${rgb}, 0.55)`,
+  }
 }
 
 export function formatDateTime(value: string | undefined): string {
@@ -102,12 +175,17 @@ export function useCouncil() {
   const selectedMeeting = ref<Meeting | null>(null)
   const selectedEvent = ref<MeetingEvent | null>(null)
   const topic = ref('先做後端核心流程')
-  const selectedModels = ref({ Blue: '', Red: '', Judge: '' })
-  const modelTestResults = ref<Record<CouncilRole, ModelTestView>>({
-    Blue: { status: 'unknown', testedAt: '', error: '' },
-    Red: { status: 'unknown', testedAt: '', error: '' },
-    Judge: { status: 'unknown', testedAt: '', error: '' },
-  })
+  // Built from councilRoles (not a hardcoded {Blue,Red,Judge} literal) so the model-slot
+  // set generalizes to whatever the active mode's roster is - still exactly those three
+  // keys today since councilRoles itself is still just red-blue's roster (see modes.ts).
+  const selectedModels = ref<Record<CouncilRole, string>>(
+    Object.fromEntries(councilRoles.map((role) => [role, ''])),
+  )
+  const modelTestResults = ref<Record<CouncilRole, ModelTestView>>(
+    Object.fromEntries(
+      councilRoles.map((role) => [role, { status: 'unknown', testedAt: '', error: '' } satisfies ModelTestView]),
+    ),
+  )
   const chairMessage = ref('')
   const selectedSequencePresetId = ref(sequencePresets[0].id)
   const meetingSearch = ref('')
@@ -184,7 +262,9 @@ export function useCouncil() {
     events.value.filter((event) => event.parsed_output),
   )
   const latestRoleEvent = computed<Record<CouncilRole, MeetingEvent | null>>(() => {
-    const result: Record<CouncilRole, MeetingEvent | null> = { Blue: null, Red: null, Judge: null }
+    const result: Record<CouncilRole, MeetingEvent | null> = Object.fromEntries(
+      councilRoles.map((role) => [role, null]),
+    )
     for (const event of events.value) {
       if (isCouncilRole(event.role) && (event.status === 'completed' || event.status === 'failed')) {
         result[event.role] = event
@@ -217,9 +297,7 @@ export function useCouncil() {
       selectedMeeting.value &&
       !isTerminalMeeting.value &&
       !isMeetingRunning.value &&
-      selectedModels.value.Blue &&
-      selectedModels.value.Red &&
-      selectedModels.value.Judge,
+      councilRoles.every((role) => selectedModels.value[role]),
   )
   // The role whose latest event is a failure, if any. Both /start and /sequences are a
   // known silent no-op once a step has failed (confirmed against the real backend: it
@@ -232,6 +310,31 @@ export function useCouncil() {
     () => councilRoles.find((role) => roleSeatStatus(role) === 'failed') ?? null,
   )
 
+  // Relay step-progress display (spec.md 16.6: "第 2 步／共 4 步：紅軍質詢中"), derived
+  // purely from mode.steps + pendingRoles - display-only, and deliberately does not
+  // drive any runtime behavior (see the FIXED_ROUND_STEP_ROLES comment above for why the
+  // real queue logic stays independent of this catalog). pendingRoles reflects whichever
+  // action queued it (a fresh round, a retried tail, a directed response, a sequence
+  // preset) - this only renders when that queue happens to line up with a *suffix* of
+  // the mode's full step list. That's always true for a fresh round ("開始審議"/"開始新回合")
+  // and for any retry (retrying re-queues the failed step through the end - see
+  // retrySelectedStep). It also happens to be true for some directed responses/sequence
+  // presets whose roles coincide with a real tail (e.g. a lone Judge directed response,
+  // or the "red-blue-judge" preset) - harmless, since the label is accurate in those
+  // cases too (that role genuinely is thinking at that point in the flow); a preset like
+  // "red-blue" that doesn't match any tail correctly shows nothing instead.
+  const currentStepProgress = computed<{ index: number; total: number; label: string } | null>(() => {
+    const steps = activeMode.steps
+    const pending = pendingRoles.value
+    if (activeMode.category !== 'relay' || !steps || !pending.length || pending.length > steps.length) {
+      return null
+    }
+    const startIndex = steps.length - pending.length
+    const tailMatches = steps.slice(startIndex).every((step, offset) => step.role === pending[offset])
+    if (!tailMatches) return null
+    return { index: startIndex + 1, total: steps.length, label: steps[startIndex].label }
+  })
+
   onMounted(async () => {
     await runAction(refreshAll)
   })
@@ -243,11 +346,9 @@ export function useCouncil() {
     models.value = await getModels()
     meetings.value = await getMeetings()
     const firstModel = models.value[0]?.id ?? ''
-    selectedModels.value = {
-      Blue: selectedModels.value.Blue || firstModel,
-      Red: selectedModels.value.Red || firstModel,
-      Judge: selectedModels.value.Judge || firstModel,
-    }
+    selectedModels.value = Object.fromEntries(
+      councilRoles.map((role) => [role, selectedModels.value[role] || firstModel]),
+    )
     if (selectedMeeting.value) {
       await openMeeting(selectedMeeting.value.meeting_id)
     }
@@ -622,6 +723,7 @@ export function useCouncil() {
     canRun,
     isFixedRoundComplete,
     failedRole,
+    currentStepProgress,
     // actions
     refreshAll,
     createNewMeeting,

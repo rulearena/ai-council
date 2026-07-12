@@ -6,6 +6,13 @@
 // the registry's whole point (a new scene needing only a new entry here) plus the
 // aspectRatio/topicCard escape hatches for scenes whose composition doesn't match the
 // meeting-room scene's assumptions (4:3 art, empty tabletop dead center).
+//
+// Mode-system slice A (spec.md 16.6) replaces the fixed Chairman/Blue/Red/Judge seat keys
+// with slot *groups* - adjudicator/chair/podium[]/ring[] - so a scene describes "where
+// this kind of seat goes" rather than "where this specific role goes". Every existing
+// scene's pixel coordinates are unchanged; only the shape holding them moved. See
+// resolveSceneSeats below for how a roster (Chairman + the active mode's roles) gets
+// mapped onto a scene's slots.
 
 import { computed, ref } from 'vue'
 import meetingRoomBackground from './assets/scenes/meeting-room.webp'
@@ -14,8 +21,11 @@ import chairmanPortrait from './assets/scenes/chairman.png'
 import bluePortrait from './assets/scenes/blue.png'
 import redPortrait from './assets/scenes/red.png'
 import judgePortrait from './assets/scenes/judge.png'
+import { ringSeatLayout, type RoleKind } from './modes'
 
-export type SeatRole = 'Chairman' | 'Blue' | 'Red' | 'Judge'
+// A role id ('Blue', 'Red', ...) or the fixed human chair seat. Generalized from the old
+// 'Chairman' | 'Blue' | 'Red' | 'Judge' union - any mode's role ids are valid here now.
+export type SeatRole = string
 
 // Percentage coordinates (0-100) within the stage container, so the layout survives a
 // background-image swap and different aspect ratios instead of being pinned to pixels.
@@ -30,17 +40,33 @@ export type SeatConfig = {
   scale?: number
 }
 
+// Slot groups (spec.md 16.6): `adjudicator` holds the relay's decision-maker (or a
+// parallel mode's synthesizer - both are "the one seat that isn't a peer member"),
+// `chair` is the always-present human seat (not a mode role at all), `podium[]` holds a
+// relay's 2 peer members side-by-side, and `ring[]` holds however many concurrent
+// members a parallel mode's fanout spins up. A scene only needs to hand-author the
+// slots it actually uses; resolveSceneSeats fills in `ring[]` procedurally via
+// ringSeatLayout when a scene leaves it empty (no shipped scene needs a hand-tuned ring
+// yet - no parallel mode is buildable in slice A).
+export type SeatSlots = {
+  adjudicator: SeatConfig
+  chair: SeatConfig
+  podium: SeatConfig[]
+  ring: SeatConfig[]
+}
+
 export type SceneConfig = {
   id: string
   // Display name for the scene picker (SettingsModal).
   label: string
   // Path to a background image, or null to render the built-in CSS chamber placeholder.
   background: string | null
-  seats: Record<SeatRole, SeatConfig>
-  // Per-scene full-body portraits. A role missing from this map (or an entirely absent
-  // `portraits` field) falls back to the existing small circular avatar - using
-  // assets/roles/*.png for Blue/Red/Judge, or the generic silhouette for Chairman.
-  portraits?: Partial<Record<SeatRole, string>>
+  seats: SeatSlots
+  // Per-scene full-body portraits, keyed by role id (or 'Chairman') - independent of
+  // which slot a role resolves to, since portrait identity and seat position are
+  // orthogonal. A role missing from this map (or an entirely absent `portraits` field)
+  // falls back to the existing small circular avatar/silhouette.
+  portraits?: Partial<Record<string, string>>
   // Background image's own width/height ratio. Defaults to 4/3 (see CouncilStage.vue's
   // --scene-aspect-ratio custom property) - only needs setting when a scene's source art
   // isn't 4:3, so `background-size: cover` doesn't crop content that matters (e.g. the
@@ -63,10 +89,10 @@ export const defaultScene: SceneConfig = {
   label: '極簡預設（CSS）',
   background: null,
   seats: {
-    Chairman: { x: 50, y: 16 },
-    Blue: { x: 20, y: 58 },
-    Red: { x: 80, y: 58 },
-    Judge: { x: 50, y: 86 },
+    chair: { x: 50, y: 16 },
+    podium: [{ x: 20, y: 58 }, { x: 80, y: 58 }],
+    adjudicator: { x: 50, y: 86 },
+    ring: [],
   },
 }
 
@@ -75,10 +101,10 @@ export const meetingRoomScene: SceneConfig = {
   label: '議事廳',
   background: meetingRoomBackground,
   seats: {
-    Chairman: { x: 50, y: 31.5, scale: 0.85 },
-    Blue: { x: 20, y: 66, scale: 1 },
-    Red: { x: 80, y: 66, scale: 1 },
-    Judge: { x: 50, y: 93, scale: 1.05 },
+    chair: { x: 50, y: 31.5, scale: 0.85 },
+    podium: [{ x: 20, y: 66, scale: 1 }, { x: 80, y: 66, scale: 1 }],
+    adjudicator: { x: 50, y: 93, scale: 1.05 },
+    ring: [],
   },
   portraits: {
     Chairman: chairmanPortrait,
@@ -99,12 +125,12 @@ export const courtroomScene: SceneConfig = {
   seats: {
     // The judge's bench sits high and central in the art - the judge stands at/behind
     // it rather than at table height like the other three roles.
-    Judge: { x: 50, y: 44, scale: 0.85 },
-    Blue: { x: 21.6, y: 62, scale: 0.9 },
-    Red: { x: 78.4, y: 62, scale: 0.9 },
+    adjudicator: { x: 50, y: 44, scale: 0.85 },
+    podium: [{ x: 21.6, y: 62, scale: 0.9 }, { x: 78.4, y: 62, scale: 0.9 }],
     // The chairman stands in the center aisle at the bar (the low railing separating
     // the well from the gallery), not at the head of the room like the meeting-room scene.
-    Chairman: { x: 50, y: 80, scale: 0.95 },
+    chair: { x: 50, y: 80, scale: 0.95 },
+    ring: [],
   },
   portraits: {
     Chairman: chairmanPortrait,
@@ -127,6 +153,53 @@ export const courtroomScene: SceneConfig = {
 // meetingRoomScene stays first/default since it's the shipped default look; defaultScene
 // (the CSS placeholder) is kept as the documented fallback example.
 export const scenes: SceneConfig[] = [meetingRoomScene, courtroomScene, defaultScene]
+
+// A roster entry the resolver needs to know about: an id (the string that will land in
+// events.jsonl, or 'Chairman' for the fixed human seat) plus which slot family it
+// belongs in. Callers build this from the active mode's roles (see useCouncil.ts's
+// activeModeRoles) plus the always-present Chairman.
+export type SeatRosterEntry = { id: string; kind: RoleKind | 'chair' }
+
+// Maps a scene's slot groups onto a concrete roster, producing one SeatConfig per role
+// id (plus 'Chairman'). `member` roles fill `podium[]` in roster order (relay modes:
+// exactly the 2 peers either side of the table); `adjudicator` and `synthesizer` roles
+// both anchor to the single `adjudicator` slot (a parallel mode's synthesizer plays the
+// same "one seat that isn't a peer" part a relay's adjudicator does); any role that
+// doesn't fit those (e.g. more members than podium has room for, or an explicit `ring`
+// kind once slice C adds it) falls back to `ring[]`, procedurally generated via
+// ringSeatLayout when the scene didn't hand-author one.
+export function resolveSceneSeats(scene: SceneConfig, roster: SeatRosterEntry[]): Record<string, SeatConfig> {
+  const result: Record<string, SeatConfig> = { Chairman: scene.seats.chair }
+  const members = roster.filter((entry) => entry.kind === 'member')
+  const authority = roster.filter((entry) => entry.kind === 'adjudicator' || entry.kind === 'synthesizer')
+  const overflow: SeatRosterEntry[] = []
+
+  authority.forEach((entry, index) => {
+    if (index === 0) {
+      result[entry.id] = scene.seats.adjudicator
+    } else {
+      overflow.push(entry)
+    }
+  })
+
+  members.forEach((entry, index) => {
+    const seat = scene.seats.podium[index]
+    if (seat) {
+      result[entry.id] = seat
+    } else {
+      overflow.push(entry)
+    }
+  })
+
+  if (overflow.length) {
+    const ring = scene.seats.ring.length ? scene.seats.ring : ringSeatLayout(overflow.length)
+    overflow.forEach((entry, index) => {
+      result[entry.id] = ring[index % ring.length]
+    })
+  }
+
+  return result
+}
 
 const SCENE_STORAGE_KEY = 'ai-council-scene'
 

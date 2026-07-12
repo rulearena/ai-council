@@ -15,6 +15,7 @@ const {
   operationStatus,
   showContinueHint,
   failedRole,
+  currentStepProgress,
   sendChairMessage,
   startOrContinueMeeting,
   startSelectedMeeting,
@@ -43,6 +44,10 @@ const failedStepTitle = computed(() =>
       <span v-if="selectedMeeting?.last_step_id">最後步驟：{{ selectedMeeting.last_step_id }}</span>
       <span v-if="selectedMeeting">更新：{{ formatDateTime(selectedMeeting.updated_at) }}</span>
     </div>
+
+    <p v-if="currentStepProgress" class="step-progress-indicator" data-testid="step-progress-indicator">
+      第 {{ currentStepProgress.index }} 步／共 {{ currentStepProgress.total }} 步：{{ currentStepProgress.label }}中
+    </p>
 
     <p v-if="failedRole && !isTerminalMeeting" class="failed-step-hint" data-testid="failed-step-hint">
       <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">

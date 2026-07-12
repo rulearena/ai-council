@@ -116,7 +116,7 @@ export async function getMeeting(meetingId: string): Promise<Meeting> {
 
 export async function startMeeting(
   meetingId: string,
-  models: Record<'Blue' | 'Red' | 'Judge', string>,
+  models: Record<string, string>,
 ): Promise<void> {
   await postJson(`/meetings/${meetingId}/start`, { models })
 }
@@ -159,16 +159,16 @@ export async function correctMeetingMessage(
 
 export async function requestRoleResponse(
   meetingId: string,
-  role: 'Blue' | 'Red' | 'Judge',
-  models: Record<'Blue' | 'Red' | 'Judge', string>,
+  role: string,
+  models: Record<string, string>,
 ): Promise<void> {
   await postJson(`/meetings/${meetingId}/roles/${role}/respond`, { models })
 }
 
 export async function requestRoleSequence(
   meetingId: string,
-  roles: Array<'Blue' | 'Red' | 'Judge'>,
-  models: Record<'Blue' | 'Red' | 'Judge', string>,
+  roles: string[],
+  models: Record<string, string>,
 ): Promise<void> {
   await postJson(`/meetings/${meetingId}/sequences`, { roles, models })
 }
@@ -176,7 +176,7 @@ export async function requestRoleSequence(
 export async function retryStep(
   meetingId: string,
   stepId: string,
-  models: Record<'Blue' | 'Red' | 'Judge', string>,
+  models: Record<string, string>,
 ): Promise<void> {
   await postJson(`/meetings/${meetingId}/steps/${stepId}/retry`, { models })
 }

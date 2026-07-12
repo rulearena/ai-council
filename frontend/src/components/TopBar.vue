@@ -10,6 +10,7 @@ defineEmits<{
   'open-past-topics': []
   'open-new-case': []
   'open-records': []
+  'open-mode-help': []
 }>()
 </script>
 
@@ -38,6 +39,15 @@ defineEmits<{
       </template>
     </div>
     <div class="top-bar-right">
+      <button
+        type="button"
+        class="btn btn-ghost btn-sm btn-icon mode-help-button"
+        data-testid="mode-help-button"
+        aria-label="會議模式說明"
+        @click="$emit('open-mode-help')"
+      >
+        ?
+      </button>
       <button
         type="button"
         class="btn btn-secondary btn-sm"

@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import { inject, ref } from 'vue'
-import { councilKey, formatDateTime, roleClass, roleIcon } from '../composables/useCouncil'
+import { councilKey, formatDateTime, roleClass, roleColor, roleColorVars, roleIcon } from '../composables/useCouncil'
 import Drawer from './Drawer.vue'
+import RoleSilhouette from './RoleSilhouette.vue'
 import { transcriptDownloadUrl } from '../api'
 
 defineProps<{ show: boolean }>()
@@ -72,10 +73,12 @@ const activeTab = ref<RecordsTab>('timeline')
         :key="event.event_id"
         class="timeline-row"
         :class="roleClass(event.role)"
+        :style="roleColorVars(event.role)"
       >
         <button type="button" class="timeline-main" @click="selectedEvent = event">
-          <span class="role-badge" :class="roleClass(event.role)" data-testid="role-badge">
+          <span class="role-badge" :class="roleClass(event.role)" :style="roleColorVars(event.role)" data-testid="role-badge">
             <img v-if="roleIcon(event.role)" :src="roleIcon(event.role)" class="role-icon" :alt="event.role" />
+            <RoleSilhouette v-else-if="roleClass(event.role)" :color="roleColor(event.role)" :size="16" />
             {{ event.role }}
           </span>
           <strong>{{ event.step_id }}</strong>

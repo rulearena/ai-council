@@ -19,17 +19,14 @@
      WCAG AA 4.5:1 for normal text; bumped one notch lighter so muted copy stays readable. */
   --color-text-muted: #7e88a0;
 
+  /* Role colors themselves now live in modes.ts (the active mode's catalog data) and
+     reach seats/badges/cards as inline --role-color/--role-tint/etc custom properties
+     (see useCouncil.ts's roleColorVars) instead of enumerated per-role CSS classes -
+     any role a mode defines gets colored without a matching rule needing to exist for
+     it. --color-role-blue/-blue-tint survive here only because .meeting-item.active
+     below reuses "blue" as a plain brand accent, unrelated to role rendering. */
   --color-role-blue: #4d8dff;
-  --color-role-blue-glow: rgba(77, 141, 255, 0.35);
   --color-role-blue-tint: rgba(77, 141, 255, 0.1);
-
-  --color-role-red: #ff6b5e;
-  --color-role-red-glow: rgba(255, 107, 94, 0.35);
-  --color-role-red-tint: rgba(255, 107, 94, 0.1);
-
-  --color-role-judge: #e8b44c;
-  --color-role-judge-glow: rgba(232, 180, 76, 0.35);
-  --color-role-judge-tint: rgba(232, 180, 76, 0.1);
 
   --color-running: #4d8dff;
   --color-running-tint: rgba(77, 141, 255, 0.14);
@@ -475,33 +472,18 @@ h2 {
   display: none;
 }
 
-.seat.role-blue .seat-avatar {
-  border-color: var(--color-role-blue);
-}
-
-.seat.role-red .seat-avatar {
-  border-color: var(--color-role-red);
-}
-
-.seat.role-judge .seat-avatar {
-  border-color: var(--color-role-judge);
+/* Role color comes from CouncilStage.vue's inline --role-color (computed from the
+   active mode's catalog color, see useCouncil.ts's roleColorVars) rather than an
+   enumerated .role-blue/.role-red/.role-judge selector per role - any role the active
+   mode defines gets a colored border here without a matching CSS rule needing to exist
+   for it. Chairman is excluded: it isn't a mode role and keeps its own neutral tone. */
+.seat:not(.seat-chairman) .seat-avatar {
+  border-color: var(--role-color, var(--color-border-strong));
 }
 
 .seat.seat-chairman .seat-avatar {
   border-color: var(--color-text-secondary);
   color: var(--color-text-secondary);
-}
-
-.seat.role-blue.seat-status-thinking {
-  --role-glow: var(--color-role-blue-glow);
-}
-
-.seat.role-red.seat-status-thinking {
-  --role-glow: var(--color-role-red-glow);
-}
-
-.seat.role-judge.seat-status-thinking {
-  --role-glow: var(--color-role-judge-glow);
 }
 
 .seat-status-thinking .seat-avatar {
@@ -538,9 +520,7 @@ h2 {
   filter: drop-shadow(0 6px 8px rgba(0, 0, 0, 0.45)) drop-shadow(0 0 10px var(--color-failed));
 }
 
-.seat.role-blue.seat-status-thinking .seat-portrait,
-.seat.role-red.seat-status-thinking .seat-portrait,
-.seat.role-judge.seat-status-thinking .seat-portrait {
+.seat.seat-status-thinking:not(.seat-chairman) .seat-portrait {
   animation: portrait-glow-breathe 2.5s ease-in-out infinite;
 }
 
@@ -562,18 +542,9 @@ h2 {
   z-index: 0;
 }
 
-.seat.role-blue .seat-ground-glow {
-  --role-tint-strong: rgba(77, 141, 255, 0.55);
-}
-
-.seat.role-red .seat-ground-glow {
-  --role-tint-strong: rgba(255, 107, 94, 0.55);
-}
-
-.seat.role-judge .seat-ground-glow {
-  --role-tint-strong: rgba(232, 180, 76, 0.55);
-}
-
+/* Role-colored tint flows in from --role-tint-strong, inherited from .seat's own inline
+   style (see the border-color rule above) - this rule's fallback only kicks in for
+   seats outside the active mode's roster. */
 .seat.seat-chairman .seat-ground-glow {
   --role-tint-strong: rgba(255, 255, 255, 0.45);
 }
@@ -834,30 +805,19 @@ h2 {
   margin-bottom: 16px;
 }
 
+/* Role tint via --role-color/--role-tint (see useCouncil.ts's roleColorVars, bound
+   inline per role in SettingsModal.vue) rather than an enumerated .role-blue/-red/-judge
+   selector - any role the active mode defines gets its own left-border/background
+   without a matching rule needing to exist for it here. */
 .model-slot {
   display: grid;
   gap: 6px;
   padding: 10px 12px;
-  border-left: 3px solid var(--color-border-strong);
+  border-left: 3px solid var(--role-color, var(--color-border-strong));
   border-radius: var(--radius-sm);
-  background: var(--color-surface-muted);
+  background: var(--role-tint, var(--color-surface-muted));
   color: var(--color-text-secondary);
   font-size: 13px;
-}
-
-.model-slot.role-blue {
-  border-left-color: var(--color-role-blue);
-  background: var(--color-role-blue-tint);
-}
-
-.model-slot.role-red {
-  border-left-color: var(--color-role-red);
-  background: var(--color-role-red-tint);
-}
-
-.model-slot.role-judge {
-  border-left-color: var(--color-role-judge);
-  background: var(--color-role-judge-tint);
 }
 
 .model-control {
@@ -1126,22 +1086,10 @@ h2 {
 
 .role-output-card {
   border: 1px solid var(--color-border);
-  border-left: 3px solid var(--color-border-strong);
+  border-left: 3px solid var(--role-color, var(--color-border-strong));
   border-radius: var(--radius-sm);
   padding: 12px;
   background: var(--color-surface-muted);
-}
-
-.role-output-card.role-blue {
-  border-left-color: var(--color-role-blue);
-}
-
-.role-output-card.role-red {
-  border-left-color: var(--color-role-red);
-}
-
-.role-output-card.role-judge {
-  border-left-color: var(--color-role-judge);
 }
 
 .role-output-card header {
@@ -1272,20 +1220,8 @@ h2 {
   gap: 10px;
   width: 100%;
   margin-top: 8px;
-  border-left: 3px solid var(--color-border-strong);
+  border-left: 3px solid var(--role-color, var(--color-border-strong));
   border-radius: var(--radius-sm);
-}
-
-.timeline-row.role-blue {
-  border-left-color: var(--color-role-blue);
-}
-
-.timeline-row.role-red {
-  border-left-color: var(--color-role-red);
-}
-
-.timeline-row.role-judge {
-  border-left-color: var(--color-role-judge);
 }
 
 /* flex-wrap (not a fixed-column grid) so this reflows correctly inside both the wide
@@ -1395,6 +1331,7 @@ pre {
   gap: 6px;
   font-family: var(--font-display);
   font-weight: 600;
+  color: var(--role-color, var(--color-text));
 }
 
 .role-icon {
@@ -1402,18 +1339,6 @@ pre {
   height: 20px;
   object-fit: contain;
   flex-shrink: 0;
-}
-
-.role-blue {
-  color: var(--color-role-blue);
-}
-
-.role-red {
-  color: var(--color-role-red);
-}
-
-.role-judge {
-  color: var(--color-role-judge);
 }
 
 .tag-badge {
@@ -1612,6 +1537,11 @@ pre {
   .drawer {
     animation: none;
   }
+
+  .sop-expand-enter-active,
+  .sop-expand-leave-active {
+    transition: none;
+  }
 }
 
 @media (max-width: 900px) {
@@ -1715,5 +1645,253 @@ pre {
      up bleeding off the left edge of the viewport instead of sitting under the button. */
   .advanced-options {
     margin-left: auto;
+  }
+}
+
+/* ---------- Step progress indicator (ActionBar) ---------- */
+
+.step-progress-indicator {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--color-text-secondary);
+}
+
+/* ---------- Mode help button (TopBar) ---------- */
+
+.mode-help-button {
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  padding: 0;
+  font-family: var(--font-display);
+  font-weight: 700;
+}
+
+/* ---------- Mode picker (NewCaseModal step 1) + mode help drawer ---------- */
+
+.mode-picker-hint,
+.mode-help-intro {
+  margin: 0 0 14px;
+  color: var(--color-text-secondary);
+  font-size: 13px;
+}
+
+.mode-card-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.mode-card {
+  display: grid;
+  gap: 8px;
+  align-content: start;
+  padding: 14px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  background: var(--color-surface-muted);
+  transition: border-color var(--transition-fast), transform var(--transition-fast), box-shadow var(--transition-fast);
+}
+
+.mode-card:hover:not(.mode-card-unavailable) {
+  border-color: var(--color-border-strong);
+  transform: translateY(-2px);
+  box-shadow: var(--shadow-sm);
+}
+
+.mode-card-unavailable {
+  opacity: 0.72;
+}
+
+.mode-card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.mode-card-header h3 {
+  margin: 0;
+  font-family: var(--font-display);
+  font-size: 15px;
+  color: var(--color-text);
+}
+
+.mode-category-badge {
+  flex-shrink: 0;
+  padding: 2px 9px;
+  border-radius: var(--radius-pill);
+  font-size: 11px;
+  font-weight: 600;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  color: var(--color-text-secondary);
+}
+
+.mode-category-badge[data-category="relay"] {
+  color: var(--color-role-blue);
+  border-color: var(--color-role-blue);
+}
+
+.mode-category-badge[data-category="parallel"] {
+  color: #8b6dd9;
+  border-color: #8b6dd9;
+}
+
+.mode-tagline {
+  margin: 0;
+  font-size: 13px;
+  color: var(--color-text);
+  line-height: 1.4;
+}
+
+.mode-when-to-use {
+  margin: 0;
+  font-size: 12px;
+  color: var(--color-text-muted);
+  line-height: 1.4;
+}
+
+.mode-sop-toggle {
+  justify-self: start;
+  padding-left: 0;
+  padding-right: 0;
+}
+
+/* Opacity + slight slide, not a height animation - SOP length varies per mode and a
+   measured-height transition needs JS bookkeeping this doesn't warrant. 180ms sits in
+   the requested 150-200ms window; prefers-reduced-motion strips it entirely above. */
+.sop-expand-enter-active,
+.sop-expand-leave-active {
+  transition: opacity 180ms ease, transform 180ms ease;
+}
+
+.sop-expand-enter-from,
+.sop-expand-leave-to {
+  opacity: 0;
+  transform: translateY(-4px);
+}
+
+.mode-sop-panel {
+  display: grid;
+  gap: 10px;
+}
+
+.mode-sop-list {
+  margin: 0;
+  padding-left: 18px;
+  display: grid;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--color-text-secondary);
+  line-height: 1.5;
+}
+
+.mode-ring-preview {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border: 1px dashed var(--color-border);
+  border-radius: var(--radius-sm);
+}
+
+.ring-preview-svg {
+  width: 56px;
+  height: 40px;
+  flex-shrink: 0;
+}
+
+.ring-preview-seat {
+  fill: #8b6dd9;
+}
+
+.ring-preview-caption {
+  font-size: 11px;
+  color: var(--color-text-muted);
+}
+
+.mode-card-cta {
+  width: 100%;
+  margin-top: 4px;
+}
+
+/* Press feedback for the moment of choosing a mode - the actual "you picked this"
+   confirmation is advancing to step 2 with the chosen mode's name/tagline shown there,
+   but a card should still visibly react to the click itself. */
+.mode-card-cta:active:not(:disabled) {
+  transform: scale(0.97);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .mode-card-cta:active:not(:disabled) {
+    transform: none;
+  }
+}
+
+/* ---------- Participant setup (NewCaseModal step 2) ---------- */
+
+.back-to-mode-picker-button {
+  justify-self: start;
+  padding-left: 0;
+}
+
+.participant-setup {
+  display: grid;
+  gap: 12px;
+}
+
+.participant-setup-title {
+  margin: 0;
+  font-family: var(--font-display);
+  font-size: 16px;
+  color: var(--color-text);
+}
+
+.participant-setup-tagline {
+  margin: -8px 0 0;
+  font-size: 13px;
+  color: var(--color-text-secondary);
+}
+
+.topic-input-row {
+  display: grid;
+  gap: 6px;
+  font-size: 13px;
+  color: var(--color-text-secondary);
+}
+
+.participant-preview {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.participant-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 10px;
+  border-radius: var(--radius-pill);
+  border: 1px solid var(--role-color, var(--color-border));
+  color: var(--role-color, var(--color-text));
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.participant-setup-note {
+  margin: 0;
+  font-size: 12px;
+  color: var(--color-text-muted);
+}
+
+.create-meeting-cta {
+  width: 100%;
+}
+
+@media (max-width: 640px) {
+  .mode-card-grid {
+    grid-template-columns: 1fr;
   }
 }

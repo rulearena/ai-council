@@ -1,7 +1,17 @@
 <script setup lang="ts">
 import { computed, inject } from 'vue'
-import { councilKey, formatDateTime, isCouncilRole, roleClass, roleIcon, type CouncilRole } from '../composables/useCouncil'
+import {
+  councilKey,
+  formatDateTime,
+  isCouncilRole,
+  roleClass,
+  roleColor,
+  roleColorVars,
+  roleIcon,
+  type CouncilRole,
+} from '../composables/useCouncil'
 import Drawer from './Drawer.vue'
+import RoleSilhouette from './RoleSilhouette.vue'
 
 const props = defineProps<{
   role: CouncilRole | 'Chairman' | null
@@ -65,10 +75,11 @@ const title = computed(() => (isChairman.value ? '主席' : props.role ?? ''))
     <template v-else-if="councilRole">
       <div class="role-output-panel" data-testid="role-output-panel">
         <template v-if="status === 'completed' && latestEvent">
-          <article class="role-output-card" :class="roleClass(councilRole)">
+          <article class="role-output-card" :class="roleClass(councilRole)" :style="roleColorVars(councilRole)">
             <header>
-              <strong class="role-badge" :class="roleClass(councilRole)" data-testid="role-badge">
+              <strong class="role-badge" :class="roleClass(councilRole)" :style="roleColorVars(councilRole)" data-testid="role-badge">
                 <img v-if="roleIcon(councilRole)" :src="roleIcon(councilRole)" class="role-icon" :alt="councilRole" />
+                <RoleSilhouette v-else :color="roleColor(councilRole)" :size="16" />
                 {{ councilRole }}
               </strong>
               <span>{{ latestEvent.step_id }}</span>
@@ -127,6 +138,7 @@ const title = computed(() => (isChairman.value ? '主席' : props.role ?? ''))
           :key="`${event.event_id}:history`"
           class="role-output-card role-history-card"
           :class="roleClass(councilRole)"
+          :style="roleColorVars(councilRole)"
         >
           <header>
             <span>{{ event.step_id }}</span>

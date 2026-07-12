@@ -6,6 +6,13 @@ import { expect, test, type Page } from '@playwright/test'
 
 async function createMeetingViaNewCase(page: Page, topic: string) {
   await page.getByTestId('new-case-button').click()
+  // NewCaseModal step 1 (mode picker): red-blue is the only mode with a live "選擇此模式"
+  // button - everything else renders but stays disabled ("即將推出").
+  await page
+    .getByTestId('mode-select-card-red-blue')
+    .getByRole('button', { name: '選擇此模式' })
+    .click()
+  // Step 2 (participant setup): the topic input moved here from the old flat form.
   await page.getByLabel('會議主題').fill(topic)
   await page.getByTestId('create-meeting-button').click()
   // NewCaseModal closes itself once createNewMeeting() resolves.
@@ -777,4 +784,131 @@ test('cancelling or closing a meeting asks for confirmation first', async ({ pag
     .filter({ hasText: topic })
     .getByTestId('delete-meeting-button')
     .click()
+})
+
+const ALL_MODE_IDS = ['red-blue', 'courtroom', 'debate', 'brainstorm', 'six-hats', 'persona-testing']
+
+test('New Case mode picker shows all six modes, but only red-blue can be created', async ({ page }) => {
+  await page.goto('/')
+
+  await page.getByTestId('new-case-button').click()
+  await expect(page.getByTestId('mode-picker-step')).toBeVisible()
+
+  for (const modeId of ALL_MODE_IDS) {
+    await expect(page.getByTestId(`mode-select-card-${modeId}`)).toBeVisible()
+  }
+
+  const redBlueCard = page.getByTestId('mode-select-card-red-blue')
+  await expect(redBlueCard.getByRole('button', { name: '選擇此模式' })).toBeEnabled()
+
+  for (const modeId of ALL_MODE_IDS.filter((id) => id !== 'red-blue')) {
+    const card = page.getByTestId(`mode-select-card-${modeId}`)
+    await expect(card.getByRole('button', { name: '即將推出' })).toBeDisabled()
+  }
+
+  // Clicking a disabled card's CTA must not advance to step 2 - still on the picker.
+  await page.getByTestId('mode-select-card-courtroom').getByRole('button', { name: '即將推出' }).click({ force: true })
+  await expect(page.getByTestId('mode-picker-step')).toBeVisible()
+
+  await page.getByTestId('new-case-close-button').click()
+})
+
+test('mode card SOP expands with the mode SOP steps, and a parallel mode also shows its ring preview', async ({
+  page,
+}) => {
+  await page.goto('/')
+  await page.getByTestId('new-case-button').click()
+
+  const redBlueCard = page.getByTestId('mode-select-card-red-blue')
+  await expect(redBlueCard.getByTestId('mode-sop-panel')).not.toBeVisible()
+  await redBlueCard.getByTestId('mode-sop-toggle').click()
+  await expect(redBlueCard.getByTestId('mode-sop-panel')).toBeVisible()
+  await expect(redBlueCard.getByTestId('mode-sop-panel')).toContainText('輸入要被驗證的方案主題')
+  // red-blue is `relay`, so it never renders the parallel-only ring preview.
+  await expect(redBlueCard.getByTestId('mode-ring-preview')).toHaveCount(0)
+  await redBlueCard.getByTestId('mode-sop-toggle').click()
+  await expect(redBlueCard.getByTestId('mode-sop-panel')).not.toBeVisible()
+
+  // brainstorm is `parallel` with a 2-6 member fanout - its SOP panel additionally shows
+  // a ring-seat preview (ringSeatLayout, scenes.ts/modes.ts), sized to the fanout minimum.
+  const brainstormCard = page.getByTestId('mode-select-card-brainstorm')
+  await brainstormCard.getByTestId('mode-sop-toggle').click()
+  await expect(brainstormCard.getByTestId('mode-ring-preview')).toBeVisible()
+  await expect(brainstormCard.getByTestId('mode-ring-preview-seat')).toHaveCount(2)
+
+  // six-hats has a fixed 5-member roster (no fanout) - its preview exercises
+  // ringSeatLayout's actual *distribution* math (not just a count), so assert the seats
+  // are genuinely spread across the arc and symmetric around the center, not bunched up.
+  const sixHatsCard = page.getByTestId('mode-select-card-six-hats')
+  await sixHatsCard.getByTestId('mode-sop-toggle').click()
+  const ringSeats = sixHatsCard.getByTestId('mode-ring-preview-seat')
+  await expect(ringSeats).toHaveCount(5)
+  const cxValues = await ringSeats.evaluateAll((nodes) => nodes.map((node) => Number(node.getAttribute('cx'))))
+  expect(cxValues[0]).toBeCloseTo(12, 0)
+  expect(cxValues[2]).toBeCloseTo(50, 0)
+  expect(cxValues[4]).toBeCloseTo(88, 0)
+  // Symmetric around the center: seat 0 and the last seat are equidistant from x=50,
+  // and so are seat 1 and seat 3 - a bunched-up or non-arc layout would fail this.
+  expect(cxValues[0] + cxValues[4]).toBeCloseTo(100, 0)
+  expect(cxValues[1] + cxValues[3]).toBeCloseTo(100, 0)
+
+  await page.getByTestId('new-case-close-button').click()
+})
+
+test('step progress indicator reflects the active relay step during a fixed round', async ({ page }) => {
+  await page.goto('/')
+
+  const topic = `E2E step progress ${Date.now()}`
+  await createMeetingViaNewCase(page, topic)
+  await setModelsInSettings(page, { blue: 'mock-slow', red: 'mock-slow', judge: 'mock-slow' })
+  await closeSettings(page)
+
+  await expect(page.getByTestId('step-progress-indicator')).not.toBeVisible()
+
+  await page.getByTestId('start-meeting-button').click()
+
+  // pendingRoles is pushed synchronously before the network call (see startSelectedMeeting),
+  // so the indicator reflects step 1/4 (blue-propose) the instant the round starts.
+  await expect(page.getByTestId('step-progress-indicator')).toContainText('第 1 步／共 4 步：藍軍提案中')
+
+  await expect(page.getByTestId('operation-status')).toContainText('狀態：completed')
+  await expect(page.getByTestId('step-progress-indicator')).not.toBeVisible()
+
+  await page.getByTestId('past-topics-button').click()
+  page.once('dialog', (dialog) => dialog.accept())
+  await page
+    .getByTestId('meeting-list-item')
+    .filter({ hasText: topic })
+    .getByTestId('delete-meeting-button')
+    .click()
+})
+
+test('TopBar help button opens the mode help drawer with the same mode catalog', async ({ page }) => {
+  await page.goto('/')
+
+  await page.getByTestId('mode-help-button').click()
+  await expect(page.getByTestId('mode-help-drawer')).toBeVisible()
+
+  for (const modeId of ALL_MODE_IDS) {
+    await expect(page.getByTestId(`mode-help-card-${modeId}`)).toBeVisible()
+  }
+  // Browsing-only: no "選擇此模式"/"即將推出" CTA in the help drawer.
+  await expect(page.getByTestId('mode-help-card-red-blue').getByRole('button')).toHaveCount(1)
+
+  await page.getByTestId('mode-help-drawer-close-button').click()
+  await expect(page.getByTestId('mode-help-drawer')).not.toBeVisible()
+})
+
+test('keeps the New Case mode picker within a 375px viewport without horizontal overflow', async ({ page }) => {
+  await page.setViewportSize({ width: 375, height: 812 })
+  await page.goto('/')
+
+  await page.getByTestId('new-case-button').click()
+  await expect(page.getByTestId('mode-select-card-red-blue')).toBeVisible()
+
+  await expect
+    .poll(() => page.evaluate(() => document.documentElement.scrollWidth))
+    .toBe(await page.evaluate(() => document.documentElement.clientWidth))
+
+  await page.getByTestId('new-case-close-button').click()
 })
