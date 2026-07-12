@@ -291,16 +291,24 @@ def create_app(
         query = (q or "").strip().lower()
         summaries: list[dict[str, Any]] = []
         pricing = model_pricing_by_id(model_repository)
+        try:
+            modes_by_id = {mode.id: mode for mode in mode_catalog.list_modes()}
+        except ModeConfigError as error:
+            raise HTTPException(status_code=500, detail=str(error)) from error
         for metadata in metadata_store.list():
             meeting_id = metadata["meeting_id"]
             events = repository.read_events(meeting_id)
             if query and not _meeting_matches_query(projector, metadata, events, query):
                 continue
+            mode_id = str(metadata.get("mode_id", "red-blue"))
+            mode = modes_by_id.get(mode_id)
+            if mode is None:
+                raise HTTPException(status_code=400, detail=f"Unknown mode: {mode_id}")
             summaries.append(
                 project_meeting_summary(
                     metadata,
                     events,
-                    mode=meeting_mode(mode_catalog, metadata),
+                    mode=mode,
                     model_pricing=pricing,
                     activity_status=live_activity_status(events, jobs.is_running(meeting_id)),
                 )
