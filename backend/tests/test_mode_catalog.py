@@ -9,7 +9,7 @@ from ai_council.meetings.modes import (
     ModeConfigError,
     relay_plan,
 )
-from ai_council.meetings.runner import DIRECTED_RESPONSE_STEPS, STEPS, StepDefinition
+from ai_council.meetings.runner import StepDefinition
 
 
 def _write_yaml(tmp_path: Path, content: str) -> Path:
@@ -360,9 +360,20 @@ def test_repo_modes_yaml_is_loadable() -> None:
         "judge-decide",
     ]
     # Backward-compat gate: the derived relay plan must reproduce the runner's
-    # pre-mode-system STEPS/DIRECTED_RESPONSE_STEPS constants exactly.
-    assert plan.steps == STEPS
-    assert plan.directed_steps == DIRECTED_RESPONSE_STEPS
+    # pre-mode-system STEPS/DIRECTED_RESPONSE_STEPS constants exactly (those
+    # constants were removed once MeetingRunner became plan-driven; the
+    # literals below are their frozen historical values).
+    assert plan.steps == [
+        StepDefinition("blue-propose", "Blue", "blue_propose"),
+        StepDefinition("red-critique", "Red", "red_critique"),
+        StepDefinition("blue-revise", "Blue", "blue_revise"),
+        StepDefinition("judge-decide", "Judge", "judge_decide"),
+    ]
+    assert plan.directed_steps == {
+        "Blue": StepDefinition("blue-response", "Blue", "blue_revise"),
+        "Red": StepDefinition("red-response", "Red", "red_critique"),
+        "Judge": StepDefinition("judge-response", "Judge", "judge_decide"),
+    }
 
     for mode in modes:
         if mode.category != "relay":
