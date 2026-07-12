@@ -52,8 +52,11 @@ watch(
 
 function chooseMode(mode: ModeDefinition) {
   if (!mode.available) return
+  // Only reset inputValues on an actual mode switch - going back to the mode picker and
+  // re-choosing the same mode (e.g. after "← 返回模式選擇") should keep whatever the user
+  // already typed. Reopening the modal fresh is still handled by the watch(show) above.
+  if (mode.id !== selectedModeId.value) inputValues.value = {}
   selectedModeId.value = mode.id
-  inputValues.value = {}
   step.value = 'participants'
 }
 

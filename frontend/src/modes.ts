@@ -94,8 +94,12 @@ export type ModeDefinition = {
   steps?: RelayStep[]
   fanout?: FanoutConfig
   synthesis?: SynthesisConfig
-  // Only red-blue is wired to a real backend today (spec.md 16.7, slice A). The rest
-  // render fully (card, tagline, SOP) but their "建立" action stays disabled.
+  // As of slice B, sourced from the backend catalog (GET /modes - see
+  // refreshModeCatalog/mapBackendMode below) once it loads: every `relay` mode
+  // (red-blue/courtroom/debate) is buildable, while `parallel` modes still render fully
+  // (card, tagline, SOP) but stay disabled until slice C wires up the parallel executor
+  // (spec.md 16.7). The local fallback consts further down hardcode the same slice-A-era
+  // values (only red-blue true) for whenever the backend is unreachable.
   available: boolean
 }
 

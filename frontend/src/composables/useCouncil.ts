@@ -418,9 +418,10 @@ export function useCouncil() {
     }
   }
 
-  // modeId/inputs default to red-blue/{} so NewCaseModal's existing single-arg call site
-  // keeps today's behavior unchanged; Task 10 passes the user's actual mode picker choice
-  // through instead.
+  // NewCaseModal passes the user's actual mode picker choice (selectedMode.id) and the
+  // participants step's input form values here. modeId/inputs still default to
+  // red-blue/{} as a defensive fallback for any other/future call site that omits them,
+  // not because anything live still relies on that default.
   async function createNewMeeting(modeId: string = DEFAULT_MODE_ID, inputs: Record<string, string> = {}) {
     await runAction(async () => {
       const meeting = await createMeeting(topic.value, { modeId, inputs })
