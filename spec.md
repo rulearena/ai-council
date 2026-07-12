@@ -660,3 +660,42 @@ POST /meetings/{id}/sequences              # roles 陣列同上
 - **切片 C（後端）**：parallel 執行器（含 per-member retry 與 synthesis gating）→ `brainstorm` 上線；`six-hats`、`persona-testing` 為純設定追加。
 - **切片 D（後端）**：彙整匿名化 hook 啟用（方向五）。
 - **美術（使用者產圖，隨切片 B/C 進度）**：檢察官/辯護律師/仲裁人立繪、六帽委員立繪、persona 通用立繪；辯論場景（可選，預設沿用議事廳）。
+
+## 17. 前端模型設定管理（Model Config Management）設計
+
+> 狀態：設計定稿（2026-07-12）。後端（Codex）先行，前端 UI 隨後接上。對應 backlog 19，取代「只能手動編輯 `config/models.yaml`」的現況。
+
+### 17.1 原則
+
+1. **`config/models.yaml` 仍是唯一真相來源。** API 寫入即改寫該檔（原子替換：寫 temp 檔 + rename），人工手動編輯仍然有效，兩者互通。保留檔內註解不是需求（YAML round-trip 允許丟失註解）。
+2. **絕不經手金鑰明文。** UI 與 API 只接受 `api_key_env`（環境變數「名稱」）。表單需明確標示「此欄位填環境變數名稱，非 API 金鑰本身」。原因：專案位於雲端同步資料夾（Synology Drive），金鑰明文落檔等於外洩。金鑰保存屬 backlog 20（Secret management），不在本設計範圍。
+3. 後端為單一 process（第 10 節），read-modify-write 無需跨程序鎖；同 process 內以單一寫入路徑序列化。
+
+### 17.2 API
+
+```text
+POST   /models                # 新增 model config
+PUT    /models/{id}           # 更新（id 不可改）
+DELETE /models/{id}
+```
+
+- 欄位同第 6 節 schema：`id`、`adapter`、`base_url`、`model`、`api_key_env`、`supports_json_mode`、`extra_body`、`command`、`timeout_seconds`
+- 驗證：`id` 唯一且符合 `^[A-Za-z0-9][A-Za-z0-9_.-]*$`；`adapter` 限 `mock | openai-compatible-http | subscription-cli`；`openai-compatible-http` 必填 `base_url` + `model`；`subscription-cli` 必填 `command`。驗證失敗回 `422` 與逐欄錯誤
+- 新增/更新後該 model `status` 重設為 `unknown`（使用者可按 Test）
+- `DELETE`：一律允許（歷史事件記錄的是 id 字串，不受影響；進行中的呼叫已持有設定物件）。若該 id 正被任一 open meeting 的最近選擇引用，回應附 `warning` 欄位供前端提示
+- 執行中的 meeting run 不受寫入影響：runner 在 start 時已解析設定
+
+### 17.3 前端 UI
+
+Settings 彈窗新增「模型管理」分頁（與既有「角色模型選擇/場景/開發者模式」並列）：
+
+- 模型列表：id、adapter、base_url/model 摘要、status dot、Test 按鈕（沿用既有）、編輯/刪除按鈕
+- 新增/編輯表單：依 adapter 動態顯示欄位（mock 無額外欄位；http 顯示 base_url/model/api_key_env/supports_json_mode/timeout；cli 顯示 command/timeout）；`api_key_env` 欄位下方固定顯示金鑰安全說明
+- 刪除需 `window.confirm`；被引用中的模型刪除時顯示後端回傳的 warning
+- 寫入成功後重抓 `GET /models`，角色選擇下拉即時更新；若被刪除的模型正被某角色選中，該角色 fallback 到清單第一個模型（沿用既有 fallback 行為）
+- testid：`model-manager-tab`、`model-manager-list`、`add-model-button`、`model-form`、`model-form-save`、`delete-model-button`
+
+### 17.4 測試
+
+- 後端：CRUD 往返（寫檔後重讀）、驗證錯誤 422、原子替換（寫入失敗不留半成品檔）、刪除被引用模型的 warning
+- 前端 e2e：新增模型 → 出現在角色下拉 → Test → 編輯 → 刪除（含 confirm 與 fallback）
