@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 from dataclasses import dataclass
 from typing import Callable, Literal, Protocol, TypedDict
 
@@ -15,6 +16,7 @@ REQUIRED_JSON_SCHEMA = (
     '{"summary":"string","arguments":[{"title":"string","detail":"string"}],'
     '"risks":[{"title":"string","detail":"string"}],"recommendation":"string"}'
 )
+REQUIRED_JSON_SCHEMA_HASH = hashlib.sha256(REQUIRED_JSON_SCHEMA.encode("utf-8")).hexdigest()
 
 
 class ModelAdapter(Protocol):
@@ -271,6 +273,7 @@ class MeetingRunner:
         config = model_assignments[step.role]
         event_step_id = event_step_id or self._event_step_id(step.step_id, round_number)
         extra_event_fields = extra_event_fields or {}
+        prompt_metadata = self._prompt_metadata(step.template_name)
         prompt = self.prompt_renderer.render(
             template_name=step.template_name,
             role=step.role,
@@ -306,6 +309,7 @@ class MeetingRunner:
             attempt=attempt,
             round_number=round_number,
             model_config_id=config.id,
+            prompt_metadata=prompt_metadata,
             extra_event_fields=extra_event_fields,
         )
         try:
@@ -334,6 +338,7 @@ class MeetingRunner:
                     "attempt": attempt,
                     "status": "failed",
                     "error": str(error),
+                    **prompt_metadata,
                     **extra_event_fields,
                 },
             )
@@ -351,6 +356,7 @@ class MeetingRunner:
             "role": step.role,
             "attempt": attempt,
             "model_config_id": config.id,
+            **prompt_metadata,
             "prompt_messages": [{"role": "user", "content": prompt}],
             "raw_output": response.raw_output,
             "parsed_output": {
@@ -379,6 +385,7 @@ class MeetingRunner:
         attempt: int,
         round_number: int,
         model_config_id: str,
+        prompt_metadata: dict[str, object],
         extra_event_fields: dict[str, object],
     ) -> None:
         if self.execution_state_store is None:
@@ -392,6 +399,7 @@ class MeetingRunner:
             "attempt": attempt,
             "model_config_id": model_config_id,
             "status": "running",
+            **prompt_metadata,
         }
         for key in ["interaction_type", "directed_sequence", "sequence", "sequence_index"]:
             value = extra_event_fields.get(key)
@@ -402,6 +410,13 @@ class MeetingRunner:
     def _clear_active_execution(self, meeting_id: str) -> None:
         if self.execution_state_store is not None:
             self.execution_state_store.clear_active(meeting_id)
+
+    def _prompt_metadata(self, template_name: str) -> dict[str, object]:
+        return {
+            "prompt_template_name": template_name,
+            "prompt_template_hash": self.prompt_renderer.template_hash(template_name),
+            "output_schema_hash": REQUIRED_JSON_SCHEMA_HASH,
+        }
 
     def _is_terminal(self, meeting_id: str) -> bool:
         return any(

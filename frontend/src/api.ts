@@ -49,6 +49,9 @@ export type MeetingEvent = {
   sequence?: number
   sequence_index?: number
   model_config_id?: string
+  prompt_template_name?: string
+  prompt_template_hash?: string
+  output_schema_hash?: string
   prompt_messages?: Array<{ role: string; content: string }>
   raw_output?: string
   parsed_output?: RoleOutput

@@ -531,7 +531,7 @@ config/models.yaml.example
 57. Google Docs export
 58. Shareable links
 59. Frontend prompt editor
-60. Prompt versioning
+60. Prompt versioning（backend prompt/schema metadata foundation 已落地）
 61. Prompt test harness
 62. Prompt library / presets
 63. Role-specific output schemas

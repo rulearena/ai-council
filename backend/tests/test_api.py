@@ -12,6 +12,9 @@ from fastapi.testclient import TestClient
 from ai_council.api import create_app
 from ai_council.models.adapters import MockModelAdapter, ModelResponse
 
+TEST_BLUE_PROPOSE_TEMPLATE_HASH = "81abba70bd2c176005a3fd28dd13ef9bda68f441de574976e8d7161e23fb5f9d"
+TEST_OUTPUT_SCHEMA_HASH = "15a45919652be5c70d3fd1690a10d37f876f19a14b2a76cc0f21765def281377"
+
 
 def test_models_endpoint_lists_configured_models(tmp_path: Path) -> None:
     app = create_test_app(tmp_path)
@@ -550,6 +553,9 @@ def test_running_step_persists_and_clears_recovery_state(
         assert state["step_id"] == "blue-propose"
         assert state["role"] == "Blue"
         assert state["status"] == "running"
+        assert state["prompt_template_name"] == "blue_propose"
+        assert state["prompt_template_hash"] == TEST_BLUE_PROPOSE_TEMPLATE_HASH
+        assert state["output_schema_hash"] == TEST_OUTPUT_SCHEMA_HASH
     finally:
         release_model.set()
 
@@ -574,6 +580,9 @@ def test_app_startup_marks_leftover_execution_state_failed(tmp_path: Path) -> No
                 "attempt": 1,
                 "model_config_id": "mock-fast",
                 "status": "running",
+                "prompt_template_name": "blue_propose",
+                "prompt_template_hash": TEST_BLUE_PROPOSE_TEMPLATE_HASH,
+                "output_schema_hash": TEST_OUTPUT_SCHEMA_HASH,
             }
         ),
         encoding="utf-8",
@@ -587,6 +596,9 @@ def test_app_startup_marks_leftover_execution_state_failed(tmp_path: Path) -> No
     assert meeting["activity_status"] == "failed"
     assert meeting["events"][-1]["status"] == "failed"
     assert meeting["events"][-1]["step_id"] == "blue-propose"
+    assert meeting["events"][-1]["prompt_template_name"] == "blue_propose"
+    assert meeting["events"][-1]["prompt_template_hash"] == TEST_BLUE_PROPOSE_TEMPLATE_HASH
+    assert meeting["events"][-1]["output_schema_hash"] == TEST_OUTPUT_SCHEMA_HASH
     assert "interrupted" in meeting["events"][-1]["error"].lower()
     assert not execution_state_path.exists()
 
@@ -1242,7 +1254,8 @@ models:
     prompt_dir.mkdir(exist_ok=True)
     for template in ["blue_propose", "red", "blue_revise", "judge"]:
         (prompt_dir / f"{template}.md").write_text(
-            "{{ role }} {{ topic }} {{ prior_transcript }} {{ required_json_schema }}",
+            f"{template} {{{{ role }}}} {{{{ topic }}}} "
+            "{{ prior_transcript }} {{ required_json_schema }}",
             encoding="utf-8",
         )
     return create_app(

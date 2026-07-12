@@ -19,6 +19,9 @@ class ActiveExecutionState(TypedDict):
     model_config_id: str
     status: Literal["running"]
     started_at: NotRequired[str]
+    prompt_template_name: NotRequired[str]
+    prompt_template_hash: NotRequired[str]
+    output_schema_hash: NotRequired[str]
     interaction_type: NotRequired[str]
     directed_sequence: NotRequired[int]
     sequence: NotRequired[int]
@@ -80,7 +83,15 @@ def interrupted_execution_event(state: ActiveExecutionState) -> dict[str, object
         "status": "failed",
         "error": "Model execution was interrupted before completion. Retry this failed step manually.",
     }
-    for key in ["interaction_type", "directed_sequence", "sequence", "sequence_index"]:
+    for key in [
+        "prompt_template_name",
+        "prompt_template_hash",
+        "output_schema_hash",
+        "interaction_type",
+        "directed_sequence",
+        "sequence",
+        "sequence_index",
+    ]:
         if key in state:
             event[key] = state[key]
     return event

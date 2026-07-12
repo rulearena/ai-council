@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 from pathlib import Path
 
 
@@ -16,7 +17,7 @@ class PromptRenderer:
         prior_transcript: str,
         required_json_schema: str,
     ) -> str:
-        template = (self.prompt_dir / f"{template_name}.md").read_text(encoding="utf-8")
+        template = self._read_template(template_name)
         values = {
             "role": role,
             "topic": topic,
@@ -28,3 +29,9 @@ class PromptRenderer:
             rendered = rendered.replace("{{ " + key + " }}", value)
             rendered = rendered.replace("{{" + key + "}}", value)
         return rendered
+
+    def template_hash(self, template_name: str) -> str:
+        return hashlib.sha256(self._read_template(template_name).encode("utf-8")).hexdigest()
+
+    def _read_template(self, template_name: str) -> str:
+        return (self.prompt_dir / f"{template_name}.md").read_text(encoding="utf-8")

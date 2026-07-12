@@ -510,3 +510,16 @@ Work the **frontier**: any ticket whose blockers are all done. For this MVP, sta
 - [x] Adapter failures mark models `unavailable` with an error string.
 - [x] `GET /models` includes health check timestamp and error metadata.
 - [x] Health status stays in memory and does not rewrite `config/models.yaml`.
+
+## 42 - Prompt Version Metadata Persistence
+
+**What to build:** Persist lightweight prompt and schema version metadata on model attempt events.
+
+**Blocked by:** 04 - Prompt Rendering And Output Parsing; 06 - MeetingRunner Red/Blue/Judge Flow.
+
+- [x] Completed model events include `prompt_template_name`.
+- [x] Completed model events include `prompt_template_hash`.
+- [x] Failed model attempt events include `prompt_template_name` and `prompt_template_hash`.
+- [x] Model attempt events include `output_schema_hash`.
+- [x] Fixed-flow events preserve the correct template name for each stage.
+- [x] Frontend API event types include the optional metadata fields.
