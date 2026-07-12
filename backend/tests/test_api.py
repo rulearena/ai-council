@@ -1446,6 +1446,23 @@ def test_create_meeting_stores_participant_models(tmp_path: Path) -> None:
     assert prosecutor["model_config_id"] == "mock-fast"
 
 
+def test_create_meeting_rejects_unknown_participant_model(tmp_path: Path) -> None:
+    app = create_test_app(tmp_path)
+    client = TestClient(app)
+
+    response = client.post(
+        "/meetings",
+        json={
+            "topic": "T",
+            "mode_id": "courtroom",
+            "participants": [{"role_id": "Prosecutor", "model_config_id": "nope"}],
+        },
+    )
+
+    assert response.status_code == 404
+    assert response.json()["detail"] == "Unknown model: nope"
+
+
 def test_legacy_meeting_projects_red_blue_participants(tmp_path: Path) -> None:
     app = create_test_app(tmp_path)
     client = TestClient(app)
