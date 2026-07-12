@@ -329,7 +329,9 @@ h2 {
   width: auto;
   height: min(720px, calc(100dvh - 260px));
   max-width: min(960px, 100%);
-  aspect-ratio: 4 / 3;
+  /* Per-scene override via CouncilStage.vue's sceneStyle (SceneConfig.aspectRatio) -
+     defaults to 4/3, matching the meeting-room art. */
+  aspect-ratio: var(--scene-aspect-ratio, 4 / 3);
   container-type: size;
   border-radius: var(--radius-lg);
   border: 1px solid var(--color-border);
@@ -355,9 +357,10 @@ h2 {
 }
 
 .stage-table {
+  /* left/top come from CouncilStage.vue's topicStyle (SceneConfig.topicCard, defaults
+     to 50/50) - safe to leave unset here: the ≤640px breakpoint switches this to
+     `position: static`, which makes left/top inert regardless of their value. */
   position: absolute;
-  left: 50%;
-  top: 50%;
   transform: translate(-50%, -50%);
   display: flex;
   flex-direction: column;

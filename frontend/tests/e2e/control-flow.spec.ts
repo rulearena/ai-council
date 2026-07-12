@@ -435,7 +435,13 @@ test('scene switcher persists the selected scene across a reload', async ({ page
   const stageScene = page.getByTestId('council-stage').locator('.stage-scene')
   await expect(stageScene).toHaveAttribute('data-scene', 'meeting-room')
 
+  // Cycle through all three registered scenes (scenes.ts's `scenes` array), not just
+  // one, so a future scene added to the registry without wiring up its switch/persist
+  // path correctly would show up here too.
   await page.getByTestId('settings-button').click()
+  await page.getByTestId('scene-select').selectOption('courtroom')
+  await expect(stageScene).toHaveAttribute('data-scene', 'courtroom')
+
   await page.getByTestId('scene-select').selectOption('default-chamber')
   await expect(stageScene).toHaveAttribute('data-scene', 'default-chamber')
   await page.getByTestId('settings-close-button').click()
@@ -445,6 +451,35 @@ test('scene switcher persists the selected scene across a reload', async ({ page
     'data-scene',
     'default-chamber',
   )
+})
+
+test('switching to the courtroom scene renders its own seat positions', async ({ page }) => {
+  await page.goto('/')
+
+  await page.getByTestId('settings-button').click()
+  await page.getByTestId('scene-select').selectOption('courtroom')
+  await page.getByTestId('settings-close-button').click()
+
+  await expect(page.getByTestId('council-stage').locator('.stage-scene')).toHaveAttribute(
+    'data-scene',
+    'courtroom',
+  )
+
+  // Seat coordinates come straight from courtroomScene.seats (scenes.ts) - a distinct
+  // layout from meeting-room's (Judge near the bench, Chairman at the bar) - confirming
+  // CouncilStage actually re-reads the scene prop instead of caching the first one seen.
+  await expect(page.getByTestId('role-seat-judge')).toHaveAttribute('style', /left:\s*50%/)
+  await expect(page.getByTestId('role-seat-judge')).toHaveAttribute('style', /top:\s*44%/)
+  await expect(page.getByTestId('role-seat-blue')).toHaveAttribute('style', /left:\s*21\.6%/)
+  await expect(page.getByTestId('role-seat-red')).toHaveAttribute('style', /left:\s*78\.4%/)
+  await expect(page.getByTestId('role-seat-chairman')).toHaveAttribute('style', /top:\s*80%/)
+
+  // All four seats still render and stay visible/clickable - the scene swap doesn't
+  // break CouncilStage's core rendering for a non-4:3, non-meeting-room scene.
+  await expect(page.getByTestId('role-seat-chairman')).toBeVisible()
+  await expect(page.getByTestId('role-seat-blue')).toBeVisible()
+  await expect(page.getByTestId('role-seat-red')).toBeVisible()
+  await expect(page.getByTestId('role-seat-judge')).toBeVisible()
 })
 
 test('falls back to the default scene when localStorage holds an unknown scene id', async ({
