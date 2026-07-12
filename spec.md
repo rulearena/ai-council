@@ -327,6 +327,8 @@ GET /meetings/{meeting_id}
 
 MVP 前端採操作台 / 除錯台風格，不做華麗會議室視覺化。
 
+> 註（2026-07-12）：Post-MVP 前端已演進為沉浸式議事廳（場景 + 席位 + 抽屜/彈窗收納），本節保留為 MVP 歷史紀錄；現行前端架構見第 16.6 節與 `frontend/src/scenes.ts`。
+
 暫定 layout：
 
 ```text
@@ -478,8 +480,8 @@ config/models.yaml.example
 4. Markdown 反向解析：從 `transcript.md` 還原狀態
 5. 更多 provider adapters：Anthropic、Gemini 等
 6. Subscription model CLI bridge 進階穩定化與跨版本相容性
-7. Parallel brainstorming mode
-8. Custom roster and topology
+7. Parallel brainstorming mode（設計已定，見第 16 節）
+8. Custom roster and topology（設計已定，見第 16 節）
 9. Drag-and-drop sequence/topology builder
 10. Conditional branching between roles
 11. Regex purifier
@@ -546,3 +548,115 @@ config/models.yaml.example
 72. Docker Compose setup
 73. Containerized deployment
 74. Reverse proxy / production hosting guide
+75. Meeting reopen endpoint（誤按取消/結案的事件溯源復原：append `reopened` event，終端狀態投影需認得它）
+
+## 16. 會議模式系統（Mode System）設計
+
+> 狀態：設計定稿（2026-07-12），分四個切片實作。切片 A 為前端先行，切片 B/C/D 為後端（Codex 依本節實作）。
+
+### 16.1 目標與原則
+
+支援多種會議模式（mode）。核心原則：
+
+1. **模式是宣告式設定，不是程式碼。** 一個 mode = 角色清單 + 拓撲 + prompt 模板引用 + 使用指引 + 預設場景。新增模式 = 新增設定與 prompt 檔，不改執行器。
+2. **只有兩種執行器。** `relay`（回合接力，深度驗證）與 `parallel`（平行扇出 + 彙整，廣度探索）。六個初始模式全部落在這兩種之上。
+3. **事件模型不變。** `events.jsonl` 的 `role` 本來就是字串、`base_step_id`/`round` 機制沿用；既有會議（無 `mode_id`）一律視為 `red-blue`，完全向後相容。
+4. **共用 output schema 不變**（第 8 節）。角色差異由 prompt 控制；豐富化裁決結構仍屬 backlog 65。
+
+### 16.2 Mode 定義 Schema
+
+檔案：`config/modes.yaml`（與 `models.yaml` 同慣例）。欄位：
+
+```yaml
+modes:
+  - id: red-blue                # 唯一識別
+    name: 紅藍對抗
+    category: relay             # relay | parallel
+    tagline: 一句話賣點（前端模式卡顯示）
+    when_to_use: 什麼情境該用這個模式（前端指引）
+    sop:                        # 操作 SOP，前端逐步顯示
+      - 輸入要被驗證的方案主題
+      - 為藍軍/紅軍/裁判挑選模型
+      - 開始審議，觀察紅軍指出的缺陷
+      - 對裁決不滿可追問或開新回合
+    default_scene: meeting-room # 前端場景對應
+    inputs: []                  # 除 topic 外的額外建立參數（見 16.4）
+    roles:
+      - id: Blue                # 進 events.jsonl 的 role 字串
+        name: 藍軍
+        color: "#4D8DFF"
+        portrait: blue          # 前端立繪 key，無對應美術時用剪影
+        kind: member            # member | adjudicator | synthesizer
+    steps:                      # relay 專用：接力步驟
+      - { role: Blue, template: blue_propose }
+      - { role: Red, template: red_critique }
+      - { role: Blue, template: blue_revise }
+      - { role: Judge, template: judge_decide }
+    # parallel 專用（與 steps 二擇一）：
+    # fanout:
+    #   role: Member            # 扇出角色原型
+    #   template: brainstorm_member
+    #   min_instances: 2
+    #   max_instances: 6
+    #   instance_prompt: optional   # 允許每個實例附加自訂視角/persona
+    # synthesis:
+    #   role: Moderator
+    #   template: brainstorm_synthesis
+```
+
+平行模式的成員是「角色原型的實例」：`member-1`…`member-N`，每個實例各自綁 model config、可附加實例級 prompt（persona / 思考帽視角）。實例的 role 字串進事件時用 `Member-1` 形式，顯示名稱由 participants 記錄。
+
+### 16.3 兩種執行器
+
+**relay（接力）**：現行 `MeetingRunner` STEPS 的參數化。step_id 沿用 `{template}`/`round-N-{template}` 慣例；失敗中止批次、retry 從失敗步驟續跑到結尾、round 計數依「最後一個 step 完成次數」推進 —— 全部既有語意不變，只是步驟序列來自 mode 設定。
+
+**parallel（平行）**：新執行器。
+- 扇出階段：所有成員實例併發呼叫（asyncio gather），step_id `fanout-{round}-member-{k}`。individual 失敗不中止其他成員；全部結束後若有失敗，進入 `waiting`，成員可單獨 retry。
+- 彙整階段：所有成員成功（或使用者明示跳過失敗成員）後觸發，step_id `synthesis-{round}`。彙整 prompt 收到全部成員輸出。
+- 匿名化（backlog 13 / 方向五）掛在彙整輸入組裝點：成員輸出洗牌、以「委員A/B/C」代稱、字串層過濾自我指認（如「身為 ChatGPT」）。第一版平行執行器即預留此 hook，預設關閉，per-mode 設定開啟。
+
+### 16.4 六個初始模式
+
+| id | 類別 | 角色 | 拓撲 | 額外 inputs | 預設場景 |
+|----|------|------|------|-------------|----------|
+| `red-blue` 紅藍對抗 | relay | 藍軍/紅軍/裁判 | propose→critique→revise→decide | — | meeting-room |
+| `courtroom` 法庭審理 | relay | 檢察官/辯護律師/法官 | 指控→辯護→再質詢→判決 | — | courtroom |
+| `debate` 辯論 | relay | 正方/反方/仲裁人 | 正申論→反申論→正質詢→反質詢→裁決 | `position_a`、`position_b` | meeting-room |
+| `brainstorm` 腦力激盪 | parallel | 委員×N（2–6）/主持彙整 | 扇出→彙整（共識/分歧/結論） | 每委員可選自訂視角 | meeting-room |
+| `six-hats` 六頂思考帽 | parallel | 白/紅/黑/黃/綠帽×5（固定）/藍帽統整 | 扇出→藍帽彙整 | — | meeting-room |
+| `persona-testing` 盲測用戶 | parallel | 使用者定義 persona×N/產品顧問彙整 | 扇出反應→彙整報告 | `personas[]`（名稱+描述） | meeting-room |
+
+法庭審理定位：災難覆盤與複雜架構除錯（topic = 被審理的事故/設計）。辯論的兩條路線由 `position_a/b` 注入雙方 prompt。六帽採經典分工：白=事實數據、紅=直覺感受、黑=風險批判、黃=價值樂觀、綠=創意發想、藍=流程統整（藍帽即彙整者）。
+
+新增 prompt 檔（`prompts/`）：courtroom_charge / courtroom_defense / courtroom_rebuttal / courtroom_verdict、debate_statement_pro / debate_statement_con / debate_cross_pro / debate_cross_con / debate_verdict、brainstorm_member / brainstorm_synthesis、hat_white / hat_red / hat_black / hat_yellow / hat_green / hat_blue_synthesis、persona_member / persona_synthesis。
+
+### 16.5 API 變更
+
+```text
+GET  /modes                       # mode catalog：完整 16.2 結構（前端指引資料來源）
+POST /meetings                    # body 新增 mode_id（預設 red-blue）、
+                                  # participants: [{role_id 或 instance slot, model_config_id,
+                                  #                display_name?, instance_prompt?}]、
+                                  # inputs: {position_a?, position_b?, personas?...}
+GET  /meetings/{id}               # read model 投影 mode_id 與 participants
+POST /meetings/{id}/roles/{role}/respond   # role 接受該 mode 的任意 role/instance id
+POST /meetings/{id}/sequences              # roles 陣列同上
+```
+
+無 `mode_id` 的舊會議投影為 `red-blue` + 現行三角色 participants。
+
+### 16.6 前端要求
+
+- **席位動態化**：移除寫死的 `CouncilRole` union；席位、pendingRoles、抽屜、事件歸戶全部改由 meeting 的 participants 驅動（角色數 3–7 不等）。顏色/立繪來自 mode 定義，無立繪的新角色用角色色剪影 placeholder。
+- **場景席位槽**：`SceneConfig.seats` 由固定四鍵改為槽位群組：`adjudicator`（上）、`chair`（下）、`podium[]`（左右講位）、`ring[]`（環繞席，供平行模式 N 成員）。mode 的角色 `kind` + 位置慣例對應到槽位群組；同群組多實例時均分排列。
+- **建立會議流程（模式選擇器）**：New Case 改為兩步 —— (1) 模式卡片牆：名稱、類別徽章（回合制/平行）、tagline、「適合情境」、可展開 SOP；(2) 參與者設定：角色→模型對應、平行模式的成員增減（min/max 來自 mode）、persona/視角編輯、辯論的雙立場輸入。
+- **會議中指引**：接力模式顯示步驟進度（「第 2 步／共 4 步：紅軍質詢中」，資料來自 mode.steps 與 pendingRoles）；平行模式顯示「N 位委員思考中（k/N 完成）→ 等待彙整」。頂欄常駐「?」按鈕開模式說明抽屜（tagline/when_to_use/SOP，同一份 catalog 資料）。
+- **指引資料來源**：`GET /modes`；後端未上線前，前端內建同 schema 的本地 catalog 常數（切片 A 用），後端上線後切換資料來源、本地常數轉為 fallback。
+
+### 16.7 實作切片
+
+- **切片 A（前端先行，不依賴後端）**：席位動態化重構 + 場景席位槽 + 本地 mode catalog + New Case 模式選擇器與指引 UI。六模式卡片全部可瀏覽（含 SOP），但僅 `red-blue` 可建立，其餘標示「即將推出」。既有功能與 e2e 全數保留。
+- **切片 B（後端）**：`config/modes.yaml` + `GET /modes` + relay 執行器參數化 + `POST /meetings` 收 mode_id/participants/inputs → `courtroom`、`debate` 上線。
+- **切片 C（後端）**：parallel 執行器（含 per-member retry 與 synthesis gating）→ `brainstorm` 上線；`six-hats`、`persona-testing` 為純設定追加。
+- **切片 D（後端）**：彙整匿名化 hook 啟用（方向五）。
+- **美術（使用者產圖，隨切片 B/C 進度）**：檢察官/辯護律師/仲裁人立繪、六帽委員立繪、persona 通用立繪；辯論場景（可選，預設沿用議事廳）。
