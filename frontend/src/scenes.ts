@@ -245,12 +245,16 @@ export function useScenePreference() {
 
   // A manual pick (Settings) always wins immediately and persists - clearing the mode's
   // override here is what makes that true even while a meeting with a default_scene is
-  // open. Trade-off (spec.md 16.7): this only lasts for the current meeting - the
-  // selectedMeeting watcher re-applies the mode's default_scene via applyModeScene on the
-  // *next* meeting switch (including re-opening the same meeting), so a manual switch
-  // never becomes a persistent override for that mode. It does persist as the fallback
-  // used by modes/meetings with no override in play (e.g. switching to a mode whose
-  // default_scene doesn't apply, or after closing the meeting list).
+  // open. Trade-off (spec.md 16.7): this only lasts for the current meeting - useCouncil.ts's
+  // sceneOverrideKey watcher re-applies the mode's default_scene via applyModeScene on the
+  // *next* meeting switch (including re-opening the same meeting), so a manual switch never
+  // becomes a persistent override for that mode. It does last for the rest of the *current*
+  // meeting, including while it's actively running: that watcher is keyed on meeting
+  // identity + default_scene, not on every mutation of the meeting object, so a stream of
+  // websocket events/step completions doesn't quietly reapply the override underneath a
+  // manual pick. The manual pick does persist as the fallback used by modes/meetings with
+  // no override in play (e.g. switching to a mode whose default_scene doesn't apply, or
+  // after closing the meeting list).
   function setScene(id: string) {
     sceneOverrideId.value = null
     selectedSceneId.value = id

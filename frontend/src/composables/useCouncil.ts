@@ -195,6 +195,14 @@ export function formatDateTime(value: string | undefined): string {
   return date.toLocaleString()
 }
 
+// The mode a given meeting resolves to (or the default mode for no meeting/an unknown
+// mode_id) - shared by the two watchers below so both agree on "what mode is this" without
+// one depending on the other having already run (see the scene-override watcher's comment
+// for why that independence matters).
+function resolveActiveMode(meeting: Meeting | null): ModeDefinition {
+  return getModeById(meeting?.mode_id ?? DEFAULT_MODE_ID) ?? getModeById(DEFAULT_MODE_ID)!
+}
+
 export function useCouncil() {
   const models = ref<ModelConfig[]>([])
   const meetings = ref<Meeting[]>([])
@@ -258,17 +266,30 @@ export function useCouncil() {
   // plain `watch(selectedMeeting, ...)` would only re-run on a meeting change and could
   // stay stuck on the local fallback mode object. No meeting selected (back at the list)
   // falls back to DEFAULT_MODE_ID, same as before any meeting is ever opened.
-  //
-  // Also applies (spec.md 16.7) the resolved mode's default_scene as a non-persisted
-  // scene override (see scenes.ts's applyModeScene) - a selected meeting jumps straight to
-  // its mode's scene (e.g. courtroom), while no meeting selected clears the override back
-  // to the user's persisted preference. This effect re-runs on every catalog refresh as
-  // well as every meeting switch (see above), so applyModeScene is called with the same
-  // resolved mode's default_scene repeatedly; that's fine since it's idempotent.
   watchEffect(() => {
-    const mode = getModeById(selectedMeeting.value?.mode_id ?? DEFAULT_MODE_ID) ?? getModeById(DEFAULT_MODE_ID)!
-    activeModeSource.value = mode
-    applyModeScene(selectedMeeting.value ? mode.defaultScene : null)
+    activeModeSource.value = resolveActiveMode(selectedMeeting.value)
+  })
+
+  // Applies (spec.md 16.7) the resolved mode's default_scene as a non-persisted scene
+  // override (see scenes.ts's applyModeScene) - deliberately a *separate* watcher from the
+  // activeModeSource one above, keyed on a `${meeting_id}::${defaultScene}` string rather
+  // than `selectedMeeting` itself. `selectedMeeting.value` gets reassigned to a brand-new
+  // object on every websocket event/run-start/openMeeting call while staying the *same*
+  // meeting (see e.g. the WS handler and openMeeting further down) - a watcher keyed on
+  // the ref (or on a freshly-built tuple/array, which Vue also treats as a new identity
+  // every run) would re-fire on every one of those and reapply default_scene each time,
+  // silently stomping a scene the user just picked manually in Settings mid-meeting. A
+  // primitive string key only changes value when the meeting identity or its mode's
+  // default_scene actually changes, so the override is (re-)applied exactly on a genuine
+  // meeting switch (including reopening the same meeting later) and left alone otherwise -
+  // matching setScene's "manual pick wins for the rest of this meeting" contract.
+  const sceneOverrideKey = computed(() => {
+    const meeting = selectedMeeting.value
+    return meeting ? `${meeting.meeting_id}::${resolveActiveMode(meeting).defaultScene}` : null
+  })
+  watch(sceneOverrideKey, () => {
+    const meeting = selectedMeeting.value
+    applyModeScene(meeting ? resolveActiveMode(meeting).defaultScene : null)
   })
 
   // Keeps selectedModels/modelTestResults' keys in sync with whichever roster is active
