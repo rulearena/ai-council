@@ -422,6 +422,86 @@ def test_start_returns_while_model_execution_continues_in_background(
         assert delete_response.json()["detail"] == "Cannot delete a running meeting"
     finally:
         release_model.set()
+        wait_for_activity(client, meeting_id, "completed")
+
+
+def test_running_step_persists_and_clears_recovery_state(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    model_entered = threading.Event()
+    release_model = threading.Event()
+
+    def slow_complete(self, request):
+        model_entered.set()
+        release_model.wait(timeout=2)
+        return ModelResponse(
+            raw_output='{"summary":"OK","arguments":[],"risks":[],"recommendation":"Go"}'
+        )
+
+    monkeypatch.setattr(MockModelAdapter, "complete", slow_complete)
+    app = create_test_app(tmp_path)
+    client = TestClient(app)
+    meeting_id = client.post("/meetings", json={"topic": "恢復狀態"}).json()["meeting_id"]
+    execution_state_path = tmp_path / "data" / "meetings" / meeting_id / "execution.json"
+
+    try:
+        response = client.post(
+            f"/meetings/{meeting_id}/start",
+            json={
+                "models": {
+                    "Blue": "mock-fast",
+                    "Red": "mock-fast",
+                    "Judge": "mock-fast",
+                }
+            },
+        )
+
+        assert response.status_code == 202
+        assert model_entered.wait(timeout=1)
+        state = json.loads(execution_state_path.read_text(encoding="utf-8"))
+        assert state["step_id"] == "blue-propose"
+        assert state["role"] == "Blue"
+        assert state["status"] == "running"
+    finally:
+        release_model.set()
+
+    wait_for_activity(client, meeting_id, "completed")
+
+    assert not execution_state_path.exists()
+
+
+def test_app_startup_marks_leftover_execution_state_failed(tmp_path: Path) -> None:
+    first_app = create_test_app(tmp_path)
+    first_client = TestClient(first_app)
+    meeting_id = first_client.post("/meetings", json={"topic": "重啟恢復"}).json()["meeting_id"]
+    execution_state_path = tmp_path / "data" / "meetings" / meeting_id / "execution.json"
+    execution_state_path.write_text(
+        json.dumps(
+            {
+                "meeting_id": meeting_id,
+                "step_id": "blue-propose",
+                "base_step_id": "blue-propose",
+                "round": 1,
+                "role": "Blue",
+                "attempt": 1,
+                "model_config_id": "mock-fast",
+                "status": "running",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    restarted_app = create_test_app(tmp_path)
+    restarted_client = TestClient(restarted_app)
+
+    meeting = restarted_client.get(f"/meetings/{meeting_id}").json()
+
+    assert meeting["activity_status"] == "failed"
+    assert meeting["events"][-1]["status"] == "failed"
+    assert meeting["events"][-1]["step_id"] == "blue-propose"
+    assert "interrupted" in meeting["events"][-1]["error"].lower()
+    assert not execution_state_path.exists()
 
 
 def test_start_rejects_missing_fixed_flow_model_assignments(tmp_path: Path) -> None:
@@ -1068,10 +1148,10 @@ models:
 """.strip(),
 ):
     config_dir = tmp_path / "config"
-    config_dir.mkdir()
+    config_dir.mkdir(exist_ok=True)
     (config_dir / "models.yaml").write_text(models_yaml, encoding="utf-8")
     prompt_dir = tmp_path / "prompts"
-    prompt_dir.mkdir()
+    prompt_dir.mkdir(exist_ok=True)
     for template in ["blue_propose", "red", "blue_revise", "judge"]:
         (prompt_dir / f"{template}.md").write_text(
             "{{ role }} {{ topic }} {{ prior_transcript }} {{ required_json_schema }}",

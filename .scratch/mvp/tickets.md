@@ -485,3 +485,16 @@ Work the **frontier**: any ticket whose blockers are all done. For this MVP, sta
 - [x] WebSocket snapshot/update payloads include `stream_events`.
 - [x] Token delta stream events are not persisted to `events.jsonl`.
 - [x] Frontend API types include token-delta stream event payloads.
+
+## 40 - Interrupted Execution Recovery State
+
+**What to build:** Persist the currently running model step so backend startup can detect interrupted executions and hand them back to manual retry.
+
+**Blocked by:** 06 - MeetingRunner Red/Blue/Judge Flow; 25 - Meeting Activity Projection; 30 - Background Meeting Progress.
+
+- [x] Runner writes `execution.json` before calling a model adapter.
+- [x] Runner clears `execution.json` after normal completion or handled failure.
+- [x] Backend startup scans leftover execution state.
+- [x] Leftover execution state appends a failed event for the interrupted step.
+- [x] Recovered failures project meeting `activity_status: failed`.
+- [x] Recovery does not automatically resend model requests.

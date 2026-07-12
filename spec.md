@@ -253,6 +253,7 @@ MVP 支援最小中斷恢復：
 - 後端重啟或前端重整後，可以從 `events.jsonl` 還原已完成發言與 meeting 狀態
 - 不自動重送正在執行中的 API 呼叫
 - 中斷中的 step 先標記為 `failed`，由使用者手動 retry
+- 後端會用每場 meeting 的 `execution.json` 暫存目前正在呼叫模型的 step；正常完成或已處理失敗會清除，若後端重啟時仍殘留，啟動時會追加 failed event
 
 MVP 支援取消整場 meeting run：
 
@@ -473,7 +474,7 @@ config/models.yaml.example
 
 1. Human message editing/correction：主席發言送出後的修正策略與事件記錄（已落地為 append-only correction event）
 2. Token streaming：Agent 逐字輸出到前端（backend WebSocket foundation 已落地；真 provider streaming 與 UI 顯示待後續）
-3. 自動恢復執行中任務：後端重啟或 API 呼叫中斷時判斷是否能安全重送
+3. 自動恢復執行中任務：後端重啟或 API 呼叫中斷時判斷是否能安全重送（backend interrupted-state detection 已落地；不自動重送）
 4. Markdown 反向解析：從 `transcript.md` 還原狀態
 5. 更多 provider adapters：Anthropic、Gemini 等
 6. Subscription model CLI bridge 進階穩定化與跨版本相容性
