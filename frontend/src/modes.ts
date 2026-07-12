@@ -287,6 +287,8 @@ function mapBackendRole(role: BackendModeRole): ModeRoleDefinition {
     name: role.name,
     color: role.color,
     portrait: role.portrait ?? undefined,
+    // Backend already validated `kind` against VALID_ROLE_KINDS (modes.py) when it
+    // parsed config/modes.yaml, so it's already one of RoleKind's members here.
     kind: role.kind as RoleKind,
   }
 }
@@ -324,6 +326,8 @@ export function mapBackendMode(raw: BackendModeDefinition): ModeDefinition {
   const mode: ModeDefinition = {
     id: raw.id,
     name: raw.name,
+    // Backend already validated `category` against VALID_CATEGORIES (modes.py) when it
+    // parsed config/modes.yaml, so it's already one of ModeCategory's members here.
     category: raw.category as ModeCategory,
     tagline: raw.tagline,
     whenToUse: raw.when_to_use,
@@ -357,20 +361,6 @@ export const DEFAULT_MODE_ID = 'red-blue'
 
 export function getModeById(id: string): ModeDefinition | undefined {
   return modeCatalog.find((mode) => mode.id === id)
-}
-
-// Every role id this catalog knows about, across every mode - used by useCouncil.ts to
-// tell a genuine AI-role event apart from the human chair's ('Human') without hardcoding
-// a per-mode list. Only red-blue's ids are ever actually exercised in slice A (it's the
-// only buildable mode), but this stays mode-agnostic on purpose so slice B/C don't need
-// to touch it.
-export function allKnownRoleIds(): string[] {
-  const ids = new Set<string>()
-  for (const mode of modeCatalog) {
-    for (const role of mode.roles) ids.add(role.id)
-    if (mode.fanout) ids.add(mode.fanout.role)
-  }
-  return [...ids]
 }
 
 // Pure, side-effect-free point layout for a `ring[]` seat group (spec.md 16.6): N seats

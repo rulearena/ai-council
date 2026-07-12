@@ -188,7 +188,9 @@ test('user can run a mock meeting and add chair feedback', async ({ page }) => {
 
   await openAdvancedOptions(page)
   await expect(page.getByTestId('role-sequence-controls')).toBeVisible()
-  await page.getByTestId('sequence-preset-select').selectOption('red-blue-judge')
+  // Preset ids are now generic (mode-system slice B task 9): 'members-reversed-adj' is
+  // red-blue's [Red, Blue, Judge] preset, same roles/label as the old 'red-blue-judge' id.
+  await page.getByTestId('sequence-preset-select').selectOption('members-reversed-adj')
   await page.getByTestId('run-sequence-button').click()
 
   // Sequence roles are also pushed synchronously before the network call.
