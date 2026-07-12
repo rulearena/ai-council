@@ -429,6 +429,183 @@ test('continuing a fully completed round runs the sequence preset instead of a n
     .click()
 })
 
+test('scene switcher persists the selected scene across a reload', async ({ page }) => {
+  await page.goto('/')
+
+  const stageScene = page.getByTestId('council-stage').locator('.stage-scene')
+  await expect(stageScene).toHaveAttribute('data-scene', 'meeting-room')
+
+  await page.getByTestId('settings-button').click()
+  await page.getByTestId('scene-select').selectOption('default-chamber')
+  await expect(stageScene).toHaveAttribute('data-scene', 'default-chamber')
+  await page.getByTestId('settings-close-button').click()
+
+  await page.reload()
+  await expect(page.getByTestId('council-stage').locator('.stage-scene')).toHaveAttribute(
+    'data-scene',
+    'default-chamber',
+  )
+})
+
+test('falls back to the default scene when localStorage holds an unknown scene id', async ({
+  page,
+}) => {
+  // Simulates a scene that was later removed from the registry - the stored id is stale,
+  // but the stage must still render something instead of going blank.
+  await page.addInitScript(() => {
+    window.localStorage.setItem('ai-council-scene', 'a-scene-that-no-longer-exists')
+  })
+  await page.goto('/')
+
+  await expect(page.getByTestId('council-stage')).toBeVisible()
+  await expect(page.getByTestId('council-stage').locator('.stage-scene')).toHaveAttribute(
+    'data-scene',
+    'meeting-room',
+  )
+
+  // The stored preference itself is sanitized on load too - not just the stage's fallback
+  // computed - so the settings picker shows "議事廳" selected, not a blank <select> with
+  // no option matching the stale stored id.
+  await page.getByTestId('settings-button').click()
+  await expect(page.getByTestId('scene-select')).toHaveValue('meeting-room')
+})
+
+test('the explicit "開始新回合" button always starts a fresh fixed round', async ({ page }) => {
+  await page.goto('/')
+
+  const topic = `E2E explicit new round ${Date.now()}`
+  await createMeetingViaNewCase(page, topic)
+  await setModelsInSettings(page, { blue: 'mock-slow', red: 'mock-slow', judge: 'mock-slow' })
+  await closeSettings(page)
+
+  await page.getByTestId('start-meeting-button').click()
+  await expect(page.getByTestId('operation-status')).toContainText('狀態：completed')
+
+  await openAdvancedOptions(page)
+  await expect(page.getByTestId('new-round-panel')).toContainText(
+    'Blue 提案 → Red 質詢 → Blue 修訂 → Judge 裁決',
+  )
+  await page.getByTestId('start-new-round-button').click()
+
+  // startSelectedMeeting pushes the fixed-round queue synchronously before the network
+  // call, same as the main CTA - Blue flips to "thinking" immediately.
+  await expect(page.getByTestId('role-seat-blue')).toHaveAttribute('data-status', 'thinking')
+  await closeAdvancedOptions(page)
+
+  await expect(page.getByTestId('operation-status')).toContainText('狀態：completed', {
+    timeout: 15000,
+  })
+
+  await page.getByTestId('records-button').click()
+  await expect(page.getByTestId('step-timeline')).toContainText('round-2-blue-propose')
+  await expect(page.getByTestId('step-timeline')).toContainText('round-2-judge-decide')
+  await page.getByTestId('records-close-button').click()
+
+  await page.getByTestId('past-topics-button').click()
+  page.once('dialog', (dialog) => dialog.accept())
+  await page
+    .getByTestId('meeting-list-item')
+    .filter({ hasText: topic })
+    .getByTestId('delete-meeting-button')
+    .click()
+})
+
+test('shows a failed-step hint and disables round-level actions until the step is retried', async ({
+  page,
+}) => {
+  await page.goto('/')
+
+  const topic = `E2E failed step hint ${Date.now()}`
+  await createMeetingViaNewCase(page, topic)
+
+  // mock-broken raises immediately (missing base_url/model), no network call involved.
+  await setModelsInSettings(page, { blue: 'mock-broken', red: 'mock-slow', judge: 'mock-slow' })
+  await closeSettings(page)
+
+  await page.getByTestId('start-meeting-button').click()
+  await expect(page.getByTestId('role-seat-blue')).toHaveAttribute('data-status', 'failed')
+
+  await expect(page.getByTestId('failed-step-hint')).toBeVisible()
+  await expect(page.getByTestId('failed-step-hint')).toContainText(
+    'Blue 的回應失敗了，點擊席位可重試',
+  )
+
+  // Confirmed against the real backend: calling /start (or /sequences) again once a step
+  // has failed is a silent no-op - 200 response, zero new events, activity_status stuck
+  // on "failed" forever. Both round-level actions must stay disabled until the step is
+  // retried, rather than let the user hit that trap.
+  await expect(page.getByTestId('start-meeting-button')).toBeDisabled()
+  await expect(page.getByTestId('start-meeting-button')).toHaveAttribute(
+    'title',
+    'Blue 的回應失敗了，請點擊席位重試該步驟',
+  )
+
+  await openAdvancedOptions(page)
+  await expect(page.getByTestId('start-new-round-button')).toBeDisabled()
+  await closeAdvancedOptions(page)
+
+  // Fix the broken assignment before retrying, same as a real operator would.
+  await setModelsInSettings(page, { blue: 'mock-slow', red: 'mock-slow', judge: 'mock-slow' })
+  await closeSettings(page)
+
+  await openRoleDrawer(page, 'blue')
+  await page.getByTestId('role-status-retry-button').click()
+
+  // The hint clears the instant the failed role re-enters the pending queue, not on a
+  // timer - it's derived from the same seat status the seat itself reads.
+  await expect(page.getByTestId('failed-step-hint')).not.toBeVisible()
+  await closeRoleDrawer(page)
+
+  await expect(page.getByTestId('operation-status')).toContainText('狀態：completed')
+  await expect(page.getByTestId('start-meeting-button')).toBeEnabled()
+
+  await page.getByTestId('past-topics-button').click()
+  page.once('dialog', (dialog) => dialog.accept())
+  await page
+    .getByTestId('meeting-list-item')
+    .filter({ hasText: topic })
+    .getByTestId('delete-meeting-button')
+    .click()
+})
+
+test('keeps the advanced options panel within a 375px viewport without horizontal overflow', async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 375, height: 812 })
+  await page.goto('/')
+
+  const topic = `E2E narrow viewport ${Date.now()}`
+  await createMeetingViaNewCase(page, topic)
+  await setModelsInSettings(page, { blue: 'mock-slow', red: 'mock-slow', judge: 'mock-slow' })
+  await closeSettings(page)
+
+  await openAdvancedOptions(page)
+  await expect(page.getByTestId('new-round-panel')).toBeVisible()
+
+  await expect
+    .poll(() => page.evaluate(() => document.documentElement.scrollWidth))
+    .toBe(await page.evaluate(() => document.documentElement.clientWidth))
+
+  // document.scrollWidth only grows from overflow past the *right* edge - an absolutely
+  // positioned popover bleeding off the *left* edge (as this one did before the
+  // `.advanced-options { margin-left: auto }` fix at the 640px breakpoint) doesn't move
+  // that number at all, so it needs its own bounding-box check against the viewport.
+  const panelBox = await page.getByTestId('advanced-options-panel').boundingBox()
+  expect(panelBox).not.toBeNull()
+  expect(panelBox!.x).toBeGreaterThanOrEqual(0)
+  expect(panelBox!.x + panelBox!.width).toBeLessThanOrEqual(375)
+
+  await closeAdvancedOptions(page)
+
+  await page.getByTestId('past-topics-button').click()
+  page.once('dialog', (dialog) => dialog.accept())
+  await page
+    .getByTestId('meeting-list-item')
+    .filter({ hasText: topic })
+    .getByTestId('delete-meeting-button')
+    .click()
+})
+
 test('cancelling or closing a meeting asks for confirmation first', async ({ page }) => {
   await page.goto('/')
 

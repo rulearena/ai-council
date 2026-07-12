@@ -1,7 +1,8 @@
 <script setup lang="ts">
-import { inject } from 'vue'
+import { computed, inject } from 'vue'
 import { councilKey } from '../composables/useCouncil'
 import { formatDateTime, roleClass, roleIcon } from '../composables/useCouncil'
+import { useScenePreference } from '../scenes'
 import Modal from './Modal.vue'
 
 defineProps<{ show: boolean }>()
@@ -9,10 +10,25 @@ defineEmits<{ close: [] }>()
 
 const store = inject(councilKey)!
 const { models, selectedModels, modelTestResults, devMode, testSelectedModel, loading } = store
+
+const { scenes, selectedSceneId, setScene } = useScenePreference()
+const sceneModel = computed({
+  get: () => selectedSceneId.value,
+  set: (id: string) => setScene(id),
+})
 </script>
 
 <template>
   <Modal :show="show" title="Settings" test-id="settings-modal" close-test-id="settings-close-button" @close="$emit('close')">
+    <section class="settings-scene-row">
+      <label class="scene-picker">
+        場景
+        <select v-model="sceneModel" data-testid="scene-select">
+          <option v-for="scene in scenes" :key="scene.id" :value="scene.id">{{ scene.label }}</option>
+        </select>
+      </label>
+    </section>
+
     <section class="settings-role-grid">
       <label class="model-slot" :class="roleClass('Blue')">
         <span class="role-badge role-blue" data-testid="role-badge">
