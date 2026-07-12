@@ -6,6 +6,7 @@ import os
 import threading
 import uuid
 from concurrent.futures import Future, ThreadPoolExecutor
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Callable
@@ -36,6 +37,8 @@ from ai_council.models.adapters import (
 )
 from ai_council.models.config import ModelConfig, ModelConfigError, ModelConfigRepository
 from ai_council.prompting.renderer import PromptRenderer
+
+MODEL_TEST_PROMPT = 'Return {"summary":"OK","arguments":[],"risks":[],"recommendation":"OK"}'
 
 
 class CreateMeetingRequest(BaseModel):
@@ -83,6 +86,7 @@ def create_app(
     data_dir: Path | str,
     model_config_path: Path | str,
     prompt_dir: Path | str,
+    start_model_health_checks: bool = True,
 ) -> FastAPI:
     app = FastAPI()
     app.add_middleware(
@@ -130,6 +134,10 @@ def create_app(
     recover_interrupted_executions(repository, execution_state_store)
     projector = TranscriptProjector()
     jobs = MeetingJobManager()
+    model_health = ModelHealthCheckStore()
+    model_health_checker = ModelHealthChecker(model_repository, model_adapters, model_health)
+    if start_model_health_checks:
+        model_health_checker.start()
 
     @app.get("/models")
     def list_models() -> list[dict[str, Any]]:
@@ -137,7 +145,7 @@ def create_app(
             models = model_repository.list_models()
         except ModelConfigError as error:
             raise HTTPException(status_code=400, detail=str(error)) from error
-        return [project_model_config(model) for model in models]
+        return [project_model_config(model, model_health.get(model.id)) for model in models]
 
     @app.put("/models/{model_config_id}")
     def upsert_model(model_config_id: str, request: UpsertModelConfigRequest) -> dict[str, Any]:
@@ -157,7 +165,7 @@ def create_app(
             )
         except ModelConfigError as error:
             raise HTTPException(status_code=400, detail=str(error)) from error
-        return project_model_config(model)
+        return project_model_config(model, model_health.get(model.id))
 
     @app.delete("/models/{model_config_id}", status_code=204)
     def delete_model(model_config_id: str) -> Response:
@@ -168,24 +176,11 @@ def create_app(
     @app.post("/models/{model_config_id}/test")
     def test_model(model_config_id: str) -> dict[str, str]:
         model = get_model(model_repository, model_config_id)
-        adapter = model_adapters.get(model.adapter)
-        tested_at = now_iso()
-        if adapter is None:
-            return {
-                "status": "unavailable",
-                "tested_at": tested_at,
-                "error": f"Unknown adapter: {model.adapter}",
-            }
-        try:
-            adapter.complete(
-                ModelRequest(
-                    prompt='Return {"summary":"OK","arguments":[],"risks":[],"recommendation":"OK"}',
-                    model_config=model,
-                )
-            )
-        except AdapterError as error:
-            return {"status": "unavailable", "tested_at": tested_at, "error": str(error)}
-        return {"status": "available", "tested_at": tested_at}
+        result = check_model_health(model, model_adapters.get(model.adapter))
+        response = {"status": result.status, "tested_at": result.checked_at}
+        if result.error is not None:
+            response["error"] = result.error
+        return response
 
     @app.get("/models/{model_config_id}/available-models")
     def discover_available_models(model_config_id: str) -> dict[str, list[str]]:
@@ -502,9 +497,15 @@ def get_model(repository: ModelConfigRepository, model_id: str) -> ModelConfig:
     raise HTTPException(status_code=404, detail=f"Unknown model: {model_id}")
 
 
-def project_model_config(model: ModelConfig) -> dict[str, Any]:
+def project_model_config(
+    model: ModelConfig,
+    health: ModelHealthCheckResult | None = None,
+) -> dict[str, Any]:
     return {
         **model.__dict__,
+        "status": health.status if health is not None else model.status,
+        "health_checked_at": health.checked_at if health is not None else None,
+        "health_error": health.error if health is not None else None,
         "credential": project_model_credential(model),
     }
 
@@ -629,6 +630,79 @@ def project_token_usage(events: list[dict[str, Any]]) -> TokenUsage:
 
 def now_iso() -> str:
     return datetime.now(UTC).isoformat()
+
+
+@dataclass(frozen=True)
+class ModelHealthCheckResult:
+    status: str
+    checked_at: str
+    error: str | None = None
+
+
+def check_model_health(model: ModelConfig, adapter: Any | None) -> ModelHealthCheckResult:
+    checked_at = now_iso()
+    if adapter is None or not hasattr(adapter, "complete"):
+        return ModelHealthCheckResult(
+            status="unavailable",
+            checked_at=checked_at,
+            error=f"Unknown adapter: {model.adapter}",
+        )
+    try:
+        adapter.complete(ModelRequest(prompt=MODEL_TEST_PROMPT, model_config=model))
+    except AdapterError as error:
+        return ModelHealthCheckResult(
+            status="unavailable",
+            checked_at=checked_at,
+            error=str(error),
+        )
+    except Exception as error:
+        return ModelHealthCheckResult(
+            status="unavailable",
+            checked_at=checked_at,
+            error=str(error),
+        )
+    return ModelHealthCheckResult(status="available", checked_at=checked_at)
+
+
+class ModelHealthCheckStore:
+    def __init__(self) -> None:
+        self._checks: dict[str, ModelHealthCheckResult] = {}
+        self._lock = threading.Lock()
+
+    def record(self, model_id: str, result: ModelHealthCheckResult) -> None:
+        with self._lock:
+            self._checks[model_id] = result
+
+    def get(self, model_id: str) -> ModelHealthCheckResult | None:
+        with self._lock:
+            return self._checks.get(model_id)
+
+
+class ModelHealthChecker:
+    def __init__(
+        self,
+        repository: ModelConfigRepository,
+        adapters: dict[str, object],
+        store: ModelHealthCheckStore,
+    ) -> None:
+        self.repository = repository
+        self.adapters = adapters
+        self.store = store
+        self._executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="ai-council-health")
+
+    def start(self) -> None:
+        self._executor.submit(self._check_all)
+
+    def _check_all(self) -> None:
+        try:
+            models = self.repository.list_models()
+        except ModelConfigError:
+            return
+        for model in models:
+            self._check_model(model)
+
+    def _check_model(self, model: ModelConfig) -> None:
+        self.store.record(model.id, check_model_health(model, self.adapters.get(model.adapter)))
 
 
 class MeetingJobManager:

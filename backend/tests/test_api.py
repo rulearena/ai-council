@@ -32,9 +32,96 @@ def test_models_endpoint_lists_configured_models(tmp_path: Path) -> None:
             "command": None,
             "timeout_seconds": 120.0,
             "status": "unknown",
+            "health_checked_at": None,
+            "health_error": None,
             "credential": None,
         }
     ]
+
+
+def test_startup_health_check_marks_mock_model_available(tmp_path: Path) -> None:
+    app = create_test_app(tmp_path, start_model_health_checks=True)
+    client = TestClient(app)
+
+    model = wait_for_model_status(client, "mock-fast", "available")
+
+    assert model["health_checked_at"]
+    assert model["health_error"] is None
+    assert "available" not in (tmp_path / "config" / "models.yaml").read_text(encoding="utf-8")
+
+
+def test_startup_health_check_marks_adapter_failures_unavailable(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    def raise_url_error(request, timeout):
+        raise urllib.error.URLError("connection refused")
+
+    monkeypatch.setattr(
+        "ai_council.models.adapters.urllib.request.urlopen",
+        raise_url_error,
+    )
+    app = create_test_app(
+        tmp_path,
+        start_model_health_checks=True,
+        models_yaml="""
+models:
+  - id: http-down
+    adapter: openai-compatible-http
+    base_url: http://example.test/v1
+    model: test-model
+""".strip(),
+    )
+    client = TestClient(app)
+
+    model = wait_for_model_status(client, "http-down", "unavailable")
+
+    assert model["health_checked_at"]
+    assert model["health_error"] == "<urlopen error connection refused>"
+
+
+def test_startup_health_check_does_not_block_app_creation(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    release_health_check = threading.Event()
+
+    def slow_urlopen(request, timeout):
+        release_health_check.wait(timeout=2)
+        return FakeHTTPResponse(
+            {
+                "choices": [
+                    {
+                        "message": {
+                            "content": '{"summary":"OK","arguments":[],"risks":[],"recommendation":"Go"}'
+                        }
+                    }
+                ]
+            }
+        )
+
+    monkeypatch.setattr(
+        "ai_council.models.adapters.urllib.request.urlopen",
+        slow_urlopen,
+    )
+
+    started_at = time.monotonic()
+    try:
+        create_test_app(
+            tmp_path,
+            start_model_health_checks=True,
+            models_yaml="""
+models:
+  - id: slow-http
+    adapter: openai-compatible-http
+    base_url: http://example.test/v1
+    model: test-model
+""".strip(),
+        )
+    finally:
+        release_health_check.set()
+
+    assert time.monotonic() - started_at < 0.5
 
 
 def test_model_config_crud_endpoints_update_models_yaml(tmp_path: Path) -> None:
@@ -1146,6 +1233,7 @@ models:
   - id: mock-fast
     adapter: mock
 """.strip(),
+    start_model_health_checks: bool = False,
 ):
     config_dir = tmp_path / "config"
     config_dir.mkdir(exist_ok=True)
@@ -1161,6 +1249,7 @@ models:
         data_dir=tmp_path / "data",
         model_config_path=config_dir / "models.yaml",
         prompt_dir=prompt_dir,
+        start_model_health_checks=start_model_health_checks,
     )
 
 
@@ -1191,3 +1280,19 @@ def wait_for_activity(
             return meeting
         time.sleep(0.01)
     raise AssertionError(f"Meeting did not reach activity status: {expected_status}")
+
+
+def wait_for_model_status(
+    client: TestClient,
+    model_id: str,
+    expected_status: str,
+    timeout: float = 2,
+) -> dict[str, object]:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        models = client.get("/models").json()
+        model = next(item for item in models if item["id"] == model_id)
+        if model["status"] == expected_status:
+            return model
+        time.sleep(0.01)
+    raise AssertionError(f"Model did not reach status: {expected_status}")

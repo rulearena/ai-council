@@ -9,6 +9,8 @@ export type ModelConfig = {
   command: string[] | null
   timeout_seconds: number
   status: 'unknown' | 'available' | 'unavailable'
+  health_checked_at: string | null
+  health_error: string | null
 }
 
 export type ModelTestResult = {

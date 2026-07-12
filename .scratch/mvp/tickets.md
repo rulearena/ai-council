@@ -498,3 +498,15 @@ Work the **frontier**: any ticket whose blockers are all done. For this MVP, sta
 - [x] Leftover execution state appends a failed event for the interrupted step.
 - [x] Recovered failures project meeting `activity_status: failed`.
 - [x] Recovery does not automatically resend model requests.
+
+## 41 - Background Model Health Checks
+
+**What to build:** Run backend startup health checks for configured models and expose the latest result through `GET /models`.
+
+**Blocked by:** 20 - Model Connection Test; 25 - Meeting Activity Projection.
+
+- [x] Backend startup schedules model health checks without blocking app creation.
+- [x] Successful checks mark models `available`.
+- [x] Adapter failures mark models `unavailable` with an error string.
+- [x] `GET /models` includes health check timestamp and error metadata.
+- [x] Health status stays in memory and does not rewrite `config/models.yaml`.

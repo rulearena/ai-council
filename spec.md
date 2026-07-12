@@ -517,7 +517,7 @@ config/models.yaml.example
 43. Team/workspace collaboration
 44. Audit log for multi-user operations
 45. Ollama-specific adapter
-46. Background model health checks
+46. Background model health checks（backend startup health projection 已落地）
 47. Auto-discover available models from endpoint
 48. Performance benchmark
 49. Token usage and cost tracking
