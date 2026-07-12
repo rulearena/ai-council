@@ -29,10 +29,11 @@ import {
 } from '../api'
 
 // A role id as it appears in events.jsonl's `role` field. Used to be a hardcoded
-// 'Blue' | 'Red' | 'Judge' union; every meeting is still actually red-blue in slice A (no
-// backend mode_id yet - spec.md 16.7), but the type itself no longer bakes that in, so
-// seat rendering/pendingRoles/drawers/event bucketing generalize to any mode's roster
-// once slice B/C add real participants.
+// 'Blue' | 'Red' | 'Judge' union; as of slice B the backend supplies each meeting's
+// mode_id and participant roster (spec.md 16.7), and the type stays a plain string so
+// seat rendering/pendingRoles/drawers/event bucketing generalize to whichever mode's
+// roster the selected meeting actually has (resolved dynamically - see activeModeSource
+// below).
 export type CouncilRole = string
 export type SeatOccupant = CouncilRole | 'Chairman'
 export type SequencePreset = {
@@ -51,7 +52,9 @@ export type RoleSeatStatus = 'waiting' | 'thinking' | 'completed' | 'failed'
 // selected (spec.md 16.7). A module-level singleton (not per-useCouncil() state) so every
 // module-level helper below (roleIcon/roleClass/...) and every component's import of
 // activeMode/activeModeRoles/councilRoles reads the one true "what's running right now" -
-// useCouncil()'s selectedMeeting watcher (see below) is the sole writer.
+// useCouncil()'s selectedMeeting watcher (see below) is the sole writer. This assumes
+// useCouncil() is only ever instantiated once (by App.vue) - a second concurrent instance
+// would fight over the same singleton.
 const activeModeSource = ref<ModeDefinition>(getModeById(DEFAULT_MODE_ID)!)
 
 // computed(...) wrappers (not activeModeSource itself) so existing `import { activeMode }`
@@ -673,7 +676,12 @@ export function useCouncil() {
   }
 
   async function requestSelectedRoleSequence() {
-    if (!selectedMeeting.value || !canRun.value) return
+    // selectedSequencePreset can be undefined when the active mode's roster can't build
+    // any presets (fewer than 2 members, or no adjudicator - see sequencePresets above,
+    // which returns []). No mode buildable today hits that (all three `parallel` modes
+    // are still `available: false`), but this guards against the TypeError up front
+    // rather than relying on that staying true.
+    if (!selectedMeeting.value || !canRun.value || !selectedSequencePreset.value) return
     clearContinueHint()
     pendingRoles.value.push(...selectedSequencePreset.value.roles)
     await runAction(async () => {
