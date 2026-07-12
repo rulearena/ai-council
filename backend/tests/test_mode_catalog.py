@@ -205,6 +205,144 @@ def test_get_mode_returns_none_for_unknown_id(tmp_path: Path) -> None:
     assert ModeCatalogRepository(config_path).get_mode("does-not-exist") is None
 
 
+def test_catalog_rejects_non_list_roles(tmp_path: Path) -> None:
+    config_path = _write_yaml(
+        tmp_path,
+        """
+modes:
+  - id: not-a-list
+    name: Not A List
+    category: relay
+    tagline: t
+    when_to_use: w
+    sop: 5
+    default_scene: meeting-room
+    inputs: []
+    roles: 7
+    steps:
+      - { role: Blue, template: blue_propose, label: Blue Propose }
+""",
+    )
+
+    with pytest.raises(ModeConfigError, match="not-a-list"):
+        ModeCatalogRepository(config_path).list_modes()
+
+
+def test_catalog_rejects_non_mapping_root(tmp_path: Path) -> None:
+    config_path = _write_yaml(
+        tmp_path,
+        """
+- id: red-blue
+- id: courtroom
+""",
+    )
+
+    with pytest.raises(ModeConfigError):
+        ModeCatalogRepository(config_path).list_modes()
+
+
+def test_catalog_rejects_non_integer_fanout_instances(tmp_path: Path) -> None:
+    config_path = _write_yaml(
+        tmp_path,
+        """
+modes:
+  - id: bad-fanout
+    name: Bad Fanout
+    category: parallel
+    tagline: t
+    when_to_use: w
+    sop: []
+    default_scene: meeting-room
+    inputs: []
+    roles:
+      - { id: Moderator, name: 主持人, color: "#8b6dd9", kind: synthesizer }
+    fanout:
+      role: Member
+      template: brainstorm_member
+      label: 委員發想
+      min_instances: abc
+      max_instances: 6
+      instance_prompt: true
+""",
+    )
+
+    with pytest.raises(ModeConfigError, match="bad-fanout"):
+        ModeCatalogRepository(config_path).list_modes()
+
+
+def test_catalog_rejects_unknown_role_kind(tmp_path: Path) -> None:
+    config_path = _write_yaml(
+        tmp_path,
+        """
+modes:
+  - id: bad-role-kind
+    name: Bad Role Kind
+    category: relay
+    tagline: t
+    when_to_use: w
+    sop: []
+    default_scene: meeting-room
+    inputs: []
+    roles:
+      - { id: Blue, name: 藍軍, color: "#4d8dff", kind: overlord }
+    steps:
+      - { role: Blue, template: blue_propose, label: Blue Propose }
+""",
+    )
+
+    with pytest.raises(ModeConfigError, match="bad-role-kind"):
+        ModeCatalogRepository(config_path).list_modes()
+
+
+def test_catalog_rejects_unknown_input_kind(tmp_path: Path) -> None:
+    config_path = _write_yaml(
+        tmp_path,
+        """
+modes:
+  - id: bad-input-kind
+    name: Bad Input Kind
+    category: relay
+    tagline: t
+    when_to_use: w
+    sop: []
+    default_scene: meeting-room
+    inputs:
+      - { id: position_a, label: 正方立場, kind: audio }
+    roles:
+      - { id: Blue, name: 藍軍, color: "#4d8dff", kind: member }
+    steps:
+      - { role: Blue, template: blue_propose, label: Blue Propose }
+""",
+    )
+
+    with pytest.raises(ModeConfigError, match="bad-input-kind"):
+        ModeCatalogRepository(config_path).list_modes()
+
+
+def test_catalog_rejects_parallel_mode_with_steps(tmp_path: Path) -> None:
+    config_path = _write_yaml(
+        tmp_path,
+        """
+modes:
+  - id: bad-parallel-steps
+    name: Bad Parallel Steps
+    category: parallel
+    tagline: t
+    when_to_use: w
+    sop: []
+    default_scene: meeting-room
+    inputs: []
+    roles:
+      - { id: Moderator, name: 主持人, color: "#8b6dd9", kind: synthesizer }
+    steps:
+      - { role: Moderator, template: brainstorm_synthesis, label: 主持人彙整 }
+""",
+    )
+
+    with pytest.raises(ModeConfigError, match="bad-parallel-steps"):
+        ModeCatalogRepository(config_path).list_modes()
+
+
 def test_repo_modes_yaml_is_loadable() -> None:
     config_path = Path(__file__).resolve().parents[2] / "config" / "modes.yaml"
     prompts_dir = Path(__file__).resolve().parents[2] / "prompts"

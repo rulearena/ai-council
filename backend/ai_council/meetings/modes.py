@@ -103,6 +103,8 @@ class ModeCatalogRepository:
         if not self.config_path.exists():
             raise ModeConfigError(f"Mode config not found: {self.config_path}")
         raw = yaml.safe_load(self.config_path.read_text(encoding="utf-8")) or {}
+        if not isinstance(raw, dict):
+            raise ModeConfigError("modes.yaml root must be a mapping")
         raw_modes = raw.get("modes", [])
         if not isinstance(raw_modes, list):
             raise ModeConfigError("modes must be a list")
@@ -121,6 +123,14 @@ class ModeCatalogRepository:
         return None
 
 
+def _require_list(mode_id: str, value: Any, field_name: str) -> list[Any]:
+    if value is None:
+        return []
+    if not isinstance(value, list):
+        raise ModeConfigError(f"Mode {mode_id!r} {field_name} must be a list")
+    return value
+
+
 def _mode_from_yaml_item(raw_mode: Any) -> ModeDefinition:
     if not isinstance(raw_mode, dict):
         raise ModeConfigError("Mode entry must be a mapping")
@@ -135,16 +145,19 @@ def _mode_from_yaml_item(raw_mode: Any) -> ModeDefinition:
     if category not in VALID_CATEGORIES:
         raise ModeConfigError(f"Mode {mode_id!r} has unknown category: {category!r}")
 
-    roles = [_role_from_yaml_item(mode_id, item) for item in raw_mode.get("roles", [])]
+    raw_roles = _require_list(mode_id, raw_mode.get("roles"), "roles")
+    roles = [_role_from_yaml_item(mode_id, item) for item in raw_roles]
     if not roles:
         raise ModeConfigError(f"Mode {mode_id!r} requires at least one role")
     role_ids = {role.id for role in roles}
     if len(role_ids) != len(roles):
         raise ModeConfigError(f"Mode {mode_id!r} has duplicate role ids")
 
-    inputs = [_input_from_yaml_item(mode_id, item) for item in raw_mode.get("inputs", []) or []]
+    raw_inputs = _require_list(mode_id, raw_mode.get("inputs"), "inputs")
+    inputs = [_input_from_yaml_item(mode_id, item) for item in raw_inputs]
 
-    steps = [_step_from_yaml_item(mode_id, item) for item in raw_mode.get("steps", []) or []]
+    raw_steps = _require_list(mode_id, raw_mode.get("steps"), "steps")
+    steps = [_step_from_yaml_item(mode_id, item) for item in raw_steps]
     if category == "relay":
         if not steps:
             raise ModeConfigError(f"Mode {mode_id!r} is category relay but has no steps")
@@ -159,13 +172,15 @@ def _mode_from_yaml_item(raw_mode: Any) -> ModeDefinition:
     fanout = _fanout_from_yaml(mode_id, raw_mode.get("fanout"))
     synthesis = _synthesis_from_yaml(mode_id, raw_mode.get("synthesis"))
 
+    sop = _require_list(mode_id, raw_mode.get("sop"), "sop")
+
     return ModeDefinition(
         id=mode_id,
         name=name,
         category=category,
         tagline=raw_mode.get("tagline", ""),
         when_to_use=raw_mode.get("when_to_use", ""),
-        sop=list(raw_mode.get("sop", []) or []),
+        sop=list(sop),
         default_scene=raw_mode.get("default_scene", ""),
         inputs=inputs,
         roles=roles,
@@ -229,12 +244,19 @@ def _fanout_from_yaml(mode_id: str, raw_fanout: Any) -> ModeFanout | None:
     label = raw_fanout.get("label")
     if not role or not template or not label:
         raise ModeConfigError(f"Mode {mode_id!r} has a fanout missing role/template/label")
+    try:
+        min_instances = int(raw_fanout.get("min_instances", 2))
+        max_instances = int(raw_fanout.get("max_instances", 6))
+    except (TypeError, ValueError) as error:
+        raise ModeConfigError(
+            f"Mode {mode_id!r} fanout min_instances/max_instances must be integers"
+        ) from error
     return ModeFanout(
         role=role,
         template=template,
         label=label,
-        min_instances=int(raw_fanout.get("min_instances", 2)),
-        max_instances=int(raw_fanout.get("max_instances", 6)),
+        min_instances=min_instances,
+        max_instances=max_instances,
         instance_prompt=bool(raw_fanout.get("instance_prompt", False)),
     )
 
