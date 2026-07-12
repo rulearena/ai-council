@@ -3,6 +3,7 @@ import roleBlueIcon from '../assets/roles/blue.png'
 import roleRedIcon from '../assets/roles/red.png'
 import roleJudgeIcon from '../assets/roles/judge.png'
 import { DEFAULT_MODE_ID, getModeById, refreshModeCatalog, type ModeDefinition, type ModeRoleDefinition } from '../modes'
+import { applyModeScene } from '../scenes'
 import {
   addMeetingMessage,
   cancelMeeting,
@@ -257,9 +258,17 @@ export function useCouncil() {
   // plain `watch(selectedMeeting, ...)` would only re-run on a meeting change and could
   // stay stuck on the local fallback mode object. No meeting selected (back at the list)
   // falls back to DEFAULT_MODE_ID, same as before any meeting is ever opened.
+  //
+  // Also applies (spec.md 16.7) the resolved mode's default_scene as a non-persisted
+  // scene override (see scenes.ts's applyModeScene) - a selected meeting jumps straight to
+  // its mode's scene (e.g. courtroom), while no meeting selected clears the override back
+  // to the user's persisted preference. This effect re-runs on every catalog refresh as
+  // well as every meeting switch (see above), so applyModeScene is called with the same
+  // resolved mode's default_scene repeatedly; that's fine since it's idempotent.
   watchEffect(() => {
-    activeModeSource.value =
-      getModeById(selectedMeeting.value?.mode_id ?? DEFAULT_MODE_ID) ?? getModeById(DEFAULT_MODE_ID)!
+    const mode = getModeById(selectedMeeting.value?.mode_id ?? DEFAULT_MODE_ID) ?? getModeById(DEFAULT_MODE_ID)!
+    activeModeSource.value = mode
+    applyModeScene(selectedMeeting.value ? mode.defaultScene : null)
   })
 
   // Keeps selectedModels/modelTestResults' keys in sync with whichever roster is active

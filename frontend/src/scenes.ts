@@ -223,15 +223,36 @@ const selectedSceneId = ref(
   storedSceneId && scenes.some((scene) => scene.id === storedSceneId) ? storedSceneId : meetingRoomScene.id,
 )
 
-export function useScenePreference() {
-  // A stale/unknown id left over in localStorage (e.g. a scene that was removed) falls
-  // back to meetingRoomScene here - in the computed itself, not just on load - so it can
-  // never render a blank stage.
-  const currentScene = computed(
-    () => scenes.find((scene) => scene.id === selectedSceneId.value) ?? meetingRoomScene,
-  )
+// Mode-system slice B (spec.md 16.7): a non-persisted override applied whenever a meeting
+// is opened, so courtroom meetings land on the courtroom scene without touching the
+// user's persisted `selectedSceneId` preference. Null means "no override - use the
+// persisted preference", which is also the state a closed/absent meeting resets to (see
+// applyModeScene's caller in useCouncil.ts's selectedMeeting watcher).
+const sceneOverrideId = ref<string | null>(null)
 
+export function useScenePreference() {
+  // Override wins while set (an open meeting's mode just applied it); otherwise fall back
+  // to the persisted preference. A stale/unknown selectedSceneId left over in localStorage
+  // (e.g. a scene that was removed) falls back to meetingRoomScene here - in the computed
+  // itself, not just on load - so it can never render a blank stage.
+  const currentScene = computed(() => {
+    if (sceneOverrideId.value) {
+      const overridden = scenes.find((scene) => scene.id === sceneOverrideId.value)
+      if (overridden) return overridden
+    }
+    return scenes.find((scene) => scene.id === selectedSceneId.value) ?? meetingRoomScene
+  })
+
+  // A manual pick (Settings) always wins immediately and persists - clearing the mode's
+  // override here is what makes that true even while a meeting with a default_scene is
+  // open. Trade-off (spec.md 16.7): this only lasts for the current meeting - the
+  // selectedMeeting watcher re-applies the mode's default_scene via applyModeScene on the
+  // *next* meeting switch (including re-opening the same meeting), so a manual switch
+  // never becomes a persistent override for that mode. It does persist as the fallback
+  // used by modes/meetings with no override in play (e.g. switching to a mode whose
+  // default_scene doesn't apply, or after closing the meeting list).
   function setScene(id: string) {
+    sceneOverrideId.value = null
     selectedSceneId.value = id
     try {
       localStorage.setItem(SCENE_STORAGE_KEY, id)
@@ -241,4 +262,12 @@ export function useScenePreference() {
   }
 
   return { scenes, selectedSceneId, currentScene, setScene }
+}
+
+// Applies (or clears) the active mode's default_scene as a non-persisted override -
+// called from useCouncil.ts's selectedMeeting watcher, not by scene-picker UI. An unknown
+// scene id (e.g. a mode config referencing a scene that doesn't exist) safely degrades to
+// null (no override) rather than leaving the stage on a stale override or throwing.
+export function applyModeScene(sceneId: string | null) {
+  sceneOverrideId.value = sceneId && scenes.some((scene) => scene.id === sceneId) ? sceneId : null
 }
