@@ -16,6 +16,11 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, PlainTextResponse, Response
 from pydantic import BaseModel, Field
 
+from ai_council.meetings.execution_state import (
+    ActiveExecutionState,
+    MeetingExecutionStateStore,
+    interrupted_execution_event,
+)
 from ai_council.meetings.repository import MeetingRepository
 from ai_council.meetings.runner import MeetingRunner, RunnerAdapters, TokenStreamEvent
 from ai_council.meetings.transcript import TranscriptProjector
@@ -103,6 +108,7 @@ def create_app(
     data_path = Path(data_dir)
     metadata_store = MeetingMetadataStore(data_path)
     repository = MeetingRepository(data_path)
+    execution_state_store = MeetingExecutionStateStore(data_path)
     model_repository = ModelConfigRepository(model_config_path)
     stream_bus = MeetingStreamBus()
     model_adapters = {
@@ -119,7 +125,9 @@ def create_app(
             by_name=model_adapters,
         ),
         stream_sink=stream_bus.publish,
+        execution_state_store=execution_state_store,
     )
+    recover_interrupted_executions(repository, execution_state_store)
     projector = TranscriptProjector()
     jobs = MeetingJobManager()
 
@@ -528,6 +536,31 @@ def reject_terminal_meeting(repository: MeetingRepository, meeting_id: str) -> N
         status = event.get("status")
         if status in {"closed", "cancelled"}:
             raise HTTPException(status_code=409, detail=f"Meeting is terminal: {status}")
+
+
+def recover_interrupted_executions(
+    repository: MeetingRepository,
+    execution_state_store: MeetingExecutionStateStore,
+) -> None:
+    for state in execution_state_store.list_active():
+        meeting_id = state["meeting_id"]
+        if not _step_has_finished(repository.read_events(meeting_id), state):
+            repository.append_event(meeting_id, interrupted_execution_event(state))
+        execution_state_store.clear_active(meeting_id)
+
+
+def _step_has_finished(
+    events: list[dict[str, Any]],
+    state: ActiveExecutionState,
+) -> bool:
+    matching_events = [
+        event
+        for event in events
+        if event.get("step_id") == state["step_id"]
+        and event.get("attempt") == state["attempt"]
+        and event.get("status") in {"completed", "failed"}
+    ]
+    return bool(matching_events)
 
 
 def project_meeting_status(events: list[dict[str, Any]]) -> str:

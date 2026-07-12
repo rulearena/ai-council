@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Callable, Literal, Protocol, TypedDict
 
+from ai_council.meetings.execution_state import ActiveExecutionState, MeetingExecutionStateStore
 from ai_council.meetings.repository import MeetingRepository
 from ai_council.meetings.transcript import TranscriptProjector
 from ai_council.models.adapters import AdapterError, ModelRequest, ModelResponse
@@ -66,11 +67,13 @@ class MeetingRunner:
         prompt_renderer: PromptRenderer,
         adapters: RunnerAdapters,
         stream_sink: Callable[[str, TokenStreamEvent], None] | None = None,
+        execution_state_store: MeetingExecutionStateStore | None = None,
     ) -> None:
         self.repository = repository
         self.prompt_renderer = prompt_renderer
         self.adapters = adapters
         self.stream_sink = stream_sink
+        self.execution_state_store = execution_state_store
         self.output_parser = RoleOutputParser()
         self.transcript_projector = TranscriptProjector()
 
@@ -296,6 +299,15 @@ class MeetingRunner:
                 },
             )
 
+        self._save_active_execution(
+            meeting_id=meeting_id,
+            step=step,
+            event_step_id=event_step_id,
+            attempt=attempt,
+            round_number=round_number,
+            model_config_id=config.id,
+            extra_event_fields=extra_event_fields,
+        )
         try:
             response = self.adapters.by_name[config.adapter].complete(
                 ModelRequest(
@@ -307,6 +319,7 @@ class MeetingRunner:
             )
             parsed = self.output_parser.parse(response.raw_output)
         except (AdapterError, OutputParseError, KeyError) as error:
+            self._clear_active_execution(meeting_id)
             if self._is_terminal(meeting_id):
                 return False
             self.repository.append_event(
@@ -326,6 +339,7 @@ class MeetingRunner:
             )
             return False
 
+        self._clear_active_execution(meeting_id)
         if self._is_terminal(meeting_id):
             return False
         completed_event = {
@@ -355,6 +369,39 @@ class MeetingRunner:
             completed_event,
         )
         return True
+
+    def _save_active_execution(
+        self,
+        *,
+        meeting_id: str,
+        step: StepDefinition,
+        event_step_id: str,
+        attempt: int,
+        round_number: int,
+        model_config_id: str,
+        extra_event_fields: dict[str, object],
+    ) -> None:
+        if self.execution_state_store is None:
+            return
+        state: ActiveExecutionState = {
+            "meeting_id": meeting_id,
+            "step_id": event_step_id,
+            "base_step_id": step.step_id,
+            "round": round_number,
+            "role": step.role,
+            "attempt": attempt,
+            "model_config_id": model_config_id,
+            "status": "running",
+        }
+        for key in ["interaction_type", "directed_sequence", "sequence", "sequence_index"]:
+            value = extra_event_fields.get(key)
+            if isinstance(value, (str, int)):
+                state[key] = value
+        self.execution_state_store.save_active(meeting_id, state)
+
+    def _clear_active_execution(self, meeting_id: str) -> None:
+        if self.execution_state_store is not None:
+            self.execution_state_store.clear_active(meeting_id)
 
     def _is_terminal(self, meeting_id: str) -> bool:
         return any(
