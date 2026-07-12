@@ -56,6 +56,40 @@ def test_prompt_renderer_loads_template_and_injects_context(tmp_path: Path) -> N
     )
 
 
+def test_renderer_injects_mode_inputs(tmp_path: Path) -> None:
+    (tmp_path / "debate_statement_pro.md").write_text(
+        "{{ topic }} | {{ position_a }} vs {{ position_b }}", encoding="utf-8"
+    )
+    renderer = PromptRenderer(tmp_path)
+
+    rendered = renderer.render(
+        template_name="debate_statement_pro",
+        role="Pro",
+        topic="T",
+        prior_transcript="",
+        required_json_schema="{}",
+        inputs={"position_a": "先做後端", "position_b": "先做前端"},
+    )
+
+    assert rendered == "T | 先做後端 vs 先做前端"
+
+
+def test_renderer_builtin_values_win_over_inputs(tmp_path: Path) -> None:
+    (tmp_path / "t.md").write_text("{{ topic }}", encoding="utf-8")
+    renderer = PromptRenderer(tmp_path)
+
+    rendered = renderer.render(
+        template_name="t",
+        role="Pro",
+        topic="real",
+        prior_transcript="",
+        required_json_schema="{}",
+        inputs={"topic": "hijacked"},
+    )
+
+    assert rendered == "real"
+
+
 def test_role_output_parser_parses_json_code_fence() -> None:
     raw_output = """
 模型回覆如下：
