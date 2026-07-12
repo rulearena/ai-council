@@ -32,7 +32,48 @@ export type Meeting = {
   estimated_cost: EstimatedCost | null
   tags: string[]
   pinned: boolean
+  mode_id: string
+  participants: MeetingParticipant[]
   events?: MeetingEvent[]
+}
+
+export type MeetingParticipant = {
+  role_id: string
+  name: string
+  color: string
+  kind: string
+  portrait: string | null
+  model_config_id: string | null
+  display_name: string
+  instance_prompt: string | null
+}
+
+export type BackendModeRole = { id: string; name: string; color: string; kind: string; portrait: string | null }
+export type BackendModeStep = { role: string; template: string; label: string }
+export type BackendModeInput = { id: string; label: string; kind: string }
+export type BackendModeFanout = {
+  role: string
+  template: string
+  label: string
+  min_instances: number
+  max_instances: number
+  instance_prompt: boolean
+}
+export type BackendModeSynthesis = { role: string; template: string; label: string }
+export type BackendModeDefinition = {
+  id: string
+  name: string
+  category: string
+  tagline: string
+  when_to_use: string
+  sop: string[]
+  default_scene: string
+  inputs: BackendModeInput[]
+  roles: BackendModeRole[]
+  steps?: BackendModeStep[]
+  fanout?: BackendModeFanout
+  synthesis?: BackendModeSynthesis
+  available: boolean
 }
 
 export type MeetingEvent = {
@@ -114,13 +155,24 @@ export async function testModel(modelId: string): Promise<ModelTestResult> {
   return postJson(`/models/${modelId}/test`, {})
 }
 
+export async function getModes(): Promise<BackendModeDefinition[]> {
+  return getJson('/modes')
+}
+
 export async function getMeetings(query?: string): Promise<Meeting[]> {
   const trimmed = query?.trim()
   return getJson(trimmed ? `/meetings?q=${encodeURIComponent(trimmed)}` : '/meetings')
 }
 
-export async function createMeeting(topic: string): Promise<Meeting> {
-  return postJson('/meetings', { topic })
+export async function createMeeting(
+  topic: string,
+  options?: { modeId?: string; inputs?: Record<string, string> },
+): Promise<Meeting> {
+  return postJson('/meetings', {
+    topic,
+    mode_id: options?.modeId ?? 'red-blue',
+    inputs: options?.inputs ?? {},
+  })
 }
 
 export async function getMeeting(meetingId: string): Promise<Meeting> {
