@@ -523,3 +523,16 @@ Work the **frontier**: any ticket whose blockers are all done. For this MVP, sta
 - [x] Model attempt events include `output_schema_hash`.
 - [x] Fixed-flow events preserve the correct template name for each stage.
 - [x] Frontend API event types include the optional metadata fields.
+
+## 43 - Token Cost Estimate Backend Foundation
+
+**What to build:** Add backend-only token cost estimate support using optional model pricing metadata and existing token usage totals.
+
+**Blocked by:** 37 - Token Usage Metadata Tracking; 33 - Backend Model Config Management API.
+
+- [x] Model configs can declare optional `pricing` metadata with `currency`, `input_per_1m_tokens`, and `output_per_1m_tokens`.
+- [x] Model config repository preserves pricing metadata when loading and saving YAML.
+- [x] Meeting read models include `estimated_cost` as `{currency, amount}` when all token-usage events can be priced.
+- [x] Meeting read models return `estimated_cost: null` when pricing metadata is unavailable.
+- [x] `GET /meetings` and `GET /meetings/{meeting_id}` return consistent `estimated_cost` values.
+- [x] Frontend API types include the new optional model pricing and meeting estimated cost fields.

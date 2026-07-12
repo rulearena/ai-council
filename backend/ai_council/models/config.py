@@ -21,6 +21,13 @@ class ModelConfigError(ValueError):
 
 
 @dataclass(frozen=True)
+class ModelPricing:
+    currency: str
+    input_per_1m_tokens: float
+    output_per_1m_tokens: float
+
+
+@dataclass(frozen=True)
 class ModelConfig:
     id: str
     adapter: str
@@ -29,6 +36,7 @@ class ModelConfig:
     api_key_env: str | None = None
     supports_json_mode: bool = False
     extra_body: dict[str, Any] = field(default_factory=dict)
+    pricing: ModelPricing | None = None
     command: list[str] | None = None
     timeout_seconds: float = 120
     status: ModelStatus = "unknown"
@@ -106,6 +114,13 @@ def validate_model_config(model: ModelConfig) -> None:
             raise ModelConfigError("subscription-cli requires command")
         if not any("{prompt}" in argument for argument in model.command):
             raise ModelConfigError("subscription-cli command requires a {prompt} placeholder")
+    if model.pricing is not None:
+        if not model.pricing.currency.strip():
+            raise ModelConfigError("pricing.currency is required")
+        if model.pricing.input_per_1m_tokens < 0:
+            raise ModelConfigError("pricing.input_per_1m_tokens must be non-negative")
+        if model.pricing.output_per_1m_tokens < 0:
+            raise ModelConfigError("pricing.output_per_1m_tokens must be non-negative")
 
 
 def _model_to_yaml_item(model: ModelConfig) -> dict[str, Any]:
@@ -123,6 +138,12 @@ def _model_to_yaml_item(model: ModelConfig) -> dict[str, Any]:
         item["supports_json_mode"] = model.supports_json_mode
     if model.extra_body:
         item["extra_body"] = model.extra_body
+    if model.pricing is not None:
+        item["pricing"] = {
+            "currency": model.pricing.currency,
+            "input_per_1m_tokens": model.pricing.input_per_1m_tokens,
+            "output_per_1m_tokens": model.pricing.output_per_1m_tokens,
+        }
     if model.command is not None:
         item["command"] = model.command
     if model.timeout_seconds != 120:
@@ -143,7 +164,38 @@ def _model_from_yaml_item(raw_model: Any) -> ModelConfig:
         api_key_env=raw_model.get("api_key_env"),
         supports_json_mode=raw_model.get("supports_json_mode", False),
         extra_body=raw_model.get("extra_body") or {},
+        pricing=_pricing_from_yaml(raw_model.get("pricing")),
         command=raw_model.get("command"),
         timeout_seconds=float(raw_model.get("timeout_seconds", 120)),
     )
     return model
+
+
+def _pricing_from_yaml(raw_pricing: Any) -> ModelPricing | None:
+    if raw_pricing is None:
+        return None
+    if not isinstance(raw_pricing, dict):
+        raise ModelConfigError("pricing must be a mapping")
+    try:
+        currency = raw_pricing["currency"]
+        input_rate = raw_pricing["input_per_1m_tokens"]
+        output_rate = raw_pricing["output_per_1m_tokens"]
+    except KeyError as error:
+        raise ModelConfigError(f"pricing.{error.args[0]} is required") from error
+    if not isinstance(currency, str):
+        raise ModelConfigError("pricing.currency must be a string")
+    try:
+        pricing = ModelPricing(
+            currency=currency,
+            input_per_1m_tokens=float(input_rate),
+            output_per_1m_tokens=float(output_rate),
+        )
+    except (TypeError, ValueError) as error:
+        raise ModelConfigError("pricing token rates must be numbers") from error
+    if not pricing.currency.strip():
+        raise ModelConfigError("pricing.currency is required")
+    if pricing.input_per_1m_tokens < 0:
+        raise ModelConfigError("pricing.input_per_1m_tokens must be non-negative")
+    if pricing.output_per_1m_tokens < 0:
+        raise ModelConfigError("pricing.output_per_1m_tokens must be non-negative")
+    return pricing

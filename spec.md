@@ -522,7 +522,7 @@ config/models.yaml.example
 46. Background model health checks（backend startup health projection 已落地）
 47. Auto-discover available models from endpoint
 48. Performance benchmark
-49. Token usage and cost tracking
+49. Token usage and cost tracking（backend cost estimate foundation 已落地）
 50. Multiple projects/workspaces
 51. Workspace switching UI
 52. Workspace-scoped model configs

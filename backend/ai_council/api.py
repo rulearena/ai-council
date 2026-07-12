@@ -8,6 +8,7 @@ import uuid
 from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any, Callable
 
@@ -36,6 +37,7 @@ from ai_council.models.adapters import (
     TokenUsage,
 )
 from ai_council.models.config import ModelConfig, ModelConfigError, ModelConfigRepository
+from ai_council.models.config import ModelPricing as ConfigModelPricing
 from ai_council.prompting.renderer import PromptRenderer
 
 MODEL_TEST_PROMPT = 'Return {"summary":"OK","arguments":[],"risks":[],"recommendation":"OK"}'
@@ -77,8 +79,15 @@ class UpsertModelConfigRequest(BaseModel):
     api_key_env: str | None = None
     supports_json_mode: bool = False
     extra_body: dict[str, Any] = Field(default_factory=dict)
+    pricing: ModelPricingRequest | None = None
     command: list[str] | None = None
     timeout_seconds: float = 120
+
+
+class ModelPricingRequest(BaseModel):
+    currency: str
+    input_per_1m_tokens: float = Field(ge=0)
+    output_per_1m_tokens: float = Field(ge=0)
 
 
 def create_app(
@@ -159,6 +168,7 @@ def create_app(
                     api_key_env=request.api_key_env,
                     supports_json_mode=request.supports_json_mode,
                     extra_body=request.extra_body,
+                    pricing=project_model_pricing_request(request.pricing),
                     command=request.command,
                     timeout_seconds=request.timeout_seconds,
                 )
@@ -208,12 +218,13 @@ def create_app(
             "pinned": False,
         }
         metadata_store.save(metadata)
-        return project_meeting_summary(metadata, [])
+        return project_meeting_summary(metadata, [], model_pricing={})
 
     @app.get("/meetings")
     def list_meetings(q: str | None = None) -> list[dict[str, Any]]:
         query = (q or "").strip().lower()
         summaries: list[dict[str, Any]] = []
+        pricing = model_pricing_by_id(model_repository)
         for metadata in metadata_store.list():
             meeting_id = metadata["meeting_id"]
             events = repository.read_events(meeting_id)
@@ -223,6 +234,7 @@ def create_app(
                 project_meeting_summary(
                     metadata,
                     events,
+                    model_pricing=pricing,
                     activity_status=live_activity_status(events, jobs.is_running(meeting_id)),
                 )
             )
@@ -236,6 +248,7 @@ def create_app(
             **project_meeting_summary(
                 metadata,
                 events,
+                model_pricing=model_pricing_by_id(model_repository),
                 activity_status=live_activity_status(events, jobs.is_running(meeting_id)),
             ),
             "events": events,
@@ -250,6 +263,7 @@ def create_app(
         return project_meeting_summary(
             metadata,
             events,
+            model_pricing=model_pricing_by_id(model_repository),
             activity_status=live_activity_status(events, jobs.is_running(meeting_id)),
         )
 
@@ -265,6 +279,7 @@ def create_app(
         return project_meeting_summary(
             metadata,
             events,
+            model_pricing=model_pricing_by_id(model_repository),
             activity_status=live_activity_status(events, jobs.is_running(meeting_id)),
         )
 
@@ -503,6 +518,7 @@ def project_model_config(
 ) -> dict[str, Any]:
     return {
         **model.__dict__,
+        "pricing": project_model_pricing(model.pricing),
         "status": health.status if health is not None else model.status,
         "health_checked_at": health.checked_at if health is not None else None,
         "health_error": health.error if health is not None else None,
@@ -518,6 +534,35 @@ def project_model_credential(model: ModelConfig) -> dict[str, Any] | None:
         "env_var": model.api_key_env,
         "configured": bool(os.environ.get(model.api_key_env)),
     }
+
+
+def project_model_pricing_request(
+    pricing: ModelPricingRequest | None,
+) -> ConfigModelPricing | None:
+    if pricing is None:
+        return None
+    return ConfigModelPricing(
+        currency=pricing.currency,
+        input_per_1m_tokens=pricing.input_per_1m_tokens,
+        output_per_1m_tokens=pricing.output_per_1m_tokens,
+    )
+
+
+def project_model_pricing(pricing: ConfigModelPricing | None) -> dict[str, Any] | None:
+    if pricing is None:
+        return None
+    return {
+        "currency": pricing.currency,
+        "input_per_1m_tokens": pricing.input_per_1m_tokens,
+        "output_per_1m_tokens": pricing.output_per_1m_tokens,
+    }
+
+
+def model_pricing_by_id(repository: ModelConfigRepository) -> dict[str, ConfigModelPricing | None]:
+    try:
+        return {model.id: model.pricing for model in repository.list_models()}
+    except ModelConfigError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
 
 
 def _meeting_matches_query(
@@ -597,6 +642,7 @@ def project_meeting_summary(
     metadata: dict[str, str],
     events: list[dict[str, Any]],
     *,
+    model_pricing: dict[str, ConfigModelPricing | None] | None = None,
     activity_status: str | None = None,
 ) -> dict[str, Any]:
     created_at = metadata.get("created_at", "")
@@ -610,6 +656,7 @@ def project_meeting_summary(
         "activity_status": activity_status or project_activity_status(events),
         "last_step_id": latest_event.get("step_id") if latest_event else None,
         "token_usage": project_token_usage(events),
+        "estimated_cost": project_estimated_cost(events, model_pricing or {}),
         "tags": metadata.get("tags") or [],
         "pinned": bool(metadata.get("pinned", False)),
     }
@@ -626,6 +673,61 @@ def project_token_usage(events: list[dict[str, Any]]) -> TokenUsage:
             if isinstance(value, int):
                 totals[key] += value
     return totals
+
+
+def project_estimated_cost(
+    events: list[dict[str, Any]],
+    model_pricing: dict[str, ConfigModelPricing | None],
+) -> dict[str, Any] | None:
+    amount = Decimal("0")
+    currency: str | None = None
+    saw_usage = False
+    for event in events:
+        usage = event.get("token_usage")
+        if not isinstance(usage, dict):
+            continue
+        model_id = event.get("model_config_id")
+        if not isinstance(model_id, str):
+            return None
+        pricing = model_pricing.get(model_id)
+        if not pricing:
+            return None
+        event_currency = pricing.currency
+        if not event_currency:
+            return None
+        if currency is None:
+            currency = event_currency
+        elif currency != event_currency:
+            return None
+        input_rate = _decimal_pricing_value(pricing.input_per_1m_tokens)
+        output_rate = _decimal_pricing_value(pricing.output_per_1m_tokens)
+        prompt_tokens = usage.get("prompt_tokens")
+        completion_tokens = usage.get("completion_tokens")
+        if (
+            input_rate is None
+            or output_rate is None
+            or not isinstance(prompt_tokens, int)
+            or not isinstance(completion_tokens, int)
+        ):
+            return None
+        amount += (Decimal(prompt_tokens) * input_rate) / Decimal(1_000_000)
+        amount += (Decimal(completion_tokens) * output_rate) / Decimal(1_000_000)
+        saw_usage = True
+    if not saw_usage or currency is None:
+        return None
+    return {"currency": currency, "amount": float(amount)}
+
+
+def _decimal_pricing_value(value: Any) -> Decimal | None:
+    if not isinstance(value, int | float | str):
+        return None
+    try:
+        decimal_value = Decimal(str(value))
+    except InvalidOperation:
+        return None
+    if decimal_value < 0:
+        return None
+    return decimal_value
 
 
 def now_iso() -> str:

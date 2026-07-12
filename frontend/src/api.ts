@@ -6,6 +6,7 @@ export type ModelConfig = {
   api_key_env: string | null
   supports_json_mode: boolean
   extra_body: Record<string, unknown>
+  pricing: ModelPricing | null
   command: string[] | null
   timeout_seconds: number
   status: 'unknown' | 'available' | 'unavailable'
@@ -28,6 +29,7 @@ export type Meeting = {
   updated_at: string
   last_step_id: string | null
   token_usage: TokenUsage
+  estimated_cost: EstimatedCost | null
   tags: string[]
   pinned: boolean
   events?: MeetingEvent[]
@@ -75,6 +77,17 @@ export type TokenUsage = {
   prompt_tokens: number
   completion_tokens: number
   total_tokens: number
+}
+
+export type ModelPricing = {
+  currency: string
+  input_per_1m_tokens: number
+  output_per_1m_tokens: number
+}
+
+export type EstimatedCost = {
+  currency: string
+  amount: number
 }
 
 export type RoleOutput = {

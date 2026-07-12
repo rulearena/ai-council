@@ -32,6 +32,7 @@ def test_models_endpoint_lists_configured_models(tmp_path: Path) -> None:
             "api_key_env": None,
             "supports_json_mode": False,
             "extra_body": {},
+            "pricing": None,
             "command": None,
             "timeout_seconds": 120.0,
             "status": "unknown",
@@ -179,6 +180,20 @@ def test_model_config_crud_reports_validation_errors(tmp_path: Path) -> None:
 
     assert response.status_code == 400
     assert "base_url and model" in response.json()["detail"]
+
+    pricing_response = client.put(
+        "/models/broken-pricing",
+        json={
+            "adapter": "mock",
+            "pricing": {
+                "currency": "USD",
+                "input_per_1m_tokens": -1,
+                "output_per_1m_tokens": 10.0,
+            },
+        },
+    )
+
+    assert pricing_response.status_code == 400
 
     missing_adapter = client.put("/models/broken", json={})
 
@@ -378,6 +393,7 @@ def test_meeting_create_list_get_start_and_transcript(tmp_path: Path) -> None:
         "completion_tokens": 0,
         "total_tokens": 0,
     }
+    assert created["estimated_cost"] is None
     assert created["tags"] == []
     assert created["pinned"] is False
     meeting_id = created["meeting_id"]
@@ -458,6 +474,48 @@ def test_meeting_read_models_include_total_token_usage(
         "total_tokens": 20,
     }
     assert client.get("/meetings").json()[0]["token_usage"] == meeting["token_usage"]
+
+
+def test_meeting_read_models_include_estimated_cost_when_models_have_pricing(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    def complete_with_usage(self, request):
+        return ModelResponse(
+            raw_output='{"summary":"OK","arguments":[],"risks":[],"recommendation":"Go"}',
+            token_usage={"prompt_tokens": 2, "completion_tokens": 3, "total_tokens": 5},
+        )
+
+    monkeypatch.setattr(MockModelAdapter, "complete", complete_with_usage)
+    app = create_test_app(
+        tmp_path,
+        models_yaml="""
+models:
+  - id: mock-fast
+    adapter: mock
+    pricing:
+      currency: USD
+      input_per_1m_tokens: 1.25
+      output_per_1m_tokens: 10.0
+""".strip(),
+    )
+    client = TestClient(app)
+    meeting_id = client.post("/meetings", json={"topic": "cost test"}).json()["meeting_id"]
+
+    client.post(
+        f"/meetings/{meeting_id}/start",
+        json={
+            "models": {
+                "Blue": "mock-fast",
+                "Red": "mock-fast",
+                "Judge": "mock-fast",
+            }
+        },
+    )
+    meeting = wait_for_activity(client, meeting_id, "completed")
+
+    assert meeting["estimated_cost"] == {"currency": "USD", "amount": 0.00013}
+    assert client.get("/meetings").json()[0]["estimated_cost"] == meeting["estimated_cost"]
 
 
 def test_start_returns_while_model_execution_continues_in_background(

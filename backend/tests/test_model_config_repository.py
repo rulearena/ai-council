@@ -4,7 +4,12 @@ from pathlib import Path
 
 import pytest
 
-from ai_council.models.config import ModelConfig, ModelConfigError, ModelConfigRepository
+from ai_council.models.config import (
+    ModelConfig,
+    ModelConfigError,
+    ModelConfigRepository,
+    ModelPricing,
+)
 
 
 def test_repository_loads_models_yaml(tmp_path: Path) -> None:
@@ -37,6 +42,29 @@ models:
     assert model.supports_json_mode is True
     assert model.extra_body == {"chat_template_kwargs": {"enable_thinking": False}}
     assert model.status == "unknown"
+
+
+def test_repository_loads_model_pricing_metadata(tmp_path: Path) -> None:
+    config_path = tmp_path / "models.yaml"
+    config_path.write_text(
+        """
+models:
+  - id: priced-model
+    adapter: mock
+    pricing:
+      currency: USD
+      input_per_1m_tokens: 1.25
+      output_per_1m_tokens: 10.0
+""".strip(),
+        encoding="utf-8",
+    )
+
+    model = ModelConfigRepository(config_path).list_models()[0]
+
+    assert model.pricing is not None
+    assert model.pricing.currency == "USD"
+    assert model.pricing.input_per_1m_tokens == 1.25
+    assert model.pricing.output_per_1m_tokens == 10.0
 
 
 def test_repository_returns_empty_list_when_config_is_missing(tmp_path: Path) -> None:
@@ -103,6 +131,11 @@ def test_repository_saves_new_model_to_yaml(tmp_path: Path) -> None:
             model="bartowski/Qwen_Qwen3.6-27B-GGUF",
             supports_json_mode=True,
             extra_body={"chat_template_kwargs": {"enable_thinking": False}},
+            pricing=ModelPricing(
+                currency="USD",
+                input_per_1m_tokens=1.25,
+                output_per_1m_tokens=10.0,
+            ),
         )
     )
 
@@ -110,6 +143,10 @@ def test_repository_saves_new_model_to_yaml(tmp_path: Path) -> None:
     assert [model.id for model in reloaded] == ["qwen27"]
     assert reloaded[0].base_url == "http://192.168.50.80:8487/v1"
     assert reloaded[0].extra_body == {"chat_template_kwargs": {"enable_thinking": False}}
+    assert reloaded[0].pricing is not None
+    assert reloaded[0].pricing.currency == "USD"
+    assert reloaded[0].pricing.input_per_1m_tokens == 1.25
+    assert reloaded[0].pricing.output_per_1m_tokens == 10.0
 
 
 def test_repository_updates_existing_model_without_reordering(tmp_path: Path) -> None:
@@ -178,6 +215,24 @@ def test_repository_rejects_invalid_model_config(tmp_path: Path) -> None:
 
     with pytest.raises(ModelConfigError, match="Unknown adapter"):
         repository.save_model(ModelConfig(id="broken-adapter", adapter="unknown"))
+
+
+def test_repository_rejects_incomplete_pricing_metadata(tmp_path: Path) -> None:
+    config_path = tmp_path / "models.yaml"
+    config_path.write_text(
+        """
+models:
+  - id: broken-pricing
+    adapter: mock
+    pricing:
+      input_per_1m_tokens: 1.25
+      output_per_1m_tokens: 10.0
+""".strip(),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ModelConfigError, match="pricing.currency"):
+        ModelConfigRepository(config_path).list_models()
 
 
 def test_repository_reports_invalid_existing_yaml(tmp_path: Path) -> None:
