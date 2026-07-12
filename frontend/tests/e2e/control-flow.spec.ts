@@ -531,6 +531,14 @@ test('the explicit "開始新回合" button always starts a fresh fixed round', 
     timeout: 15000,
   })
 
+  // The queue must actually *drain* back to completed, not just fill and stall - a
+  // filtering fix that over-filters (treats round-2's own new events as "already seen"
+  // too) would leave seats stuck on "thinking" forever while activity_status still
+  // reports completed independently, so this has to be asserted on the seats directly.
+  await expect(page.getByTestId('role-seat-blue')).toHaveAttribute('data-status', 'completed')
+  await expect(page.getByTestId('role-seat-red')).toHaveAttribute('data-status', 'completed')
+  await expect(page.getByTestId('role-seat-judge')).toHaveAttribute('data-status', 'completed')
+
   await page.getByTestId('records-button').click()
   await expect(page.getByTestId('step-timeline')).toContainText('round-2-blue-propose')
   await expect(page.getByTestId('step-timeline')).toContainText('round-2-judge-decide')
@@ -543,6 +551,101 @@ test('the explicit "開始新回合" button always starts a fresh fixed round', 
     .filter({ hasText: topic })
     .getByTestId('delete-meeting-button')
     .click()
+})
+
+test('reloading mid-round still shows the real final state after reopening the meeting', async ({
+  page,
+}) => {
+  await page.goto('/')
+
+  const topic = `E2E reload mid-round ${Date.now()}`
+  await createMeetingViaNewCase(page, topic)
+  await setModelsInSettings(page, { blue: 'mock-slow', red: 'mock-slow', judge: 'mock-slow' })
+  await closeSettings(page)
+
+  await page.getByTestId('start-meeting-button').click()
+  await expect(page.getByTestId('operation-status')).toContainText('狀態：running')
+
+  // The backend keeps running the synchronous /start call regardless of the client, so
+  // reloading here throws away every bit of in-memory state (pendingRoles, the
+  // seenEventIds bookkeeping in useCouncil.ts) - the reopened meeting has to reconstruct
+  // status purely from the reconnect's snapshot, with nothing left in the pending queue
+  // to (correctly or incorrectly) reconcile against.
+  await page.reload()
+  await expect(page.getByTestId('council-stage')).toContainText('尚未選擇會議')
+
+  await page.getByTestId('past-topics-button').click()
+  await page.getByTestId('meeting-list-item').filter({ hasText: topic }).locator('.meeting-item').click()
+
+  await expect(page.getByTestId('operation-status')).toContainText('狀態：completed', { timeout: 15000 })
+  await expect(page.getByTestId('role-seat-blue')).toHaveAttribute('data-status', 'completed')
+  await expect(page.getByTestId('role-seat-red')).toHaveAttribute('data-status', 'completed')
+  await expect(page.getByTestId('role-seat-judge')).toHaveAttribute('data-status', 'completed')
+
+  await page.getByTestId('records-button').click()
+  await expect(page.getByTestId('step-timeline')).toContainText('judge-decide')
+  await page.getByTestId('records-close-button').click()
+
+  await page.getByTestId('past-topics-button').click()
+  page.once('dialog', (dialog) => dialog.accept())
+  await page
+    .getByTestId('meeting-list-item')
+    .filter({ hasText: topic })
+    .getByTestId('delete-meeting-button')
+    .click()
+})
+
+test('switching meetings does not leak pendingRoles state, and a revisited meeting can still start a fresh round', async ({
+  page,
+}) => {
+  await page.goto('/')
+
+  const topicA = `E2E switch meeting A ${Date.now()}`
+  await createMeetingViaNewCase(page, topicA)
+  await setModelsInSettings(page, { blue: 'mock-slow', red: 'mock-slow', judge: 'mock-slow' })
+  await closeSettings(page)
+  await page.getByTestId('start-meeting-button').click()
+  await expect(page.getByTestId('operation-status')).toContainText('狀態：completed')
+
+  const topicB = `E2E switch meeting B ${Date.now()}`
+  await createMeetingViaNewCase(page, topicB)
+  await expect(page.getByTestId('council-stage')).toContainText(topicB)
+  await expect(page.getByTestId('role-seat-blue')).toHaveAttribute('data-status', 'waiting')
+
+  // Revisit meeting A (already fully completed) and start an explicit new round on it -
+  // this is exactly the scenario the pendingRoles/seenEventIds race hit: reconnecting
+  // the websocket right after pushing the new round's queue, with A's already-completed
+  // round-1 events sitting right there in the very next snapshot.
+  await page.getByTestId('past-topics-button').click()
+  await page.getByTestId('meeting-list-item').filter({ hasText: topicA }).locator('.meeting-item').click()
+  await expect(page.getByTestId('council-stage')).toContainText(topicA)
+
+  await openAdvancedOptions(page)
+  await page.getByTestId('start-new-round-button').click()
+  await expect(page.getByTestId('role-seat-blue')).toHaveAttribute('data-status', 'thinking')
+  await closeAdvancedOptions(page)
+
+  await expect(page.getByTestId('operation-status')).toContainText('狀態：completed', { timeout: 15000 })
+
+  // The queue must actually drain, not just fill and stall - see the identical note in
+  // the "開始新回合" test above for why this needs its own assertion on the seats.
+  await expect(page.getByTestId('role-seat-blue')).toHaveAttribute('data-status', 'completed')
+  await expect(page.getByTestId('role-seat-red')).toHaveAttribute('data-status', 'completed')
+  await expect(page.getByTestId('role-seat-judge')).toHaveAttribute('data-status', 'completed')
+
+  await page.getByTestId('records-button').click()
+  await expect(page.getByTestId('step-timeline')).toContainText('round-2-blue-propose')
+  await page.getByTestId('records-close-button').click()
+
+  await page.getByTestId('past-topics-button').click()
+  for (const topic of [topicA, topicB]) {
+    page.once('dialog', (dialog) => dialog.accept())
+    await page
+      .getByTestId('meeting-list-item')
+      .filter({ hasText: topic })
+      .getByTestId('delete-meeting-button')
+      .click()
+  }
 })
 
 test('shows a failed-step hint and disables round-level actions until the step is retried', async ({

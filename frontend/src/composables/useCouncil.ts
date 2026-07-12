@@ -120,6 +120,18 @@ export function useCouncil() {
   const devMode = ref(false)
   let closeEventStream: (() => void) | null = null
 
+  // event_ids this session has already processed for the currently-open meeting - lets
+  // the WS handler tell a genuinely new event apart from one merely being resent (every
+  // reconnect's first message is a "snapshot" of the *entire* event history, see
+  // connectMeetingEvents/backend's meeting_events websocket handler). Deliberately NOT
+  // reset on every reconnect (only on an actual meeting switch, in openMeeting below) -
+  // event_ids are stable and unique per (step, round, attempt) (see runner.py's
+  // `f"{meeting_id}:{event_step_id}:attempt-{attempt}:completed"`), so this survives
+  // across the reconnects that startSelectedMeeting/retrySelectedStep/etc. trigger and
+  // still lets a snapshot's *actually new* events (e.g. ones produced while briefly
+  // disconnected) through - see applyPendingRoleUpdates's caller.
+  let seenEventIds = new Set<string>()
+
   // Roles the backend has been asked to run but hasn't confirmed completed/failed yet.
   // The backend only emits completed/failed events (no "running" event), so this queue
   // is the sole source of the "thinking" state: pendingRoles[0] is thinking, the rest are queued.
@@ -257,6 +269,7 @@ export function useCouncil() {
       pendingRoles.value = []
       meetingIdCopied.value = false
       showContinueHint.value = false
+      seenEventIds = new Set()
     }
     selectedMeeting.value = await getMeeting(meetingId)
     selectedEvent.value = selectedMeeting.value.events?.at(-1) ?? null
@@ -311,7 +324,16 @@ export function useCouncil() {
           last_step_id: latestEvent?.step_id ?? null,
           updated_at: latestEvent?.created_at ?? selectedMeeting.value.updated_at,
         }
-        applyPendingRoleUpdates(message.events, message.activity_status)
+        // A reconnect's "snapshot" resends the meeting's *entire* history (not just what
+        // happened since we disconnected), so most of its events are old news the
+        // instant we've already lived through them once - only events this session has
+        // never seen before should be allowed to resolve a pendingRoles entry. Without
+        // this, starting round 2 right after round 1 completes reconnects the socket
+        // before round 2 produces anything, and round 1's still-fresh-in-the-snapshot
+        // completions immediately (and wrongly) clear round 2's just-pushed queue.
+        const newEvents = message.events.filter((event) => !seenEventIds.has(event.event_id))
+        for (const event of message.events) seenEventIds.add(event.event_id)
+        applyPendingRoleUpdates(newEvents, message.activity_status)
         if (message.events.length) {
           selectedEvent.value = latestEvent ?? null
           void refreshMeetingOutputs(meetingId, message.activity_status)
@@ -383,6 +405,7 @@ export function useCouncil() {
         selectedEvent.value = null
         transcript.value = ''
         pendingRoles.value = []
+        seenEventIds = new Set()
       }
       meetings.value = await getMeetings()
       if (transcriptSearchResults.value) {
