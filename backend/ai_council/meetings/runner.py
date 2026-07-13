@@ -395,6 +395,7 @@ class MeetingRunner:
         event_step_id: str | None,
         extra_event_fields: dict[str, object] | None,
         prior_transcript_override: str | None,
+        parse_retries_remaining: int = 1,
     ) -> bool:
         config = model_assignments[step.role]
         event_step_id = event_step_id or self._event_step_id(step.step_id, round_number)
@@ -454,7 +455,42 @@ class MeetingRunner:
                 )
             )
             parsed_output = output_schema.parse(response.raw_output)
-        except (AdapterError, OutputParseError, KeyError) as error:
+        except OutputParseError as error:
+            self._clear_active_execution(meeting_id)
+            if self._is_terminal(meeting_id):
+                return False
+            self.repository.append_event(
+                meeting_id,
+                {
+                    "event_id": f"{meeting_id}:{event_step_id}:attempt-{attempt}:failed",
+                    "meeting_id": meeting_id,
+                    "step_id": event_step_id,
+                    "base_step_id": step.step_id,
+                    "round": round_number,
+                    "role": step.role,
+                    "attempt": attempt,
+                    "status": "failed",
+                    "error": str(error),
+                    **prompt_metadata,
+                    **extra_event_fields,
+                },
+            )
+            if parse_retries_remaining:
+                return self._run_step(
+                    meeting_id=meeting_id,
+                    topic=topic,
+                    model_assignments=model_assignments,
+                    inputs=inputs,
+                    step=step,
+                    attempt=attempt + 1,
+                    round_number=round_number,
+                    event_step_id=event_step_id,
+                    extra_event_fields=extra_event_fields,
+                    prior_transcript_override=prior_transcript_override,
+                    parse_retries_remaining=parse_retries_remaining - 1,
+                )
+            return False
+        except (AdapterError, KeyError) as error:
             self._clear_active_execution(meeting_id)
             if self._is_terminal(meeting_id):
                 return False

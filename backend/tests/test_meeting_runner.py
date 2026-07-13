@@ -20,7 +20,11 @@ from ai_council.meetings.runner import (
 from ai_council.models.adapters import AdapterError, ModelRequest, ModelResponse
 from ai_council.models.config import ModelConfig
 from ai_council.prompting.renderer import PromptRenderer
-from ai_council.prompting.schemas import OutputSchemaCodec, OutputSchemaRegistry
+from ai_council.prompting.schemas import (
+    STRUCTURED_VERDICT_V1_SCHEMA,
+    OutputSchemaCodec,
+    OutputSchemaRegistry,
+)
 
 
 VALID_OUTPUT = json.dumps(
@@ -30,6 +34,24 @@ VALID_OUTPUT = json.dumps(
         "risks": [],
         "recommendation": "Continue",
     }
+)
+VALID_STRUCTURED_VERDICT = json.dumps(
+    {
+        "summary": "有條件核准",
+        "decision": "approve-with-conditions",
+        "findings": [
+            {
+                "title": "驗收完成",
+                "detail": "測試紀錄完整。",
+                "evidence_refs": ["[證物一]"],
+            }
+        ],
+        "risks": [],
+        "recommendation": "完成回滾演練後上線。",
+        "conditions": ["完成回滾演練"],
+        "unresolved_questions": ["尖峰容量是否足夠？"],
+    },
+    ensure_ascii=False,
 )
 TEST_PROMPT_TEMPLATE_HASHES = {
     "blue_propose": "81abba70bd2c176005a3fd28dd13ef9bda68f441de574976e8d7161e23fb5f9d",
@@ -263,7 +285,7 @@ def test_output_schema_codec_accepts_a_dict_returning_parser(tmp_path: Path) -> 
     assert event["parsed_output"] == {"value": "dict parsed"}
 
 
-def test_codec_decode_error_records_failure_and_uses_existing_retry_flow(
+def test_codec_decode_error_auto_retries_once_then_allows_manual_retry(
     tmp_path: Path,
 ) -> None:
     custom_schema_id = "test-output/v1"
@@ -283,7 +305,7 @@ def test_codec_decode_error_records_failure_and_uses_existing_retry_flow(
     )
     runner = build_runner(
         tmp_path,
-        adapter=FakeAdapter(["not json", '{"value":"recovered"}']),
+        adapter=FakeAdapter(["not json", "still not json", '{"value":"recovered"}']),
         output_schemas=registry,
     )
 
@@ -294,9 +316,12 @@ def test_codec_decode_error_records_failure_and_uses_existing_retry_flow(
         model_assignments={"Blue": ModelConfig(id="mock-blue", adapter="mock")},
     )
 
-    failed = runner.repository.read_events("meeting-1")[-1]
-    assert failed["status"] == "failed"
-    assert failed["output_schema_id"] == custom_schema_id
+    failed_events = runner.repository.read_events("meeting-1")
+    assert [(event["attempt"], event["status"]) for event in failed_events] == [
+        (1, "failed"),
+        (2, "failed"),
+    ]
+    assert {event["output_schema_id"] for event in failed_events} == {custom_schema_id}
 
     runner.retry_failed_step(
         plan=plan,
@@ -308,8 +333,48 @@ def test_codec_decode_error_records_failure_and_uses_existing_retry_flow(
 
     recovered = runner.repository.read_events("meeting-1")[-1]
     assert recovered["status"] == "completed"
-    assert recovered["attempt"] == 2
+    assert recovered["attempt"] == 3
     assert recovered["parsed_output"] == {"value": "recovered"}
+
+
+def test_rich_parse_failure_is_recorded_then_automatically_retried_once(
+    tmp_path: Path,
+) -> None:
+    plan = RelayPlan(
+        steps=[
+            StepDefinition(
+                "judge-decide",
+                "Judge",
+                "judge_decide",
+                "structured-verdict/v1",
+            )
+        ],
+        directed_steps={},
+    )
+    adapter = FakeAdapter(["not a verdict", VALID_STRUCTURED_VERDICT])
+    runner = build_runner(tmp_path, adapter=adapter)
+
+    runner.start(
+        plan=plan,
+        meeting_id="meeting-1",
+        topic="是否核准上線？",
+        model_assignments={"Judge": ModelConfig(id="mock-judge", adapter="mock")},
+    )
+
+    events = runner.repository.read_events("meeting-1")
+    assert [(event["attempt"], event["status"]) for event in events] == [
+        (1, "failed"),
+        (2, "completed"),
+    ]
+    assert {event["step_id"] for event in events} == {"judge-decide"}
+    assert {event["round"] for event in events} == {1}
+    assert {event["output_schema_id"] for event in events} == {
+        "structured-verdict/v1"
+    }
+    assert len({event["output_schema_hash"] for event in events}) == 1
+    assert len(adapter.requests) == 2
+    assert all(STRUCTURED_VERDICT_V1_SCHEMA in request.prompt for request in adapter.requests)
+    assert events[-1]["parsed_output"]["decision"] == "approve-with-conditions"
 
 
 def test_injected_registry_is_shared_from_catalog_through_plan_and_runner(
@@ -693,7 +758,7 @@ def test_runner_marks_step_failed_when_adapter_raises(tmp_path: Path) -> None:
 
 
 def test_runner_marks_step_failed_when_output_cannot_be_parsed(tmp_path: Path) -> None:
-    runner = build_runner(tmp_path, adapter=FakeAdapter(["not json"]))
+    runner = build_runner(tmp_path, adapter=FakeAdapter(["not json", "still not json"]))
 
     runner.start(
         plan=RED_BLUE_PLAN,
@@ -703,6 +768,10 @@ def test_runner_marks_step_failed_when_output_cannot_be_parsed(tmp_path: Path) -
     )
 
     events = runner.repository.read_events("meeting-1")
+    assert [(event["attempt"], event["status"]) for event in events] == [
+        (1, "failed"),
+        (2, "failed"),
+    ]
     assert events[-1]["step_id"] == "blue-propose"
     assert events[-1]["status"] == "failed"
     assert events[-1]["error"]

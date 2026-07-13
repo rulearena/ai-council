@@ -722,6 +722,10 @@ def test_meeting_create_list_get_start_and_transcript(tmp_path: Path) -> None:
         "blue-revise",
         "judge-decide",
     ]
+    judge_event = next(event for event in meeting["events"] if event["role"] == "Judge")
+    assert judge_event["output_schema_id"] == "structured-verdict/v1"
+    assert judge_event["output_schema_hash"]
+    assert judge_event["parsed_output"]["decision"] == "approve-with-conditions"
     transcript = client.get(f"/meetings/{meeting_id}/transcript.md")
     assert transcript.status_code == 200
     assert transcript.text.startswith("# 先做後端？\n")
@@ -766,9 +770,12 @@ def test_meeting_read_models_include_total_token_usage(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
+    original_complete = MockModelAdapter.complete
+
     def complete_with_usage(self, request):
+        response = original_complete(self, request)
         return ModelResponse(
-            raw_output='{"summary":"OK","arguments":[],"risks":[],"recommendation":"Go"}',
+            raw_output=response.raw_output,
             token_usage={"prompt_tokens": 2, "completion_tokens": 3, "total_tokens": 5},
         )
 
@@ -801,9 +808,12 @@ def test_meeting_read_models_include_estimated_cost_when_models_have_pricing(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
+    original_complete = MockModelAdapter.complete
+
     def complete_with_usage(self, request):
+        response = original_complete(self, request)
         return ModelResponse(
-            raw_output='{"summary":"OK","arguments":[],"risks":[],"recommendation":"Go"}',
+            raw_output=response.raw_output,
             token_usage={"prompt_tokens": 2, "completion_tokens": 3, "total_tokens": 5},
         )
 
@@ -845,13 +855,12 @@ def test_start_returns_while_model_execution_continues_in_background(
 ) -> None:
     model_entered = threading.Event()
     release_model = threading.Event()
+    original_complete = MockModelAdapter.complete
 
     def slow_complete(self, request):
         model_entered.set()
         release_model.wait(timeout=2)
-        return ModelResponse(
-            raw_output='{"summary":"OK","arguments":[],"risks":[],"recommendation":"Go"}'
-        )
+        return original_complete(self, request)
 
     monkeypatch.setattr(MockModelAdapter, "complete", slow_complete)
     app = create_test_app(tmp_path)
@@ -900,13 +909,12 @@ def test_running_step_persists_and_clears_recovery_state(
 ) -> None:
     model_entered = threading.Event()
     release_model = threading.Event()
+    original_complete = MockModelAdapter.complete
 
     def slow_complete(self, request):
         model_entered.set()
         release_model.wait(timeout=2)
-        return ModelResponse(
-            raw_output='{"summary":"OK","arguments":[],"risks":[],"recommendation":"Go"}'
-        )
+        return original_complete(self, request)
 
     monkeypatch.setattr(MockModelAdapter, "complete", slow_complete)
     app = create_test_app(tmp_path)
@@ -1627,7 +1635,13 @@ def test_modes_endpoint_returns_catalog(tmp_path: Path) -> None:
     ]
     red_blue = next(mode for mode in modes if mode["id"] == "red-blue")
     assert red_blue["available"] is True
-    assert {role["output_schema"] for role in red_blue["roles"]} == {"role-output/v1"}
+    assert {
+        role["id"]: role["output_schema"] for role in red_blue["roles"]
+    } == {
+        "Blue": "role-output/v1",
+        "Red": "role-output/v1",
+        "Judge": "structured-verdict/v1",
+    }
     assert red_blue["steps"] == [
         {"role": "Blue", "template": "blue_propose", "label": "藍軍提案"},
         {"role": "Red", "template": "red_critique", "label": "紅軍質詢"},
@@ -2093,6 +2107,9 @@ def test_start_courtroom_meeting_runs_courtroom_steps(tmp_path: Path) -> None:
         "courtroom-rebuttal",
         "courtroom-verdict",
     ]
+    verdict = meeting["events"][-1]
+    assert verdict["output_schema_id"] == "structured-verdict/v1"
+    assert verdict["parsed_output"]["decision"] == "approve-with-conditions"
 
 
 def test_start_rejects_missing_roles_for_mode(tmp_path: Path) -> None:
@@ -2138,6 +2155,10 @@ def test_debate_inputs_reach_prompts(tmp_path: Path) -> None:
 
     first_completed = next(event for event in meeting["events"] if event["status"] == "completed")
     assert "先做後端" in first_completed["prompt_messages"][0]["content"]
+    verdict = meeting["events"][-1]
+    assert verdict["role"] == "Arbiter"
+    assert verdict["output_schema_id"] == "structured-verdict/v1"
+    assert verdict["parsed_output"]["decision"] == "approve-with-conditions"
 
 
 def test_case_files_reach_only_visible_role_prompts(tmp_path: Path) -> None:

@@ -19,6 +19,7 @@ from ai_council.models.adapters import (
     SubscriptionCLIAdapter,
 )
 from ai_council.models.config import ModelConfig
+from ai_council.prompting.schemas import DEFAULT_OUTPUT_SCHEMA_REGISTRY
 
 
 def test_mock_adapter_returns_deterministic_valid_json() -> None:
@@ -36,6 +37,33 @@ def test_mock_adapter_returns_deterministic_valid_json() -> None:
         "arguments": [{"title": "Mock argument", "detail": "Deterministic detail"}],
         "risks": [],
         "recommendation": "Use this response for tests.",
+    }
+
+
+def test_mock_adapter_returns_a_valid_verdict_when_prompt_requests_rich_schema() -> None:
+    codec = DEFAULT_OUTPUT_SCHEMA_REGISTRY.get("structured-verdict/v1")
+
+    response = MockModelAdapter().complete(
+        ModelRequest(
+            prompt=f"Return exactly one JSON object matching this schema:\n{codec.schema}",
+            model_config=ModelConfig(id="mock-fast", adapter="mock"),
+        )
+    )
+
+    assert codec.parse(response.raw_output) == {
+        "summary": "Mock verdict",
+        "decision": "approve-with-conditions",
+        "findings": [
+            {
+                "title": "Mock finding",
+                "detail": "Deterministic finding",
+                "evidence_refs": [],
+            }
+        ],
+        "risks": [],
+        "recommendation": "Use this verdict for tests.",
+        "conditions": ["Verify the result."],
+        "unresolved_questions": ["Is more evidence available?"],
     }
 
 

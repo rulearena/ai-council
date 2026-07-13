@@ -13,6 +13,7 @@ from dataclasses import dataclass
 from typing import Callable, TypedDict
 
 from ai_council.models.config import ModelConfig
+from ai_council.prompting.schemas import STRUCTURED_VERDICT_V1_SCHEMA
 
 ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
 
@@ -51,22 +52,36 @@ class MockModelAdapter:
         delay_ms = request.model_config.extra_body.get("mock_delay_ms", 0)
         if isinstance(delay_ms, (int, float)) and delay_ms > 0:
             time.sleep(delay_ms / 1000)
-        return ModelResponse(
-            raw_output=json.dumps(
-                {
-                    "summary": "Mock response",
-                    "arguments": [
-                        {
-                            "title": "Mock argument",
-                            "detail": "Deterministic detail",
-                        }
-                    ],
-                    "risks": [],
-                    "recommendation": "Use this response for tests.",
-                },
-                ensure_ascii=False,
-            )
+        payload = (
+            {
+                "summary": "Mock verdict",
+                "decision": "approve-with-conditions",
+                "findings": [
+                    {
+                        "title": "Mock finding",
+                        "detail": "Deterministic finding",
+                        "evidence_refs": [],
+                    }
+                ],
+                "risks": [],
+                "recommendation": "Use this verdict for tests.",
+                "conditions": ["Verify the result."],
+                "unresolved_questions": ["Is more evidence available?"],
+            }
+            if STRUCTURED_VERDICT_V1_SCHEMA in request.prompt
+            else {
+                "summary": "Mock response",
+                "arguments": [
+                    {
+                        "title": "Mock argument",
+                        "detail": "Deterministic detail",
+                    }
+                ],
+                "risks": [],
+                "recommendation": "Use this response for tests.",
+            }
         )
+        return ModelResponse(raw_output=json.dumps(payload, ensure_ascii=False))
 
 
 class SubscriptionCLIAdapter:
