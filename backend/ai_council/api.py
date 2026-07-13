@@ -140,6 +140,17 @@ def create_app(
         request: Request,
         exc: RequestValidationError,
     ) -> JSONResponse:
+        if (request.method == "POST" and request.url.path == "/models") or (
+            request.method == "PUT" and request.url.path.startswith("/models/")
+        ):
+            detail = [
+                {
+                    "field": ".".join(str(part) for part in error["loc"] if part != "body"),
+                    "message": error["msg"],
+                }
+                for error in exc.errors()
+            ]
+            return JSONResponse(status_code=422, content={"detail": detail})
         return JSONResponse(status_code=422, content={"detail": exc.errors()})
 
     data_path = Path(data_dir)
@@ -223,6 +234,7 @@ def create_app(
     def test_model(model_config_id: str) -> dict[str, str]:
         model = get_model(model_repository, model_config_id)
         result = check_model_health(model, model_adapters.get(model.adapter))
+        model_health.record(model_config_id, result)
         response = {"status": result.status, "tested_at": result.checked_at}
         if result.error is not None:
             response["error"] = result.error

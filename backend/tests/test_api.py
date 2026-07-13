@@ -197,10 +197,15 @@ def test_model_config_crud_reports_validation_errors(tmp_path: Path) -> None:
     )
 
     assert pricing_response.status_code == 422
+    assert any(
+        item["field"] == "pricing.input_per_1m_tokens"
+        for item in pricing_response.json()["detail"]
+    )
 
     missing_adapter = client.put("/models/broken", json={})
 
     assert missing_adapter.status_code == 422
+    assert any(item["field"] == "adapter" for item in missing_adapter.json()["detail"])
 
 
 def test_post_models_creates_and_resets_status(tmp_path: Path) -> None:
@@ -288,6 +293,35 @@ def test_model_validation_errors_are_per_field_422(tmp_path: Path) -> None:
 
     assert missing_command.status_code == 422
     assert any(item["field"] == "command" for item in missing_command.json()["detail"])
+
+
+def test_post_models_pydantic_errors_use_per_field_shape(tmp_path: Path) -> None:
+    app = create_test_app(tmp_path)
+    client = TestClient(app)
+
+    missing_adapter = client.post("/models", json={"id": "no-adapter"})
+
+    assert missing_adapter.status_code == 422
+    assert any(item["field"] == "adapter" for item in missing_adapter.json()["detail"])
+
+    negative_pricing = client.post(
+        "/models",
+        json={
+            "id": "bad-pricing",
+            "adapter": "mock",
+            "pricing": {
+                "currency": "USD",
+                "input_per_1m_tokens": -1,
+                "output_per_1m_tokens": 10.0,
+            },
+        },
+    )
+
+    assert negative_pricing.status_code == 422
+    assert any(
+        item["field"] == "pricing.input_per_1m_tokens"
+        for item in negative_pricing.json()["detail"]
+    )
 
 
 def test_models_endpoint_reports_invalid_config_file(tmp_path: Path) -> None:
@@ -432,6 +466,9 @@ models:
     assert payload["status"] == "available"
     assert payload["tested_at"]
 
+    listed = next(model for model in client.get("/models").json() if model["id"] == "http-ok")
+    assert listed["status"] == "available"
+
 
 def test_http_model_test_endpoint_marks_unavailable_on_adapter_error(
     tmp_path: Path,
@@ -464,6 +501,9 @@ models:
     assert payload["status"] == "unavailable"
     assert payload["tested_at"]
     assert payload["error"] == "<urlopen error connection refused>"
+
+    listed = next(model for model in client.get("/models").json() if model["id"] == "http-down")
+    assert listed["status"] == "unavailable"
 
 
 def test_meeting_create_list_get_start_and_transcript(tmp_path: Path) -> None:
