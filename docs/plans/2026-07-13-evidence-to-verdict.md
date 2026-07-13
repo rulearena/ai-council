@@ -1,5 +1,7 @@
 # 證據到可追溯裁決批次實作計畫
 
+> 狀態：implemented / awaiting acceptance（2026-07-13）。Main 驗收：backend 241 passed、frontend build 綠、Chromium e2e 31 passed。
+
 **核准範圍：** `spec.md` backlog 80、63、64、65。執行順序為證據引用錨點 → 版本化角色輸出契約 → 豐富裁決。
 
 **目標：** 讓案卷中的每份文件可以被 AI 角色以穩定錨點引用，並讓 adjudicator 類角色產生可呈現、可追溯且不破壞舊事件的結構化裁決。
