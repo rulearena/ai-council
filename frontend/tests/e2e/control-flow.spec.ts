@@ -1046,6 +1046,7 @@ test('New Case keeps user input when create fails', async ({ page }) => {
   await expect(page.getByTestId('case-file-1-content')).toHaveValue('失敗後不應清空這段內容')
   await expect(page.getByTestId('case-file-1-role-Blue')).toBeChecked()
   await expect(page.getByTestId('case-file-cost-note')).toContainText('目前 11 / 120000 字元')
+  await expect(page.getByTestId('case-file-cost-note')).toContainText('粗估約 11 tokens')
   await expect(page.getByTestId('new-case-server-error')).toHaveText('Unknown mode: red-blue')
 })
 
