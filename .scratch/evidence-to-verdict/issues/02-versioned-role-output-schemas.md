@@ -1,6 +1,6 @@
 # 版本化角色輸出契約
 
-Status: ready-for-agent
+Status: implemented / awaiting acceptance
 Blocked by: 01
 
 ## Goal
@@ -53,3 +53,7 @@ Blocked by: 01
 - Reviewer verdict pass。
 
 ## Comments
+
+- 2026-07-13：Executor commits `a3a3382` / `c807f7a`；backend 202 passed、frontend build 綠。
+- 第一次 Quality review 發現 parser return contract 會讓 dict/validation error 繞過 failed/retry（Major），以及 catalog/runner registry seam 未統一（Minor）。原 Executor 以三個 public tracer tests 修復。
+- Spec/Quality 複驗皆 pass；production registry 此時仍只有 `role-output/v1`，舊 events 採 read-time fallback、不重寫。

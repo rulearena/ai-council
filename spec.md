@@ -538,8 +538,8 @@ config/models.yaml.example
 60. Prompt versioning（backend prompt/schema metadata foundation 已落地）
 61. Prompt test harness
 62. Prompt library / presets
-63. Role-specific output schemas
-64. Schema migration/versioning
+63. Role-specific output schemas（已完成 2026-07-13：versioned schema registry + per-role selection foundation）
+64. Schema migration/versioning（已完成 2026-07-13：舊事件 read-time fallback，不重寫 events）
 65. Rich structured verdicts for Judge
 66. UI i18n
 67. Prompt language presets
