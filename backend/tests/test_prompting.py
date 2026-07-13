@@ -15,6 +15,75 @@ ROLE_OUTPUT_V1_LITERAL = (
 )
 ROLE_OUTPUT_V1_HASH = "15a45919652be5c70d3fd1690a10d37f876f19a14b2a76cc0f21765def281377"
 
+STRUCTURED_VERDICT_LITERAL = (
+    '{"summary":"string","decision":"approve | approve-with-conditions | reject | '
+    'insufficient-evidence","findings":[{"title":"string","detail":"string",'
+    '"evidence_refs":["[證物一]"]}],"risks":[{"title":"string","detail":"string",'
+    '"evidence_refs":["[證物一]"]}],"recommendation":"string","conditions":["string"],'
+    '"unresolved_questions":["string"]}'
+)
+
+
+def test_structured_verdict_v1_registry_accepts_a_known_verdict_literal() -> None:
+    codec = DEFAULT_OUTPUT_SCHEMA_REGISTRY.get("structured-verdict/v1")
+
+    assert codec.schema == STRUCTURED_VERDICT_LITERAL
+    assert codec.parse(
+        '{"summary":"核准上線","decision":"approve-with-conditions",'
+        '"findings":[{"title":"測試完整","detail":"驗收紀錄完整。",'
+        '"evidence_refs":["[證物一]"]}],'
+        '"risks":[{"title":"回滾風險","detail":"需先演練。",'
+        '"evidence_refs":["[證物二]"]}],'
+        '"recommendation":"完成演練後上線。","conditions":["完成回滾演練"],'
+        '"unresolved_questions":["尖峰容量是否足夠？"]}'
+    ) == {
+        "summary": "核准上線",
+        "decision": "approve-with-conditions",
+        "findings": [
+            {
+                "title": "測試完整",
+                "detail": "驗收紀錄完整。",
+                "evidence_refs": ["[證物一]"],
+            }
+        ],
+        "risks": [
+            {
+                "title": "回滾風險",
+                "detail": "需先演練。",
+                "evidence_refs": ["[證物二]"],
+            }
+        ],
+        "recommendation": "完成演練後上線。",
+        "conditions": ["完成回滾演練"],
+        "unresolved_questions": ["尖峰容量是否足夠？"],
+    }
+
+
+@pytest.mark.parametrize(
+    "raw_output",
+    [
+        '[]',
+        '{"summary":"S","decision":"unknown","findings":[],"risks":[],'
+        '"recommendation":"R","conditions":[],"unresolved_questions":[]}',
+        '{"summary":"S","decision":"reject","findings":"bad","risks":[],'
+        '"recommendation":"R","conditions":[],"unresolved_questions":[]}',
+        '{"summary":"S","decision":"reject","findings":[{"title":"F",'
+        '"detail":"D","evidence_refs":["證物一"]}],"risks":[],'
+        '"recommendation":"R","conditions":[],"unresolved_questions":[]}',
+        '{"summary":"S","decision":"reject","findings":[],"risks":[],'
+        '"recommendation":"R","conditions":[1],"unresolved_questions":[]}',
+    ],
+)
+def test_structured_verdict_v1_registry_rejects_invalid_payloads_as_parse_errors(
+    raw_output: str,
+) -> None:
+    codec = DEFAULT_OUTPUT_SCHEMA_REGISTRY.get("structured-verdict/v1")
+
+    with pytest.raises(OutputParseError) as error:
+        codec.parse(raw_output)
+
+    assert error.value.raw_output == raw_output
+
 
 def test_role_output_v1_registry_preserves_literal_hash_and_parser_contract() -> None:
     codec = DEFAULT_OUTPUT_SCHEMA_REGISTRY.get("role-output/v1")

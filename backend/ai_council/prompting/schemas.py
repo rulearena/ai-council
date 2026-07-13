@@ -5,12 +5,23 @@ import json
 from dataclasses import asdict, dataclass, is_dataclass
 from typing import Any, Protocol
 
-from ai_council.prompting.parser import OutputParseError, RoleOutputParser
+from ai_council.prompting.parser import (
+    OutputParseError,
+    RoleOutputParser,
+    StructuredVerdictParser,
+)
 
 DEFAULT_OUTPUT_SCHEMA_ID = "role-output/v1"
 ROLE_OUTPUT_V1_SCHEMA = (
     '{"summary":"string","arguments":[{"title":"string","detail":"string"}],'
     '"risks":[{"title":"string","detail":"string"}],"recommendation":"string"}'
+)
+STRUCTURED_VERDICT_V1_SCHEMA = (
+    '{"summary":"string","decision":"approve | approve-with-conditions | reject | '
+    'insufficient-evidence","findings":[{"title":"string","detail":"string",'
+    '"evidence_refs":["[證物一]"]}],"risks":[{"title":"string","detail":"string",'
+    '"evidence_refs":["[證物一]"]}],"recommendation":"string","conditions":["string"],'
+    '"unresolved_questions":["string"]}'
 )
 
 
@@ -65,6 +76,11 @@ DEFAULT_OUTPUT_SCHEMA_REGISTRY = OutputSchemaRegistry(
             id=DEFAULT_OUTPUT_SCHEMA_ID,
             schema=ROLE_OUTPUT_V1_SCHEMA,
             parser=RoleOutputParser(),
-        )
+        ),
+        OutputSchemaCodec(
+            id="structured-verdict/v1",
+            schema=STRUCTURED_VERDICT_V1_SCHEMA,
+            parser=StructuredVerdictParser(),
+        ),
     ]
 )
