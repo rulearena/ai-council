@@ -40,6 +40,17 @@ def test_mock_adapter_returns_deterministic_valid_json() -> None:
     }
 
 
+def test_model_request_keeps_legacy_positional_meeting_id_compatible() -> None:
+    request = ModelRequest(
+        "legacy positional request",
+        ModelConfig(id="mock-fast", adapter="mock"),
+        "meeting-1",
+    )
+
+    assert request.meeting_id == "meeting-1"
+    assert request.output_schema_id == "role-output/v1"
+
+
 def test_mock_adapter_returns_a_valid_verdict_when_prompt_requests_rich_schema() -> None:
     codec = DEFAULT_OUTPUT_SCHEMA_REGISTRY.get("structured-verdict/v1")
 

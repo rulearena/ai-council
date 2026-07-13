@@ -29,9 +29,9 @@ class AdapterError(RuntimeError):
 class ModelRequest:
     prompt: str
     model_config: ModelConfig
-    output_schema_id: str = DEFAULT_OUTPUT_SCHEMA_ID
     meeting_id: str | None = None
     on_token_delta: Callable[[str], None] | None = None
+    output_schema_id: str = DEFAULT_OUTPUT_SCHEMA_ID
 
 
 class TokenUsage(TypedDict):
