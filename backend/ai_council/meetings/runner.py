@@ -53,6 +53,22 @@ class RelayPlan:
     directed_steps: dict[str, StepDefinition]
 
 
+@dataclass(frozen=True)
+class ParallelMemberStep:
+    step_id: str
+    role: str
+    template_name: str
+    display_name: str
+    instance_prompt: str
+    index: int
+
+
+@dataclass(frozen=True)
+class ParallelPlan:
+    members: list[ParallelMemberStep]
+    synthesis: StepDefinition
+
+
 class MeetingRunner:
     def __init__(
         self,

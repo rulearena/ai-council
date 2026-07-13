@@ -7,9 +7,10 @@ import pytest
 from ai_council.meetings.modes import (
     ModeCatalogRepository,
     ModeConfigError,
+    parallel_plan,
     relay_plan,
 )
-from ai_council.meetings.runner import StepDefinition
+from ai_council.meetings.runner import ParallelMemberStep, StepDefinition
 
 
 def _write_yaml(tmp_path: Path, content: str) -> Path:
@@ -55,6 +56,18 @@ modes:
     roles:
       - { id: HatWhite, name: 白帽, color: "#e8e8ec", kind: member }
       - { id: HatBlue, name: 藍帽, color: "#4d8dff", kind: synthesizer }
+    fanout:
+      role: Hat
+      template: hat_white
+      label: 帽子發言
+      min_instances: 1
+      max_instances: 5
+      templates_by_role:
+        HatWhite: hat_white
+    synthesis:
+      role: HatBlue
+      template: hat_blue_synthesis
+      label: 藍帽統整
 """
 
 
@@ -85,7 +98,90 @@ def test_catalog_marks_parallel_modes_unavailable(tmp_path: Path) -> None:
 
     assert len(modes) == 1
     assert modes[0].category == "parallel"
-    assert modes[0].available is False
+    assert modes[0].available is True
+
+
+def test_parallel_plan_derives_member_and_synthesis_steps(tmp_path: Path) -> None:
+    config_path = _write_yaml(
+        tmp_path,
+        """
+modes:
+  - id: brainstorm
+    name: Brainstorm
+    category: parallel
+    tagline: t
+    when_to_use: w
+    sop: []
+    default_scene: meeting-room
+    inputs: []
+    roles:
+      - { id: Moderator, name: 主持人, color: "#8b6dd9", kind: synthesizer }
+    fanout:
+      role: Member
+      template: brainstorm_member
+      label: 委員發想
+      min_instances: 2
+      max_instances: 6
+      instance_prompt: true
+    synthesis:
+      role: Moderator
+      template: brainstorm_synthesis
+      label: 主持人彙整
+""",
+    )
+    mode = ModeCatalogRepository(config_path).get_mode("brainstorm")
+    assert mode is not None
+
+    plan = parallel_plan(
+        mode,
+        [
+            {"role_id": "Member-1", "display_name": "委員 1", "instance_prompt": "成本視角"},
+            {"role_id": "Member-2", "display_name": "委員 2", "instance_prompt": "使用者視角"},
+            {"role_id": "Moderator", "display_name": "主持人"},
+        ],
+    )
+
+    assert plan.members == [
+        ParallelMemberStep(
+            step_id="member-1",
+            role="Member-1",
+            template_name="brainstorm_member",
+            display_name="委員 1",
+            instance_prompt="成本視角",
+            index=1,
+        ),
+        ParallelMemberStep(
+            step_id="member-2",
+            role="Member-2",
+            template_name="brainstorm_member",
+            display_name="委員 2",
+            instance_prompt="使用者視角",
+            index=2,
+        ),
+    ]
+    assert plan.synthesis == StepDefinition("synthesis", "Moderator", "brainstorm_synthesis")
+
+
+def test_catalog_rejects_parallel_mode_without_fanout_or_synthesis(tmp_path: Path) -> None:
+    config_path = _write_yaml(
+        tmp_path,
+        """
+modes:
+  - id: bad-parallel
+    name: Bad Parallel
+    category: parallel
+    tagline: t
+    when_to_use: w
+    sop: []
+    default_scene: meeting-room
+    inputs: []
+    roles:
+      - { id: Moderator, name: 主持人, color: "#8b6dd9", kind: synthesizer }
+""",
+    )
+
+    with pytest.raises(ModeConfigError, match="bad-parallel"):
+        ModeCatalogRepository(config_path).list_modes()
 
 
 def test_relay_plan_derives_step_ids_from_templates(tmp_path: Path) -> None:
@@ -376,8 +472,12 @@ def test_repo_modes_yaml_is_loadable() -> None:
     }
 
     for mode in modes:
-        if mode.category != "relay":
-            continue
-        for step in mode.steps:
-            template_path = prompts_dir / f"{step.template}.md"
+        if mode.category == "relay":
+            templates = [step.template for step in mode.steps]
+        else:
+            assert mode.fanout is not None, f"parallel mode missing fanout: {mode.id}"
+            assert mode.synthesis is not None, f"parallel mode missing synthesis: {mode.id}"
+            templates = [mode.fanout.template, mode.synthesis.template]
+        for template in templates:
+            template_path = prompts_dir / f"{template}.md"
             assert template_path.exists(), f"missing prompt template: {template_path}"

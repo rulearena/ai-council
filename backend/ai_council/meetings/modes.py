@@ -6,7 +6,7 @@ from typing import Any
 
 import yaml
 
-from ai_council.meetings.runner import RelayPlan, StepDefinition
+from ai_council.meetings.runner import ParallelMemberStep, ParallelPlan, RelayPlan, StepDefinition
 
 VALID_CATEGORIES = {"relay", "parallel"}
 VALID_ROLE_KINDS = {"member", "adjudicator", "synthesizer"}
@@ -48,6 +48,7 @@ class ModeFanout:
     min_instances: int
     max_instances: int
     instance_prompt: bool
+    templates_by_role: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -74,8 +75,7 @@ class ModeDefinition:
 
     @property
     def available(self) -> bool:
-        # Only the relay executor exists today; parallel modes unlock in slice C.
-        return self.category == "relay"
+        return True
 
     def role_ids(self) -> list[str]:
         return [role.id for role in self.roles]
@@ -93,6 +93,51 @@ def relay_plan(mode: ModeDefinition) -> RelayPlan:
         for step in mode.steps
     }
     return RelayPlan(steps=steps, directed_steps=directed_steps)
+
+
+def parallel_plan(mode: ModeDefinition, participants: list[dict[str, Any]]) -> ParallelPlan:
+    if mode.category != "parallel":
+        raise ModeConfigError(f"Mode does not use the parallel executor: {mode.id}")
+    if mode.fanout is None or mode.synthesis is None:
+        raise ModeConfigError(f"Mode {mode.id!r} requires fanout and synthesis")
+
+    synthesizer_role = mode.synthesis.role
+    fixed_member_roles = {role.id for role in mode.roles if role.kind == "member"}
+    member_items: list[dict[str, Any]] = []
+    for participant in participants:
+        role_id = str(participant.get("role_id", ""))
+        if role_id == synthesizer_role:
+            continue
+        if fixed_member_roles:
+            if role_id in fixed_member_roles:
+                member_items.append(participant)
+        elif _is_fanout_instance_role(mode.fanout.role, role_id):
+            member_items.append(participant)
+
+    member_items.sort(key=lambda item: _fanout_instance_index(mode.fanout.role, str(item["role_id"])))
+    members = [
+        ParallelMemberStep(
+            step_id=f"member-{index}",
+            role=str(item["role_id"]),
+            template_name=mode.fanout.templates_by_role.get(
+                str(item["role_id"]),
+                mode.fanout.template,
+            ),
+            display_name=str(item.get("display_name") or item["role_id"]),
+            instance_prompt=str(item.get("instance_prompt") or ""),
+            index=index,
+        )
+        for index, item in enumerate(member_items, start=1)
+    ]
+    if not (mode.fanout.min_instances <= len(members) <= mode.fanout.max_instances):
+        raise ModeConfigError(
+            f"Mode {mode.id!r} requires {mode.fanout.min_instances}-"
+            f"{mode.fanout.max_instances} fanout members"
+        )
+    return ParallelPlan(
+        members=members,
+        synthesis=StepDefinition("synthesis", synthesizer_role, mode.synthesis.template),
+    )
 
 
 class ModeCatalogRepository:
@@ -171,6 +216,20 @@ def _mode_from_yaml_item(raw_mode: Any) -> ModeDefinition:
 
     fanout = _fanout_from_yaml(mode_id, raw_mode.get("fanout"))
     synthesis = _synthesis_from_yaml(mode_id, raw_mode.get("synthesis"))
+    if category == "parallel":
+        if fanout is None or synthesis is None:
+            raise ModeConfigError(f"Mode {mode_id!r} is category parallel but lacks fanout/synthesis")
+        if synthesis.role not in role_ids:
+            raise ModeConfigError(
+                f"Mode {mode_id!r} synthesis role {synthesis.role!r} is not in roles"
+            )
+        fixed_member_roles = {role.id for role in roles if role.kind == "member"}
+        unknown_template_roles = set(fanout.templates_by_role) - fixed_member_roles
+        if unknown_template_roles:
+            raise ModeConfigError(
+                f"Mode {mode_id!r} fanout templates reference unknown roles: "
+                f"{', '.join(sorted(unknown_template_roles))}"
+            )
 
     sop = _require_list(mode_id, raw_mode.get("sop"), "sop")
 
@@ -258,6 +317,11 @@ def _fanout_from_yaml(mode_id: str, raw_fanout: Any) -> ModeFanout | None:
         min_instances=min_instances,
         max_instances=max_instances,
         instance_prompt=bool(raw_fanout.get("instance_prompt", False)),
+        templates_by_role=_string_map_from_yaml(
+            mode_id,
+            raw_fanout.get("templates_by_role", {}),
+            "fanout.templates_by_role",
+        ),
     )
 
 
@@ -272,3 +336,27 @@ def _synthesis_from_yaml(mode_id: str, raw_synthesis: Any) -> ModeSynthesis | No
     if not role or not template or not label:
         raise ModeConfigError(f"Mode {mode_id!r} has a synthesis missing role/template/label")
     return ModeSynthesis(role=role, template=template, label=label)
+
+
+def _string_map_from_yaml(mode_id: str, raw_map: Any, field_name: str) -> dict[str, str]:
+    if raw_map is None:
+        return {}
+    if not isinstance(raw_map, dict):
+        raise ModeConfigError(f"Mode {mode_id!r} {field_name} must be a mapping")
+    result: dict[str, str] = {}
+    for key, value in raw_map.items():
+        if not isinstance(key, str) or not isinstance(value, str):
+            raise ModeConfigError(f"Mode {mode_id!r} {field_name} must map strings to strings")
+        result[key] = value
+    return result
+
+
+def _is_fanout_instance_role(prototype_role: str, role_id: str) -> bool:
+    prefix = f"{prototype_role}-"
+    return role_id.startswith(prefix) and role_id[len(prefix) :].isdigit()
+
+
+def _fanout_instance_index(prototype_role: str, role_id: str) -> int:
+    if _is_fanout_instance_role(prototype_role, role_id):
+        return int(role_id.rsplit("-", 1)[1])
+    return 10_000
