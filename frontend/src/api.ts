@@ -61,7 +61,14 @@ export type MeetingParticipant = {
   instance_prompt: string | null
 }
 
-export type BackendModeRole = { id: string; name: string; color: string; kind: string; portrait: string | null }
+export type BackendModeRole = {
+  id: string
+  name: string
+  color: string
+  kind: string
+  portrait: string | null
+  output_schema: string
+}
 export type BackendModeStep = { role: string; template: string; label: string }
 export type BackendModeInput = { id: string; label: string; kind: string }
 export type BackendModeFanout = {
@@ -113,6 +120,7 @@ export type MeetingEvent = {
   prompt_template_name?: string
   prompt_template_hash?: string
   output_schema_hash?: string
+  output_schema_id?: string
   prompt_messages?: Array<{ role: string; content: string }>
   raw_output?: string
   parsed_output?: RoleOutput

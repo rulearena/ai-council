@@ -88,8 +88,36 @@ def test_catalog_parses_relay_mode(tmp_path: Path) -> None:
     assert mode.default_scene == "meeting-room"
     assert mode.inputs == []
     assert mode.role_ids() == ["Blue", "Red", "Judge"]
+    assert {role.output_schema for role in mode.roles} == {"role-output/v1"}
     assert len(mode.steps) == 4
     assert mode.available is True
+
+
+def test_catalog_rejects_role_with_unknown_output_schema(tmp_path: Path) -> None:
+    config_path = _write_yaml(
+        tmp_path,
+        """
+modes:
+  - id: broken-schema
+    name: Broken Schema
+    category: relay
+    tagline: t
+    when_to_use: w
+    sop: []
+    default_scene: meeting-room
+    inputs: []
+    roles:
+      - { id: Judge, name: 裁判, color: "#e8b44c", kind: adjudicator, output_schema: missing/v9 }
+    steps:
+      - { role: Judge, template: judge_decide, label: 裁判 }
+""",
+    )
+
+    with pytest.raises(
+        ModeConfigError,
+        match=r"broken-schema.*Judge.*missing/v9",
+    ):
+        ModeCatalogRepository(config_path).list_modes()
 
 
 def test_catalog_marks_parallel_modes_unavailable(tmp_path: Path) -> None:

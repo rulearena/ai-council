@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import hashlib
 import json
+from dataclasses import dataclass
 from pathlib import Path
 
 import pytest
@@ -17,6 +19,7 @@ from ai_council.meetings.runner import (
 from ai_council.models.adapters import AdapterError, ModelRequest, ModelResponse
 from ai_council.models.config import ModelConfig
 from ai_council.prompting.renderer import PromptRenderer
+from ai_council.prompting.schemas import OutputSchemaCodec, OutputSchemaRegistry
 
 
 VALID_OUTPUT = json.dumps(
@@ -34,6 +37,18 @@ TEST_PROMPT_TEMPLATE_HASHES = {
     "judge_decide": "b804a5f1bb3893a45854d48085dc2ffc8496e9b61819c4a4c31ea4192b847e25",
 }
 TEST_OUTPUT_SCHEMA_HASH = "15a45919652be5c70d3fd1690a10d37f876f19a14b2a76cc0f21765def281377"
+TEST_ONLY_SCHEMA = '{"value":"string"}'
+TEST_ONLY_SCHEMA_HASH = hashlib.sha256(TEST_ONLY_SCHEMA.encode("utf-8")).hexdigest()
+
+
+@dataclass(frozen=True)
+class StubOutput:
+    value: str
+
+
+class TestOnlyParser:
+    def parse(self, raw_output: str) -> StubOutput:
+        return StubOutput(value=json.loads(raw_output)["value"])
 
 RED_BLUE_PLAN = RelayPlan(
     steps=[
@@ -166,7 +181,44 @@ def test_runner_persists_prompt_metadata_on_completed_events(tmp_path: Path) -> 
     event = runner.repository.read_events("meeting-1")[-1]
     assert event["prompt_template_name"] == "blue_revise"
     assert event["prompt_template_hash"] == TEST_PROMPT_TEMPLATE_HASHES["blue_revise"]
+    assert event["output_schema_id"] == "role-output/v1"
     assert event["output_schema_hash"] == TEST_OUTPUT_SCHEMA_HASH
+
+
+def test_directed_response_uses_step_output_schema_for_prompt_parser_and_event(
+    tmp_path: Path,
+) -> None:
+    custom_schema_id = "test-output/v1"
+    plan = RelayPlan(
+        steps=[StepDefinition("blue-propose", "Blue", "blue_propose")],
+        directed_steps={
+            "Blue": StepDefinition(
+                "blue-response",
+                "Blue",
+                "blue_revise",
+                custom_schema_id,
+            )
+        },
+    )
+    registry = OutputSchemaRegistry(
+        [OutputSchemaCodec(custom_schema_id, TEST_ONLY_SCHEMA, TestOnlyParser())]
+    )
+    adapter = FakeAdapter(['{"value":"custom parsed"}'])
+    runner = build_runner(tmp_path, adapter=adapter, output_schemas=registry)
+
+    runner.respond_as_role(
+        plan=plan,
+        meeting_id="meeting-1",
+        topic="schema selection",
+        role="Blue",
+        model_assignments={"Blue": ModelConfig(id="mock-blue", adapter="mock")},
+    )
+
+    event = runner.repository.read_events("meeting-1")[-1]
+    assert TEST_ONLY_SCHEMA in adapter.requests[0].prompt
+    assert event["output_schema_id"] == custom_schema_id
+    assert event["output_schema_hash"] == TEST_ONLY_SCHEMA_HASH
+    assert event["parsed_output"] == {"value": "custom parsed"}
 
 
 def test_runner_persists_prompt_metadata_on_failed_events(tmp_path: Path) -> None:
@@ -184,6 +236,7 @@ def test_runner_persists_prompt_metadata_on_failed_events(tmp_path: Path) -> Non
     assert event["status"] == "failed"
     assert event["prompt_template_name"] == "red_critique"
     assert event["prompt_template_hash"] == TEST_PROMPT_TEMPLATE_HASHES["red_critique"]
+    assert event["output_schema_id"] == "role-output/v1"
     assert event["output_schema_hash"] == TEST_OUTPUT_SCHEMA_HASH
 
 
@@ -215,6 +268,7 @@ def test_runner_persists_prompt_template_names_for_fixed_flow(tmp_path: Path) ->
         TEST_PROMPT_TEMPLATE_HASHES["judge_decide"],
     ]
     assert {event["output_schema_hash"] for event in events} == {TEST_OUTPUT_SCHEMA_HASH}
+    assert {event["output_schema_id"] for event in events} == {"role-output/v1"}
 
 
 def test_runner_start_resumes_from_first_incomplete_step_after_restart(tmp_path: Path) -> None:
@@ -446,6 +500,42 @@ def test_runner_runs_chair_directed_role_sequence(tmp_path: Path) -> None:
     assert "主席要求：Red 先挑戰" in adapter.requests[0].prompt
 
 
+def test_role_sequence_uses_each_step_output_schema(tmp_path: Path) -> None:
+    custom_schema_id = "test-output/v1"
+    plan = RelayPlan(
+        steps=[StepDefinition("blue-propose", "Blue", "blue_propose")],
+        directed_steps={
+            "Blue": StepDefinition(
+                "blue-response",
+                "Blue",
+                "blue_revise",
+                custom_schema_id,
+            )
+        },
+    )
+    registry = OutputSchemaRegistry(
+        [OutputSchemaCodec(custom_schema_id, TEST_ONLY_SCHEMA, TestOnlyParser())]
+    )
+    runner = build_runner(
+        tmp_path,
+        adapter=FakeAdapter(['{"value":"sequence parsed"}']),
+        output_schemas=registry,
+    )
+
+    runner.respond_as_sequence(
+        plan=plan,
+        meeting_id="meeting-1",
+        topic="schema selection",
+        roles=["Blue"],
+        model_assignments={"Blue": ModelConfig(id="mock-blue", adapter="mock")},
+    )
+
+    event = runner.repository.read_events("meeting-1")[-1]
+    assert event["interaction_type"] == "role-sequence-response"
+    assert event["output_schema_id"] == custom_schema_id
+    assert event["parsed_output"] == {"value": "sequence parsed"}
+
+
 def test_runner_marks_step_failed_when_adapter_raises(tmp_path: Path) -> None:
     runner = build_runner(tmp_path, adapter=FailingAdapter())
 
@@ -517,6 +607,48 @@ def test_runner_retry_failed_step_creates_second_attempt_and_continues(
         "blue-revise",
         "judge-decide",
     ]
+
+
+def test_retry_uses_the_failed_step_role_output_schema(tmp_path: Path) -> None:
+    custom_schema_id = "test-output/v1"
+    plan = RelayPlan(
+        steps=[StepDefinition("blue-propose", "Blue", "blue_propose", custom_schema_id)],
+        directed_steps={},
+    )
+    registry = OutputSchemaRegistry(
+        [OutputSchemaCodec(custom_schema_id, TEST_ONLY_SCHEMA, TestOnlyParser())]
+    )
+    runner = build_runner(
+        tmp_path,
+        adapter=FakeAdapter(['{"value":"retry parsed"}']),
+        output_schemas=registry,
+    )
+    runner.repository.append_event(
+        "meeting-1",
+        {
+            "event_id": "old-failure",
+            "meeting_id": "meeting-1",
+            "step_id": "blue-propose",
+            "role": "Blue",
+            "attempt": 1,
+            "status": "failed",
+            "error": "bad JSON",
+        },
+    )
+
+    runner.retry_failed_step(
+        plan=plan,
+        meeting_id="meeting-1",
+        step_id="blue-propose",
+        topic="schema selection",
+        model_assignments={"Blue": ModelConfig(id="mock-blue", adapter="mock")},
+    )
+
+    event = runner.repository.read_events("meeting-1")[-1]
+    assert event["attempt"] == 2
+    assert event["output_schema_id"] == custom_schema_id
+    assert event["output_schema_hash"] == TEST_ONLY_SCHEMA_HASH
+    assert event["parsed_output"] == {"value": "retry parsed"}
 
 
 def test_runner_retries_round_scoped_failed_step(tmp_path: Path) -> None:
@@ -870,6 +1002,60 @@ def test_parallel_runner_completes_fanout_then_synthesis(tmp_path: Path) -> None
     synthesis_prompt = completed[-1]["prompt_messages"][0]["content"]
     assert "Member-1" in synthesis_prompt
     assert "Continue" in synthesis_prompt
+    assert {event["output_schema_id"] for event in completed} == {"role-output/v1"}
+
+
+def test_parallel_fanout_and_synthesis_use_their_step_output_schemas(tmp_path: Path) -> None:
+    custom_schema_id = "test-output/v1"
+    plan = ParallelPlan(
+        members=[
+            ParallelMemberStep(
+                step_id="member-1",
+                role="Member-1",
+                template_name="brainstorm_member",
+                display_name="委員 1",
+                instance_prompt="",
+                index=1,
+                output_schema_id=custom_schema_id,
+            )
+        ],
+        synthesis=StepDefinition(
+            "synthesis",
+            "Moderator",
+            "brainstorm_synthesis",
+            custom_schema_id,
+        ),
+    )
+    registry = OutputSchemaRegistry(
+        [OutputSchemaCodec(custom_schema_id, TEST_ONLY_SCHEMA, TestOnlyParser())]
+    )
+    runner = build_runner(
+        tmp_path,
+        adapter=FakeAdapter(['{"value":"member"}', '{"value":"synthesis"}']),
+        templates=("brainstorm_member", "brainstorm_synthesis"),
+        extra_placeholders=" {{ fanout_outputs }}",
+        output_schemas=registry,
+    )
+
+    runner.start_parallel(
+        plan=plan,
+        meeting_id="meeting-1",
+        topic="schema selection",
+        model_assignments={
+            "Member-1": ModelConfig(id="mock-member", adapter="mock"),
+            "Moderator": ModelConfig(id="mock-moderator", adapter="mock"),
+        },
+    )
+
+    events = runner.repository.read_events("meeting-1")
+    assert [event["output_schema_id"] for event in events] == [
+        custom_schema_id,
+        custom_schema_id,
+    ]
+    assert [event["parsed_output"] for event in events] == [
+        {"value": "member"},
+        {"value": "synthesis"},
+    ]
 
 
 def test_parallel_runner_can_anonymize_synthesis_inputs(tmp_path: Path) -> None:
@@ -986,6 +1172,7 @@ def test_parallel_runner_retry_failed_member_runs_only_that_member_then_synthesi
         ("fanout-1-member-2", 2, "completed"),
         ("synthesis-1", 1, "completed"),
     ]
+    assert [event["output_schema_id"] for event in events] == ["role-output/v1"] * 5
 
 
 def test_parallel_runner_starts_next_round_after_synthesis_complete(tmp_path: Path) -> None:
@@ -1041,6 +1228,7 @@ def build_runner(
     adapter: object,
     templates: tuple[str, ...] = ("blue_propose", "red_critique", "blue_revise", "judge_decide"),
     extra_placeholders: str = "",
+    output_schemas: OutputSchemaRegistry | None = None,
 ) -> MeetingRunner:
     prompt_dir = tmp_path / "prompts"
     prompt_dir.mkdir()
@@ -1060,6 +1248,7 @@ def build_runner(
                 "mock": adapter,
             }
         ),
+        output_schemas=output_schemas,
     )
 
 

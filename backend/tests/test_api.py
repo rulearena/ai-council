@@ -13,6 +13,7 @@ from fastapi.testclient import TestClient
 from ai_council.api import ModelHealthCheckResult, ModelHealthCheckStore, create_app
 from ai_council.models.adapters import AdapterError, MockModelAdapter, ModelRequest, ModelResponse
 from ai_council.models.config import ModelConfigRepository
+from ai_council.meetings.repository import MeetingRepository
 
 TEST_BLUE_PROPOSE_TEMPLATE_HASH = "ea9d0dea0781c59af0e7a45d382fed40bfc3d4f90510011eb0d316f5746f89b8"
 TEST_OUTPUT_SCHEMA_HASH = "15a45919652be5c70d3fd1690a10d37f876f19a14b2a76cc0f21765def281377"
@@ -727,6 +728,40 @@ def test_meeting_create_list_get_start_and_transcript(tmp_path: Path) -> None:
     assert "## Blue - blue-propose" in transcript.text
 
 
+def test_legacy_event_without_schema_id_projects_as_role_output_v1_without_rewrite(
+    tmp_path: Path,
+) -> None:
+    app = create_test_app(tmp_path)
+    client = TestClient(app)
+    meeting_id = client.post("/meetings", json={"topic": "legacy event"}).json()["meeting_id"]
+    repository = MeetingRepository(tmp_path / "data")
+    repository.append_event(
+        meeting_id,
+        {
+            "event_id": "legacy-completed",
+            "meeting_id": meeting_id,
+            "step_id": "blue-propose",
+            "role": "Blue",
+            "attempt": 1,
+            "status": "completed",
+            "parsed_output": {
+                "summary": "Legacy summary",
+                "arguments": [],
+                "risks": [],
+                "recommendation": "Legacy recommendation",
+            },
+        },
+    )
+
+    event = client.get(f"/meetings/{meeting_id}").json()["events"][-1]
+    transcript = client.get(f"/meetings/{meeting_id}/transcript.md")
+
+    assert event["output_schema_id"] == "role-output/v1"
+    assert transcript.status_code == 200
+    assert "Legacy summary" in transcript.text
+    assert "output_schema_id" not in repository.read_events(meeting_id)[-1]
+
+
 def test_meeting_read_models_include_total_token_usage(
     tmp_path: Path,
     monkeypatch,
@@ -899,6 +934,7 @@ def test_running_step_persists_and_clears_recovery_state(
         assert state["status"] == "running"
         assert state["prompt_template_name"] == "blue_propose"
         assert state["prompt_template_hash"] == TEST_BLUE_PROPOSE_TEMPLATE_HASH
+        assert state["output_schema_id"] == "role-output/v1"
         assert state["output_schema_hash"] == TEST_OUTPUT_SCHEMA_HASH
     finally:
         release_model.set()
@@ -1591,6 +1627,7 @@ def test_modes_endpoint_returns_catalog(tmp_path: Path) -> None:
     ]
     red_blue = next(mode for mode in modes if mode["id"] == "red-blue")
     assert red_blue["available"] is True
+    assert {role["output_schema"] for role in red_blue["roles"]} == {"role-output/v1"}
     assert red_blue["steps"] == [
         {"role": "Blue", "template": "blue_propose", "label": "藍軍提案"},
         {"role": "Red", "template": "red_critique", "label": "紅軍質詢"},

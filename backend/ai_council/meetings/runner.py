@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import hashlib
 import re
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
@@ -11,14 +10,18 @@ from ai_council.meetings.repository import MeetingRepository
 from ai_council.meetings.transcript import TranscriptProjector
 from ai_council.models.adapters import AdapterError, ModelRequest, ModelResponse
 from ai_council.models.config import ModelConfig
-from ai_council.prompting.parser import OutputParseError, RoleOutputParser
+from ai_council.prompting.parser import OutputParseError
 from ai_council.prompting.renderer import PromptRenderer
-
-REQUIRED_JSON_SCHEMA = (
-    '{"summary":"string","arguments":[{"title":"string","detail":"string"}],'
-    '"risks":[{"title":"string","detail":"string"}],"recommendation":"string"}'
+from ai_council.prompting.schemas import (
+    DEFAULT_OUTPUT_SCHEMA_ID,
+    DEFAULT_OUTPUT_SCHEMA_REGISTRY,
+    ROLE_OUTPUT_V1_SCHEMA,
+    OutputSchemaCodec,
+    OutputSchemaRegistry,
 )
-REQUIRED_JSON_SCHEMA_HASH = hashlib.sha256(REQUIRED_JSON_SCHEMA.encode("utf-8")).hexdigest()
+
+REQUIRED_JSON_SCHEMA = ROLE_OUTPUT_V1_SCHEMA
+REQUIRED_JSON_SCHEMA_HASH = DEFAULT_OUTPUT_SCHEMA_REGISTRY.get(DEFAULT_OUTPUT_SCHEMA_ID).hash
 LIFECYCLE_STATUSES = {"cancelled", "closed", "reopened"}
 CASE_FILES_BY_ROLE_INPUT = "__case_files_by_role"
 CASE_FILES_DEFAULT_ROLE = "__default__"
@@ -50,6 +53,7 @@ class StepDefinition:
     step_id: str
     role: str
     template_name: str
+    output_schema_id: str = DEFAULT_OUTPUT_SCHEMA_ID
 
 
 @dataclass(frozen=True)
@@ -66,6 +70,7 @@ class ParallelMemberStep:
     display_name: str
     instance_prompt: str
     index: int
+    output_schema_id: str = DEFAULT_OUTPUT_SCHEMA_ID
 
 
 @dataclass(frozen=True)
@@ -84,13 +89,14 @@ class MeetingRunner:
         adapters: RunnerAdapters,
         stream_sink: Callable[[str, TokenStreamEvent], None] | None = None,
         execution_state_store: MeetingExecutionStateStore | None = None,
+        output_schemas: OutputSchemaRegistry | None = None,
     ) -> None:
         self.repository = repository
         self.prompt_renderer = prompt_renderer
         self.adapters = adapters
         self.stream_sink = stream_sink
         self.execution_state_store = execution_state_store
-        self.output_parser = RoleOutputParser()
+        self.output_schemas = output_schemas or DEFAULT_OUTPUT_SCHEMA_REGISTRY
         self.transcript_projector = TranscriptProjector()
 
     def start(
@@ -393,7 +399,8 @@ class MeetingRunner:
         config = model_assignments[step.role]
         event_step_id = event_step_id or self._event_step_id(step.step_id, round_number)
         extra_event_fields = extra_event_fields or {}
-        prompt_metadata = self._prompt_metadata(step.template_name)
+        output_schema = self.output_schemas.get(step.output_schema_id)
+        prompt_metadata = self._prompt_metadata(step.template_name, output_schema)
         prompt = self.prompt_renderer.render(
             template_name=step.template_name,
             role=step.role,
@@ -406,7 +413,7 @@ class MeetingRunner:
                     title=topic,
                 )
             ),
-            required_json_schema=REQUIRED_JSON_SCHEMA,
+            required_json_schema=output_schema.schema,
             inputs=self._inputs_for_role(inputs, step.role),
         )
 
@@ -446,7 +453,7 @@ class MeetingRunner:
                     on_token_delta=emit_token_delta,
                 )
             )
-            parsed = self.output_parser.parse(response.raw_output)
+            parsed_output = output_schema.parse(response.raw_output)
         except (AdapterError, OutputParseError, KeyError) as error:
             self._clear_active_execution(meeting_id)
             if self._is_terminal(meeting_id):
@@ -484,12 +491,7 @@ class MeetingRunner:
             **prompt_metadata,
             "prompt_messages": [{"role": "user", "content": prompt}],
             "raw_output": response.raw_output,
-            "parsed_output": {
-                "summary": parsed.summary,
-                "arguments": [item.__dict__ for item in parsed.arguments],
-                "risks": [item.__dict__ for item in parsed.risks],
-                "recommendation": parsed.recommendation,
-            },
+            "parsed_output": parsed_output,
             "status": "completed",
             **extra_event_fields,
         }
@@ -547,7 +549,8 @@ class MeetingRunner:
     ) -> dict[str, object]:
         config = model_assignments[member.role]
         event_step_id = f"fanout-{round_number}-member-{member.index}"
-        prompt_metadata = self._prompt_metadata(member.template_name)
+        output_schema = self.output_schemas.get(member.output_schema_id)
+        prompt_metadata = self._prompt_metadata(member.template_name, output_schema)
         prompt = self.prompt_renderer.render(
             template_name=member.template_name,
             role=member.role,
@@ -556,7 +559,7 @@ class MeetingRunner:
                 self.repository.read_events(meeting_id),
                 title=topic,
             ),
-            required_json_schema=REQUIRED_JSON_SCHEMA,
+            required_json_schema=output_schema.schema,
             inputs=self._inputs_for_role(
                 inputs,
                 member.role,
@@ -570,7 +573,7 @@ class MeetingRunner:
             response = self.adapters.by_name[config.adapter].complete(
                 ModelRequest(prompt=prompt, model_config=config, meeting_id=meeting_id)
             )
-            parsed = self.output_parser.parse(response.raw_output)
+            parsed_output = output_schema.parse(response.raw_output)
         except (AdapterError, OutputParseError, KeyError) as error:
             return {
                 "event_id": f"{meeting_id}:{event_step_id}:attempt-{attempt}:failed",
@@ -597,12 +600,7 @@ class MeetingRunner:
             **prompt_metadata,
             "prompt_messages": [{"role": "user", "content": prompt}],
             "raw_output": response.raw_output,
-            "parsed_output": {
-                "summary": parsed.summary,
-                "arguments": [item.__dict__ for item in parsed.arguments],
-                "risks": [item.__dict__ for item in parsed.risks],
-                "recommendation": parsed.recommendation,
-            },
+            "parsed_output": parsed_output,
             "status": "completed",
         }
         if response.token_usage is not None:
@@ -677,11 +675,16 @@ class MeetingRunner:
         if self.execution_state_store is not None:
             self.execution_state_store.clear_active(meeting_id)
 
-    def _prompt_metadata(self, template_name: str) -> dict[str, object]:
+    def _prompt_metadata(
+        self,
+        template_name: str,
+        output_schema: OutputSchemaCodec,
+    ) -> dict[str, object]:
         return {
             "prompt_template_name": template_name,
             "prompt_template_hash": self.prompt_renderer.template_hash(template_name),
-            "output_schema_hash": REQUIRED_JSON_SCHEMA_HASH,
+            "output_schema_id": output_schema.id,
+            "output_schema_hash": output_schema.hash,
         }
 
     def _inputs_for_role(

@@ -21,6 +21,7 @@ class ActiveExecutionState(TypedDict):
     started_at: NotRequired[str]
     prompt_template_name: NotRequired[str]
     prompt_template_hash: NotRequired[str]
+    output_schema_id: NotRequired[str]
     output_schema_hash: NotRequired[str]
     interaction_type: NotRequired[str]
     directed_sequence: NotRequired[int]
@@ -86,6 +87,7 @@ def interrupted_execution_event(state: ActiveExecutionState) -> dict[str, object
     for key in [
         "prompt_template_name",
         "prompt_template_hash",
+        "output_schema_id",
         "output_schema_hash",
         "interaction_type",
         "directed_sequence",

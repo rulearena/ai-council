@@ -58,6 +58,7 @@ from ai_council.models.config import (
 )
 from ai_council.models.config import ModelPricing as ConfigModelPricing
 from ai_council.prompting.renderer import PromptRenderer
+from ai_council.prompting.schemas import DEFAULT_OUTPUT_SCHEMA_ID
 
 MODEL_TEST_PROMPT = 'Return {"summary":"OK","arguments":[],"risks":[],"recommendation":"OK"}'
 MAX_CASE_FILE_CHARS = 20_000
@@ -393,7 +394,7 @@ def create_app(
                     meeting_mode(mode_catalog, metadata),
                 ),
             ),
-            "events": events,
+            "events": project_events(events),
             "case_files": project_case_files(repository.read_case_files(meeting_id)),
         }
 
@@ -660,7 +661,7 @@ def create_app(
             await websocket.send_json(
                 {
                     "type": "snapshot",
-                    "events": events,
+                    "events": project_events(events),
                     "stream_events": [],
                     "activity_status": activity_status,
                 }
@@ -683,7 +684,7 @@ def create_app(
                     await websocket.send_json(
                         {
                             "type": "update",
-                            "events": events[event_count:],
+                            "events": project_events(events[event_count:]),
                             "stream_events": stream_events,
                             "activity_status": next_activity_status,
                         }
@@ -705,6 +706,20 @@ def get_mode_or_400(catalog: ModeCatalogRepository, mode_id: str) -> ModeDefinit
     if mode is None:
         raise HTTPException(status_code=404, detail=f"Unknown mode: {mode_id}")
     return mode
+
+
+def project_events(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [
+        {
+            **event,
+            **(
+                {"output_schema_id": event.get("output_schema_id", DEFAULT_OUTPUT_SCHEMA_ID)}
+                if event.get("role") not in {"Human", "System"}
+                else {}
+            ),
+        }
+        for event in events
+    ]
 
 
 def meeting_mode(catalog: ModeCatalogRepository, metadata: dict[str, Any]) -> ModeDefinition:
@@ -731,6 +746,7 @@ def project_mode(mode: ModeDefinition) -> dict[str, Any]:
                 "color": role.color,
                 "kind": role.kind,
                 "portrait": role.portrait,
+                "output_schema": role.output_schema,
             }
             for role in mode.roles
         ],

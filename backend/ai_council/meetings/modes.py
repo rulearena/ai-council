@@ -7,6 +7,10 @@ from typing import Any
 import yaml
 
 from ai_council.meetings.runner import ParallelMemberStep, ParallelPlan, RelayPlan, StepDefinition
+from ai_council.prompting.schemas import (
+    DEFAULT_OUTPUT_SCHEMA_ID,
+    DEFAULT_OUTPUT_SCHEMA_REGISTRY,
+)
 
 VALID_CATEGORIES = {"relay", "parallel"}
 VALID_ROLE_KINDS = {"member", "adjudicator", "synthesizer"}
@@ -25,6 +29,7 @@ class ModeRole:
     color: str
     kind: str
     portrait: str | None = None
+    output_schema: str = DEFAULT_OUTPUT_SCHEMA_ID
 
 
 @dataclass(frozen=True)
@@ -86,12 +91,23 @@ class ModeDefinition:
 def relay_plan(mode: ModeDefinition) -> RelayPlan:
     if mode.category != "relay":
         raise ModeConfigError(f"Mode does not use the relay executor: {mode.id}")
+    schemas_by_role = {role.id: role.output_schema for role in mode.roles}
     steps = [
-        StepDefinition(step.template.replace("_", "-"), step.role, step.template)
+        StepDefinition(
+            step.template.replace("_", "-"),
+            step.role,
+            step.template,
+            schemas_by_role[step.role],
+        )
         for step in mode.steps
     ]
     directed_steps = {
-        step.role: StepDefinition(f"{step.role.lower()}-response", step.role, step.template)
+        step.role: StepDefinition(
+            f"{step.role.lower()}-response",
+            step.role,
+            step.template,
+            schemas_by_role[step.role],
+        )
         for step in mode.steps
     }
     return RelayPlan(steps=steps, directed_steps=directed_steps)
@@ -103,6 +119,7 @@ def parallel_plan(mode: ModeDefinition, participants: list[dict[str, Any]]) -> P
     if mode.fanout is None or mode.synthesis is None:
         raise ModeConfigError(f"Mode {mode.id!r} requires fanout and synthesis")
 
+    schemas_by_role = {role.id: role.output_schema for role in mode.roles}
     synthesizer_role = mode.synthesis.role
     fixed_member_roles = {role.id for role in mode.roles if role.kind == "member"}
     member_items: list[dict[str, Any]] = []
@@ -128,6 +145,7 @@ def parallel_plan(mode: ModeDefinition, participants: list[dict[str, Any]]) -> P
             display_name=str(item.get("display_name") or item["role_id"]),
             instance_prompt=str(item.get("instance_prompt") or ""),
             index=index,
+            output_schema_id=schemas_by_role.get(str(item["role_id"]), DEFAULT_OUTPUT_SCHEMA_ID),
         )
         for index, item in enumerate(member_items, start=1)
     ]
@@ -138,7 +156,12 @@ def parallel_plan(mode: ModeDefinition, participants: list[dict[str, Any]]) -> P
         )
     return ParallelPlan(
         members=members,
-        synthesis=StepDefinition("synthesis", synthesizer_role, mode.synthesis.template),
+        synthesis=StepDefinition(
+            "synthesis",
+            synthesizer_role,
+            mode.synthesis.template,
+            schemas_by_role[synthesizer_role],
+        ),
         anonymize_synthesis_inputs=mode.synthesis.anonymize_inputs,
     )
 
@@ -263,12 +286,19 @@ def _role_from_yaml_item(mode_id: str, raw_role: Any) -> ModeRole:
         raise ModeConfigError(f"Mode {mode_id!r} has a role missing id/name/color")
     if kind not in VALID_ROLE_KINDS:
         raise ModeConfigError(f"Mode {mode_id!r} has role {role_id!r} with unknown kind: {kind!r}")
+    output_schema = raw_role.get("output_schema", DEFAULT_OUTPUT_SCHEMA_ID)
+    if not isinstance(output_schema, str) or not DEFAULT_OUTPUT_SCHEMA_REGISTRY.contains(output_schema):
+        raise ModeConfigError(
+            f"Mode {mode_id!r} role {role_id!r} references unknown output schema: "
+            f"{output_schema!r}"
+        )
     return ModeRole(
         id=role_id,
         name=name,
         color=color,
         kind=kind,
         portrait=raw_role.get("portrait"),
+        output_schema=output_schema,
     )
 
 

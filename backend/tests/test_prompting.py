@@ -6,6 +6,30 @@ import pytest
 
 from ai_council.prompting.parser import OutputParseError, RoleOutputParser
 from ai_council.prompting.renderer import PromptRenderer
+from ai_council.prompting.schemas import DEFAULT_OUTPUT_SCHEMA_REGISTRY
+
+
+ROLE_OUTPUT_V1_LITERAL = (
+    '{"summary":"string","arguments":[{"title":"string","detail":"string"}],'
+    '"risks":[{"title":"string","detail":"string"}],"recommendation":"string"}'
+)
+ROLE_OUTPUT_V1_HASH = "15a45919652be5c70d3fd1690a10d37f876f19a14b2a76cc0f21765def281377"
+
+
+def test_role_output_v1_registry_preserves_literal_hash_and_parser_contract() -> None:
+    codec = DEFAULT_OUTPUT_SCHEMA_REGISTRY.get("role-output/v1")
+
+    assert codec.schema == ROLE_OUTPUT_V1_LITERAL
+    assert codec.hash == ROLE_OUTPUT_V1_HASH
+    assert codec.parse(
+        '{"summary":"A","arguments":[{"title":"T","detail":"D"}],'
+        '"risks":[],"recommendation":"B"}'
+    ) == {
+        "summary": "A",
+        "arguments": [{"title": "T", "detail": "D"}],
+        "risks": [],
+        "recommendation": "B",
+    }
 
 
 @pytest.mark.parametrize(
