@@ -181,6 +181,7 @@ def create_app(
     jobs = MeetingJobManager()
     model_health = ModelHealthCheckStore()
     model_health_checker = ModelHealthChecker(model_repository, model_adapters, model_health)
+    model_write_lock = threading.Lock()
     if start_model_health_checks:
         model_health_checker.start()
 
@@ -206,7 +207,13 @@ def create_app(
             command=request.command,
             timeout_seconds=request.timeout_seconds,
         )
-        return save_model_or_422(model_repository, model_health, model, expect_existing=False)
+        return save_model_or_422(
+            model_repository,
+            model_health,
+            model,
+            expect_existing=False,
+            write_lock=model_write_lock,
+        )
 
     @app.put("/models/{model_config_id}")
     def update_model(model_config_id: str, request: UpsertModelConfigRequest) -> dict[str, Any]:
@@ -222,19 +229,27 @@ def create_app(
             command=request.command,
             timeout_seconds=request.timeout_seconds,
         )
-        return save_model_or_422(model_repository, model_health, model, expect_existing=True)
+        return save_model_or_422(
+            model_repository,
+            model_health,
+            model,
+            expect_existing=True,
+            write_lock=model_write_lock,
+        )
 
     @app.delete("/models/{model_config_id}", status_code=204)
     def delete_model(model_config_id: str) -> Response:
-        if not model_repository.delete_model(model_config_id):
-            raise HTTPException(status_code=404, detail=f"Unknown model: {model_config_id}")
+        with model_write_lock:
+            if not model_repository.delete_model(model_config_id):
+                raise HTTPException(status_code=404, detail=f"Unknown model: {model_config_id}")
         return Response(status_code=204)
 
     @app.post("/models/{model_config_id}/test")
     def test_model(model_config_id: str) -> dict[str, str]:
         model = get_model(model_repository, model_config_id)
+        generation = model_health.generation(model_config_id)
         result = check_model_health(model, model_adapters.get(model.adapter))
-        model_health.record(model_config_id, result)
+        model_health.record(model_config_id, result, generation)
         response = {"status": result.status, "tested_at": result.checked_at}
         if result.error is not None:
             response["error"] = result.error
@@ -723,30 +738,32 @@ def save_model_or_422(
     model: ModelConfig,
     *,
     expect_existing: bool,
+    write_lock: threading.Lock,
 ) -> dict[str, Any]:
     errors = validate_model_config_fields(model)
     if errors:
         raise HTTPException(status_code=422, detail=errors)
-    try:
-        existing_models = model_repository.list_models()
-    except ModelConfigError as error:
-        raise HTTPException(status_code=400, detail=str(error)) from error
-    already_exists = any(existing.id == model.id for existing in existing_models)
-    if expect_existing and not already_exists:
-        raise HTTPException(status_code=404, detail=f"Unknown model: {model.id}")
-    if not expect_existing and already_exists:
-        raise HTTPException(
-            status_code=422,
-            detail=[{"field": "id", "message": "Model id already exists"}],
-        )
-    try:
-        saved = model_repository.save_model(model)
-    except ModelConfigError as error:
-        raise HTTPException(
-            status_code=422,
-            detail=[{"field": "", "message": str(error)}],
-        ) from error
-    model_health.clear(saved.id)
+    with write_lock:
+        try:
+            existing_models = model_repository.list_models()
+        except ModelConfigError as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
+        already_exists = any(existing.id == model.id for existing in existing_models)
+        if expect_existing and not already_exists:
+            raise HTTPException(status_code=404, detail=f"Unknown model: {model.id}")
+        if not expect_existing and already_exists:
+            raise HTTPException(
+                status_code=422,
+                detail=[{"field": "id", "message": "Model id already exists"}],
+            )
+        try:
+            saved = model_repository.save_model(model)
+        except ModelConfigError as error:
+            raise HTTPException(
+                status_code=422,
+                detail=[{"field": "", "message": str(error)}],
+            ) from error
+        model_health.clear(saved.id)
     return project_model_config(saved, model_health.get(saved.id))
 
 
@@ -1008,21 +1025,38 @@ def check_model_health(model: ModelConfig, adapter: Any | None) -> ModelHealthCh
 
 
 class ModelHealthCheckStore:
+    """Tracks health-check results per model id.
+
+    Each id has a generation counter that `clear()` bumps whenever the model
+    is (re)saved. `record()` only writes if the generation it was given still
+    matches, so a health check that was already in flight when a save
+    happened can't clobber the freshly-reset "unknown" status with a stale
+    result once it finishes.
+    """
+
     def __init__(self) -> None:
         self._checks: dict[str, ModelHealthCheckResult] = {}
+        self._generations: dict[str, int] = {}
         self._lock = threading.Lock()
 
-    def record(self, model_id: str, result: ModelHealthCheckResult) -> None:
+    def record(self, model_id: str, result: ModelHealthCheckResult, generation: int) -> None:
         with self._lock:
+            if generation != self._generations.get(model_id, 0):
+                return
             self._checks[model_id] = result
 
     def get(self, model_id: str) -> ModelHealthCheckResult | None:
         with self._lock:
             return self._checks.get(model_id)
 
+    def generation(self, model_id: str) -> int:
+        with self._lock:
+            return self._generations.get(model_id, 0)
+
     def clear(self, model_id: str) -> None:
         with self._lock:
             self._checks.pop(model_id, None)
+            self._generations[model_id] = self._generations.get(model_id, 0) + 1
 
 
 class ModelHealthChecker:
@@ -1049,7 +1083,9 @@ class ModelHealthChecker:
             self._check_model(model)
 
     def _check_model(self, model: ModelConfig) -> None:
-        self.store.record(model.id, check_model_health(model, self.adapters.get(model.adapter)))
+        generation = self.store.generation(model.id)
+        result = check_model_health(model, self.adapters.get(model.adapter))
+        self.store.record(model.id, result, generation)
 
 
 class MeetingJobManager:

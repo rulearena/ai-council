@@ -10,8 +10,9 @@ from pathlib import Path
 
 from fastapi.testclient import TestClient
 
-from ai_council.api import create_app
+from ai_council.api import ModelHealthCheckResult, ModelHealthCheckStore, create_app
 from ai_council.models.adapters import MockModelAdapter, ModelResponse
+from ai_council.models.config import ModelConfigRepository
 
 TEST_BLUE_PROPOSE_TEMPLATE_HASH = "81abba70bd2c176005a3fd28dd13ef9bda68f441de574976e8d7161e23fb5f9d"
 TEST_OUTPUT_SCHEMA_HASH = "15a45919652be5c70d3fd1690a10d37f876f19a14b2a76cc0f21765def281377"
@@ -248,6 +249,58 @@ def test_post_models_creates_and_resets_status(tmp_path: Path) -> None:
     assert updated.json()["status"] == "unknown"
     refreshed = next(model for model in client.get("/models").json() if model["id"] == "mock-fast")
     assert refreshed["status"] == "unknown"
+
+
+def test_concurrent_post_models_with_same_id_only_one_succeeds(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    app = create_test_app(tmp_path)
+    client = TestClient(app)
+
+    # Delay the first save_model() call so it starts *after* its own
+    # existence check already passed but *before* it writes to disk. If the
+    # existence-check-then-save critical section isn't locked, a second POST
+    # can slip its own existence check into that window and also pass.
+    original_save_model = ModelConfigRepository.save_model
+    first_call_started = threading.Event()
+    call_count = {"n": 0}
+    count_lock = threading.Lock()
+
+    def slow_save_model(self: ModelConfigRepository, model):
+        with count_lock:
+            call_count["n"] += 1
+            is_first_call = call_count["n"] == 1
+        if is_first_call:
+            first_call_started.set()
+            time.sleep(0.3)
+        return original_save_model(self, model)
+
+    monkeypatch.setattr(ModelConfigRepository, "save_model", slow_save_model)
+
+    payload = {"id": "race-model", "adapter": "mock"}
+    results: dict[str, int] = {}
+
+    def post(key: str) -> None:
+        results[key] = client.post("/models", json=payload).status_code
+
+    thread_one = threading.Thread(target=post, args=("first",))
+    thread_one.start()
+    assert first_call_started.wait(timeout=2)
+
+    thread_two = threading.Thread(target=post, args=("second",))
+    thread_two.start()
+
+    thread_one.join(timeout=3)
+    thread_two.join(timeout=3)
+
+    # Without a lock serializing "check existence -> save" both requests can
+    # observe "no existing model" and both succeed, creating a duplicate.
+    assert sorted(results.values()) == [201, 422]
+    assert sorted(model["id"] for model in client.get("/models").json()) == [
+        "mock-fast",
+        "race-model",
+    ]
 
 
 def test_post_models_validates_id_format(tmp_path: Path) -> None:
@@ -504,6 +557,25 @@ models:
 
     listed = next(model for model in client.get("/models").json() if model["id"] == "http-down")
     assert listed["status"] == "unavailable"
+
+
+def test_model_health_store_drops_stale_generation_record() -> None:
+    store = ModelHealthCheckStore()
+
+    # Simulate a health check that started before a save cleared the record.
+    generation = store.generation("m")
+    store.clear("m")  # e.g. a concurrent PUT resets status to "unknown"
+
+    stale_result = ModelHealthCheckResult(status="available", checked_at="t1")
+    store.record("m", stale_result, generation)
+
+    assert store.get("m") is None  # stale result must be dropped, not applied
+
+    fresh_generation = store.generation("m")
+    fresh_result = ModelHealthCheckResult(status="unavailable", checked_at="t2")
+    store.record("m", fresh_result, fresh_generation)
+
+    assert store.get("m") == fresh_result
 
 
 def test_meeting_create_list_get_start_and_transcript(tmp_path: Path) -> None:
