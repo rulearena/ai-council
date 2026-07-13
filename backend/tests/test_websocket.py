@@ -8,7 +8,7 @@ from pathlib import Path
 from fastapi.testclient import TestClient
 
 from ai_council.api import create_app
-from ai_council.models.adapters import MockModelAdapter, ModelResponse
+from ai_council.models.adapters import MockModelAdapter
 
 PROJECT_CONFIG_DIR = Path(__file__).resolve().parents[2] / "config"
 
@@ -51,12 +51,11 @@ def test_meeting_websocket_streams_background_run_status_and_events(
     monkeypatch,
 ) -> None:
     release_model = threading.Event()
+    original_complete = MockModelAdapter.complete
 
     def slow_complete(self, request):
         release_model.wait(timeout=2)
-        return ModelResponse(
-            raw_output='{"summary":"OK","arguments":[],"risks":[],"recommendation":"Go"}'
-        )
+        return original_complete(self, request)
 
     monkeypatch.setattr(MockModelAdapter, "complete", slow_complete)
     app = create_test_app(tmp_path)
