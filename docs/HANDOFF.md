@@ -21,7 +21,11 @@
 
 ## 2. Agent 開發佇列與目前核准批次
 
-Human Owner 已於 2026-07-13 核准「證據到可追溯裁決」批次，依序自主執行：
+Evidence to Verdict 批次已實作並等待 Human Owner acceptance。
+
+Human Owner 另於 2026-07-13 核准 backlog 81「案卷容量限制設定化與建立前提示」：預設單份/總量提高為 50,000/120,000 字元，環境變數可覆寫，前端顯示實際限制、token/context 風險與 inline 錯誤。執行計畫：`docs/plans/2026-07-13-configurable-case-file-limits.md`；ticket：`.scratch/configurable-case-file-limits/`。
+
+已完成的 Evidence to Verdict 範圍：
 
 1. backlog 80：證據編號與引用錨點。——已完成（2026-07-13，`96cd1d9` / `837b6d8`）
 2. backlog 63/64：版本化角色輸出契約；舊 `role-output/v1` 與舊 events 維持相容。——已完成（2026-07-13，`a3a3382` / `c807f7a`）

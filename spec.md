@@ -558,6 +558,7 @@ config/models.yaml.example
 78. **案卷（Case Files）Phase 1**：建立會議時附多份文件（貼上/上傳純文字或 markdown，各有標題），**每份可指定可見角色**（法庭：控方證據/辯方書狀/雙方已提交卷宗給法官；紅藍：方案全文；辯論：參考資料；盲測：產品規格）。注入走既有 mode inputs 機制 + prompt 模板 `{{ case_files }}` 佔位符（slice B 的 renderer inputs 注入直接沿用）；全文注入 + 大小上限與 token 成本警告；存放於 meeting data dir（file-based，不建外部索引）。動機：法庭審理的災難覆盤需要事故時間軸/log/設計文件等卷宗，topic 單欄位明顯不足（2026-07-13 使用者提出）（已完成 2026-07-13）
 79. 案卷 Phase 2（僅在卷宗量超出 context window 才做）：檢索/摘要層（RAG）。Phase 1 刻意不做——個人使用量級全文注入即可，先上 RAG 是過度工程
 80. 證據編號引用：案卷文件賦予「證物一/證物二」式編號，prompt 要求角色引用時帶錨點——與 backlog 65（豐富裁決結構）銜接，依賴 78（已完成 2026-07-13）
+81. **案卷容量限制設定化與建立前提示**：單份/總量 hard limit 改由環境變數設定，預設提高為 50,000/120,000 字元；後端公開實際限制，New Case 顯示每份與總量、粗估 token/context 風險，超限時 inline 阻擋並保留後端 detail。仍採全文注入，不包含 RAG（2026-07-13 已核准）
 
 ## 16. 會議模式系統（Mode System）設計
 
