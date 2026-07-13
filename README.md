@@ -2,12 +2,16 @@
 
 Local single-user AI meeting orchestration app.
 
-The MVP runs a fixed Red/Blue/Judge flow:
+The app runs meetings from a mode catalog (`config/modes.yaml`, served via `GET /modes`).
+The original relay mode is Red/Blue/Judge:
 
 1. Blue proposes
 2. Red critiques
 3. Blue revises
 4. Judge decides
+
+Other relay modes (e.g. `courtroom`, `debate`) follow the same step-by-step pattern with
+a different roster and prompt templates; see `spec.md` section 16 for the mode system design.
 
 The chair can also add human feedback during a meeting, ask a single role to respond,
 or run a preset role sequence such as `Red -> Blue -> Judge` for automatic follow-up.
@@ -19,7 +23,8 @@ The backend stores meeting events as JSONL under `data/meetings/<meeting_id>/eve
 - `backend/` - FastAPI app, meeting runner, persistence, prompt rendering, output parsing, and model adapters.
 - `frontend/` - Vue 3 control/debug UI.
 - `config/models.yaml.example` - example OpenAI-compatible model configuration.
-- `prompts/` - prompt templates used by the fixed meeting flow.
+- `config/modes.yaml` - mode catalog (roster, steps, prompt templates) served via `GET /modes`.
+- `prompts/` - prompt templates used by the meeting flows.
 - `.scratch/mvp/` - local PRD, tickets, and issue files for this MVP.
 
 ## Backend Setup
