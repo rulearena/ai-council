@@ -1,6 +1,6 @@
 # 證據編號與引用錨點
 
-Status: ready-for-agent
+Status: implemented / awaiting acceptance
 Blocked by: none
 
 ## Goal
@@ -47,3 +47,7 @@ Blocked by: none
 - Reviewer verdict pass。
 
 ## Comments
+
+- 2026-07-13：Executor commits `96cd1d9` / `837b6d8`；backend 192 passed、frontend build 綠、targeted Chromium 1 passed。
+- 第一次 Spec review 發現無可見案卷角色缺共通引用規則（Major），原 Executor 以 regression test 修復；Spec/Quality 複驗皆 pass。
+- Quality review 保留 non-blocking Minor：前後端中文數字 formatter 各自維護。Orchestrator 裁定不阻擋，因跨語言無共用 runtime，且 API/Playwright literals 已固定使用者契約。

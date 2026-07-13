@@ -22,7 +22,7 @@
 
 Human Owner 已於 2026-07-13 核准「證據到可追溯裁決」批次，依序自主執行：
 
-1. backlog 80：證據編號與引用錨點。
+1. backlog 80：證據編號與引用錨點。——已完成（2026-07-13，`96cd1d9` / `837b6d8`）
 2. backlog 63/64：版本化角色輸出契約；舊 `role-output/v1` 與舊 events 維持相容。
 3. backlog 65：adjudicator rich structured verdicts。
 
