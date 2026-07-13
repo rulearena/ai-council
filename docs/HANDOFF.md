@@ -17,11 +17,10 @@
 
 ## 2. 待辦佇列（優先序）
 
-1. **Backlog 76–77 清理**（小）：測試 flake timeout 放寬；ghost mode_id 防禦、DEFAULT_MODE_ID 常數、錯誤碼對稱、NewCaseModal 失敗保留輸入。
-2. **Reopen endpoint**（backlog 75）：append `reopened` event；`api.py` 的 `project_meeting_status`/`reject_terminal_meeting` 與 `runner._is_terminal` 的終端判定需認得它（掃到 cancelled/closed 之後若有 reopened 則不算終端）。
-3. **案卷 Phase 1**（backlog 78）：per-role 可見的文件注入。沿用 slice B 建的 inputs 注入機制（`PromptRenderer.render(inputs=...)`）+ `{{ case_files }}` 佔位符。**不做 RAG**（backlog 79 明文延後）。
-4. **Slice D：彙整匿名化 hook 啟用**（spec §16.3、§16.7 切片 D）：slice C 已預留彙整輸入組裝點，預設仍關閉。
-5. 新角色立繪：使用者自行產圖，不是 agent 工作。
+1. **Reopen endpoint**（backlog 75）：append `reopened` event；`api.py` 的 `project_meeting_status`/`reject_terminal_meeting` 與 `runner._is_terminal` 的終端判定需認得它（掃到 cancelled/closed 之後若有 reopened 則不算終端）。
+2. **案卷 Phase 1**（backlog 78）：per-role 可見的文件注入。沿用 slice B 建的 inputs 注入機制（`PromptRenderer.render(inputs=...)`）+ `{{ case_files }}` 佔位符。**不做 RAG**（backlog 79 明文延後）。
+3. **Slice D：彙整匿名化 hook 啟用**（spec §16.3、§16.7 切片 D）：slice C 已預留彙整輸入組裝點，預設仍關閉。
+4. 新角色立繪：使用者自行產圖，不是 agent 工作。
 
 ## 3. 架構關鍵事實（改動前必讀）
 
@@ -36,7 +35,7 @@
 ## 4. 開發環境
 
 - 後端測試：`cd backend && .venv/bin/python -m pytest tests/ -q`（venv 在主 repo `backend/.venv`；worktree 沒有 venv——pytest `pythonpath=["."]` 會 import 執行目錄的程式碼，所以**在 worktree 的 backend 目錄下用主 repo 的 venv 跑**即測 worktree 的碼）。
-- **已知 flake（backlog 76）**：`test_api.py` 少數測試在機器負載下偶發超時（`wait_for_activity` 2s deadline），單獨重跑即過。全套紅一個先單獨重跑再判斷。
+- **已知 flake（backlog 76）**：已於 2026-07-13 將 `test_api.py` 的 `wait_for_activity` deadline 放寬到 5s；若全套仍有單一 activity timeout，先單獨重跑再判斷。
 - e2e：`playwright.config.ts` 無 webServer，baseURL 吃 `E2E_BASE_URL`（預設 3009）。**主 repo 的 3009/5009 常被使用者的 dev server 佔用**——一律用空閒 port 自起：
   ```bash
   DATA=$(mktemp -d); cp config/models.yaml.example $DATA/models.yaml
