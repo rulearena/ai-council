@@ -216,12 +216,22 @@ export async function getMeetings(query?: string): Promise<Meeting[]> {
 
 export async function createMeeting(
   topic: string,
-  options?: { modeId?: string; inputs?: Record<string, string> },
+  options?: {
+    modeId?: string
+    inputs?: Record<string, string>
+    participants?: Array<{
+      role_id: string
+      model_config_id?: string | null
+      display_name?: string | null
+      instance_prompt?: string | null
+    }>
+  },
 ): Promise<Meeting> {
   return postJson('/meetings', {
     topic,
     mode_id: options?.modeId ?? 'red-blue',
     inputs: options?.inputs ?? {},
+    participants: options?.participants ?? [],
   })
 }
 

@@ -26,6 +26,7 @@ import {
   updateMeetingTags,
   type Meeting,
   type MeetingEvent,
+  type MeetingParticipant,
   type ModelConfig,
 } from '../api'
 
@@ -57,6 +58,7 @@ export type RoleSeatStatus = 'waiting' | 'thinking' | 'completed' | 'failed'
 // useCouncil() is only ever instantiated once (by App.vue) - a second concurrent instance
 // would fight over the same singleton.
 const activeModeSource = ref<ModeDefinition>(getModeById(DEFAULT_MODE_ID)!)
+const activeRoleSource = ref<ModeRoleDefinition[]>(activeModeSource.value.roles)
 
 // computed(...) wrappers (not activeModeSource itself) so existing `import { activeMode }`
 // call sites keep working unchanged in `<template>` (auto-unwrapped) and only need a
@@ -68,12 +70,12 @@ export const activeMode = computed(() => activeModeSource.value)
 // scene slot (adjudicator/podium/ring) each role occupies (see scenes.ts's
 // resolveSceneSeats). Kept as its own export rather than making callers reach into
 // modes.ts directly, so there's one place that says "this is the mode running right now".
-export const activeModeRoles = computed(() => activeModeSource.value.roles)
+export const activeModeRoles = computed(() => activeRoleSource.value)
 
 // Every AI role id in the active mode's roster, in display order - replaces the old
 // hardcoded `['Blue', 'Red', 'Judge']` literal with whichever roster the active mode
 // (see activeModeSource above) actually has.
-export const councilRoles = computed<CouncilRole[]>(() => activeModeSource.value.roles.map((role) => role.id))
+export const councilRoles = computed<CouncilRole[]>(() => activeRoleSource.value.map((role) => role.id))
 
 // Generic 2-role "auto-continue" presets, derived from the active mode's roster rather
 // than red-blue's three role ids: `members` is every `kind: 'member'` role (relay's two
@@ -83,6 +85,7 @@ export const councilRoles = computed<CouncilRole[]>(() => activeModeSource.value
 // fewer than 2 members can't build a meaningful "swap order" preset.
 export const sequencePresets = computed<SequencePreset[]>(() => {
   const mode = activeModeSource.value
+  if (mode.category !== 'relay') return []
   const members = mode.roles.filter((role) => role.kind === 'member').map((role) => role.id)
   const adjudicator = mode.roles.find((role) => role.kind !== 'member')?.id
   if (!adjudicator || members.length < 2) return []
@@ -203,6 +206,16 @@ function resolveActiveMode(meeting: Meeting | null): ModeDefinition {
   return getModeById(meeting?.mode_id ?? DEFAULT_MODE_ID) ?? getModeById(DEFAULT_MODE_ID)!
 }
 
+function participantToRoleDefinition(participant: MeetingParticipant): ModeRoleDefinition {
+  return {
+    id: participant.role_id,
+    name: participant.display_name || participant.name,
+    color: participant.color,
+    portrait: participant.portrait ?? undefined,
+    kind: participant.kind as ModeRoleDefinition['kind'],
+  }
+}
+
 export function useCouncil() {
   const models = ref<ModelConfig[]>([])
   const meetings = ref<Meeting[]>([])
@@ -268,6 +281,9 @@ export function useCouncil() {
   // falls back to DEFAULT_MODE_ID, same as before any meeting is ever opened.
   watchEffect(() => {
     activeModeSource.value = resolveActiveMode(selectedMeeting.value)
+    activeRoleSource.value = selectedMeeting.value
+      ? selectedMeeting.value.participants.map(participantToRoleDefinition)
+      : activeModeSource.value.roles
   })
 
   // Applies (spec.md 16.7) the resolved mode's default_scene as a non-persisted scene
@@ -463,9 +479,18 @@ export function useCouncil() {
   // participants step's input form values here. modeId/inputs still default to
   // red-blue/{} as a defensive fallback for any other/future call site that omits them,
   // not because anything live still relies on that default.
-  async function createNewMeeting(modeId: string = DEFAULT_MODE_ID, inputs: Record<string, string> = {}) {
+  async function createNewMeeting(
+    modeId: string = DEFAULT_MODE_ID,
+    inputs: Record<string, string> = {},
+    participants: Array<{
+      role_id: string
+      model_config_id?: string | null
+      display_name?: string | null
+      instance_prompt?: string | null
+    }> = [],
+  ) {
     await runAction(async () => {
-      const meeting = await createMeeting(topic.value, { modeId, inputs })
+      const meeting = await createMeeting(topic.value, { modeId, inputs, participants })
       meetings.value = await getMeetings()
       await openMeeting(meeting.meeting_id)
     })
@@ -511,7 +536,14 @@ export function useCouncil() {
     // The active mode's full step roster, in order (was a literal ['Blue','Red','Blue',
     // 'Judge']) - a round always runs every step, so this is roundBaseSteps' roles, not
     // just retryCascadeRoles' tail.
-    pendingRoles.value.push(...(activeModeSource.value.steps ?? []).map((step) => step.role))
+    const queuedRoles =
+      activeModeSource.value.category === 'parallel'
+        ? [
+            ...activeModeRoles.value.filter((role) => role.kind === 'member').map((role) => role.id),
+            ...activeModeRoles.value.filter((role) => role.kind === 'synthesizer').map((role) => role.id),
+          ]
+        : (activeModeSource.value.steps ?? []).map((step) => step.role)
+    pendingRoles.value.push(...queuedRoles)
     connectMeetingEvents(meetingId)
     await runAction(async () => {
       await startMeeting(meetingId, selectedModels.value)

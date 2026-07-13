@@ -33,10 +33,24 @@ const selectedMode = computed<ModeDefinition>(
 // `available: false` until slice C), so this form only ever needs to render plain text
 // fields.
 const inputValues = ref<Record<string, string>>({})
+const parallelMemberCount = ref(2)
+const parallelMembers = ref<Array<{ displayName: string; instancePrompt: string }>>([])
 const textInputs = computed(() => selectedMode.value.inputs.filter((input) => input.kind === 'text'))
 const hasEmptyRequiredInput = computed(() =>
   textInputs.value.some((input) => !(inputValues.value[input.id] ?? '').trim()),
 )
+const selectedModeParticipants = computed(() => {
+  const mode = selectedMode.value
+  if (mode.category !== 'parallel' || !mode.fanout || !mode.synthesis) return mode.roles
+  const members = Array.from({ length: parallelMemberCount.value }, (_, index) => ({
+    id: `${mode.fanout!.role}-${index + 1}`,
+    name: parallelMembers.value[index]?.displayName || `委員 ${index + 1}`,
+    color: '#4d8dff',
+    kind: 'member' as const,
+  }))
+  const synthesizers = mode.roles.filter((role) => role.kind === 'synthesizer')
+  return [...members, ...synthesizers]
+})
 
 // Reopening the modal always starts over at the mode picker - a half-finished previous
 // attempt (e.g. closed after picking a mode but before creating) shouldn't linger.
@@ -46,6 +60,7 @@ watch(
     if (visible) {
       step.value = 'mode'
       inputValues.value = {}
+      resetParallelMembers(selectedMode.value)
     }
   },
 )
@@ -55,7 +70,10 @@ function chooseMode(mode: ModeDefinition) {
   // Only reset inputValues on an actual mode switch - going back to the mode picker and
   // re-choosing the same mode (e.g. after "← 返回模式選擇") should keep whatever the user
   // already typed. Reopening the modal fresh is still handled by the watch(show) above.
-  if (mode.id !== selectedModeId.value) inputValues.value = {}
+  if (mode.id !== selectedModeId.value) {
+    inputValues.value = {}
+    resetParallelMembers(mode)
+  }
   selectedModeId.value = mode.id
   step.value = 'participants'
 }
@@ -65,8 +83,49 @@ function backToModePicker() {
 }
 
 async function submit() {
-  await createNewMeeting(selectedMode.value.id, { ...inputValues.value })
+  await createNewMeeting(selectedMode.value.id, { ...inputValues.value }, buildParticipants())
   emit('close')
+}
+
+function resetParallelMembers(mode: ModeDefinition) {
+  if (!mode.fanout) {
+    parallelMemberCount.value = 2
+    parallelMembers.value = []
+    return
+  }
+  parallelMemberCount.value = mode.fanout.minInstances
+  parallelMembers.value = Array.from({ length: mode.fanout.minInstances }, (_, index) => ({
+    displayName: `委員 ${index + 1}`,
+    instancePrompt: '',
+  }))
+}
+
+function setParallelMemberCount(nextCount: number) {
+  const fanout = selectedMode.value.fanout
+  if (!fanout) return
+  const clamped = Math.min(fanout.maxInstances, Math.max(fanout.minInstances, nextCount))
+  parallelMemberCount.value = clamped
+  while (parallelMembers.value.length < clamped) {
+    const index = parallelMembers.value.length
+    parallelMembers.value.push({ displayName: `委員 ${index + 1}`, instancePrompt: '' })
+  }
+  parallelMembers.value.splice(clamped)
+}
+
+function buildParticipants() {
+  const mode = selectedMode.value
+  if (mode.category !== 'parallel' || !mode.fanout || !mode.synthesis) return []
+  const members = Array.from({ length: parallelMemberCount.value }, (_, index) => ({
+    role_id: `${mode.fanout!.role}-${index + 1}`,
+    display_name: parallelMembers.value[index]?.displayName || `委員 ${index + 1}`,
+    instance_prompt: parallelMembers.value[index]?.instancePrompt || null,
+  }))
+  return [
+    ...members,
+    ...mode.roles
+      .filter((role) => role.kind === 'synthesizer')
+      .map((role) => ({ role_id: role.id, display_name: role.name })),
+  ]
 }
 </script>
 
@@ -112,9 +171,49 @@ async function submit() {
         />
       </label>
 
+      <section v-if="selectedMode.category === 'parallel' && selectedMode.fanout" class="parallel-member-editor" data-testid="parallel-member-editor">
+        <div class="parallel-member-count-row">
+          <span>成員數</span>
+          <button
+            type="button"
+            class="btn btn-secondary btn-sm"
+            data-testid="parallel-member-decrement"
+            @click="setParallelMemberCount(parallelMemberCount - 1)"
+            :disabled="parallelMemberCount <= selectedMode.fanout.minInstances"
+          >
+            -
+          </button>
+          <strong data-testid="parallel-member-count">{{ parallelMemberCount }}</strong>
+          <button
+            type="button"
+            class="btn btn-secondary btn-sm"
+            data-testid="parallel-member-increment"
+            @click="setParallelMemberCount(parallelMemberCount + 1)"
+            :disabled="parallelMemberCount >= selectedMode.fanout.maxInstances"
+          >
+            +
+          </button>
+        </div>
+
+        <label v-for="(_, index) in parallelMemberCount" :key="index" class="parallel-member-row">
+          <span>{{ selectedMode.fanout.role }}-{{ index + 1 }}</span>
+          <input
+            v-model="parallelMembers[index].displayName"
+            :data-testid="`parallel-member-${index + 1}-name`"
+            :aria-label="`成員 ${index + 1} 名稱`"
+          />
+          <textarea
+            v-if="selectedMode.fanout.instancePrompt"
+            v-model="parallelMembers[index].instancePrompt"
+            :data-testid="`parallel-member-${index + 1}-prompt`"
+            :aria-label="`成員 ${index + 1} 視角`"
+          />
+        </label>
+      </section>
+
       <div class="participant-preview" data-testid="participant-preview">
         <span
-          v-for="role in selectedMode.roles"
+          v-for="role in selectedModeParticipants"
           :key="role.id"
           class="participant-chip"
           :style="{ '--role-color': role.color }"

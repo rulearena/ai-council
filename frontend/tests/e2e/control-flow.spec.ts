@@ -817,13 +817,9 @@ test('cancelling or closing a meeting asks for confirmation first', async ({ pag
 })
 
 const ALL_MODE_IDS = ['red-blue', 'courtroom', 'debate', 'brainstorm', 'six-hats', 'persona-testing']
-// Mode-system slice B (feat: create courtroom and debate meetings from the mode picker)
-// unlocked every `relay` mode - only the three `parallel` modes remain "即將推出" until
-// slice C wires up the parallel executor.
-const AVAILABLE_MODE_IDS = ['red-blue', 'courtroom', 'debate']
-const COMING_SOON_MODE_IDS = ['brainstorm', 'six-hats', 'persona-testing']
+const AVAILABLE_MODE_IDS = ALL_MODE_IDS
 
-test('New Case mode picker shows all six modes; the three relay modes can be created, the three parallel modes stay "即將推出"', async ({
+test('New Case mode picker shows all six modes and all six can be created', async ({
   page,
 }) => {
   await page.goto('/')
@@ -840,15 +836,9 @@ test('New Case mode picker shows all six modes; the three relay modes can be cre
     await expect(card.getByRole('button', { name: '選擇此模式' })).toBeEnabled()
   }
 
-  for (const modeId of COMING_SOON_MODE_IDS) {
-    const card = page.getByTestId(`mode-select-card-${modeId}`)
-    await expect(card.getByRole('button', { name: '即將推出' })).toBeDisabled()
-  }
-
-  // Clicking a disabled (parallel-mode) card's CTA must not advance to step 2 - still on
-  // the picker.
-  await page.getByTestId('mode-select-card-brainstorm').getByRole('button', { name: '即將推出' }).click({ force: true })
-  await expect(page.getByTestId('mode-picker-step')).toBeVisible()
+  await page.getByTestId('mode-select-card-brainstorm').getByRole('button', { name: '選擇此模式' }).click()
+  await expect(page.getByTestId('participant-setup-step')).toBeVisible()
+  await expect(page.getByTestId('parallel-member-editor')).toBeVisible()
 
   await page.getByTestId('new-case-close-button').click()
 })
@@ -1051,6 +1041,65 @@ test('courtroom mode runs its full four-step relay and renders the Prosecutor/De
   const observedPositions = courtroomStepIds.map((stepId) => renderedStepIds.indexOf(stepId))
   expect(observedPositions.every((position) => position >= 0)).toBe(true)
   expect(observedPositions).toEqual([...observedPositions].sort((a, b) => a - b))
+  await page.getByTestId('records-close-button').click()
+
+  await page.getByTestId('past-topics-button').click()
+  page.once('dialog', (dialog) => dialog.accept())
+  await page
+    .getByTestId('meeting-list-item')
+    .filter({ hasText: topic })
+    .getByTestId('delete-meeting-button')
+    .click()
+})
+
+test('brainstorm mode creates member instances and runs fanout plus synthesis', async ({ page }) => {
+  await page.goto('/')
+
+  const topic = `E2E brainstorm happy path ${Date.now()}`
+  await page.getByTestId('new-case-button').click()
+  await page
+    .getByTestId('mode-select-card-brainstorm')
+    .getByRole('button', { name: '選擇此模式' })
+    .click()
+  await page.getByLabel('會議主題').fill(topic)
+  await expect(page.getByTestId('parallel-member-count')).toHaveText('2')
+  await page.getByTestId('parallel-member-increment').click()
+  await expect(page.getByTestId('parallel-member-count')).toHaveText('3')
+  await page.getByTestId('parallel-member-1-name').fill('成本委員')
+  await page.getByTestId('parallel-member-1-prompt').fill('從成本與維護角度發想')
+  await page.getByTestId('parallel-member-2-name').fill('使用者委員')
+  await page.getByTestId('parallel-member-2-prompt').fill('從新手使用者角度發想')
+  await page.getByTestId('parallel-member-3-name').fill('營運委員')
+  await page.getByTestId('parallel-member-3-prompt').fill('從營運落地角度發想')
+  await page.getByTestId('create-meeting-button').click()
+  await expect(page.getByTestId('new-case-modal')).not.toBeVisible()
+
+  await expect(page.getByTestId('role-seat-member-1')).toBeVisible()
+  await expect(page.getByTestId('role-seat-member-2')).toBeVisible()
+  await expect(page.getByTestId('role-seat-member-3')).toBeVisible()
+  await expect(page.getByTestId('role-seat-moderator')).toBeVisible()
+
+  await setRoleModelsInSettings(page, {
+    'Member-1': 'mock-slow',
+    'Member-2': 'mock-slow',
+    'Member-3': 'mock-slow',
+    Moderator: 'mock-slow',
+  })
+  await closeSettings(page)
+
+  await page.getByTestId('start-meeting-button').click()
+  await expect(page.getByTestId('role-seat-member-1')).toHaveAttribute('data-status', 'thinking')
+  await expect(page.getByTestId('operation-status')).toContainText('狀態：completed', { timeout: 15000 })
+  await expect(page.getByTestId('operation-status')).toContainText('最後步驟：synthesis-1')
+  await expect(page.getByTestId('role-seat-member-1')).toHaveAttribute('data-status', 'completed')
+  await expect(page.getByTestId('role-seat-member-2')).toHaveAttribute('data-status', 'completed')
+  await expect(page.getByTestId('role-seat-member-3')).toHaveAttribute('data-status', 'completed')
+  await expect(page.getByTestId('role-seat-moderator')).toHaveAttribute('data-status', 'completed')
+
+  await page.getByTestId('records-button').click()
+  for (const stepId of ['fanout-1-member-1', 'fanout-1-member-2', 'fanout-1-member-3', 'synthesis-1']) {
+    await expect(page.getByTestId('step-timeline')).toContainText(stepId)
+  }
   await page.getByTestId('records-close-button').click()
 
   await page.getByTestId('past-topics-button').click()
