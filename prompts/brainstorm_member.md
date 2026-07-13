@@ -6,6 +6,9 @@ Topic:
 Your assigned perspective:
 {{ instance_prompt }}
 
+Case files visible to you:
+{{ case_files }}
+
 Prior transcript:
 {{ prior_transcript }}
 

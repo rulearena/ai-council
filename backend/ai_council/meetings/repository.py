@@ -42,8 +42,25 @@ class MeetingRepository:
         if meeting_dir.exists():
             shutil.rmtree(meeting_dir)
 
+    def save_case_files(self, meeting_id: str, case_files: list[dict[str, Any]]) -> None:
+        case_files_path = self._case_files_path(meeting_id)
+        case_files_path.parent.mkdir(parents=True, exist_ok=True)
+        case_files_path.write_text(
+            json.dumps(case_files, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+
+    def read_case_files(self, meeting_id: str) -> list[dict[str, Any]]:
+        case_files_path = self._case_files_path(meeting_id)
+        if not case_files_path.exists():
+            return []
+        return json.loads(case_files_path.read_text(encoding="utf-8"))
+
     def _event_log_path(self, meeting_id: str) -> Path:
         return self._meeting_dir(meeting_id) / "events.jsonl"
+
+    def _case_files_path(self, meeting_id: str) -> Path:
+        return self._meeting_dir(meeting_id) / "case_files.json"
 
     def _meeting_dir(self, meeting_id: str) -> Path:
         if not SAFE_MEETING_ID.fullmatch(meeting_id):

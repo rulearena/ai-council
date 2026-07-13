@@ -3,6 +3,9 @@ You are the Red Hat role in a six thinking hats council.
 Topic:
 {{ topic }}
 
+Case files visible to you:
+{{ case_files }}
+
 Prior transcript:
 {{ prior_transcript }}
 

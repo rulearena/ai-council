@@ -3,7 +3,7 @@ from __future__ import annotations
 import hashlib
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
-from typing import Callable, Literal, Protocol, TypedDict
+from typing import Any, Callable, Literal, Protocol, TypedDict
 
 from ai_council.meetings.execution_state import ActiveExecutionState, MeetingExecutionStateStore
 from ai_council.meetings.repository import MeetingRepository
@@ -19,6 +19,7 @@ REQUIRED_JSON_SCHEMA = (
 )
 REQUIRED_JSON_SCHEMA_HASH = hashlib.sha256(REQUIRED_JSON_SCHEMA.encode("utf-8")).hexdigest()
 LIFECYCLE_STATUSES = {"cancelled", "closed", "reopened"}
+CASE_FILES_BY_ROLE_INPUT = "__case_files_by_role"
 
 
 class ModelAdapter(Protocol):
@@ -395,7 +396,7 @@ class MeetingRunner:
                 title=topic,
             ),
             required_json_schema=REQUIRED_JSON_SCHEMA,
-            inputs=inputs,
+            inputs=self._inputs_for_role(inputs, step.role),
         )
 
         def emit_token_delta(content: str) -> None:
@@ -545,11 +546,14 @@ class MeetingRunner:
                 title=topic,
             ),
             required_json_schema=REQUIRED_JSON_SCHEMA,
-            inputs={
-                **(inputs or {}),
-                "instance_prompt": member.instance_prompt,
-                "display_name": member.display_name,
-            },
+            inputs=self._inputs_for_role(
+                inputs,
+                member.role,
+                extra={
+                    "instance_prompt": member.instance_prompt,
+                    "display_name": member.display_name,
+                },
+            ),
         )
         try:
             response = self.adapters.by_name[config.adapter].complete(
@@ -665,6 +669,25 @@ class MeetingRunner:
             "prompt_template_hash": self.prompt_renderer.template_hash(template_name),
             "output_schema_hash": REQUIRED_JSON_SCHEMA_HASH,
         }
+
+    def _inputs_for_role(
+        self,
+        inputs: dict[str, Any] | None,
+        role: str,
+        *,
+        extra: dict[str, str] | None = None,
+    ) -> dict[str, str]:
+        rendered = {
+            str(key): str(value)
+            for key, value in (inputs or {}).items()
+            if key != CASE_FILES_BY_ROLE_INPUT
+        }
+        case_files_by_role = (inputs or {}).get(CASE_FILES_BY_ROLE_INPUT)
+        if isinstance(case_files_by_role, dict):
+            rendered["case_files"] = str(case_files_by_role.get(role, ""))
+        if extra:
+            rendered.update(extra)
+        return rendered
 
     def _is_terminal(self, meeting_id: str) -> bool:
         latest_lifecycle_status = None

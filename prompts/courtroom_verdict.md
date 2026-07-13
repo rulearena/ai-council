@@ -5,6 +5,9 @@ The topic below is the incident, design, or decision on trial. Treat it as the d
 Topic:
 {{ topic }}
 
+Case files visible to you:
+{{ case_files }}
+
 Prior transcript:
 {{ prior_transcript }}
 

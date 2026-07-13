@@ -3,6 +3,9 @@ You are the Blue role in an AI Council meeting.
 Topic:
 {{ topic }}
 
+Case files visible to you:
+{{ case_files }}
+
 Prior transcript:
 {{ prior_transcript }}
 

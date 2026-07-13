@@ -1659,6 +1659,100 @@ def test_create_meeting_with_courtroom_mode(tmp_path: Path) -> None:
     assert [p["role_id"] for p in participants] == ["Prosecutor", "Defense", "Judge"]
 
 
+def test_create_meeting_stores_and_returns_case_files(tmp_path: Path) -> None:
+    app = create_test_app(tmp_path)
+    client = TestClient(app)
+
+    response = client.post(
+        "/meetings",
+        json={
+            "topic": "事故覆盤",
+            "mode_id": "courtroom",
+            "case_files": [
+                {
+                    "title": "事故時間線",
+                    "content": "10:00 deploy\n10:05 error rate spike",
+                    "visible_roles": ["Prosecutor", "Judge"],
+                },
+                {
+                    "title": "辯方說明",
+                    "content": "The rollback was blocked by a pending migration.",
+                    "visible_roles": ["Defense", "Judge"],
+                },
+            ],
+        },
+    )
+
+    assert response.status_code == 200
+    created = response.json()
+    assert created["case_files"] == [
+        {
+            "id": "case-file-1",
+            "title": "事故時間線",
+            "visible_roles": ["Prosecutor", "Judge"],
+            "size": len("10:00 deploy\n10:05 error rate spike"),
+        },
+        {
+            "id": "case-file-2",
+            "title": "辯方說明",
+            "visible_roles": ["Defense", "Judge"],
+            "size": len("The rollback was blocked by a pending migration."),
+        },
+    ]
+    meeting_id = created["meeting_id"]
+    stored_path = tmp_path / "data" / "meetings" / meeting_id / "case_files.json"
+    assert stored_path.exists()
+
+    fetched = client.get(f"/meetings/{meeting_id}").json()
+    assert fetched["case_files"][0]["content"] == "10:00 deploy\n10:05 error rate spike"
+    assert fetched["case_files"][1]["content"] == "The rollback was blocked by a pending migration."
+
+
+def test_create_meeting_rejects_case_files_for_unknown_roles(tmp_path: Path) -> None:
+    app = create_test_app(tmp_path)
+    client = TestClient(app)
+
+    response = client.post(
+        "/meetings",
+        json={
+            "topic": "事故覆盤",
+            "mode_id": "courtroom",
+            "case_files": [
+                {
+                    "title": "藍軍不屬於法庭",
+                    "content": "visible role should be mode-scoped",
+                    "visible_roles": ["Blue"],
+                }
+            ],
+        },
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "Unknown case file visible role for mode courtroom: Blue"
+
+
+def test_create_meeting_rejects_oversized_case_files(tmp_path: Path) -> None:
+    app = create_test_app(tmp_path)
+    client = TestClient(app)
+
+    response = client.post(
+        "/meetings",
+        json={
+            "topic": "事故覆盤",
+            "case_files": [
+                {
+                    "title": "too large",
+                    "content": "x" * 20001,
+                    "visible_roles": ["Blue"],
+                }
+            ],
+        },
+    )
+
+    assert response.status_code == 413
+    assert response.json()["detail"] == "Case file content exceeds 20000 characters: too large"
+
+
 def test_create_meeting_rejects_unknown_mode(tmp_path: Path) -> None:
     app = create_test_app(tmp_path)
     client = TestClient(app)
@@ -1947,6 +2041,107 @@ def test_debate_inputs_reach_prompts(tmp_path: Path) -> None:
     assert "先做後端" in first_completed["prompt_messages"][0]["content"]
 
 
+def test_case_files_reach_only_visible_role_prompts(tmp_path: Path) -> None:
+    app = create_test_app(tmp_path)
+    client = TestClient(app)
+    meeting_id = client.post(
+        "/meetings",
+        json={
+            "topic": "事故覆盤",
+            "mode_id": "courtroom",
+            "case_files": [
+                {
+                    "title": "檢方事故時間線",
+                    "content": "10:05 error rate spike",
+                    "visible_roles": ["Prosecutor", "Judge"],
+                },
+                {
+                    "title": "辯方回滾說明",
+                    "content": "rollback was blocked by migration",
+                    "visible_roles": ["Defense", "Judge"],
+                },
+            ],
+        },
+    ).json()["meeting_id"]
+
+    client.post(
+        f"/meetings/{meeting_id}/start",
+        json={
+            "models": {
+                "Prosecutor": "mock-fast",
+                "Defense": "mock-fast",
+                "Judge": "mock-fast",
+            }
+        },
+    )
+    meeting = wait_for_activity(client, meeting_id, "completed")
+
+    prompts_by_role = {
+        event["role"]: event["prompt_messages"][0]["content"]
+        for event in meeting["events"]
+        if event.get("status") == "completed"
+    }
+    assert "檢方事故時間線" in prompts_by_role["Prosecutor"]
+    assert "辯方回滾說明" not in prompts_by_role["Prosecutor"]
+    assert "辯方回滾說明" in prompts_by_role["Defense"]
+    assert "檢方事故時間線" not in prompts_by_role["Defense"]
+    assert "檢方事故時間線" in prompts_by_role["Judge"]
+    assert "辯方回滾說明" in prompts_by_role["Judge"]
+
+
+def test_case_files_reach_parallel_member_instance_prompts(tmp_path: Path) -> None:
+    app = create_test_app(tmp_path)
+    client = TestClient(app)
+    meeting_id = client.post(
+        "/meetings",
+        json={
+            "topic": "腦力激盪",
+            "mode_id": "brainstorm",
+            "participants": [
+                {"role_id": "Member-1", "model_config_id": "mock-fast"},
+                {"role_id": "Member-2", "model_config_id": "mock-fast"},
+                {"role_id": "Moderator", "model_config_id": "mock-fast"},
+            ],
+            "case_files": [
+                {
+                    "title": "成本資料",
+                    "content": "GPU budget is capped.",
+                    "visible_roles": ["Member-1", "Moderator"],
+                },
+                {
+                    "title": "用戶訪談",
+                    "content": "Users asked for simpler onboarding.",
+                    "visible_roles": ["Member-2", "Moderator"],
+                },
+            ],
+        },
+    ).json()["meeting_id"]
+
+    client.post(
+        f"/meetings/{meeting_id}/start",
+        json={
+            "models": {
+                "Member-1": "mock-fast",
+                "Member-2": "mock-fast",
+                "Moderator": "mock-fast",
+            }
+        },
+    )
+    meeting = wait_for_activity(client, meeting_id, "completed")
+
+    prompts_by_role = {
+        event["role"]: event["prompt_messages"][0]["content"]
+        for event in meeting["events"]
+        if event.get("status") == "completed"
+    }
+    assert "成本資料" in prompts_by_role["Member-1"]
+    assert "用戶訪談" not in prompts_by_role["Member-1"]
+    assert "用戶訪談" in prompts_by_role["Member-2"]
+    assert "成本資料" not in prompts_by_role["Member-2"]
+    assert "成本資料" in prompts_by_role["Moderator"]
+    assert "用戶訪談" in prompts_by_role["Moderator"]
+
+
 def test_start_brainstorm_meeting_runs_parallel_steps(tmp_path: Path) -> None:
     app = create_test_app(tmp_path)
     client = TestClient(app)
@@ -2167,7 +2362,7 @@ models:
     for template in RELAY_PROMPT_TEMPLATES:
         content = (
             f"{template} {{{{ role }}}} {{{{ topic }}}} "
-            "{{ prior_transcript }} {{ required_json_schema }}"
+            "{{ prior_transcript }} {{ case_files }} {{ required_json_schema }}"
         )
         if template in DEBATE_PROMPT_TEMPLATES:
             content += " {{ position_a }} {{ position_b }}"

@@ -3,6 +3,9 @@ You are the Product Advisor role in a blind user testing council.
 Topic:
 {{ topic }}
 
+Case files visible to you:
+{{ case_files }}
+
 Prior transcript:
 {{ prior_transcript }}
 

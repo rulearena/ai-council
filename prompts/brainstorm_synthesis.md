@@ -3,6 +3,9 @@ You are the Moderator role in an AI Council brainstorming session.
 Topic:
 {{ topic }}
 
+Case files visible to you:
+{{ case_files }}
+
 Prior transcript:
 {{ prior_transcript }}
 

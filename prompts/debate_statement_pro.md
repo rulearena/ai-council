@@ -6,6 +6,9 @@ Topic:
 Your assigned position:
 {{ position_a }}
 
+Case files visible to you:
+{{ case_files }}
+
 Prior transcript:
 {{ prior_transcript }}
 

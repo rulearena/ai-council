@@ -32,7 +32,12 @@ from ai_council.meetings.modes import (
     relay_plan,
 )
 from ai_council.meetings.repository import MeetingRepository
-from ai_council.meetings.runner import MeetingRunner, RunnerAdapters, TokenStreamEvent
+from ai_council.meetings.runner import (
+    CASE_FILES_BY_ROLE_INPUT,
+    MeetingRunner,
+    RunnerAdapters,
+    TokenStreamEvent,
+)
 from ai_council.meetings.transcript import TranscriptProjector
 from ai_council.models.adapters import (
     AdapterError,
@@ -54,6 +59,8 @@ from ai_council.models.config import ModelPricing as ConfigModelPricing
 from ai_council.prompting.renderer import PromptRenderer
 
 MODEL_TEST_PROMPT = 'Return {"summary":"OK","arguments":[],"risks":[],"recommendation":"OK"}'
+MAX_CASE_FILE_CHARS = 20_000
+MAX_TOTAL_CASE_FILE_CHARS = 60_000
 
 
 class MeetingParticipantRequest(BaseModel):
@@ -63,11 +70,18 @@ class MeetingParticipantRequest(BaseModel):
     instance_prompt: str | None = None
 
 
+class CaseFileRequest(BaseModel):
+    title: str
+    content: str
+    visible_roles: list[str]
+
+
 class CreateMeetingRequest(BaseModel):
     topic: str
     mode_id: str = DEFAULT_MODE_ID
     participants: list[MeetingParticipantRequest] = Field(default_factory=list)
     inputs: dict[str, str] = Field(default_factory=dict)
+    case_files: list[CaseFileRequest] = Field(default_factory=list)
 
 
 class StartMeetingRequest(BaseModel):
@@ -298,6 +312,7 @@ def create_app(
                 detail=f"Mode is not yet supported: {mode.id}",
             )
         participants = normalize_participants(mode, request.participants, model_repository)
+        case_files = normalize_case_files(mode, participants, request.case_files)
 
         declared_input_ids = {item.id for item in mode.inputs}
         unknown_inputs = sorted(set(request.inputs.keys()) - declared_input_ids)
@@ -324,8 +339,11 @@ def create_app(
             "mode_id": mode.id,
             "participants": participants,
             "inputs": request.inputs,
+            "case_files": case_file_manifest(case_files),
         }
         metadata_store.save(metadata)
+        if case_files:
+            repository.save_case_files(meeting_id, case_files)
         return project_meeting_summary(metadata, [], mode=mode, model_pricing={})
 
     @app.get("/meetings")
@@ -374,6 +392,7 @@ def create_app(
                 ),
             ),
             "events": events,
+            "case_files": repository.read_case_files(meeting_id),
         }
 
     @app.put("/meetings/{meeting_id}/tags")
@@ -438,6 +457,7 @@ def create_app(
                 mode=mode,
                 metadata=metadata,
                 model_assignments=model_assignments,
+                inputs=meeting_inputs_for_runner(metadata, repository.read_case_files(meeting_id)),
             ),
         ):
             raise HTTPException(status_code=409, detail="Meeting is already running")
@@ -550,7 +570,7 @@ def create_app(
                     for role_name, model_id in request.models.items()
                 },
                 plan=relay_plan(mode),
-                inputs=metadata.get("inputs") or {},
+                inputs=meeting_inputs_for_runner(metadata, repository.read_case_files(meeting_id)),
             )
         except ValueError as error:
             raise HTTPException(status_code=400, detail=str(error)) from error
@@ -576,7 +596,7 @@ def create_app(
                     for role_name, model_id in request.models.items()
                 },
                 plan=relay_plan(mode),
-                inputs=metadata.get("inputs") or {},
+                inputs=meeting_inputs_for_runner(metadata, repository.read_case_files(meeting_id)),
             )
         except ValueError as error:
             raise HTTPException(status_code=400, detail=str(error)) from error
@@ -603,7 +623,7 @@ def create_app(
                     topic=metadata["topic"],
                     model_assignments=model_assignments,
                     plan=relay_plan(mode),
-                    inputs=metadata.get("inputs") or {},
+                    inputs=meeting_inputs_for_runner(metadata, repository.read_case_files(meeting_id)),
                 )
             else:
                 runner.retry_failed_parallel_step(
@@ -612,7 +632,7 @@ def create_app(
                     topic=metadata["topic"],
                     model_assignments=model_assignments,
                     plan=parallel_plan(mode, project_participants(mode, metadata)),
-                    inputs=metadata.get("inputs") or {},
+                    inputs=meeting_inputs_for_runner(metadata, repository.read_case_files(meeting_id)),
                 )
         except ValueError as error:
             raise HTTPException(status_code=400, detail=str(error)) from error
@@ -783,6 +803,94 @@ def normalize_participants(
     return participants
 
 
+def normalize_case_files(
+    mode: ModeDefinition,
+    participants: list[dict[str, Any]],
+    requested: list[CaseFileRequest],
+) -> list[dict[str, Any]]:
+    if not requested:
+        return []
+    allowed_roles = {
+        participant["role_id"]
+        for participant in project_participants(mode, {"participants": participants})
+    }
+    case_files: list[dict[str, Any]] = []
+    total_size = 0
+    for index, item in enumerate(requested, start=1):
+        title = item.title.strip()
+        content = item.content
+        visible_roles = [role.strip() for role in item.visible_roles if role.strip()]
+        if not title:
+            raise HTTPException(status_code=400, detail="Case file title is required")
+        if not content.strip():
+            raise HTTPException(status_code=400, detail=f"Case file content is required: {title}")
+        if not visible_roles:
+            raise HTTPException(status_code=400, detail=f"Case file requires at least one visible role: {title}")
+        for role in visible_roles:
+            if role not in allowed_roles:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Unknown case file visible role for mode {mode.id}: {role}",
+                )
+        size = len(content)
+        if size > MAX_CASE_FILE_CHARS:
+            raise HTTPException(
+                status_code=413,
+                detail=f"Case file content exceeds {MAX_CASE_FILE_CHARS} characters: {title}",
+            )
+        total_size += size
+        if total_size > MAX_TOTAL_CASE_FILE_CHARS:
+            raise HTTPException(
+                status_code=413,
+                detail=f"Case files exceed {MAX_TOTAL_CASE_FILE_CHARS} total characters",
+            )
+        case_files.append(
+            {
+                "id": f"case-file-{index}",
+                "title": title,
+                "content": content,
+                "visible_roles": visible_roles,
+                "size": size,
+            }
+        )
+    return case_files
+
+
+def case_file_manifest(case_files: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [
+        {
+            "id": str(item["id"]),
+            "title": str(item["title"]),
+            "visible_roles": list(item["visible_roles"]),
+            "size": int(item["size"]),
+        }
+        for item in case_files
+    ]
+
+
+def meeting_inputs_for_runner(
+    metadata: dict[str, Any],
+    case_files: list[dict[str, Any]],
+) -> dict[str, Any]:
+    inputs: dict[str, Any] = dict(metadata.get("inputs") or {})
+    if case_files:
+        inputs[CASE_FILES_BY_ROLE_INPUT] = case_files_by_role(case_files)
+    return inputs
+
+
+def case_files_by_role(case_files: list[dict[str, Any]]) -> dict[str, str]:
+    grouped: dict[str, list[str]] = {}
+    for item in case_files:
+        title = str(item.get("title", "")).strip()
+        content = str(item.get("content", ""))
+        if not title or not content.strip():
+            continue
+        block = f"### {title}\n{content}"
+        for role in item.get("visible_roles") or []:
+            grouped.setdefault(str(role), []).append(block)
+    return {role: "\n\n".join(blocks) for role, blocks in grouped.items()}
+
+
 def validate_participant_ids(
     *,
     mode: ModeDefinition,
@@ -931,6 +1039,7 @@ def start_runner_for_mode(
     mode: ModeDefinition,
     metadata: dict[str, Any],
     model_assignments: dict[str, ModelConfig],
+    inputs: dict[str, Any],
 ) -> None:
     if mode.category == "relay":
         runner.start(
@@ -938,7 +1047,7 @@ def start_runner_for_mode(
             topic=metadata["topic"],
             model_assignments=model_assignments,
             plan=relay_plan(mode),
-            inputs=metadata.get("inputs") or {},
+            inputs=inputs,
         )
         return
     runner.start_parallel(
@@ -946,7 +1055,7 @@ def start_runner_for_mode(
         topic=metadata["topic"],
         model_assignments=model_assignments,
         plan=parallel_plan(mode, project_participants(mode, metadata)),
-        inputs=metadata.get("inputs") or {},
+        inputs=inputs,
     )
 
 

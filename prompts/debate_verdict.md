@@ -9,6 +9,9 @@ Position A:
 Position B:
 {{ position_b }}
 
+Case files visible to you:
+{{ case_files }}
+
 Prior transcript:
 {{ prior_transcript }}
 
