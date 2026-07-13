@@ -1,12 +1,13 @@
 <script setup lang="ts">
-import { computed, inject } from 'vue'
+import { computed, inject, ref, watch } from 'vue'
 import { councilKey } from '../composables/useCouncil'
 import { councilRoles, formatDateTime, roleClass, roleColor, roleColorVars, roleIcon } from '../composables/useCouncil'
 import RoleSilhouette from './RoleSilhouette.vue'
 import { useScenePreference } from '../scenes'
 import Modal from './Modal.vue'
+import ModelManagerPanel from './ModelManagerPanel.vue'
 
-defineProps<{ show: boolean }>()
+const props = defineProps<{ show: boolean }>()
 defineEmits<{ close: [] }>()
 
 const store = inject(councilKey)!
@@ -21,10 +22,47 @@ const sceneModel = computed({
   get: () => currentScene.value.id,
   set: (id: string) => setScene(id),
 })
+
+type SettingsTab = 'general' | 'models'
+const activeTab = ref<SettingsTab>('general')
+
+// activeTab lives here in SettingsModal, which stays mounted across modal close/reopen
+// (only `show` toggles), so without this it would silently keep whatever tab was active
+// last time - reset to 一般 on every reopen so a previous 模型管理 visit doesn't linger.
+watch(
+  () => props.show,
+  (visible) => {
+    if (visible) activeTab.value = 'general'
+  },
+)
 </script>
 
 <template>
   <Modal :show="show" title="Settings" test-id="settings-modal" close-test-id="settings-close-button" @close="$emit('close')">
+    <div class="settings-tabs">
+      <button
+        type="button"
+        class="btn btn-ghost btn-sm settings-tab-button"
+        :class="{ active: activeTab === 'general' }"
+        data-testid="general-tab"
+        @click="activeTab = 'general'"
+      >
+        一般
+      </button>
+      <button
+        type="button"
+        class="btn btn-ghost btn-sm settings-tab-button"
+        :class="{ active: activeTab === 'models' }"
+        data-testid="model-manager-tab"
+        @click="activeTab = 'models'"
+      >
+        模型管理
+      </button>
+    </div>
+
+    <ModelManagerPanel v-if="activeTab === 'models'" />
+
+    <template v-else>
     <section class="settings-scene-row">
       <label class="scene-picker">
         場景
@@ -76,5 +114,6 @@ const sceneModel = computed({
         開發者模式（在議事紀錄中顯示 Debug 面板）
       </label>
     </section>
+    </template>
   </Modal>
 </template>

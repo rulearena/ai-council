@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import os
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal
@@ -14,6 +16,7 @@ SUPPORTED_ADAPTERS = {
     "gemini-http",
     "subscription-cli",
 }
+MODEL_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
 
 
 class ModelConfigError(ValueError):
@@ -95,10 +98,13 @@ class ModelConfigRepository:
 
     def _write_config(self, raw_config: dict[str, Any]) -> None:
         self.config_path.parent.mkdir(parents=True, exist_ok=True)
-        self.config_path.write_text(
-            yaml.safe_dump(raw_config, sort_keys=False, allow_unicode=True),
-            encoding="utf-8",
-        )
+        serialized = yaml.safe_dump(raw_config, sort_keys=False, allow_unicode=True)
+        temp_path = self.config_path.with_name(f".{self.config_path.name}.tmp")
+        try:
+            temp_path.write_text(serialized, encoding="utf-8")
+            os.replace(temp_path, self.config_path)
+        finally:
+            temp_path.unlink(missing_ok=True)
 
 
 def validate_model_config(model: ModelConfig) -> None:
@@ -121,6 +127,35 @@ def validate_model_config(model: ModelConfig) -> None:
             raise ModelConfigError("pricing.input_per_1m_tokens must be non-negative")
         if model.pricing.output_per_1m_tokens < 0:
             raise ModelConfigError("pricing.output_per_1m_tokens must be non-negative")
+
+
+def validate_model_config_fields(model: ModelConfig) -> list[dict[str, str]]:
+    """Per-field validation for the management API (spec 17.2). Returns [] when valid."""
+    errors: list[dict[str, str]] = []
+    if not MODEL_ID_PATTERN.match(model.id or ""):
+        errors.append({"field": "id", "message": "id must match ^[A-Za-z0-9][A-Za-z0-9_.-]*$"})
+    if model.adapter not in SUPPORTED_ADAPTERS:
+        errors.append({"field": "adapter", "message": f"Unknown adapter: {model.adapter}"})
+    elif model.adapter in {"openai-compatible-http", "anthropic-http", "gemini-http"}:
+        if not model.base_url:
+            errors.append({"field": "base_url", "message": f"{model.adapter} requires base_url"})
+        if not model.model:
+            errors.append({"field": "model", "message": f"{model.adapter} requires model"})
+    elif model.adapter == "subscription-cli":
+        if not model.command:
+            errors.append({"field": "command", "message": "subscription-cli requires command"})
+        elif not any("{prompt}" in argument for argument in model.command):
+            errors.append({"field": "command", "message": "command requires a {prompt} placeholder"})
+    if model.pricing is not None:
+        if not model.pricing.currency.strip():
+            errors.append({"field": "pricing.currency", "message": "currency is required"})
+        if model.pricing.input_per_1m_tokens < 0:
+            errors.append({"field": "pricing.input_per_1m_tokens", "message": "must be non-negative"})
+        if model.pricing.output_per_1m_tokens < 0:
+            errors.append({"field": "pricing.output_per_1m_tokens", "message": "must be non-negative"})
+    if model.timeout_seconds <= 0:
+        errors.append({"field": "timeout_seconds", "message": "must be positive"})
+    return errors
 
 
 def _model_to_yaml_item(model: ModelConfig) -> dict[str, Any]:

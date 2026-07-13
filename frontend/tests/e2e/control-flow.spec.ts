@@ -62,6 +62,13 @@ async function closeRoleDrawer(page: Page) {
   await expect(page.getByTestId('role-drawer')).not.toBeVisible()
 }
 
+// ModelManagerPanel.vue renders one row per model, keyed by `data-model-id` (Task 5) -
+// scoping to a single row this way is exact, unlike a text filter, since model ids can be
+// substrings of each other (e.g. 'mock' vs 'mock-fast').
+function modelManagerRow(page: Page, modelId: string) {
+  return page.locator(`[data-testid="model-manager-row"][data-model-id="${modelId}"]`)
+}
+
 async function openAdvancedOptions(page: Page) {
   await page.getByTestId('advanced-options-button').click()
   await expect(page.getByTestId('advanced-options-panel')).toBeVisible()
@@ -1150,4 +1157,132 @@ test('opening a courtroom meeting switches the stage to the courtroom scene, and
       .click()
   }
   await page.getByTestId('meetings-close-button').click()
+})
+
+test('model manager tab supports create, test, edit, and delete for a model config', async ({
+  page,
+}) => {
+  await page.goto('/')
+
+  const modelId = 'e2e-added-mock'
+  await page.getByTestId('settings-button').click()
+  await page.getByTestId('model-manager-tab').click()
+
+  await page.getByTestId('add-model-button').click()
+  await page.getByTestId('model-form-id-input').fill(modelId)
+  // adapter select defaults to 'mock' (ModelManagerPanel's openCreateForm) - leave it, so
+  // the Test step below resolves deterministically to "available" with no real network
+  // call (check_model_health's mock branch just calls adapter.complete() locally).
+  await page.getByTestId('model-form-save').click()
+  await expect(page.getByTestId('model-form')).not.toBeVisible()
+  await expect(modelManagerRow(page, modelId)).toBeVisible()
+
+  // The role dropdowns in 一般 tab read the same `models` ref refreshModels() just updated -
+  // no reload needed for the new model to show up there.
+  await page.getByTestId('general-tab').click()
+  await expect(page.getByTestId('blue-model-select').locator(`option[value="${modelId}"]`)).toHaveCount(1)
+
+  await page.getByTestId('model-manager-tab').click()
+  await page.getByTestId(`test-model-button-${modelId}`).click()
+  await expect(modelManagerRow(page, modelId).locator('.status-dot')).toHaveAttribute(
+    'data-status',
+    'available',
+  )
+
+  // Editing: timeout_seconds only renders for http/cli adapters (ModelManagerPanel.vue's
+  // isHttpAdapter/isCliAdapter template branches) - a mock model has no editable field
+  // besides its (readonly) id, so exercising a real edit means switching the adapter as
+  // part of the edit, same as an operator converting a placeholder mock entry into a real
+  // one would.
+  await page.getByTestId(`edit-model-button-${modelId}`).click()
+  await expect(page.getByTestId('model-form-id-input')).toHaveValue(modelId)
+  await page.getByTestId('model-form-adapter-select').selectOption('openai-compatible-http')
+  await page.getByTestId('model-form-base-url-input').fill('http://127.0.0.1:9/v1')
+  await page.getByTestId('model-form-model-input').fill('dummy-model')
+  await page.getByTestId('model-form-timeout-input').fill('60')
+  await page.getByTestId('model-form-save').click()
+  await expect(page.getByTestId('model-form')).not.toBeVisible()
+
+  // Round-trip check: re-open the edit form and confirm the PUT actually persisted, not
+  // just that the form closed without error.
+  await page.getByTestId(`edit-model-button-${modelId}`).click()
+  await expect(page.getByTestId('model-form-timeout-input')).toHaveValue('60')
+  await expect(page.getByTestId('model-form-base-url-input')).toHaveValue('http://127.0.0.1:9/v1')
+  await page.getByTestId('model-form-cancel').click()
+
+  page.once('dialog', (dialog) => dialog.accept())
+  await page.getByTestId(`delete-model-button-${modelId}`).click()
+  await expect(modelManagerRow(page, modelId)).toHaveCount(0)
+
+  await page.getByTestId('general-tab').click()
+  await expect(page.getByTestId('blue-model-select').locator(`option[value="${modelId}"]`)).toHaveCount(0)
+
+  await closeSettings(page)
+})
+
+test('model manager form shows per-field validation errors and does not create the model', async ({
+  page,
+}) => {
+  await page.goto('/')
+
+  const modelId = 'e2e-invalid-http'
+  await page.getByTestId('settings-button').click()
+  await page.getByTestId('model-manager-tab').click()
+
+  await page.getByTestId('add-model-button').click()
+  await page.getByTestId('model-form-id-input').fill(modelId)
+  await page.getByTestId('model-form-adapter-select').selectOption('openai-compatible-http')
+  // base_url/model left empty on purpose - validate_model_config_fields (backend) requires
+  // both for the http-family adapters.
+  await page.getByTestId('model-form-save').click()
+
+  await expect(page.getByTestId('model-form-error-base_url')).toBeVisible()
+  await expect(page.getByTestId('model-form-error-model')).toBeVisible()
+  // The save failed (422), so the form must still be open rather than having closed as if
+  // it succeeded.
+  await expect(page.getByTestId('model-form')).toBeVisible()
+
+  await page.getByTestId('model-form-cancel').click()
+  await expect(page.getByTestId('model-manager-list')).not.toContainText(modelId)
+
+  await closeSettings(page)
+})
+
+test('deleting a model that a role has selected falls back to the first remaining model', async ({
+  page,
+}) => {
+  await page.goto('/')
+
+  // Role dropdowns exist from page load via the default mode's roster (councilRoles),
+  // with no meeting required - capture the current first option before touching anything,
+  // rather than hardcoding e.g. 'mock-fast', so this doesn't depend on models.yaml's
+  // example content or on other tests' ordering.
+  await page.getByTestId('settings-button').click()
+  const blueSelect = page.getByTestId('blue-model-select')
+  const firstModelId = await blueSelect.locator('option').first().getAttribute('value')
+  expect(firstModelId).toBeTruthy()
+
+  const modelId = 'e2e-fallback-mock'
+  await page.getByTestId('model-manager-tab').click()
+  await page.getByTestId('add-model-button').click()
+  await page.getByTestId('model-form-id-input').fill(modelId)
+  await page.getByTestId('model-form-save').click()
+  await expect(modelManagerRow(page, modelId)).toBeVisible()
+
+  await page.getByTestId('general-tab').click()
+  await blueSelect.selectOption(modelId)
+  await expect(blueSelect).toHaveValue(modelId)
+
+  await page.getByTestId('model-manager-tab').click()
+  page.once('dialog', (dialog) => dialog.accept())
+  await page.getByTestId(`delete-model-button-${modelId}`).click()
+  await expect(modelManagerRow(page, modelId)).toHaveCount(0)
+
+  // useCouncil.ts's sanitize watch (Task 4) clears any role pointing at a now-deleted
+  // model id and falls back to models.value[0] - assert Blue actually moved, not just that
+  // the deleted id disappeared from the option list.
+  await page.getByTestId('general-tab').click()
+  await expect(blueSelect).toHaveValue(firstModelId!)
+
+  await closeSettings(page)
 })

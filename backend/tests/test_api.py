@@ -10,8 +10,9 @@ from pathlib import Path
 
 from fastapi.testclient import TestClient
 
-from ai_council.api import create_app
+from ai_council.api import ModelHealthCheckResult, ModelHealthCheckStore, create_app
 from ai_council.models.adapters import MockModelAdapter, ModelResponse
+from ai_council.models.config import ModelConfigRepository
 
 TEST_BLUE_PROPOSE_TEMPLATE_HASH = "81abba70bd2c176005a3fd28dd13ef9bda68f441de574976e8d7161e23fb5f9d"
 TEST_OUTPUT_SCHEMA_HASH = "15a45919652be5c70d3fd1690a10d37f876f19a14b2a76cc0f21765def281377"
@@ -133,9 +134,10 @@ def test_model_config_crud_endpoints_update_models_yaml(tmp_path: Path) -> None:
     app = create_test_app(tmp_path)
     client = TestClient(app)
 
-    created = client.put(
-        "/models/qwen27",
+    created = client.post(
+        "/models",
         json={
+            "id": "qwen27",
             "adapter": "openai-compatible-http",
             "base_url": "http://192.168.50.80:8487/v1",
             "model": "bartowski/Qwen_Qwen3.6-27B-GGUF",
@@ -145,7 +147,7 @@ def test_model_config_crud_endpoints_update_models_yaml(tmp_path: Path) -> None:
         },
     )
 
-    assert created.status_code == 200
+    assert created.status_code == 201
     assert created.json()["id"] == "qwen27"
     assert created.json()["supports_json_mode"] is True
     assert [model["id"] for model in client.get("/models").json()] == ["mock-fast", "qwen27"]
@@ -166,7 +168,8 @@ def test_model_config_crud_endpoints_update_models_yaml(tmp_path: Path) -> None:
 
     deleted = client.delete("/models/qwen27")
 
-    assert deleted.status_code == 204
+    assert deleted.status_code == 200
+    assert deleted.json() == {"id": "qwen27", "warning": None}
     assert [model["id"] for model in client.get("/models").json()] == ["mock-fast"]
 
 
@@ -179,8 +182,9 @@ def test_model_config_crud_reports_validation_errors(tmp_path: Path) -> None:
         json={"adapter": "openai-compatible-http"},
     )
 
-    assert response.status_code == 400
-    assert "base_url and model" in response.json()["detail"]
+    assert response.status_code == 422
+    fields = {item["field"] for item in response.json()["detail"]}
+    assert {"base_url", "model"} <= fields
 
     pricing_response = client.put(
         "/models/broken-pricing",
@@ -194,11 +198,233 @@ def test_model_config_crud_reports_validation_errors(tmp_path: Path) -> None:
         },
     )
 
-    assert pricing_response.status_code == 400
+    assert pricing_response.status_code == 422
+    assert any(
+        item["field"] == "pricing.input_per_1m_tokens"
+        for item in pricing_response.json()["detail"]
+    )
 
     missing_adapter = client.put("/models/broken", json={})
 
-    assert missing_adapter.status_code == 400
+    assert missing_adapter.status_code == 422
+    assert any(item["field"] == "adapter" for item in missing_adapter.json()["detail"])
+
+
+def test_delete_model_returns_warning_when_referenced_by_open_meeting(tmp_path: Path) -> None:
+    app = create_test_app(tmp_path)
+    client = TestClient(app)
+
+    meeting_id = client.post("/meetings", json={"topic": "先做後端？"}).json()["meeting_id"]
+    client.post(
+        f"/meetings/{meeting_id}/start",
+        json={"models": {"Blue": "mock-fast", "Red": "mock-fast", "Judge": "mock-fast"}},
+    )
+    wait_for_activity(client, meeting_id, "completed")
+
+    deleted = client.delete("/models/mock-fast")
+
+    assert deleted.status_code == 200
+    body = deleted.json()
+    assert body["id"] == "mock-fast"
+    assert body["warning"] is not None
+    assert meeting_id in body["warning"]
+    assert client.get("/models").json() == []
+
+
+def test_delete_model_no_warning_when_meeting_closed(tmp_path: Path) -> None:
+    app = create_test_app(tmp_path)
+    client = TestClient(app)
+
+    meeting_id = client.post("/meetings", json={"topic": "先做後端？"}).json()["meeting_id"]
+    client.post(
+        f"/meetings/{meeting_id}/start",
+        json={"models": {"Blue": "mock-fast", "Red": "mock-fast", "Judge": "mock-fast"}},
+    )
+    wait_for_activity(client, meeting_id, "completed")
+    close_response = client.post(f"/meetings/{meeting_id}/close")
+    assert close_response.status_code == 200
+
+    deleted = client.delete("/models/mock-fast")
+
+    assert deleted.status_code == 200
+    assert deleted.json() == {"id": "mock-fast", "warning": None}
+
+
+def test_delete_unknown_model_still_404(tmp_path: Path) -> None:
+    app = create_test_app(tmp_path)
+    client = TestClient(app)
+
+    response = client.delete("/models/does-not-exist")
+
+    assert response.status_code == 404
+
+
+def test_post_models_creates_and_resets_status(tmp_path: Path) -> None:
+    app = create_test_app(tmp_path, start_model_health_checks=True)
+    client = TestClient(app)
+    wait_for_model_status(client, "mock-fast", "available")
+
+    created = client.post(
+        "/models",
+        json={
+            "id": "qwen",
+            "adapter": "openai-compatible-http",
+            "base_url": "http://192.168.50.80:8487/v1",
+            "model": "bartowski/Qwen_Qwen3.6-27B-GGUF",
+        },
+    )
+
+    assert created.status_code == 201
+    assert created.json()["id"] == "qwen"
+    assert {model["id"] for model in client.get("/models").json()} == {"mock-fast", "qwen"}
+
+    duplicate = client.post(
+        "/models",
+        json={
+            "id": "qwen",
+            "adapter": "openai-compatible-http",
+            "base_url": "http://192.168.50.80:8487/v1",
+            "model": "bartowski/Qwen_Qwen3.6-27B-GGUF",
+        },
+    )
+
+    assert duplicate.status_code == 422
+    assert any(item["field"] == "id" for item in duplicate.json()["detail"])
+
+    # mock-fast was already marked "available" by the startup health checker;
+    # saving it via PUT must clear that record so status resets to "unknown".
+    updated = client.put("/models/mock-fast", json={"adapter": "mock"})
+
+    assert updated.status_code == 200
+    assert updated.json()["status"] == "unknown"
+    refreshed = next(model for model in client.get("/models").json() if model["id"] == "mock-fast")
+    assert refreshed["status"] == "unknown"
+
+
+def test_concurrent_post_models_with_same_id_only_one_succeeds(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    app = create_test_app(tmp_path)
+    client = TestClient(app)
+
+    # Delay the first save_model() call so it starts *after* its own
+    # existence check already passed but *before* it writes to disk. If the
+    # existence-check-then-save critical section isn't locked, a second POST
+    # can slip its own existence check into that window and also pass.
+    original_save_model = ModelConfigRepository.save_model
+    first_call_started = threading.Event()
+    call_count = {"n": 0}
+    count_lock = threading.Lock()
+
+    def slow_save_model(self: ModelConfigRepository, model):
+        with count_lock:
+            call_count["n"] += 1
+            is_first_call = call_count["n"] == 1
+        if is_first_call:
+            first_call_started.set()
+            time.sleep(0.3)
+        return original_save_model(self, model)
+
+    monkeypatch.setattr(ModelConfigRepository, "save_model", slow_save_model)
+
+    payload = {"id": "race-model", "adapter": "mock"}
+    results: dict[str, int] = {}
+
+    def post(key: str) -> None:
+        results[key] = client.post("/models", json=payload).status_code
+
+    thread_one = threading.Thread(target=post, args=("first",))
+    thread_one.start()
+    assert first_call_started.wait(timeout=2)
+
+    thread_two = threading.Thread(target=post, args=("second",))
+    thread_two.start()
+
+    thread_one.join(timeout=3)
+    thread_two.join(timeout=3)
+
+    # Without a lock serializing "check existence -> save" both requests can
+    # observe "no existing model" and both succeed, creating a duplicate.
+    assert sorted(results.values()) == [201, 422]
+    assert sorted(model["id"] for model in client.get("/models").json()) == [
+        "mock-fast",
+        "race-model",
+    ]
+
+
+def test_post_models_validates_id_format(tmp_path: Path) -> None:
+    app = create_test_app(tmp_path)
+    client = TestClient(app)
+
+    bad_characters = client.post("/models", json={"id": "bad id!", "adapter": "mock"})
+
+    assert bad_characters.status_code == 422
+    assert any(item["field"] == "id" for item in bad_characters.json()["detail"])
+
+    leading_dash = client.post("/models", json={"id": "-leading-dash", "adapter": "mock"})
+
+    assert leading_dash.status_code == 422
+    assert any(item["field"] == "id" for item in leading_dash.json()["detail"])
+
+
+def test_put_models_is_update_only(tmp_path: Path) -> None:
+    app = create_test_app(tmp_path)
+    client = TestClient(app)
+
+    response = client.put("/models/never-created", json={"adapter": "mock"})
+
+    assert response.status_code == 404
+
+
+def test_model_validation_errors_are_per_field_422(tmp_path: Path) -> None:
+    app = create_test_app(tmp_path)
+    client = TestClient(app)
+
+    missing_fields = client.post("/models", json={"id": "x", "adapter": "openai-compatible-http"})
+
+    assert missing_fields.status_code == 422
+    fields = {item["field"] for item in missing_fields.json()["detail"]}
+    assert {"base_url", "model"} <= fields
+
+    unknown_adapter = client.post("/models", json={"id": "y", "adapter": "no-such-adapter"})
+
+    assert unknown_adapter.status_code == 422
+    assert any(item["field"] == "adapter" for item in unknown_adapter.json()["detail"])
+
+    missing_command = client.post("/models", json={"id": "z", "adapter": "subscription-cli"})
+
+    assert missing_command.status_code == 422
+    assert any(item["field"] == "command" for item in missing_command.json()["detail"])
+
+
+def test_post_models_pydantic_errors_use_per_field_shape(tmp_path: Path) -> None:
+    app = create_test_app(tmp_path)
+    client = TestClient(app)
+
+    missing_adapter = client.post("/models", json={"id": "no-adapter"})
+
+    assert missing_adapter.status_code == 422
+    assert any(item["field"] == "adapter" for item in missing_adapter.json()["detail"])
+
+    negative_pricing = client.post(
+        "/models",
+        json={
+            "id": "bad-pricing",
+            "adapter": "mock",
+            "pricing": {
+                "currency": "USD",
+                "input_per_1m_tokens": -1,
+                "output_per_1m_tokens": 10.0,
+            },
+        },
+    )
+
+    assert negative_pricing.status_code == 422
+    assert any(
+        item["field"] == "pricing.input_per_1m_tokens"
+        for item in negative_pricing.json()["detail"]
+    )
 
 
 def test_models_endpoint_reports_invalid_config_file(tmp_path: Path) -> None:
@@ -343,6 +569,9 @@ models:
     assert payload["status"] == "available"
     assert payload["tested_at"]
 
+    listed = next(model for model in client.get("/models").json() if model["id"] == "http-ok")
+    assert listed["status"] == "available"
+
 
 def test_http_model_test_endpoint_marks_unavailable_on_adapter_error(
     tmp_path: Path,
@@ -375,6 +604,62 @@ models:
     assert payload["status"] == "unavailable"
     assert payload["tested_at"]
     assert payload["error"] == "<urlopen error connection refused>"
+
+    listed = next(model for model in client.get("/models").json() if model["id"] == "http-down")
+    assert listed["status"] == "unavailable"
+
+
+def test_model_health_store_drops_stale_generation_record() -> None:
+    store = ModelHealthCheckStore()
+
+    # Simulate a health check that started before a save cleared the record.
+    generation = store.generation("m")
+    store.clear("m")  # e.g. a concurrent PUT resets status to "unknown"
+
+    stale_result = ModelHealthCheckResult(status="available", checked_at="t1")
+    store.record("m", stale_result, generation)
+
+    assert store.get("m") is None  # stale result must be dropped, not applied
+
+    fresh_generation = store.generation("m")
+    fresh_result = ModelHealthCheckResult(status="unavailable", checked_at="t2")
+    store.record("m", fresh_result, fresh_generation)
+
+    assert store.get("m") == fresh_result
+
+
+def test_test_model_endpoint_drops_stale_check_when_save_races_between_read_and_generation(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    app = create_test_app(tmp_path)
+    client = TestClient(app)
+
+    from ai_council import api as api_module
+
+    original_get_model = api_module.get_model
+
+    def get_model_then_race(repository, model_id):
+        # Return the model as it was read, but land a concurrent PUT (which
+        # saves + clears the health record) before the caller can capture a
+        # generation for its own in-flight check. A correct implementation
+        # must capture its generation *before* reading the model config, so
+        # this race can never land inside that window.
+        model = original_get_model(repository, model_id)
+        response = client.put(f"/models/{model_id}", json={"adapter": "mock"})
+        assert response.status_code == 200
+        return model
+
+    monkeypatch.setattr(api_module, "get_model", get_model_then_race)
+
+    test_response = client.post("/models/mock-fast/test")
+
+    assert test_response.status_code == 200
+
+    # The manual test's result was computed against a pre-race config read
+    # and must not clobber the fresher "unknown" reset the racing PUT made.
+    listed = next(model for model in client.get("/models").json() if model["id"] == "mock-fast")
+    assert listed["status"] == "unknown"
 
 
 def test_meeting_create_list_get_start_and_transcript(tmp_path: Path) -> None:

@@ -42,7 +42,12 @@ from ai_council.models.adapters import (
     SubscriptionCLIAdapter,
     TokenUsage,
 )
-from ai_council.models.config import ModelConfig, ModelConfigError, ModelConfigRepository
+from ai_council.models.config import (
+    ModelConfig,
+    ModelConfigError,
+    ModelConfigRepository,
+    validate_model_config_fields,
+)
 from ai_council.models.config import ModelPricing as ConfigModelPricing
 from ai_council.prompting.renderer import PromptRenderer
 
@@ -100,6 +105,10 @@ class UpsertModelConfigRequest(BaseModel):
     timeout_seconds: float = 120
 
 
+class CreateModelConfigRequest(UpsertModelConfigRequest):
+    id: str
+
+
 class ModelPricingRequest(BaseModel):
     currency: str
     input_per_1m_tokens: float = Field(ge=0)
@@ -131,8 +140,17 @@ def create_app(
         request: Request,
         exc: RequestValidationError,
     ) -> JSONResponse:
-        if request.method == "PUT" and request.url.path.startswith("/models/"):
-            return JSONResponse(status_code=400, content={"detail": exc.errors()})
+        if (request.method == "POST" and request.url.path == "/models") or (
+            request.method == "PUT" and request.url.path.startswith("/models/")
+        ):
+            detail = [
+                {
+                    "field": ".".join(str(part) for part in error["loc"] if part != "body"),
+                    "message": error["msg"],
+                }
+                for error in exc.errors()
+            ]
+            return JSONResponse(status_code=422, content={"detail": detail})
         return JSONResponse(status_code=422, content={"detail": exc.errors()})
 
     data_path = Path(data_dir)
@@ -163,6 +181,7 @@ def create_app(
     jobs = MeetingJobManager()
     model_health = ModelHealthCheckStore()
     model_health_checker = ModelHealthChecker(model_repository, model_adapters, model_health)
+    model_write_lock = threading.Lock()
     if start_model_health_checks:
         model_health_checker.start()
 
@@ -174,37 +193,73 @@ def create_app(
             raise HTTPException(status_code=400, detail=str(error)) from error
         return [project_model_config(model, model_health.get(model.id)) for model in models]
 
-    @app.put("/models/{model_config_id}")
-    def upsert_model(model_config_id: str, request: UpsertModelConfigRequest) -> dict[str, Any]:
-        try:
-            model = model_repository.save_model(
-                ModelConfig(
-                    id=model_config_id,
-                    adapter=request.adapter,
-                    base_url=request.base_url,
-                    model=request.model,
-                    api_key_env=request.api_key_env,
-                    supports_json_mode=request.supports_json_mode,
-                    extra_body=request.extra_body,
-                    pricing=project_model_pricing_request(request.pricing),
-                    command=request.command,
-                    timeout_seconds=request.timeout_seconds,
-                )
-            )
-        except ModelConfigError as error:
-            raise HTTPException(status_code=400, detail=str(error)) from error
-        return project_model_config(model, model_health.get(model.id))
+    @app.post("/models", status_code=201)
+    def create_model(request: CreateModelConfigRequest) -> dict[str, Any]:
+        model = ModelConfig(
+            id=request.id,
+            adapter=request.adapter,
+            base_url=request.base_url,
+            model=request.model,
+            api_key_env=request.api_key_env,
+            supports_json_mode=request.supports_json_mode,
+            extra_body=request.extra_body,
+            pricing=project_model_pricing_request(request.pricing),
+            command=request.command,
+            timeout_seconds=request.timeout_seconds,
+        )
+        return save_model_or_422(
+            model_repository,
+            model_health,
+            model,
+            expect_existing=False,
+            write_lock=model_write_lock,
+        )
 
-    @app.delete("/models/{model_config_id}", status_code=204)
-    def delete_model(model_config_id: str) -> Response:
-        if not model_repository.delete_model(model_config_id):
-            raise HTTPException(status_code=404, detail=f"Unknown model: {model_config_id}")
-        return Response(status_code=204)
+    @app.put("/models/{model_config_id}")
+    def update_model(model_config_id: str, request: UpsertModelConfigRequest) -> dict[str, Any]:
+        model = ModelConfig(
+            id=model_config_id,
+            adapter=request.adapter,
+            base_url=request.base_url,
+            model=request.model,
+            api_key_env=request.api_key_env,
+            supports_json_mode=request.supports_json_mode,
+            extra_body=request.extra_body,
+            pricing=project_model_pricing_request(request.pricing),
+            command=request.command,
+            timeout_seconds=request.timeout_seconds,
+        )
+        return save_model_or_422(
+            model_repository,
+            model_health,
+            model,
+            expect_existing=True,
+            write_lock=model_write_lock,
+        )
+
+    @app.delete("/models/{model_config_id}")
+    def delete_model(model_config_id: str) -> dict[str, Any]:
+        with model_write_lock:
+            if not model_repository.delete_model(model_config_id):
+                raise HTTPException(status_code=404, detail=f"Unknown model: {model_config_id}")
+            model_health.clear(model_config_id)
+        referencing = open_meetings_referencing_model(
+            metadata_store, repository, model_config_id
+        )
+        warning = None
+        if referencing:
+            warning = (
+                f"Model is the latest selection in {len(referencing)} open meeting(s): "
+                + ", ".join(referencing[:5])
+            )
+        return {"id": model_config_id, "warning": warning}
 
     @app.post("/models/{model_config_id}/test")
     def test_model(model_config_id: str) -> dict[str, str]:
+        generation = model_health.generation(model_config_id)
         model = get_model(model_repository, model_config_id)
         result = check_model_health(model, model_adapters.get(model.adapter))
+        model_health.record(model_config_id, result, generation)
         response = {"status": result.status, "tested_at": result.checked_at}
         if result.error is not None:
             response["error"] = result.error
@@ -687,6 +742,41 @@ def get_model(repository: ModelConfigRepository, model_id: str) -> ModelConfig:
     raise HTTPException(status_code=404, detail=f"Unknown model: {model_id}")
 
 
+def save_model_or_422(
+    model_repository: ModelConfigRepository,
+    model_health: ModelHealthCheckStore,
+    model: ModelConfig,
+    *,
+    expect_existing: bool,
+    write_lock: threading.Lock,
+) -> dict[str, Any]:
+    errors = validate_model_config_fields(model)
+    if errors:
+        raise HTTPException(status_code=422, detail=errors)
+    with write_lock:
+        try:
+            existing_models = model_repository.list_models()
+        except ModelConfigError as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
+        already_exists = any(existing.id == model.id for existing in existing_models)
+        if expect_existing and not already_exists:
+            raise HTTPException(status_code=404, detail=f"Unknown model: {model.id}")
+        if not expect_existing and already_exists:
+            raise HTTPException(
+                status_code=422,
+                detail=[{"field": "id", "message": "Model id already exists"}],
+            )
+        try:
+            saved = model_repository.save_model(model)
+        except ModelConfigError as error:
+            raise HTTPException(
+                status_code=422,
+                detail=[{"field": "", "message": str(error)}],
+            ) from error
+        model_health.clear(saved.id)
+    return project_model_config(saved, model_health.get(saved.id))
+
+
 def project_model_config(
     model: ModelConfig,
     health: ModelHealthCheckResult | None = None,
@@ -790,6 +880,38 @@ def project_meeting_status(events: list[dict[str, Any]]) -> str:
         if status in {"closed", "cancelled"}:
             return str(status)
     return "open"
+
+
+def open_meetings_referencing_model(
+    metadata_store: MeetingMetadataStore,
+    repository: MeetingRepository,
+    model_config_id: str,
+) -> list[str]:
+    """Open meetings whose latest per-role model selection is `model_config_id`.
+
+    "Latest selection" means either the model recorded on a role's most
+    recent event that carries a model_config_id, or the model stored on the
+    meeting's participants metadata (covers roles that haven't run a step
+    yet, e.g. right after meeting creation but before start).
+    """
+    referencing: list[str] = []
+    for metadata in metadata_store.list():
+        meeting_id = metadata["meeting_id"]
+        events = repository.read_events(meeting_id)
+        if project_meeting_status(events) != "open":
+            continue
+        stored = {
+            item.get("model_config_id")
+            for item in (metadata.get("participants") or [])
+            if isinstance(item, dict)
+        }
+        latest_by_role: dict[str, Any] = {}
+        for event in events:
+            if isinstance(event.get("model_config_id"), str):
+                latest_by_role[str(event.get("role"))] = event["model_config_id"]
+        if model_config_id in stored or model_config_id in latest_by_role.values():
+            referencing.append(meeting_id)
+    return referencing
 
 
 def project_activity_status(events: list[dict[str, Any]]) -> str:
@@ -945,17 +1067,38 @@ def check_model_health(model: ModelConfig, adapter: Any | None) -> ModelHealthCh
 
 
 class ModelHealthCheckStore:
+    """Tracks health-check results per model id.
+
+    Each id has a generation counter that `clear()` bumps whenever the model
+    is (re)saved. `record()` only writes if the generation it was given still
+    matches, so a health check that was already in flight when a save
+    happened can't clobber the freshly-reset "unknown" status with a stale
+    result once it finishes.
+    """
+
     def __init__(self) -> None:
         self._checks: dict[str, ModelHealthCheckResult] = {}
+        self._generations: dict[str, int] = {}
         self._lock = threading.Lock()
 
-    def record(self, model_id: str, result: ModelHealthCheckResult) -> None:
+    def record(self, model_id: str, result: ModelHealthCheckResult, generation: int) -> None:
         with self._lock:
+            if generation != self._generations.get(model_id, 0):
+                return
             self._checks[model_id] = result
 
     def get(self, model_id: str) -> ModelHealthCheckResult | None:
         with self._lock:
             return self._checks.get(model_id)
+
+    def generation(self, model_id: str) -> int:
+        with self._lock:
+            return self._generations.get(model_id, 0)
+
+    def clear(self, model_id: str) -> None:
+        with self._lock:
+            self._checks.pop(model_id, None)
+            self._generations[model_id] = self._generations.get(model_id, 0) + 1
 
 
 class ModelHealthChecker:
@@ -979,10 +1122,30 @@ class ModelHealthChecker:
         except ModelConfigError:
             return
         for model in models:
-            self._check_model(model)
+            self._check_model(model.id)
 
-    def _check_model(self, model: ModelConfig) -> None:
-        self.store.record(model.id, check_model_health(model, self.adapters.get(model.adapter)))
+    def _check_model(self, model_id: str) -> None:
+        # Capture the generation before re-reading the config, so a save
+        # that races in between is guaranteed to be caught: either it lands
+        # before this read (we'd then check the fresh config, but that's
+        # fine) or after (its clear() bumps the generation past what we
+        # captured, so our record() below is correctly dropped as stale).
+        generation = self.store.generation(model_id)
+        model = self._find_model(model_id)
+        if model is None:
+            return
+        result = check_model_health(model, self.adapters.get(model.adapter))
+        self.store.record(model_id, result, generation)
+
+    def _find_model(self, model_id: str) -> ModelConfig | None:
+        try:
+            models = self.repository.list_models()
+        except ModelConfigError:
+            return None
+        for model in models:
+            if model.id == model_id:
+                return model
+        return None
 
 
 class MeetingJobManager:

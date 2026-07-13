@@ -824,6 +824,14 @@ h2 {
 
 /* ---------- Settings modal ---------- */
 
+.settings-tabs {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 14px;
+  border-bottom: 1px solid var(--color-border);
+  padding-bottom: 10px;
+}
+
 .settings-scene-row {
   margin-bottom: 16px;
   padding-bottom: 16px;
@@ -903,6 +911,101 @@ h2 {
   gap: 8px;
   font-size: 13px;
   color: var(--color-text-secondary);
+}
+
+/* ---------- Model manager tab ---------- */
+
+.model-manager-panel {
+  display: grid;
+  gap: 12px;
+}
+
+.model-manager-list {
+  display: grid;
+  gap: 8px;
+  max-height: 40vh;
+  overflow: auto;
+}
+
+.model-manager-row {
+  display: grid;
+  gap: 4px;
+  padding: 10px 12px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface);
+  font-size: 13px;
+}
+
+.model-manager-id {
+  display: flex;
+  align-items: center;
+  font-family: var(--font-mono);
+  font-weight: 600;
+  color: var(--color-text);
+}
+
+.model-manager-adapter {
+  color: var(--color-text-secondary);
+  font-size: 12px;
+}
+
+.model-manager-summary {
+  color: var(--color-text-muted);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.model-manager-test-error {
+  color: var(--color-danger-hover);
+  font-size: 12px;
+  font-style: normal;
+  overflow-wrap: anywhere;
+}
+
+.model-manager-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 4px;
+}
+
+.model-manager-empty {
+  margin: 0;
+  color: var(--color-text-muted);
+  font-size: 13px;
+}
+
+.model-form {
+  display: grid;
+  gap: 10px;
+  margin-top: 4px;
+  padding-top: 12px;
+  border-top: 1px solid var(--color-border);
+}
+
+.model-form h3 {
+  margin: 0;
+  font-size: 15px;
+  font-family: var(--font-display);
+}
+
+.model-form-hint {
+  margin: -4px 0 0;
+  font-size: 12px;
+  color: var(--color-text-muted);
+}
+
+.model-form-field-error {
+  color: var(--color-danger-hover);
+  font-size: 12px;
+  font-style: normal;
+}
+
+.model-form-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 4px;
 }
 
 /* ---------- Meetings modal (Past Topics) ---------- */

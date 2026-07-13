@@ -492,7 +492,7 @@ config/models.yaml.example
 16. Favorites/pinning
 17. Share links/export views
 18. Permissions and collaboration
-19. Frontend model config management
+19. Frontend model config management（已完成 2026-07-13，見 §17）
 20. Secret management
 21. Additional subscription model CLI provider presets
 22. Subscription model CLI subprocess cancellation and session management
@@ -670,7 +670,7 @@ POST /meetings/{id}/sequences              # roles 陣列同上
 
 ## 17. 前端模型設定管理（Model Config Management）設計
 
-> 狀態：設計定稿（2026-07-12）。後端（Codex）先行，前端 UI 隨後接上。對應 backlog 19，取代「只能手動編輯 `config/models.yaml`」的現況。
+> 狀態：設計定稿（2026-07-12）。後端（Codex）先行，前端 UI 隨後接上。對應 backlog 19，取代「只能手動編輯 `config/models.yaml`」的現況。——已完成（2026-07-13）
 
 ### 17.1 原則
 
@@ -687,9 +687,9 @@ DELETE /models/{id}
 ```
 
 - 欄位同第 6 節 schema：`id`、`adapter`、`base_url`、`model`、`api_key_env`、`supports_json_mode`、`extra_body`、`command`、`timeout_seconds`
-- 驗證：`id` 唯一且符合 `^[A-Za-z0-9][A-Za-z0-9_.-]*$`；`adapter` 限 `mock | openai-compatible-http | subscription-cli`；`openai-compatible-http` 必填 `base_url` + `model`；`subscription-cli` 必填 `command`。驗證失敗回 `422` 與逐欄錯誤
+- 驗證：`id` 唯一且符合 `^[A-Za-z0-9][A-Za-z0-9_.-]*$`；`adapter` 限 `SUPPORTED_ADAPTERS`（`backend/ai_council/models/config.py`，以程式碼為準；截至本節完成時為 `mock | openai-compatible-http | anthropic-http | gemini-http | subscription-cli` 五種）；`openai-compatible-http`/`anthropic-http`/`gemini-http` 三個 http 系 adapter 皆必填 `base_url` + `model`；`subscription-cli` 必填 `command`。驗證失敗回 `422` 與逐欄錯誤
 - 新增/更新後該 model `status` 重設為 `unknown`（使用者可按 Test）
-- `DELETE`：一律允許（歷史事件記錄的是 id 字串，不受影響；進行中的呼叫已持有設定物件）。若該 id 正被任一 open meeting 的最近選擇引用，回應附 `warning` 欄位供前端提示
+- `DELETE`：一律允許（歷史事件記錄的是 id 字串，不受影響；進行中的呼叫已持有設定物件）。回應為 `200` + JSON body `{"id", "warning"}`；若該 id 正被任一 open meeting 的最近選擇引用，`warning` 為說明字串，否則為 `null`
 - 執行中的 meeting run 不受寫入影響：runner 在 start 時已解析設定
 
 ### 17.3 前端 UI
