@@ -44,7 +44,9 @@ async function createMeetingViaNewCase(
   }
   if (options.caseFiles?.length) {
     const totalChars = options.caseFiles.reduce((total, file) => total + file.content.length, 0)
-    await expect(page.getByTestId('case-file-cost-note')).toContainText(`目前 ${totalChars} 字元`)
+    await expect(page.getByTestId('case-file-cost-note')).toContainText(
+      `目前 ${totalChars} / 120000 字元`,
+    )
   }
   await page.getByTestId('create-meeting-button').click()
   // NewCaseModal closes itself once createNewMeeting() resolves.
@@ -1043,7 +1045,7 @@ test('New Case keeps user input when create fails', async ({ page }) => {
   await expect(page.getByTestId('case-file-1-title')).toHaveValue('保留案卷')
   await expect(page.getByTestId('case-file-1-content')).toHaveValue('失敗後不應清空這段內容')
   await expect(page.getByTestId('case-file-1-role-Blue')).toBeChecked()
-  await expect(page.getByTestId('case-file-cost-note')).toContainText('目前 11 字元')
+  await expect(page.getByTestId('case-file-cost-note')).toContainText('目前 11 / 120000 字元')
   await expect(page.getByTestId('new-case-server-error')).toHaveText('Unknown mode: red-blue')
 })
 

@@ -5,6 +5,7 @@ import roleJudgeIcon from '../assets/roles/judge.png'
 import { DEFAULT_MODE_ID, getModeById, refreshModeCatalog, type ModeDefinition, type ModeRoleDefinition } from '../modes'
 import { applyModeScene } from '../scenes'
 import {
+  ApiError,
   addMeetingMessage,
   cancelMeeting,
   closeMeeting,
@@ -848,7 +849,12 @@ export function useCouncil() {
       await action()
       return true
     } catch (caught) {
-      error.value = caught instanceof Error ? caught.message : String(caught)
+      error.value =
+        caught instanceof ApiError && typeof caught.detail === 'string'
+          ? caught.detail
+          : caught instanceof Error
+            ? caught.message
+            : String(caught)
       return false
     } finally {
       loading.value = false

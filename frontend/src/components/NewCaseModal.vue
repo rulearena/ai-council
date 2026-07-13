@@ -17,7 +17,7 @@ const props = defineProps<{ show: boolean }>()
 const emit = defineEmits<{ close: [] }>()
 
 const store = inject(councilKey)!
-const { topic, loading, createNewMeeting } = store
+const { topic, loading, error, createNewMeeting } = store
 
 type Step = 'mode' | 'participants'
 type DraftCaseFile = {
@@ -37,6 +37,7 @@ const selectedMode = computed<ModeDefinition>(
 // handled by the member editor below.
 const inputValues = ref<Record<string, string>>({})
 const caseFiles = ref<DraftCaseFile[]>([])
+const serverError = ref('')
 const fallbackCaseFileLimits: CaseFileLimits = {
   per_file_chars: 50_000,
   total_chars: 120_000,
@@ -92,6 +93,7 @@ watch(
       step.value = 'mode'
       inputValues.value = {}
       caseFiles.value = []
+      serverError.value = ''
       resetParallelMembers(selectedMode.value)
       caseFileLimits.value = { ...fallbackCaseFileLimits }
       void refreshCaseFileLimits()
@@ -126,15 +128,17 @@ function backToModePicker() {
 }
 
 async function submit() {
-  if (
-    await createNewMeeting(
-      selectedMode.value.id,
-      { ...inputValues.value },
-      buildParticipants(),
-      buildCaseFiles(),
-    )
-  ) {
+  serverError.value = ''
+  const created = await createNewMeeting(
+    selectedMode.value.id,
+    { ...inputValues.value },
+    buildParticipants(),
+    buildCaseFiles(),
+  )
+  if (created) {
     emit('close')
+  } else {
+    serverError.value = error.value
   }
 }
 
@@ -450,6 +454,10 @@ function buildParticipants() {
         </span>
       </div>
       <p class="participant-setup-note">模型可於建立後在 Settings 中為每個角色指派。</p>
+
+      <p v-if="serverError" class="error" data-testid="new-case-server-error">
+        {{ serverError }}
+      </p>
 
       <button
         type="button"
