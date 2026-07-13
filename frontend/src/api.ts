@@ -22,6 +22,11 @@ export type ModelTestResult = {
   error?: string
 }
 
+export type CaseFileLimits = {
+  per_file_chars: number
+  total_chars: number
+}
+
 export type Meeting = {
   meeting_id: string
   topic: string
@@ -245,6 +250,10 @@ export async function testModel(modelId: string): Promise<ModelTestResult> {
 
 export async function getModes(): Promise<BackendModeDefinition[]> {
   return getJson('/modes')
+}
+
+export async function getCaseFileLimits(): Promise<CaseFileLimits> {
+  return getJson('/case-file-limits')
 }
 
 export async function getMeetings(query?: string): Promise<Meeting[]> {

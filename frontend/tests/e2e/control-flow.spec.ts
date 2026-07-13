@@ -1044,7 +1044,74 @@ test('New Case keeps user input when create fails', async ({ page }) => {
   await expect(page.getByTestId('case-file-1-content')).toHaveValue('失敗後不應清空這段內容')
   await expect(page.getByTestId('case-file-1-role-Blue')).toBeChecked()
   await expect(page.getByTestId('case-file-cost-note')).toContainText('目前 11 字元')
-  await expect(page.getByTestId('app-error')).toContainText('POST /meetings failed: 404')
+  await expect(page.getByTestId('new-case-server-error')).toHaveText('Unknown mode: red-blue')
+})
+
+test('New Case uses server case file limits and blocks oversized drafts before POST', async ({
+  page,
+}) => {
+  await page.route('**/case-file-limits', (route) =>
+    route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify({ per_file_chars: 10, total_chars: 15 }),
+    }),
+  )
+  let createRequests = 0
+  await page.route('**/meetings', async (route) => {
+    if (route.request().method() === 'POST') createRequests += 1
+    await route.continue()
+  })
+  await page.goto('/')
+  await page.getByTestId('new-case-button').click()
+  await page
+    .getByTestId('mode-select-card-red-blue')
+    .getByRole('button', { name: '選擇此模式' })
+    .click()
+  await page.getByLabel('會議主題').fill('容量預檢')
+  await page.getByTestId('add-case-file-button').click()
+  await page.getByTestId('case-file-1-title').fill('第一份')
+  await page.getByTestId('case-file-1-content').fill('abcdefghijk')
+  await page.getByTestId('case-file-1-role-Blue').check()
+
+  await expect(page.getByTestId('case-file-1-char-count')).toHaveText('11 / 10 字元')
+  await expect(page.getByTestId('case-file-1-limit-error')).toHaveText(
+    '案卷 1 超過單份上限 10 字元',
+  )
+  await expect(page.getByTestId('case-file-cost-note')).toContainText('目前 11 / 15 字元')
+  await expect(page.getByTestId('case-file-cost-note')).toContainText('粗估約 3 tokens')
+  await expect(page.getByTestId('case-file-cost-note')).toContainText('可能超出模型 context window')
+  await expect(page.getByTestId('create-meeting-button')).toBeDisabled()
+
+  await page.getByTestId('case-file-1-content').fill('abcdefgh')
+  await page.getByTestId('add-case-file-button').click()
+  await page.getByTestId('case-file-2-title').fill('第二份')
+  await page.getByTestId('case-file-2-content').fill('ijklmnop')
+  await page.getByTestId('case-file-2-role-Blue').check()
+
+  await expect(page.getByTestId('case-file-total-limit-error')).toHaveText(
+    '全部案卷超過總量上限 15 字元',
+  )
+  await expect(page.getByTestId('create-meeting-button')).toBeDisabled()
+  await page.getByTestId('create-meeting-button').evaluate((button: HTMLButtonElement) =>
+    button.click(),
+  )
+  await expect.poll(() => createRequests).toBe(0)
+})
+
+test('New Case falls back to safe case file limits when limits endpoint is unavailable', async ({
+  page,
+}) => {
+  await page.route('**/case-file-limits', (route) => route.abort())
+  await page.goto('/')
+  await page.getByTestId('new-case-button').click()
+  await page
+    .getByTestId('mode-select-card-red-blue')
+    .getByRole('button', { name: '選擇此模式' })
+    .click()
+  await page.getByTestId('add-case-file-button').click()
+
+  await expect(page.getByTestId('case-file-1-char-count')).toHaveText('0 / 50000 字元')
+  await expect(page.getByTestId('case-file-cost-note')).toContainText('目前 0 / 120000 字元')
 })
 
 test('New Case creates a meeting with numbered role-scoped case files', async ({ page }) => {

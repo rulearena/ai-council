@@ -6,6 +6,7 @@
 // and creating still ends up calling createNewMeeting() the same way the old flat form did,
 // so a user who never looks at the mode picker gets today's behavior unchanged.
 import { computed, inject, ref, watch } from 'vue'
+import { getCaseFileLimits, type CaseFileLimits } from '../api'
 import { councilKey, roleIcon } from '../composables/useCouncil'
 import { DEFAULT_MODE_ID, modeCatalog, type ModeDefinition } from '../modes'
 import Modal from './Modal.vue'
@@ -36,6 +37,11 @@ const selectedMode = computed<ModeDefinition>(
 // handled by the member editor below.
 const inputValues = ref<Record<string, string>>({})
 const caseFiles = ref<DraftCaseFile[]>([])
+const fallbackCaseFileLimits: CaseFileLimits = {
+  per_file_chars: 50_000,
+  total_chars: 120_000,
+}
+const caseFileLimits = ref<CaseFileLimits>({ ...fallbackCaseFileLimits })
 const parallelMemberCount = ref(2)
 const parallelMembers = ref<Array<{ displayName: string; instancePrompt: string }>>([])
 const textInputs = computed(() => selectedMode.value.inputs.filter((input) => input.kind === 'text'))
@@ -50,6 +56,20 @@ const hasIncompleteCaseFile = computed(() =>
 const totalCaseFileChars = computed(() =>
   caseFiles.value.reduce((total, file) => total + file.content.length, 0),
 )
+const hasOversizedCaseFile = computed(() =>
+  caseFiles.value.some((file) => file.content.length > caseFileLimits.value.per_file_chars),
+)
+const hasOversizedCaseFileTotal = computed(
+  () => totalCaseFileChars.value > caseFileLimits.value.total_chars,
+)
+const estimatedCaseFileTokens = computed(() => {
+  const content = caseFiles.value.map((file) => file.content).join('')
+  const cjkCount = (content.match(/[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]/g) ?? []).length
+  const otherNonWhitespaceCount = content
+    .replace(/[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]/g, '')
+    .replace(/\s/g, '').length
+  return cjkCount + Math.ceil(otherNonWhitespaceCount / 4)
+})
 const selectedModeParticipants = computed(() => {
   const mode = selectedMode.value
   if (mode.category !== 'parallel' || !mode.fanout || !mode.synthesis) return mode.roles
@@ -73,9 +93,19 @@ watch(
       inputValues.value = {}
       caseFiles.value = []
       resetParallelMembers(selectedMode.value)
+      caseFileLimits.value = { ...fallbackCaseFileLimits }
+      void refreshCaseFileLimits()
     }
   },
 )
+
+async function refreshCaseFileLimits() {
+  try {
+    caseFileLimits.value = await getCaseFileLimits()
+  } catch {
+    // Older or temporarily unreachable backends still get the documented safe defaults.
+  }
+}
 
 function chooseMode(mode: ModeDefinition) {
   if (!mode.available) return
@@ -355,6 +385,16 @@ function buildParticipants() {
               :data-testid="`case-file-${index + 1}-content`"
               :aria-label="`案卷 ${index + 1} 內容`"
             />
+            <span :data-testid="`case-file-${index + 1}-char-count`">
+              {{ file.content.length }} / {{ caseFileLimits.per_file_chars }} 字元
+            </span>
+            <span
+              v-if="file.content.length > caseFileLimits.per_file_chars"
+              class="case-file-limit-error"
+              :data-testid="`case-file-${index + 1}-limit-error`"
+            >
+              案卷 {{ index + 1 }} 超過單份上限 {{ caseFileLimits.per_file_chars }} 字元
+            </span>
           </label>
           <label class="case-file-upload">
             <span>匯入 .txt / .md</span>
@@ -384,7 +424,16 @@ function buildParticipants() {
           </fieldset>
         </article>
         <p v-if="caseFiles.length" class="case-file-cost-note" data-testid="case-file-cost-note">
-          案卷全文會加入 prompt 並計入模型成本；目前 {{ totalCaseFileChars }} 字元。
+          案卷全文會加入 prompt 並計入模型成本；目前 {{ totalCaseFileChars }} /
+          {{ caseFileLimits.total_chars }} 字元，粗估約 {{ estimatedCaseFileTokens }} tokens。
+          大型案卷可能超出模型 context window。
+        </p>
+        <p
+          v-if="hasOversizedCaseFileTotal"
+          class="case-file-limit-error"
+          data-testid="case-file-total-limit-error"
+        >
+          全部案卷超過總量上限 {{ caseFileLimits.total_chars }} 字元
         </p>
       </section>
 
@@ -407,7 +456,7 @@ function buildParticipants() {
         class="btn btn-primary create-meeting-cta"
         data-testid="create-meeting-button"
         @click="submit"
-        :disabled="loading || !topic.trim() || hasEmptyRequiredInput || hasIncompleteCaseFile"
+        :disabled="loading || !topic.trim() || hasEmptyRequiredInput || hasIncompleteCaseFile || hasOversizedCaseFile || hasOversizedCaseFileTotal"
       >
         建立
       </button>
