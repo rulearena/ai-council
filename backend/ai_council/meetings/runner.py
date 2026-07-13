@@ -608,6 +608,8 @@ class MeetingRunner:
         )
         events: list[dict[str, object]] = []
         for current_attempt in (attempt, attempt + 1):
+            if current_attempt != attempt and self._is_terminal(meeting_id):
+                return events
             try:
                 response = self.adapters.by_name[config.adapter].complete(
                     ModelRequest(prompt=prompt, model_config=config, meeting_id=meeting_id)
@@ -961,7 +963,12 @@ class MeetingRunner:
             for event in self.repository.read_events(meeting_id)
             if event.get("interaction_type") == "directed-role-response"
         ]
-        return len(directed_events) + 1
+        existing_sequences = {
+            int(event["directed_sequence"])
+            for event in directed_events
+            if "directed_sequence" in event
+        }
+        return (max(existing_sequences) if existing_sequences else 0) + 1
 
     def _next_role_sequence_number(self, meeting_id: str) -> int:
         sequence_events = [

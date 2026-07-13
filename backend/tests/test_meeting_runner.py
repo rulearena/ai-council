@@ -661,6 +661,37 @@ def test_runner_runs_single_chair_directed_role_response(tmp_path: Path) -> None
     assert "主席要求：Blue 只回應最小可行方案。" in adapter.requests[0].prompt
 
 
+def test_directed_parse_retry_reuses_sequence_number_for_the_next_response(
+    tmp_path: Path,
+) -> None:
+    adapter = FakeAdapter(["not json", VALID_OUTPUT, VALID_OUTPUT])
+    runner = build_runner(tmp_path, adapter=adapter)
+    assignments = {"Blue": ModelConfig(id="mock-blue", adapter="mock")}
+
+    runner.respond_as_role(
+        plan=RED_BLUE_PLAN,
+        meeting_id="meeting-1",
+        topic="先做後端？",
+        role="Blue",
+        model_assignments=assignments,
+    )
+    runner.respond_as_role(
+        plan=RED_BLUE_PLAN,
+        meeting_id="meeting-1",
+        topic="先做後端？",
+        role="Blue",
+        model_assignments=assignments,
+    )
+
+    events = runner.repository.read_events("meeting-1")
+    assert [event["directed_sequence"] for event in events] == [1, 1, 2]
+    assert [event["step_id"] for event in events] == [
+        "directed-1-blue-response",
+        "directed-1-blue-response",
+        "directed-2-blue-response",
+    ]
+
+
 def test_runner_runs_chair_directed_role_sequence(tmp_path: Path) -> None:
     adapter = FakeAdapter([VALID_OUTPUT] * 3)
     runner = build_runner(tmp_path, adapter=adapter)
@@ -1422,6 +1453,91 @@ def test_parallel_member_two_parse_failures_wait_for_manual_attempt_three(
         ("fanout-1-member-1", 2, "failed"),
         ("fanout-1-member-1", 3, "completed"),
         ("synthesis-1", 1, "completed"),
+    ]
+
+
+def test_parallel_parse_retry_stops_before_second_call_when_meeting_is_cancelled(
+    tmp_path: Path,
+) -> None:
+    class CancellingInvalidAdapter:
+        def __init__(self, repository: MeetingRepository) -> None:
+            self.repository = repository
+            self.calls = 0
+
+        def complete(self, request: ModelRequest) -> ModelResponse:
+            self.calls += 1
+            assert request.meeting_id is not None
+            self.repository.append_event(
+                request.meeting_id,
+                {
+                    "event_id": f"{request.meeting_id}:cancelled",
+                    "meeting_id": request.meeting_id,
+                    "step_id": "meeting-cancelled",
+                    "role": "System",
+                    "attempt": 1,
+                    "status": "cancelled",
+                },
+            )
+            return ModelResponse(raw_output="not json")
+
+    custom_schema_id = "test-output/v1"
+    member = ParallelMemberStep(
+        step_id="member-1",
+        role="Member-1",
+        template_name="brainstorm_member",
+        display_name="委員 1",
+        instance_prompt="",
+        index=1,
+        output_schema_id=custom_schema_id,
+    )
+    plan = ParallelPlan(
+        members=[member],
+        synthesis=StepDefinition(
+            "synthesis",
+            "Moderator",
+            "brainstorm_synthesis",
+            custom_schema_id,
+        ),
+    )
+    registry = OutputSchemaRegistry(
+        [OutputSchemaCodec(custom_schema_id, TEST_ONLY_SCHEMA, TestOnlyParser())]
+    )
+    repository = MeetingRepository(tmp_path / "data")
+    adapter = CancellingInvalidAdapter(repository)
+    prompt_dir = tmp_path / "prompts"
+    prompt_dir.mkdir()
+    for template in ("brainstorm_member", "brainstorm_synthesis"):
+        (prompt_dir / f"{template}.md").write_text(
+            "{{ required_json_schema }} {{ fanout_outputs }}",
+            encoding="utf-8",
+        )
+    runner = MeetingRunner(
+        repository=repository,
+        prompt_renderer=PromptRenderer(prompt_dir),
+        adapters=RunnerAdapters(by_name={"mock": adapter}),
+        output_schemas=registry,
+    )
+
+    runner.start_parallel(
+        plan=plan,
+        meeting_id="meeting-1",
+        topic="取消 retry",
+        model_assignments={
+            "Member-1": ModelConfig(id="mock-member", adapter="mock"),
+            "Moderator": ModelConfig(id="mock-moderator", adapter="mock"),
+        },
+    )
+
+    assert adapter.calls == 1
+    assert strip_created_at(repository.read_events("meeting-1")) == [
+        {
+            "event_id": "meeting-1:cancelled",
+            "meeting_id": "meeting-1",
+            "step_id": "meeting-cancelled",
+            "role": "System",
+            "attempt": 1,
+            "status": "cancelled",
+        }
     ]
 
 
