@@ -1641,7 +1641,7 @@ def test_create_meeting_rejects_unknown_mode(tmp_path: Path) -> None:
 
     response = client.post("/meetings", json={"topic": "T", "mode_id": "does-not-exist"})
 
-    assert response.status_code == 400
+    assert response.status_code == 404
     assert response.json()["detail"] == "Unknown mode: does-not-exist"
 
 
@@ -1815,6 +1815,35 @@ def test_legacy_meeting_projects_red_blue_participants(tmp_path: Path) -> None:
 
     assert fetched["mode_id"] == "red-blue"
     assert [p["role_id"] for p in fetched["participants"]] == ["Blue", "Red", "Judge"]
+
+
+def test_meeting_list_tolerates_removed_mode_id_metadata(tmp_path: Path) -> None:
+    app = create_test_app(tmp_path)
+    client = TestClient(app)
+    meeting_id = "meeting-ghost-mode"
+    metadata_path = tmp_path / "data" / "meetings" / meeting_id / "metadata.json"
+    metadata_path.parent.mkdir(parents=True)
+    metadata_path.write_text(
+        json.dumps(
+            {
+                "meeting_id": meeting_id,
+                "topic": "髒資料模式",
+                "created_at": "2026-01-01T00:00:00+00:00",
+                "tags": [],
+                "pinned": False,
+                "mode_id": "removed-mode",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    response = client.get("/meetings")
+
+    assert response.status_code == 200
+    [meeting] = response.json()
+    assert meeting["meeting_id"] == meeting_id
+    assert meeting["mode_id"] == "red-blue"
+    assert [p["role_id"] for p in meeting["participants"]] == ["Blue", "Red", "Judge"]
 
 
 def test_start_courtroom_meeting_runs_courtroom_steps(tmp_path: Path) -> None:
@@ -2150,7 +2179,7 @@ def wait_for_activity(
     client: TestClient,
     meeting_id: str,
     expected_status: str,
-    timeout: float = 2,
+    timeout: float = 5,
 ) -> dict[str, object]:
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:

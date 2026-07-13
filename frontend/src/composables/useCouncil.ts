@@ -489,7 +489,7 @@ export function useCouncil() {
       instance_prompt?: string | null
     }> = [],
   ) {
-    await runAction(async () => {
+    return await runAction(async () => {
       const meeting = await createMeeting(topic.value, { modeId, inputs, participants })
       meetings.value = await getMeetings()
       await openMeeting(meeting.meeting_id)
@@ -823,13 +823,15 @@ export function useCouncil() {
     )
   }
 
-  async function runAction(action: () => Promise<void>) {
+  async function runAction(action: () => Promise<void>): Promise<boolean> {
     loading.value = true
     error.value = ''
     try {
       await action()
+      return true
     } catch (caught) {
       error.value = caught instanceof Error ? caught.message : String(caught)
+      return false
     } finally {
       loading.value = false
     }

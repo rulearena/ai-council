@@ -1,3 +1,5 @@
+import { DEFAULT_MODE_ID } from './modes'
+
 export type ModelConfig = {
   id: string
   adapter: string
@@ -229,7 +231,7 @@ export async function createMeeting(
 ): Promise<Meeting> {
   return postJson('/meetings', {
     topic,
-    mode_id: options?.modeId ?? 'red-blue',
+    mode_id: options?.modeId ?? DEFAULT_MODE_ID,
     inputs: options?.inputs ?? {},
     participants: options?.participants ?? [],
   })

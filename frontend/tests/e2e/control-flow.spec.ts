@@ -943,6 +943,33 @@ test('keeps the New Case mode picker within a 375px viewport without horizontal 
   await page.getByTestId('new-case-close-button').click()
 })
 
+test('New Case keeps user input when create fails', async ({ page }) => {
+  await page.route('**/meetings', async (route) => {
+    if (route.request().method() === 'POST') {
+      await route.fulfill({
+        status: 404,
+        contentType: 'application/json',
+        body: JSON.stringify({ detail: 'Unknown mode: red-blue' }),
+      })
+      return
+    }
+    await route.continue()
+  })
+  await page.goto('/')
+
+  await page.getByTestId('new-case-button').click()
+  await page
+    .getByTestId('mode-select-card-red-blue')
+    .getByRole('button', { name: '選擇此模式' })
+    .click()
+  await page.getByLabel('會議主題').fill('保留這個輸入')
+  await page.getByTestId('create-meeting-button').click()
+
+  await expect(page.getByTestId('new-case-modal')).toBeVisible()
+  await expect(page.getByLabel('會議主題')).toHaveValue('保留這個輸入')
+  await expect(page.getByTestId('app-error')).toContainText('POST /meetings failed: 404')
+})
+
 test('seat nameplate shows the selected model, with a placeholder when unset, and updates live from Settings', async ({
   page,
 }) => {

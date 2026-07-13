@@ -11,6 +11,7 @@ from ai_council.meetings.runner import ParallelMemberStep, ParallelPlan, RelayPl
 VALID_CATEGORIES = {"relay", "parallel"}
 VALID_ROLE_KINDS = {"member", "adjudicator", "synthesizer"}
 VALID_INPUT_KINDS = {"text", "persona-list"}
+DEFAULT_MODE_ID = "red-blue"
 
 
 class ModeConfigError(ValueError):

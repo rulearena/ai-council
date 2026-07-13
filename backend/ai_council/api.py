@@ -24,6 +24,7 @@ from ai_council.meetings.execution_state import (
     interrupted_execution_event,
 )
 from ai_council.meetings.modes import (
+    DEFAULT_MODE_ID,
     ModeCatalogRepository,
     ModeConfigError,
     ModeDefinition,
@@ -64,7 +65,7 @@ class MeetingParticipantRequest(BaseModel):
 
 class CreateMeetingRequest(BaseModel):
     topic: str
-    mode_id: str = "red-blue"
+    mode_id: str = DEFAULT_MODE_ID
     participants: list[MeetingParticipantRequest] = Field(default_factory=list)
     inputs: dict[str, str] = Field(default_factory=dict)
 
@@ -341,10 +342,10 @@ def create_app(
             events = repository.read_events(meeting_id)
             if query and not _meeting_matches_query(projector, metadata, events, query):
                 continue
-            mode_id = str(metadata.get("mode_id", "red-blue"))
-            mode = modes_by_id.get(mode_id)
+            mode_id = str(metadata.get("mode_id", DEFAULT_MODE_ID))
+            mode = modes_by_id.get(mode_id) or modes_by_id.get(DEFAULT_MODE_ID)
             if mode is None:
-                raise HTTPException(status_code=400, detail=f"Unknown mode: {mode_id}")
+                raise HTTPException(status_code=500, detail=f"Missing default mode: {DEFAULT_MODE_ID}")
             summaries.append(
                 project_meeting_summary(
                     metadata,
@@ -666,12 +667,12 @@ def get_mode_or_400(catalog: ModeCatalogRepository, mode_id: str) -> ModeDefinit
     except ModeConfigError as error:
         raise HTTPException(status_code=500, detail=str(error)) from error
     if mode is None:
-        raise HTTPException(status_code=400, detail=f"Unknown mode: {mode_id}")
+        raise HTTPException(status_code=404, detail=f"Unknown mode: {mode_id}")
     return mode
 
 
 def meeting_mode(catalog: ModeCatalogRepository, metadata: dict[str, Any]) -> ModeDefinition:
-    return get_mode_or_400(catalog, str(metadata.get("mode_id", "red-blue")))
+    return get_mode_or_400(catalog, str(metadata.get("mode_id", DEFAULT_MODE_ID)))
 
 
 def project_mode(mode: ModeDefinition) -> dict[str, Any]:

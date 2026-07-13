@@ -7,7 +7,7 @@
 // so a user who never looks at the mode picker gets today's behavior unchanged.
 import { computed, inject, ref, watch } from 'vue'
 import { councilKey, roleIcon } from '../composables/useCouncil'
-import { modeCatalog, type ModeDefinition } from '../modes'
+import { DEFAULT_MODE_ID, modeCatalog, type ModeDefinition } from '../modes'
 import Modal from './Modal.vue'
 import ModeCard from './ModeCard.vue'
 import RoleSilhouette from './RoleSilhouette.vue'
@@ -20,7 +20,7 @@ const { topic, loading, createNewMeeting } = store
 
 type Step = 'mode' | 'participants'
 const step = ref<Step>('mode')
-const selectedModeId = ref<string>('red-blue')
+const selectedModeId = ref<string>(DEFAULT_MODE_ID)
 const selectedMode = computed<ModeDefinition>(
   () => modeCatalog.find((mode) => mode.id === selectedModeId.value) ?? modeCatalog[0],
 )
@@ -79,8 +79,9 @@ function backToModePicker() {
 }
 
 async function submit() {
-  await createNewMeeting(selectedMode.value.id, { ...inputValues.value }, buildParticipants())
-  emit('close')
+  if (await createNewMeeting(selectedMode.value.id, { ...inputValues.value }, buildParticipants())) {
+    emit('close')
+  }
 }
 
 function resetParallelMembers(mode: ModeDefinition) {
