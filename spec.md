@@ -478,18 +478,18 @@ config/models.yaml.example
 2. Token streaming：Agent 逐字輸出到前端（backend WebSocket foundation 已落地；真 provider streaming 與 UI 顯示待後續）
 3. 自動恢復執行中任務：後端重啟或 API 呼叫中斷時判斷是否能安全重送（backend interrupted-state detection 已落地；不自動重送）
 4. Markdown 反向解析：從 `transcript.md` 還原狀態
-5. 更多 provider adapters：Anthropic、Gemini 等
+5. 更多 provider adapters：Anthropic、Gemini 等（已完成：anthropic-http / gemini-http adapters 已落地）
 6. Subscription model CLI bridge 進階穩定化與跨版本相容性
-7. Parallel brainstorming mode（設計已定，見第 16 節）
+7. Parallel brainstorming mode（設計已定，見第 16 節；slice C 待實作——執行器規格見 §16.3）
 8. Custom roster and topology（設計已定，見第 16 節）
 9. Drag-and-drop sequence/topology builder
 10. Conditional branching between roles
 11. Regex purifier
 12. LLM fallback purifier
-13. Anonymization layer
+13. Anonymization layer（設計已定，見 §16.3 彙整匿名化 hook；slice D 待實作，依賴 slice C）
 14. Advanced meeting search
-15. Meeting tags/folders
-16. Favorites/pinning
+15. Meeting tags/folders（已完成：tags 已落地，PUT /meetings/{id}/tags）
+16. Favorites/pinning（已完成：pinned 已落地，PUT /meetings/{id}/pinned）
 17. Share links/export views
 18. Permissions and collaboration
 19. Frontend model config management（已完成 2026-07-13，見 §17）
@@ -498,8 +498,8 @@ config/models.yaml.example
 22. Subscription model CLI subprocess cancellation and session management
 23. Provider-specific CLI output normalization
 24. Subscription model CLI compliance review
-25. Visual meeting room UI
-26. Agent character cards
+25. Visual meeting room UI（已完成：沉浸式議事廳 + 法院場景 + 席位系統，2026-07-12）
+26. Agent character cards（大致完成：立繪席位 + 角色抽屜；新角色立繪待補）
 27. Drag-and-drop roster builder
 28. Voting/speaking-order visualization
 29. Advanced dashboard views
@@ -520,7 +520,7 @@ config/models.yaml.example
 44. Audit log for multi-user operations
 45. Ollama-specific adapter
 46. Background model health checks（backend startup health projection 已落地）
-47. Auto-discover available models from endpoint
+47. Auto-discover available models from endpoint（已完成：GET /models/{id}/available-models）
 48. Performance benchmark
 49. Token usage and cost tracking（backend cost estimate foundation 已落地）
 50. Multiple projects/workspaces
@@ -542,7 +542,7 @@ config/models.yaml.example
 66. UI i18n
 67. Prompt language presets
 68. Per-meeting output language setting
-69. Full Playwright E2E suite
+69. Full Playwright E2E suite（已落地：27 案例，隨功能持續擴充）
 70. Frontend component tests
 71. Real provider integration tests
 72. Docker Compose setup
