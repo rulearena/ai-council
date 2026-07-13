@@ -42,6 +42,8 @@ export type Meeting = {
 
 export type CaseFile = {
   id: string
+  evidence_index: number
+  citation_anchor: string
   title: string
   content?: string
   visible_roles: string[]

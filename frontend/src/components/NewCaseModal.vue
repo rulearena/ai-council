@@ -137,6 +137,38 @@ function addCaseFile() {
   caseFiles.value.push({ title: '', content: '', visibleRoles: [] })
 }
 
+function draftEvidenceAnchor(index: number) {
+  const digits = '零一二三四五六七八九'
+  const section = (value: number) => {
+    let result = ''
+    let pendingZero = false
+    for (const [divisor, unit] of [
+      [1000, '千'],
+      [100, '百'],
+      [10, '十'],
+      [1, ''],
+    ] as const) {
+      const digit = Math.floor(value / divisor)
+      value %= divisor
+      if (digit) {
+        if (pendingZero && result) result += digits[0]
+        if (!(divisor === 10 && digit === 1 && !result)) result += digits[digit]
+        result += unit
+        pendingZero = false
+      } else if (result && value) {
+        pendingZero = true
+      }
+    }
+    return result
+  }
+  const high = Math.floor(index / 10_000)
+  const low = index % 10_000
+  const numeral = high
+    ? `${section(high)}萬${low && low < 1000 ? digits[0] : ''}${low ? section(low) : ''}`
+    : section(low)
+  return `[證物${numeral}]`
+}
+
 function removeCaseFile(index: number) {
   caseFiles.value.splice(index, 1)
 }
@@ -290,7 +322,15 @@ function buildParticipants() {
           :data-testid="`case-file-${index + 1}`"
         >
           <div class="case-file-card-header">
-            <strong>案卷 {{ index + 1 }}</strong>
+            <strong>
+              案卷 {{ index + 1 }}
+              <span
+                class="case-file-evidence-anchor"
+                :data-testid="`case-file-${index + 1}-evidence-anchor`"
+              >
+                {{ draftEvidenceAnchor(index + 1) }}
+              </span>
+            </strong>
             <button
               type="button"
               class="btn btn-ghost btn-sm"

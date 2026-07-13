@@ -1689,12 +1689,16 @@ def test_create_meeting_stores_and_returns_case_files(tmp_path: Path) -> None:
     assert created["case_files"] == [
         {
             "id": "case-file-1",
+            "evidence_index": 1,
+            "citation_anchor": "[證物一]",
             "title": "事故時間線",
             "visible_roles": ["Prosecutor", "Judge"],
             "size": len("10:00 deploy\n10:05 error rate spike"),
         },
         {
             "id": "case-file-2",
+            "evidence_index": 2,
+            "citation_anchor": "[證物二]",
             "title": "辯方說明",
             "visible_roles": ["Defense", "Judge"],
             "size": len("The rollback was blocked by a pending migration."),
@@ -1703,10 +1707,67 @@ def test_create_meeting_stores_and_returns_case_files(tmp_path: Path) -> None:
     meeting_id = created["meeting_id"]
     stored_path = tmp_path / "data" / "meetings" / meeting_id / "case_files.json"
     assert stored_path.exists()
+    stored = json.loads(stored_path.read_text(encoding="utf-8"))
+    assert [(item["evidence_index"], item["citation_anchor"]) for item in stored] == [
+        (1, "[證物一]"),
+        (2, "[證物二]"),
+    ]
 
     fetched = client.get(f"/meetings/{meeting_id}").json()
+    assert [(item["evidence_index"], item["citation_anchor"]) for item in fetched["case_files"]] == [
+        (1, "[證物一]"),
+        (2, "[證物二]"),
+    ]
     assert fetched["case_files"][0]["content"] == "10:00 deploy\n10:05 error rate spike"
     assert fetched["case_files"][1]["content"] == "The rollback was blocked by a pending migration."
+
+
+def test_get_meeting_derives_evidence_anchors_for_legacy_case_files_without_rewriting(
+    tmp_path: Path,
+) -> None:
+    app = create_test_app(tmp_path)
+    client = TestClient(app)
+    meeting_id = client.post(
+        "/meetings",
+        json={
+            "topic": "舊案卷",
+            "mode_id": "courtroom",
+            "case_files": [
+                {
+                    "title": "事故時間線",
+                    "content": "10:05 error rate spike",
+                    "visible_roles": ["Judge"],
+                },
+                {
+                    "title": "回滾紀錄",
+                    "content": "10:07 rollback started",
+                    "visible_roles": ["Judge"],
+                },
+            ],
+        },
+    ).json()["meeting_id"]
+    meeting_dir = tmp_path / "data" / "meetings" / meeting_id
+    for path in (meeting_dir / "metadata.json", meeting_dir / "case_files.json"):
+        legacy = json.loads(path.read_text(encoding="utf-8"))
+        items = legacy["case_files"] if path.name == "metadata.json" else legacy
+        for item in items:
+            item.pop("evidence_index")
+            item.pop("citation_anchor")
+        path.write_text(json.dumps(legacy, ensure_ascii=False), encoding="utf-8")
+
+    fetched = client.get(f"/meetings/{meeting_id}")
+
+    assert fetched.status_code == 200
+    body = fetched.json()
+    expected = [(1, "[證物一]"), (2, "[證物二]")]
+    assert [(item["evidence_index"], item["citation_anchor"]) for item in body["case_files"]] == expected
+    listed = next(item for item in client.get("/meetings").json() if item["meeting_id"] == meeting_id)
+    assert [
+        (item["evidence_index"], item["citation_anchor"])
+        for item in listed["case_files"]
+    ] == expected
+    assert "evidence_index" not in (meeting_dir / "case_files.json").read_text(encoding="utf-8")
+    assert "evidence_index" not in (meeting_dir / "metadata.json").read_text(encoding="utf-8")
 
 
 def test_create_meeting_rejects_case_files_for_unknown_roles(tmp_path: Path) -> None:
@@ -2083,11 +2144,20 @@ def test_case_files_reach_only_visible_role_prompts(tmp_path: Path) -> None:
         if event.get("status") == "completed"
     }
     assert "檢方事故時間線" in prompts_by_role["Prosecutor"]
+    assert "### [證物一] 檢方事故時間線" in prompts_by_role["Prosecutor"]
+    assert "[證物二]" not in prompts_by_role["Prosecutor"]
     assert "辯方回滾說明" not in prompts_by_role["Prosecutor"]
     assert "辯方回滾說明" in prompts_by_role["Defense"]
+    assert "### [證物二] 辯方回滾說明" in prompts_by_role["Defense"]
+    assert "[證物一]" not in prompts_by_role["Defense"]
     assert "檢方事故時間線" not in prompts_by_role["Defense"]
     assert "檢方事故時間線" in prompts_by_role["Judge"]
     assert "辯方回滾說明" in prompts_by_role["Judge"]
+    assert "### [證物一] 檢方事故時間線" in prompts_by_role["Judge"]
+    assert "### [證物二] 辯方回滾說明" in prompts_by_role["Judge"]
+    for prompt in prompts_by_role.values():
+        assert "引用案卷中的事實或主張時，必須附上對應的 [證物…] 引用錨點" in prompt
+        assert "不可假造不存在的證物錨點" in prompt
 
 
 def test_case_files_reach_parallel_member_instance_prompts(tmp_path: Path) -> None:

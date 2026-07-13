@@ -61,6 +61,7 @@ from ai_council.prompting.renderer import PromptRenderer
 MODEL_TEST_PROMPT = 'Return {"summary":"OK","arguments":[],"risks":[],"recommendation":"OK"}'
 MAX_CASE_FILE_CHARS = 20_000
 MAX_TOTAL_CASE_FILE_CHARS = 60_000
+CHINESE_DIGITS = "零一二三四五六七八九"
 
 
 class MeetingParticipantRequest(BaseModel):
@@ -392,7 +393,7 @@ def create_app(
                 ),
             ),
             "events": events,
-            "case_files": repository.read_case_files(meeting_id),
+            "case_files": project_case_files(repository.read_case_files(meeting_id)),
         }
 
     @app.put("/meetings/{meeting_id}/tags")
@@ -848,6 +849,8 @@ def normalize_case_files(
         case_files.append(
             {
                 "id": f"case-file-{index}",
+                "evidence_index": index,
+                "citation_anchor": citation_anchor(index),
                 "title": title,
                 "content": content,
                 "visible_roles": visible_roles,
@@ -861,12 +864,60 @@ def case_file_manifest(case_files: list[dict[str, Any]]) -> list[dict[str, Any]]
     return [
         {
             "id": str(item["id"]),
+            "evidence_index": int(item["evidence_index"]),
+            "citation_anchor": str(item["citation_anchor"]),
             "title": str(item["title"]),
             "visible_roles": list(item["visible_roles"]),
             "size": int(item["size"]),
         }
-        for item in case_files
+        for item in project_case_files(case_files)
     ]
+
+
+def citation_anchor(index: int) -> str:
+    return f"[證物{chinese_integer(index)}]"
+
+
+def chinese_integer(value: int) -> str:
+    def section(number: int) -> str:
+        result = ""
+        pending_zero = False
+        for divisor, unit in ((1000, "千"), (100, "百"), (10, "十"), (1, "")):
+            digit, number = divmod(number, divisor)
+            if digit:
+                if pending_zero and result:
+                    result += CHINESE_DIGITS[0]
+                if not (divisor == 10 and digit == 1 and not result):
+                    result += CHINESE_DIGITS[digit]
+                result += unit
+                pending_zero = False
+            elif result and number:
+                pending_zero = True
+        return result
+
+    if value <= 0:
+        raise ValueError("Evidence index must be positive")
+    high, low = divmod(value, 10_000)
+    if not high:
+        return section(low)
+    if high >= 10_000:
+        return "".join(CHINESE_DIGITS[int(digit)] for digit in str(value))
+    separator = CHINESE_DIGITS[0] if low and low < 1000 else ""
+    return f"{section(high)}萬{separator}{section(low) if low else ''}"
+
+
+def project_case_files(case_files: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    projected: list[dict[str, Any]] = []
+    for position, item in enumerate(case_files, start=1):
+        evidence_index = int(item.get("evidence_index", position))
+        projected.append(
+            {
+                **item,
+                "evidence_index": evidence_index,
+                "citation_anchor": str(item.get("citation_anchor") or citation_anchor(evidence_index)),
+            }
+        )
+    return projected
 
 
 def meeting_inputs_for_runner(
@@ -881,15 +932,22 @@ def meeting_inputs_for_runner(
 
 def case_files_by_role(case_files: list[dict[str, Any]]) -> dict[str, str]:
     grouped: dict[str, list[str]] = {}
-    for item in case_files:
+    for item in project_case_files(case_files):
         title = str(item.get("title", "")).strip()
         content = str(item.get("content", ""))
         if not title or not content.strip():
             continue
-        block = f"### {title}\n{content}"
+        block = f"### {item['citation_anchor']} {title}\n{content}"
         for role in item.get("visible_roles") or []:
             grouped.setdefault(str(role), []).append(block)
-    return {role: "\n\n".join(blocks) for role, blocks in grouped.items()}
+    instruction = (
+        "引用案卷中的事實或主張時，必須附上對應的 [證物…] 引用錨點；"
+        "不可假造不存在的證物錨點。"
+    )
+    return {
+        role: instruction + "\n\n" + "\n\n".join(blocks)
+        for role, blocks in grouped.items()
+    }
 
 
 def validate_participant_ids(
@@ -1324,6 +1382,7 @@ def project_meeting_summary(
         "pinned": bool(metadata.get("pinned", False)),
         "mode_id": mode.id,
         "participants": project_participants(mode, metadata),
+        "case_files": case_file_manifest(metadata.get("case_files") or []),
     }
 
 

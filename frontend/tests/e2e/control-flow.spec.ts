@@ -32,6 +32,10 @@ async function createMeetingViaNewCase(
   for (const [index, file] of (options.caseFiles ?? []).entries()) {
     const fileNumber = index + 1
     await page.getByTestId('add-case-file-button').click()
+    const expectedAnchor = fileNumber === 1 ? '[證物一]' : '[證物二]'
+    await expect(page.getByTestId(`case-file-${fileNumber}-evidence-anchor`)).toHaveText(
+      expectedAnchor,
+    )
     await page.getByTestId(`case-file-${fileNumber}-title`).fill(file.title)
     await page.getByTestId(`case-file-${fileNumber}-content`).fill(file.content)
     for (const role of file.visibleRoles) {
@@ -1023,7 +1027,7 @@ test('New Case keeps user input when create fails', async ({ page }) => {
   await expect(page.getByTestId('app-error')).toContainText('POST /meetings failed: 404')
 })
 
-test('New Case creates a meeting with role-scoped case files', async ({ page }) => {
+test('New Case creates a meeting with numbered role-scoped case files', async ({ page }) => {
   let createPayload: Record<string, unknown> | null = null
   await page.route('**/meetings', async (route) => {
     if (route.request().method() === 'POST') {
@@ -1034,6 +1038,9 @@ test('New Case creates a meeting with role-scoped case files', async ({ page }) 
   await page.goto('/')
 
   const topic = `E2E case files ${Date.now()}`
+  const createResponsePromise = page.waitForResponse(
+    (response) => response.request().method() === 'POST' && response.url().endsWith('/meetings'),
+  )
   await createMeetingViaNewCase(page, topic, {
     modeId: 'courtroom',
     caseFiles: [
@@ -1042,8 +1049,14 @@ test('New Case creates a meeting with role-scoped case files', async ({ page }) 
         content: '10:05 error rate spike\n10:07 rollback started',
         visibleRoles: ['Prosecutor', 'Judge'],
       },
+      {
+        title: '回滾紀錄',
+        content: '10:07 rollback started',
+        visibleRoles: ['Defense', 'Judge'],
+      },
     ],
   })
+  const createResponse = await createResponsePromise
 
   expect(createPayload).toMatchObject({
     topic,
@@ -1054,8 +1067,20 @@ test('New Case creates a meeting with role-scoped case files', async ({ page }) 
         content: '10:05 error rate spike\n10:07 rollback started',
         visible_roles: ['Prosecutor', 'Judge'],
       },
+      {
+        title: '回滾紀錄',
+        content: '10:07 rollback started',
+        visible_roles: ['Defense', 'Judge'],
+      },
     ],
   })
+  const meetingId = await page.getByTestId('meeting-id-display').innerText()
+  const meeting = await page.request.get(`${new URL(createResponse.url()).origin}/meetings/${meetingId}`)
+  expect(meeting.ok()).toBeTruthy()
+  expect((await meeting.json()).case_files).toMatchObject([
+    { evidence_index: 1, citation_anchor: '[證物一]' },
+    { evidence_index: 2, citation_anchor: '[證物二]' },
+  ])
   await expect(page.getByTestId('role-seat-prosecutor')).toBeVisible()
   await expect(page.getByTestId('role-seat-defense')).toBeVisible()
   await expect(page.getByTestId('role-seat-judge')).toBeVisible()
