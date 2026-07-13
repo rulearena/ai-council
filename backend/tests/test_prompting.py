@@ -128,6 +128,35 @@ def test_role_prompts_require_responses_to_follow_the_topic_language(
     assert "All JSON string values must use that language." in rendered
 
 
+@pytest.mark.parametrize(
+    ("template_name", "role"),
+    [
+        ("judge_decide", "Judge"),
+        ("courtroom_verdict", "Judge"),
+        ("debate_verdict", "Arbiter"),
+    ],
+)
+def test_adjudicator_prompts_require_grounded_evidence_refs(
+    template_name: str,
+    role: str,
+) -> None:
+    prompt_dir = Path(__file__).parents[2] / "prompts"
+
+    rendered = PromptRenderer(prompt_dir).render(
+        template_name=template_name,
+        role=role,
+        topic="是否核准上線？",
+        prior_transcript="雙方已完成陳述。",
+        required_json_schema=STRUCTURED_VERDICT_LITERAL,
+        inputs={"case_files": "[證物一] 上線檢查表"},
+    )
+
+    assert "[證物一] 上線檢查表" in rendered
+    assert "Use only citation anchors that appear in the case files" in rendered
+    assert "Do not invent citation anchors" in rendered
+    assert "insufficient-evidence" in rendered
+
+
 def test_prompt_renderer_loads_template_and_injects_context(tmp_path: Path) -> None:
     prompt_dir = tmp_path / "prompts"
     prompt_dir.mkdir()

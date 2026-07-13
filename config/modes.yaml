@@ -14,7 +14,7 @@ modes:
     roles:
       - { id: Blue, name: 藍軍, color: "#4d8dff", portrait: blue, kind: member }
       - { id: Red, name: 紅軍, color: "#ff6b5e", portrait: red, kind: member }
-      - { id: Judge, name: 裁判, color: "#e8b44c", portrait: judge, kind: adjudicator }
+      - { id: Judge, name: 裁判, color: "#e8b44c", portrait: judge, kind: adjudicator, output_schema: structured-verdict/v1 }
     steps:
       - { role: Blue, template: blue_propose, label: 藍軍提案 }
       - { role: Red, template: red_critique, label: 紅軍質詢 }
@@ -36,7 +36,7 @@ modes:
     roles:
       - { id: Prosecutor, name: 檢察官, color: "#ff6b5e", kind: member }
       - { id: Defense, name: 辯護律師, color: "#4d8dff", kind: member }
-      - { id: Judge, name: 法官, color: "#e8b44c", kind: adjudicator }
+      - { id: Judge, name: 法官, color: "#e8b44c", kind: adjudicator, output_schema: structured-verdict/v1 }
     steps:
       - { role: Prosecutor, template: courtroom_charge, label: 檢察官指控 }
       - { role: Defense, template: courtroom_defense, label: 辯護律師答辯 }
@@ -60,7 +60,7 @@ modes:
     roles:
       - { id: Pro, name: 正方, color: "#4d8dff", kind: member }
       - { id: Con, name: 反方, color: "#ff6b5e", kind: member }
-      - { id: Arbiter, name: 仲裁人, color: "#e8b44c", kind: adjudicator }
+      - { id: Arbiter, name: 仲裁人, color: "#e8b44c", kind: adjudicator, output_schema: structured-verdict/v1 }
     steps:
       - { role: Pro, template: debate_statement_pro, label: 正方申論 }
       - { role: Con, template: debate_statement_con, label: 反方申論 }

@@ -502,20 +502,28 @@ def test_repo_modes_yaml_is_loadable() -> None:
         "blue-revise",
         "judge-decide",
     ]
-    # Backward-compat gate: the derived relay plan must reproduce the runner's
-    # pre-mode-system STEPS/DIRECTED_RESPONSE_STEPS constants exactly (those
-    # constants were removed once MeetingRunner became plan-driven; the
-    # literals below are their frozen historical values).
+    # Backward-compat gate: step, role, and template identities remain frozen;
+    # only the adjudicator's versioned output contract may differ from v1.
     assert plan.steps == [
         StepDefinition("blue-propose", "Blue", "blue_propose"),
         StepDefinition("red-critique", "Red", "red_critique"),
         StepDefinition("blue-revise", "Blue", "blue_revise"),
-        StepDefinition("judge-decide", "Judge", "judge_decide"),
+        StepDefinition(
+            "judge-decide",
+            "Judge",
+            "judge_decide",
+            "structured-verdict/v1",
+        ),
     ]
     assert plan.directed_steps == {
         "Blue": StepDefinition("blue-response", "Blue", "blue_revise"),
         "Red": StepDefinition("red-response", "Red", "red_critique"),
-        "Judge": StepDefinition("judge-response", "Judge", "judge_decide"),
+        "Judge": StepDefinition(
+            "judge-response",
+            "Judge",
+            "judge_decide",
+            "structured-verdict/v1",
+        ),
     }
 
     for mode in modes:
@@ -528,3 +536,28 @@ def test_repo_modes_yaml_is_loadable() -> None:
         for template in templates:
             template_path = prompts_dir / f"{template}.md"
             assert template_path.exists(), f"missing prompt template: {template_path}"
+
+
+def test_repo_modes_select_rich_verdicts_only_for_adjudicators() -> None:
+    config_path = Path(__file__).resolve().parents[2] / "config" / "modes.yaml"
+
+    modes = ModeCatalogRepository(config_path).list_modes()
+
+    adjudicators = [
+        (mode.id, role.id, role.output_schema)
+        for mode in modes
+        for role in mode.roles
+        if role.kind == "adjudicator"
+    ]
+    other_schemas = {
+        role.output_schema
+        for mode in modes
+        for role in mode.roles
+        if role.kind != "adjudicator"
+    }
+    assert adjudicators == [
+        ("red-blue", "Judge", "structured-verdict/v1"),
+        ("courtroom", "Judge", "structured-verdict/v1"),
+        ("debate", "Arbiter", "structured-verdict/v1"),
+    ]
+    assert other_schemas == {"role-output/v1"}
