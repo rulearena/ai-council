@@ -58,7 +58,10 @@ from ai_council.models.config import (
 )
 from ai_council.models.config import ModelPricing as ConfigModelPricing
 from ai_council.prompting.renderer import PromptRenderer
-from ai_council.prompting.schemas import DEFAULT_OUTPUT_SCHEMA_ID
+from ai_council.prompting.schemas import (
+    DEFAULT_OUTPUT_SCHEMA_ID,
+    DEFAULT_OUTPUT_SCHEMA_REGISTRY,
+)
 
 MODEL_TEST_PROMPT = 'Return {"summary":"OK","arguments":[],"risks":[],"recommendation":"OK"}'
 MAX_CASE_FILE_CHARS = 20_000
@@ -177,7 +180,11 @@ def create_app(
     repository = MeetingRepository(data_path)
     execution_state_store = MeetingExecutionStateStore(data_path)
     model_repository = ModelConfigRepository(model_config_path)
-    mode_catalog = ModeCatalogRepository(modes_config_path)
+    output_schemas = DEFAULT_OUTPUT_SCHEMA_REGISTRY
+    mode_catalog = ModeCatalogRepository(
+        modes_config_path,
+        output_schemas=output_schemas,
+    )
     stream_bus = MeetingStreamBus()
     model_adapters = {
         "mock": MockModelAdapter(),
@@ -194,6 +201,7 @@ def create_app(
         ),
         stream_sink=stream_bus.publish,
         execution_state_store=execution_state_store,
+        output_schemas=output_schemas,
     )
     recover_interrupted_executions(repository, execution_state_store)
     projector = TranscriptProjector()

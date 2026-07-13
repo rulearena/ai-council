@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 import hashlib
-from dataclasses import asdict, dataclass
+import json
+from dataclasses import asdict, dataclass, is_dataclass
 from typing import Any, Protocol
 
-from ai_council.prompting.parser import RoleOutputParser
+from ai_council.prompting.parser import OutputParseError, RoleOutputParser
 
 DEFAULT_OUTPUT_SCHEMA_ID = "role-output/v1"
 ROLE_OUTPUT_V1_SCHEMA = (
@@ -14,7 +15,7 @@ ROLE_OUTPUT_V1_SCHEMA = (
 
 
 class OutputParser(Protocol):
-    def parse(self, raw_output: str) -> Any:
+    def parse(self, raw_output: str) -> object:
         ...
 
 
@@ -29,8 +30,17 @@ class OutputSchemaCodec:
         return hashlib.sha256(self.schema.encode("utf-8")).hexdigest()
 
     def parse(self, raw_output: str) -> dict[str, Any]:
-        parsed = self.parser.parse(raw_output)
-        return asdict(parsed)
+        try:
+            parsed = self.parser.parse(raw_output)
+        except OutputParseError:
+            raise
+        except (json.JSONDecodeError, KeyError, TypeError) as error:
+            raise OutputParseError(str(error), raw_output=raw_output) from error
+        if isinstance(parsed, dict):
+            return parsed
+        if is_dataclass(parsed) and not isinstance(parsed, type):
+            return asdict(parsed)
+        raise TypeError("Output schema parsers must return a dict or dataclass instance")
 
 
 class OutputSchemaRegistry:

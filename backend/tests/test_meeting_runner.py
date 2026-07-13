@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 
+from ai_council.meetings.modes import ModeCatalogRepository, relay_plan
 from ai_council.meetings.repository import MeetingRepository
 from ai_council.meetings.runner import (
     MeetingRunner,
@@ -49,6 +50,12 @@ class StubOutput:
 class TestOnlyParser:
     def parse(self, raw_output: str) -> StubOutput:
         return StubOutput(value=json.loads(raw_output)["value"])
+
+
+class DictOutputParser:
+    def parse(self, raw_output: str) -> dict[str, str]:
+        return json.loads(raw_output)
+
 
 RED_BLUE_PLAN = RelayPlan(
     steps=[
@@ -219,6 +226,139 @@ def test_directed_response_uses_step_output_schema_for_prompt_parser_and_event(
     assert event["output_schema_id"] == custom_schema_id
     assert event["output_schema_hash"] == TEST_ONLY_SCHEMA_HASH
     assert event["parsed_output"] == {"value": "custom parsed"}
+
+
+def test_output_schema_codec_accepts_a_dict_returning_parser(tmp_path: Path) -> None:
+    custom_schema_id = "test-output/v1"
+    plan = RelayPlan(
+        steps=[StepDefinition("blue-propose", "Blue", "blue_propose")],
+        directed_steps={
+            "Blue": StepDefinition(
+                "blue-response",
+                "Blue",
+                "blue_revise",
+                custom_schema_id,
+            )
+        },
+    )
+    registry = OutputSchemaRegistry(
+        [OutputSchemaCodec(custom_schema_id, TEST_ONLY_SCHEMA, DictOutputParser())]
+    )
+    runner = build_runner(
+        tmp_path,
+        adapter=FakeAdapter(['{"value":"dict parsed"}']),
+        output_schemas=registry,
+    )
+
+    runner.respond_as_role(
+        plan=plan,
+        meeting_id="meeting-1",
+        topic="schema selection",
+        role="Blue",
+        model_assignments={"Blue": ModelConfig(id="mock-blue", adapter="mock")},
+    )
+
+    event = runner.repository.read_events("meeting-1")[-1]
+    assert event["status"] == "completed"
+    assert event["parsed_output"] == {"value": "dict parsed"}
+
+
+def test_codec_decode_error_records_failure_and_uses_existing_retry_flow(
+    tmp_path: Path,
+) -> None:
+    custom_schema_id = "test-output/v1"
+    plan = RelayPlan(
+        steps=[
+            StepDefinition(
+                "blue-propose",
+                "Blue",
+                "blue_propose",
+                custom_schema_id,
+            )
+        ],
+        directed_steps={},
+    )
+    registry = OutputSchemaRegistry(
+        [OutputSchemaCodec(custom_schema_id, TEST_ONLY_SCHEMA, DictOutputParser())]
+    )
+    runner = build_runner(
+        tmp_path,
+        adapter=FakeAdapter(["not json", '{"value":"recovered"}']),
+        output_schemas=registry,
+    )
+
+    runner.start(
+        plan=plan,
+        meeting_id="meeting-1",
+        topic="schema selection",
+        model_assignments={"Blue": ModelConfig(id="mock-blue", adapter="mock")},
+    )
+
+    failed = runner.repository.read_events("meeting-1")[-1]
+    assert failed["status"] == "failed"
+    assert failed["output_schema_id"] == custom_schema_id
+
+    runner.retry_failed_step(
+        plan=plan,
+        meeting_id="meeting-1",
+        step_id="blue-propose",
+        topic="schema selection",
+        model_assignments={"Blue": ModelConfig(id="mock-blue", adapter="mock")},
+    )
+
+    recovered = runner.repository.read_events("meeting-1")[-1]
+    assert recovered["status"] == "completed"
+    assert recovered["attempt"] == 2
+    assert recovered["parsed_output"] == {"value": "recovered"}
+
+
+def test_injected_registry_is_shared_from_catalog_through_plan_and_runner(
+    tmp_path: Path,
+) -> None:
+    custom_schema_id = "test-output/v1"
+    registry = OutputSchemaRegistry(
+        [OutputSchemaCodec(custom_schema_id, TEST_ONLY_SCHEMA, DictOutputParser())]
+    )
+    modes_path = tmp_path / "modes.yaml"
+    modes_path.write_text(
+        """
+modes:
+  - id: custom
+    name: Custom
+    category: relay
+    tagline: t
+    when_to_use: w
+    sop: []
+    default_scene: meeting-room
+    inputs: []
+    roles:
+      - { id: Blue, name: Blue, color: "#4d8dff", kind: member, output_schema: test-output/v1 }
+    steps:
+      - { role: Blue, template: blue_propose, label: Blue }
+""".strip(),
+        encoding="utf-8",
+    )
+    mode = ModeCatalogRepository(modes_path, output_schemas=registry).get_mode("custom")
+    assert mode is not None
+    plan = relay_plan(mode)
+    runner = build_runner(
+        tmp_path,
+        adapter=FakeAdapter(['{"value":"catalog selected"}']),
+        output_schemas=registry,
+    )
+
+    runner.start(
+        plan=plan,
+        meeting_id="meeting-1",
+        topic="schema selection",
+        model_assignments={"Blue": ModelConfig(id="mock-blue", adapter="mock")},
+    )
+
+    event = runner.repository.read_events("meeting-1")[-1]
+    assert plan.steps[0].output_schema_id == custom_schema_id
+    assert TEST_ONLY_SCHEMA in event["prompt_messages"][0]["content"]
+    assert event["output_schema_id"] == custom_schema_id
+    assert event["parsed_output"] == {"value": "catalog selected"}
 
 
 def test_runner_persists_prompt_metadata_on_failed_events(tmp_path: Path) -> None:

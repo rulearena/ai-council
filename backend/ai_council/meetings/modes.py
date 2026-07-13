@@ -10,6 +10,7 @@ from ai_council.meetings.runner import ParallelMemberStep, ParallelPlan, RelayPl
 from ai_council.prompting.schemas import (
     DEFAULT_OUTPUT_SCHEMA_ID,
     DEFAULT_OUTPUT_SCHEMA_REGISTRY,
+    OutputSchemaRegistry,
 )
 
 VALID_CATEGORIES = {"relay", "parallel"}
@@ -167,8 +168,14 @@ def parallel_plan(mode: ModeDefinition, participants: list[dict[str, Any]]) -> P
 
 
 class ModeCatalogRepository:
-    def __init__(self, config_path: Path | str) -> None:
+    def __init__(
+        self,
+        config_path: Path | str,
+        *,
+        output_schemas: OutputSchemaRegistry | None = None,
+    ) -> None:
         self.config_path = Path(config_path)
+        self.output_schemas = output_schemas or DEFAULT_OUTPUT_SCHEMA_REGISTRY
 
     def list_modes(self) -> list[ModeDefinition]:
         if not self.config_path.exists():
@@ -179,7 +186,10 @@ class ModeCatalogRepository:
         raw_modes = raw.get("modes", [])
         if not isinstance(raw_modes, list):
             raise ModeConfigError("modes must be a list")
-        modes = [_mode_from_yaml_item(item) for item in raw_modes]
+        modes = [
+            _mode_from_yaml_item(item, output_schemas=self.output_schemas)
+            for item in raw_modes
+        ]
         seen: set[str] = set()
         for mode in modes:
             if mode.id in seen:
@@ -202,7 +212,11 @@ def _require_list(mode_id: str, value: Any, field_name: str) -> list[Any]:
     return value
 
 
-def _mode_from_yaml_item(raw_mode: Any) -> ModeDefinition:
+def _mode_from_yaml_item(
+    raw_mode: Any,
+    *,
+    output_schemas: OutputSchemaRegistry,
+) -> ModeDefinition:
     if not isinstance(raw_mode, dict):
         raise ModeConfigError("Mode entry must be a mapping")
 
@@ -217,7 +231,10 @@ def _mode_from_yaml_item(raw_mode: Any) -> ModeDefinition:
         raise ModeConfigError(f"Mode {mode_id!r} has unknown category: {category!r}")
 
     raw_roles = _require_list(mode_id, raw_mode.get("roles"), "roles")
-    roles = [_role_from_yaml_item(mode_id, item) for item in raw_roles]
+    roles = [
+        _role_from_yaml_item(mode_id, item, output_schemas=output_schemas)
+        for item in raw_roles
+    ]
     if not roles:
         raise ModeConfigError(f"Mode {mode_id!r} requires at least one role")
     role_ids = {role.id for role in roles}
@@ -275,7 +292,12 @@ def _mode_from_yaml_item(raw_mode: Any) -> ModeDefinition:
     )
 
 
-def _role_from_yaml_item(mode_id: str, raw_role: Any) -> ModeRole:
+def _role_from_yaml_item(
+    mode_id: str,
+    raw_role: Any,
+    *,
+    output_schemas: OutputSchemaRegistry,
+) -> ModeRole:
     if not isinstance(raw_role, dict):
         raise ModeConfigError(f"Mode {mode_id!r} has a role entry that is not a mapping")
     role_id = raw_role.get("id")
@@ -287,7 +309,7 @@ def _role_from_yaml_item(mode_id: str, raw_role: Any) -> ModeRole:
     if kind not in VALID_ROLE_KINDS:
         raise ModeConfigError(f"Mode {mode_id!r} has role {role_id!r} with unknown kind: {kind!r}")
     output_schema = raw_role.get("output_schema", DEFAULT_OUTPUT_SCHEMA_ID)
-    if not isinstance(output_schema, str) or not DEFAULT_OUTPUT_SCHEMA_REGISTRY.contains(output_schema):
+    if not isinstance(output_schema, str) or not output_schemas.contains(output_schema):
         raise ModeConfigError(
             f"Mode {mode_id!r} role {role_id!r} references unknown output schema: "
             f"{output_schema!r}"
