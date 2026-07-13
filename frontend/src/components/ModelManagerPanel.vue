@@ -1,8 +1,7 @@
 <script setup lang="ts">
-// Model management tab (spec.md §17.2/17.3, docs/plans/2026-07-13-model-config-management.md
-// Task 5) - lets a user create/edit/delete/test entries in config/models.yaml through the
-// API added in Tasks 1-3 instead of hand-editing the file. Reuses useCouncil's `models`
-// ref and `refreshModels()` (Task 4) as the single source of truth: every write here calls
+// Model management tab (spec.md §17.2/17.3) - lets a user create/edit/delete/test entries
+// in config/models.yaml through the management API instead of hand-editing the file. Reuses useCouncil's `models`
+// ref and `refreshModels()` as the single source of truth: every write here calls
 // refreshModels() afterward rather than mutating `models` locally, so the role dropdowns in
 // SettingsModal's 一般 tab (and the sanitize watch in useCouncil.ts that fallback-clears a
 // deleted model's role selections) pick up the change through the exact same path a fresh
@@ -93,7 +92,7 @@ const formApiKeyEnv = ref('')
 const formSupportsJsonMode = ref(false)
 const formTimeoutSeconds = ref(120)
 const formCommandText = ref('')
-// Not rendered as inputs (round-trip only, per Task 5's fidelity requirement below) -
+// Not rendered as inputs (round-trip only, per the fidelity requirement below) -
 // carried through from the model being edited and sent back unchanged on save so a PUT
 // from this form never silently drops extra_body/pricing a human hand-edited into
 // models.yaml.

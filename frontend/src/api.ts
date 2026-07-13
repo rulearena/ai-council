@@ -150,7 +150,7 @@ const API_BASE = import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:5009'
 // Thrown by every *Json helper below on a non-2xx response. `detail` preserves the
 // response body's `detail` field verbatim - for /models write endpoints that's a 422
 // per-field array (`[{field, message}]`, see backend/ai_council/api.py's
-// RequestValidationError handler and save_model_or_422), which ModelManagerPanel (Task 5)
+// RequestValidationError handler and save_model_or_422), which ModelManagerPanel
 // needs to show inline per-field errors rather than a single flattened message.
 export class ApiError extends Error {
   readonly status: number

@@ -295,7 +295,7 @@ export function useCouncil() {
   // Keeps selectedModels/modelTestResults' keys in sync with whichever roster is active
   // right now (councilRoles, driven by activeModeSource - see the selectedMeeting watcher
   // below) AND sanitizes selectedModels against whichever models currently exist (models,
-  // refreshed by refreshModels() - see ModelManagerPanel in Task 5, which deletes/renames
+  // refreshed by refreshModels() - see ModelManagerPanel, which deletes/renames
   // models out from under an already-selected role). A role's current selection survives
   // as long as it's still a role in the roster *and* still a real model id; otherwise it
   // falls back to the first available model (spec.md 17.3's delete-fallback contract). A
@@ -440,7 +440,7 @@ export function useCouncil() {
 
   // Re-fetches the model list and lets the [councilRoles, models] watcher above (re-)sync
   // selectedModels/modelTestResults against it - the sole GET /models call site, reused by
-  // both startup (refreshAll) and ModelManagerPanel (Task 5) after a create/update/delete
+  // both startup (refreshAll) and ModelManagerPanel after a create/update/delete
   // so a freshly added/removed model shows up in the role dropdowns without a page reload.
   async function refreshModels() {
     models.value = await getModels()
