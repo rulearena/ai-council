@@ -14,7 +14,7 @@ from ai_council.api import ModelHealthCheckResult, ModelHealthCheckStore, create
 from ai_council.models.adapters import AdapterError, MockModelAdapter, ModelRequest, ModelResponse
 from ai_council.models.config import ModelConfigRepository
 
-TEST_BLUE_PROPOSE_TEMPLATE_HASH = "81abba70bd2c176005a3fd28dd13ef9bda68f441de574976e8d7161e23fb5f9d"
+TEST_BLUE_PROPOSE_TEMPLATE_HASH = "ea9d0dea0781c59af0e7a45d382fed40bfc3d4f90510011eb0d316f5746f89b8"
 TEST_OUTPUT_SCHEMA_HASH = "15a45919652be5c70d3fd1690a10d37f876f19a14b2a76cc0f21765def281377"
 
 
