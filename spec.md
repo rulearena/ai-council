@@ -548,7 +548,7 @@ config/models.yaml.example
 72. Docker Compose setup
 73. Containerized deployment
 74. Reverse proxy / production hosting guide
-75. Meeting reopen endpoint（誤按取消/結案的事件溯源復原：append `reopened` event，終端狀態投影需認得它）
+75. Meeting reopen endpoint（誤按取消/結案的事件溯源復原：append `reopened` event，終端狀態投影需認得它）（已完成 2026-07-13）
 76. 測試 flake：`test_api.py` 的 `wait_for_activity` 2 秒 deadline 在機器負載下偏緊（背景執行緒跑四步偶爾超時；單獨重跑即過）——放寬到 5 秒（已完成 2026-07-13）
 
 > **個人版範圍外（2026-07-13 裁定）**：本工具定位為單人自用，多人/帳號/工作區類項目（18、40–44、50–53）不再排程，保留編號僅供追溯。

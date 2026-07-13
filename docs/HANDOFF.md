@@ -17,10 +17,9 @@
 
 ## 2. 待辦佇列（優先序）
 
-1. **Reopen endpoint**（backlog 75）：append `reopened` event；`api.py` 的 `project_meeting_status`/`reject_terminal_meeting` 與 `runner._is_terminal` 的終端判定需認得它（掃到 cancelled/closed 之後若有 reopened 則不算終端）。
-2. **案卷 Phase 1**（backlog 78）：per-role 可見的文件注入。沿用 slice B 建的 inputs 注入機制（`PromptRenderer.render(inputs=...)`）+ `{{ case_files }}` 佔位符。**不做 RAG**（backlog 79 明文延後）。
-3. **Slice D：彙整匿名化 hook 啟用**（spec §16.3、§16.7 切片 D）：slice C 已預留彙整輸入組裝點，預設仍關閉。
-4. 新角色立繪：使用者自行產圖，不是 agent 工作。
+1. **案卷 Phase 1**（backlog 78）：per-role 可見的文件注入。沿用 slice B 建的 inputs 注入機制（`PromptRenderer.render(inputs=...)`）+ `{{ case_files }}` 佔位符。**不做 RAG**（backlog 79 明文延後）。
+2. **Slice D：彙整匿名化 hook 啟用**（spec §16.3、§16.7 切片 D）：slice C 已預留彙整輸入組裝點，預設仍關閉。
+3. 新角色立繪：使用者自行產圖，不是 agent 工作。
 
 ## 3. 架構關鍵事實（改動前必讀）
 
