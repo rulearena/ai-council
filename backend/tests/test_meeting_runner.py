@@ -1267,6 +1267,164 @@ def test_parallel_fanout_and_synthesis_use_their_step_output_schemas(tmp_path: P
     ]
 
 
+def test_parallel_member_parse_failure_is_recorded_then_auto_retried(
+    tmp_path: Path,
+) -> None:
+    class RetryFirstMemberAdapter:
+        first_member_calls = 0
+
+        def complete(self, request: ModelRequest) -> ModelResponse:
+            if request.model_config.id == "mock-member-1":
+                self.first_member_calls += 1
+                if self.first_member_calls == 1:
+                    return ModelResponse(raw_output="not json")
+                return ModelResponse(raw_output='{"value":"member 1 recovered"}')
+            if request.model_config.id == "mock-member-2":
+                return ModelResponse(raw_output='{"value":"member 2"}')
+            return ModelResponse(raw_output='{"value":"synthesis"}')
+
+    custom_schema_id = "test-output/v1"
+    plan = ParallelPlan(
+        members=[
+            ParallelMemberStep(
+                step_id="member-1",
+                role="Member-1",
+                template_name="brainstorm_member",
+                display_name="委員 1",
+                instance_prompt="",
+                index=1,
+                output_schema_id=custom_schema_id,
+            ),
+            ParallelMemberStep(
+                step_id="member-2",
+                role="Member-2",
+                template_name="brainstorm_member",
+                display_name="委員 2",
+                instance_prompt="",
+                index=2,
+                output_schema_id=custom_schema_id,
+            ),
+        ],
+        synthesis=StepDefinition(
+            "synthesis",
+            "Moderator",
+            "brainstorm_synthesis",
+            custom_schema_id,
+        ),
+    )
+    registry = OutputSchemaRegistry(
+        [OutputSchemaCodec(custom_schema_id, TEST_ONLY_SCHEMA, TestOnlyParser())]
+    )
+    runner = build_runner(
+        tmp_path,
+        adapter=RetryFirstMemberAdapter(),
+        templates=("brainstorm_member", "brainstorm_synthesis"),
+        extra_placeholders=" {{ fanout_outputs }}",
+        output_schemas=registry,
+    )
+
+    runner.start_parallel(
+        plan=plan,
+        meeting_id="meeting-1",
+        topic="schema retry",
+        model_assignments={
+            "Member-1": ModelConfig(id="mock-member-1", adapter="mock"),
+            "Member-2": ModelConfig(id="mock-member-2", adapter="mock"),
+            "Moderator": ModelConfig(id="mock-moderator", adapter="mock"),
+        },
+    )
+
+    events = runner.repository.read_events("meeting-1")
+    assert [
+        (event["step_id"], event["attempt"], event["status"])
+        for event in events
+    ] == [
+        ("fanout-1-member-1", 1, "failed"),
+        ("fanout-1-member-1", 2, "completed"),
+        ("fanout-1-member-2", 1, "completed"),
+        ("synthesis-1", 1, "completed"),
+    ]
+    assert {event["output_schema_id"] for event in events} == {custom_schema_id}
+    assert len({event["output_schema_hash"] for event in events}) == 1
+
+
+def test_parallel_member_two_parse_failures_wait_for_manual_attempt_three(
+    tmp_path: Path,
+) -> None:
+    custom_schema_id = "test-output/v1"
+    member = ParallelMemberStep(
+        step_id="member-1",
+        role="Member-1",
+        template_name="brainstorm_member",
+        display_name="委員 1",
+        instance_prompt="",
+        index=1,
+        output_schema_id=custom_schema_id,
+    )
+    plan = ParallelPlan(
+        members=[member],
+        synthesis=StepDefinition(
+            "synthesis",
+            "Moderator",
+            "brainstorm_synthesis",
+            custom_schema_id,
+        ),
+    )
+    registry = OutputSchemaRegistry(
+        [OutputSchemaCodec(custom_schema_id, TEST_ONLY_SCHEMA, TestOnlyParser())]
+    )
+    runner = build_runner(
+        tmp_path,
+        adapter=FakeAdapter(
+            [
+                "not json",
+                "still not json",
+                '{"value":"member recovered"}',
+                '{"value":"synthesis"}',
+            ]
+        ),
+        templates=("brainstorm_member", "brainstorm_synthesis"),
+        extra_placeholders=" {{ fanout_outputs }}",
+        output_schemas=registry,
+    )
+    assignments = {
+        "Member-1": ModelConfig(id="mock-member", adapter="mock"),
+        "Moderator": ModelConfig(id="mock-moderator", adapter="mock"),
+    }
+
+    runner.start_parallel(
+        plan=plan,
+        meeting_id="meeting-1",
+        topic="schema retry",
+        model_assignments=assignments,
+    )
+
+    events = runner.repository.read_events("meeting-1")
+    assert [(event["attempt"], event["status"]) for event in events] == [
+        (1, "failed"),
+        (2, "failed"),
+    ]
+
+    runner.retry_failed_parallel_step(
+        plan=plan,
+        meeting_id="meeting-1",
+        step_id="fanout-1-member-1",
+        topic="schema retry",
+        model_assignments=assignments,
+    )
+
+    events = runner.repository.read_events("meeting-1")
+    assert [
+        (event["step_id"], event["attempt"], event["status"])
+        for event in events
+    ] == [
+        ("fanout-1-member-1", 1, "failed"),
+        ("fanout-1-member-1", 2, "failed"),
+        ("fanout-1-member-1", 3, "completed"),
+        ("synthesis-1", 1, "completed"),
+    ]
+
+
 def test_parallel_runner_can_anonymize_synthesis_inputs(tmp_path: Path) -> None:
     outputs = [
         json.dumps(

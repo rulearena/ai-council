@@ -555,7 +555,7 @@ class MeetingRunner:
         with ThreadPoolExecutor(max_workers=len(members)) as executor:
             futures = [
                 executor.submit(
-                    self._build_parallel_member_event,
+                    self._build_parallel_member_events,
                     meeting_id=meeting_id,
                     topic=topic,
                     model_assignments=model_assignments,
@@ -566,13 +566,14 @@ class MeetingRunner:
                 )
                 for member in members
             ]
-            events = [future.result() for future in futures]
-        for event in events:
-            if self._is_terminal(meeting_id):
-                return
-            self.repository.append_event(meeting_id, event)
+            event_groups = [future.result() for future in futures]
+        for events in event_groups:
+            for event in events:
+                if self._is_terminal(meeting_id):
+                    return
+                self.repository.append_event(meeting_id, event)
 
-    def _build_parallel_member_event(
+    def _build_parallel_member_events(
         self,
         *,
         meeting_id: str,
@@ -582,7 +583,7 @@ class MeetingRunner:
         inputs: dict[str, str] | None,
         round_number: int,
         attempt: int,
-    ) -> dict[str, object]:
+    ) -> list[dict[str, object]]:
         config = model_assignments[member.role]
         event_step_id = f"fanout-{round_number}-member-{member.index}"
         output_schema = self.output_schemas.get(member.output_schema_id)
@@ -605,43 +606,86 @@ class MeetingRunner:
                 },
             ),
         )
-        try:
-            response = self.adapters.by_name[config.adapter].complete(
-                ModelRequest(prompt=prompt, model_config=config, meeting_id=meeting_id)
-            )
-            parsed_output = output_schema.parse(response.raw_output)
-        except (AdapterError, OutputParseError, KeyError) as error:
-            return {
-                "event_id": f"{meeting_id}:{event_step_id}:attempt-{attempt}:failed",
+        events: list[dict[str, object]] = []
+        for current_attempt in (attempt, attempt + 1):
+            try:
+                response = self.adapters.by_name[config.adapter].complete(
+                    ModelRequest(prompt=prompt, model_config=config, meeting_id=meeting_id)
+                )
+                parsed_output = output_schema.parse(response.raw_output)
+            except OutputParseError as error:
+                events.append(
+                    self._parallel_member_failure_event(
+                        meeting_id=meeting_id,
+                        event_step_id=event_step_id,
+                        member=member,
+                        round_number=round_number,
+                        attempt=current_attempt,
+                        error=error,
+                        prompt_metadata=prompt_metadata,
+                    )
+                )
+                continue
+            except (AdapterError, KeyError) as error:
+                events.append(
+                    self._parallel_member_failure_event(
+                        meeting_id=meeting_id,
+                        event_step_id=event_step_id,
+                        member=member,
+                        round_number=round_number,
+                        attempt=current_attempt,
+                        error=error,
+                        prompt_metadata=prompt_metadata,
+                    )
+                )
+                return events
+
+            completed_event: dict[str, object] = {
+                "event_id": (
+                    f"{meeting_id}:{event_step_id}:attempt-{current_attempt}:completed"
+                ),
                 "meeting_id": meeting_id,
                 "step_id": event_step_id,
                 "base_step_id": member.step_id,
                 "round": round_number,
                 "role": member.role,
-                "attempt": attempt,
-                "status": "failed",
-                "error": str(error),
+                "attempt": current_attempt,
+                "model_config_id": config.id,
                 **prompt_metadata,
+                "prompt_messages": [{"role": "user", "content": prompt}],
+                "raw_output": response.raw_output,
+                "parsed_output": parsed_output,
+                "status": "completed",
             }
+            if response.token_usage is not None:
+                completed_event["token_usage"] = response.token_usage
+            events.append(completed_event)
+            return events
+        return events
 
-        completed_event: dict[str, object] = {
-            "event_id": f"{meeting_id}:{event_step_id}:attempt-{attempt}:completed",
+    @staticmethod
+    def _parallel_member_failure_event(
+        *,
+        meeting_id: str,
+        event_step_id: str,
+        member: ParallelMemberStep,
+        round_number: int,
+        attempt: int,
+        error: Exception,
+        prompt_metadata: dict[str, object],
+    ) -> dict[str, object]:
+        return {
+            "event_id": f"{meeting_id}:{event_step_id}:attempt-{attempt}:failed",
             "meeting_id": meeting_id,
             "step_id": event_step_id,
             "base_step_id": member.step_id,
             "round": round_number,
             "role": member.role,
             "attempt": attempt,
-            "model_config_id": config.id,
+            "status": "failed",
+            "error": str(error),
             **prompt_metadata,
-            "prompt_messages": [{"role": "user", "content": prompt}],
-            "raw_output": response.raw_output,
-            "parsed_output": parsed_output,
-            "status": "completed",
         }
-        if response.token_usage is not None:
-            completed_event["token_usage"] = response.token_usage
-        return completed_event
 
     def _run_parallel_synthesis_if_ready(
         self,
