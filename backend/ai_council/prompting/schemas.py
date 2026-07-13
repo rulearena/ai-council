@@ -12,6 +12,7 @@ from ai_council.prompting.parser import (
 )
 
 DEFAULT_OUTPUT_SCHEMA_ID = "role-output/v1"
+STRUCTURED_VERDICT_V1_ID = "structured-verdict/v1"
 ROLE_OUTPUT_V1_SCHEMA = (
     '{"summary":"string","arguments":[{"title":"string","detail":"string"}],'
     '"risks":[{"title":"string","detail":"string"}],"recommendation":"string"}'
@@ -83,7 +84,7 @@ DEFAULT_OUTPUT_SCHEMA_REGISTRY = OutputSchemaRegistry(
             parser=RoleOutputParser(),
         ),
         OutputSchemaCodec(
-            id="structured-verdict/v1",
+            id=STRUCTURED_VERDICT_V1_ID,
             schema=STRUCTURED_VERDICT_V1_SCHEMA,
             parser=StructuredVerdictParser(),
         ),

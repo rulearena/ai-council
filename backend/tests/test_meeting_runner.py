@@ -245,6 +245,7 @@ def test_directed_response_uses_step_output_schema_for_prompt_parser_and_event(
 
     event = runner.repository.read_events("meeting-1")[-1]
     assert TEST_ONLY_SCHEMA in adapter.requests[0].prompt
+    assert adapter.requests[0].output_schema_id == custom_schema_id
     assert event["output_schema_id"] == custom_schema_id
     assert event["output_schema_hash"] == TEST_ONLY_SCHEMA_HASH
     assert event["parsed_output"] == {"value": "custom parsed"}
@@ -1299,9 +1300,10 @@ def test_parallel_fanout_and_synthesis_use_their_step_output_schemas(tmp_path: P
     registry = OutputSchemaRegistry(
         [OutputSchemaCodec(custom_schema_id, TEST_ONLY_SCHEMA, TestOnlyParser())]
     )
+    adapter = FakeAdapter(['{"value":"member"}', '{"value":"synthesis"}'])
     runner = build_runner(
         tmp_path,
-        adapter=FakeAdapter(['{"value":"member"}', '{"value":"synthesis"}']),
+        adapter=adapter,
         templates=("brainstorm_member", "brainstorm_synthesis"),
         extra_placeholders=" {{ fanout_outputs }}",
         output_schemas=registry,
@@ -1325,6 +1327,10 @@ def test_parallel_fanout_and_synthesis_use_their_step_output_schemas(tmp_path: P
     assert [event["parsed_output"] for event in events] == [
         {"value": "member"},
         {"value": "synthesis"},
+    ]
+    assert [request.output_schema_id for request in adapter.requests] == [
+        custom_schema_id,
+        custom_schema_id,
     ]
 
 

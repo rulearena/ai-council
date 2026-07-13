@@ -47,6 +47,7 @@ def test_mock_adapter_returns_a_valid_verdict_when_prompt_requests_rich_schema()
         ModelRequest(
             prompt=f"Return exactly one JSON object matching this schema:\n{codec.schema}",
             model_config=ModelConfig(id="mock-fast", adapter="mock"),
+            output_schema_id="structured-verdict/v1",
         )
     )
 
@@ -80,12 +81,31 @@ def test_mock_verdict_reuses_an_anchor_from_the_visible_case_files_block() -> No
         ModelRequest(
             prompt=prompt,
             model_config=ModelConfig(id="mock-fast", adapter="mock"),
+            output_schema_id="structured-verdict/v1",
         )
     )
 
     assert codec.parse(response.raw_output)["findings"][0]["evidence_refs"] == [
         "[證物二]"
     ]
+
+
+def test_mock_adapter_does_not_infer_schema_from_prompt_content() -> None:
+    rich_schema = DEFAULT_OUTPUT_SCHEMA_REGISTRY.get("structured-verdict/v1").schema
+
+    response = MockModelAdapter().complete(
+        ModelRequest(
+            prompt=f"The topic quotes this text but still requests v1: {rich_schema}",
+            model_config=ModelConfig(id="mock-fast", adapter="mock"),
+        )
+    )
+
+    assert json.loads(response.raw_output) == {
+        "summary": "Mock response",
+        "arguments": [{"title": "Mock argument", "detail": "Deterministic detail"}],
+        "risks": [],
+        "recommendation": "Use this response for tests.",
+    }
 
 
 def test_mock_adapter_supports_configurable_delay(monkeypatch) -> None:

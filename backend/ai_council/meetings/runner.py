@@ -450,6 +450,7 @@ class MeetingRunner:
                 ModelRequest(
                     prompt=prompt,
                     model_config=config,
+                    output_schema_id=output_schema.id,
                     meeting_id=meeting_id,
                     on_token_delta=emit_token_delta,
                 )
@@ -612,7 +613,12 @@ class MeetingRunner:
                 return events
             try:
                 response = self.adapters.by_name[config.adapter].complete(
-                    ModelRequest(prompt=prompt, model_config=config, meeting_id=meeting_id)
+                    ModelRequest(
+                        prompt=prompt,
+                        model_config=config,
+                        output_schema_id=output_schema.id,
+                        meeting_id=meeting_id,
+                    )
                 )
                 parsed_output = output_schema.parse(response.raw_output)
             except OutputParseError as error:

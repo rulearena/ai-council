@@ -13,7 +13,10 @@ from dataclasses import dataclass
 from typing import Callable, TypedDict
 
 from ai_council.models.config import ModelConfig
-from ai_council.prompting.schemas import STRUCTURED_VERDICT_V1_SCHEMA
+from ai_council.prompting.schemas import (
+    DEFAULT_OUTPUT_SCHEMA_ID,
+    STRUCTURED_VERDICT_V1_ID,
+)
 
 ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
 
@@ -26,6 +29,7 @@ class AdapterError(RuntimeError):
 class ModelRequest:
     prompt: str
     model_config: ModelConfig
+    output_schema_id: str = DEFAULT_OUTPUT_SCHEMA_ID
     meeting_id: str | None = None
     on_token_delta: Callable[[str], None] | None = None
 
@@ -68,7 +72,7 @@ class MockModelAdapter:
                 "conditions": ["Verify the result."],
                 "unresolved_questions": ["Is more evidence available?"],
             }
-            if STRUCTURED_VERDICT_V1_SCHEMA in request.prompt
+            if request.output_schema_id == STRUCTURED_VERDICT_V1_ID
             else {
                 "summary": "Mock response",
                 "arguments": [
