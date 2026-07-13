@@ -549,6 +549,8 @@ config/models.yaml.example
 73. Containerized deployment
 74. Reverse proxy / production hosting guide
 75. Meeting reopen endpoint（誤按取消/結案的事件溯源復原：append `reopened` event，終端狀態投影需認得它）
+76. 測試 flake：`test_api.py` 的 `wait_for_activity` 2 秒 deadline 在機器負載下偏緊（背景執行緒跑四步偶爾超時；單獨重跑即過）——放寬到 5 秒
+77. Slice B 審查遺留（皆 non-blocker）：metadata 的 `mode_id` 指向已從 modes.yaml 移除的模式時 `GET /meetings` 整組 400（單筆髒資料炸全列表）；`"red-blue"` 預設值字面值散落三處可抽 DEFAULT_MODE_ID 常數；create 驗證錯誤碼不對稱（unknown mode 400 vs unknown participant model 404）；NewCaseModal submit 失敗仍關閉 modal（使用者輸入遺失）
 
 ## 16. 會議模式系統（Mode System）設計
 
