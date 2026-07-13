@@ -1032,10 +1032,18 @@ test('courtroom mode runs its full four-step relay and renders the Prosecutor/De
   // courtroom's mode-derived plan (courtroom-charge -> courtroom-defense ->
   // courtroom-rebuttal -> courtroom-verdict), not the red-blue fixed round.
   await page.getByTestId('records-button').click()
-  await expect(page.getByTestId('step-timeline')).toContainText('courtroom-charge')
-  await expect(page.getByTestId('step-timeline')).toContainText('courtroom-defense')
-  await expect(page.getByTestId('step-timeline')).toContainText('courtroom-rebuttal')
-  await expect(page.getByTestId('step-timeline')).toContainText('courtroom-verdict')
+  const courtroomStepIds = ['courtroom-charge', 'courtroom-defense', 'courtroom-rebuttal', 'courtroom-verdict']
+  for (const stepId of courtroomStepIds) {
+    await expect(page.getByTestId('step-timeline')).toContainText(stepId)
+  }
+  // Presence alone (the loop above) would also pass if the steps ran out of order -
+  // execution order is the relay executor's core guarantee, so read each row's step_id
+  // (RecordsDrawer.vue renders `events` - and therefore these rows - in event order) and
+  // assert courtroom's four steps appear in ascending position, not just somewhere.
+  const renderedStepIds = await page.getByTestId('step-timeline').locator('.timeline-row strong').allTextContents()
+  const observedPositions = courtroomStepIds.map((stepId) => renderedStepIds.indexOf(stepId))
+  expect(observedPositions.every((position) => position >= 0)).toBe(true)
+  expect(observedPositions).toEqual([...observedPositions].sort((a, b) => a - b))
   await page.getByTestId('records-close-button').click()
 
   await page.getByTestId('past-topics-button').click()
@@ -1125,6 +1133,12 @@ test('opening a courtroom meeting switches the stage to the courtroom scene, and
     'data-scene',
     'courtroom',
   )
+  // MeetingsModal.selectMeeting() sets selectedMeeting (which the scene assertion above
+  // reacts to) *before* it emits close - openMeeting() itself resolves first, then the
+  // modal closes as a separate step. Without waiting for the modal to actually be gone,
+  // the very next past-topics-button click below can race its still-open (or
+  // still-closing) overlay and land on the wrong target.
+  await expect(page.getByTestId('meetings-modal')).not.toBeVisible()
 
   await page.getByTestId('past-topics-button').click()
   for (const topic of [courtroomTopic, redBlueTopic]) {
