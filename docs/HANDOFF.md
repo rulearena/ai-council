@@ -11,7 +11,7 @@
 | Mode system slice A | `981f355` | 前端席位動態化、模式卡片牆、本地 catalog |
 | Mode system slice B | `059dcbe` | `config/modes.yaml` + `GET /modes` + relay 執行器參數化 + 法庭審理/辯論上線（實作計畫留檔：`docs/plans/2026-07-12-mode-system-slice-b.md`） |
 | Model config mgmt（spec §17） | `ac44fef` | 模型 CRUD API + Settings 模型管理分頁（實作計畫：`docs/plans/2026-07-13-model-config-management.md`） |
-| Mode system slice C | 本次分支 | parallel 執行器 + per-member retry/synthesis gating + 腦力激盪上線；六帽/盲測設定與 prompt 補齊（實作計畫：`docs/plans/2026-07-13-mode-system-slice-c.md`） |
+| Mode system slice C | `711640d` | parallel 執行器 + per-member retry/synthesis gating + 腦力激盪上線；六帽/盲測設定與 prompt 補齊（實作計畫：`docs/plans/2026-07-13-mode-system-slice-c.md`） |
 
 **驗收基線（任何改動後不得低於此）**：後端 `pytest` **180 passed**；前端 `npm run build` 綠；e2e **28/28**。
 
@@ -60,6 +60,6 @@
 
 ## 6. 交接時的未結事項
 
-- `mode-system-slice-c` worktree/branch 完成待 merge；驗收已通過：backend 180 passed、frontend build 綠、e2e 28/28。
+- Mode system slice C 已 merge 回 `main`（`711640d`）；驗收已通過：backend 180 passed、frontend build 綠、e2e 28/28。
 - spec §16 slice D 未實作；§17 已完成。
 - 使用者已裁定：個人版不做多人/帳號（backlog 有註記）；案卷 Phase 1 不做 RAG。

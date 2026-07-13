@@ -480,7 +480,7 @@ config/models.yaml.example
 4. Markdown 反向解析：從 `transcript.md` 還原狀態
 5. 更多 provider adapters：Anthropic、Gemini 等（已完成：anthropic-http / gemini-http adapters 已落地）
 6. Subscription model CLI bridge 進階穩定化與跨版本相容性
-7. Parallel brainstorming mode（設計已定，見第 16 節；slice C 待實作——執行器規格見 §16.3）
+7. Parallel brainstorming mode（已完成 2026-07-13：brainstorm 上線，six-hats / persona-testing 設定補齊；執行器規格見 §16.3）
 8. Custom roster and topology（設計已定，見第 16 節）
 9. Drag-and-drop sequence/topology builder
 10. Conditional branching between roles
