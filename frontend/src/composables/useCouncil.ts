@@ -294,16 +294,23 @@ export function useCouncil() {
 
   // Keeps selectedModels/modelTestResults' keys in sync with whichever roster is active
   // right now (councilRoles, driven by activeModeSource - see the selectedMeeting watcher
-  // below). Existing values for roles that are still around survive a mode switch;
-  // a role that's newly in the roster gets the first available model (selectedModels) or
-  // an 'unknown' test result (modelTestResults). `immediate: true` also does this
-  // composable's original one-time startup seeding, so no separate init is needed.
+  // below) AND sanitizes selectedModels against whichever models currently exist (models,
+  // refreshed by refreshModels() - see ModelManagerPanel in Task 5, which deletes/renames
+  // models out from under an already-selected role). A role's current selection survives
+  // as long as it's still a role in the roster *and* still a real model id; otherwise it
+  // falls back to the first available model (spec.md 17.3's delete-fallback contract). A
+  // role that's newly in the roster gets the same fallback. `immediate: true` also does
+  // this composable's original one-time startup seeding, so no separate init is needed.
   watch(
-    councilRoles,
-    (roles) => {
+    [councilRoles, models],
+    ([roles]) => {
       const firstModel = models.value[0]?.id ?? ''
+      const validModelIds = new Set(models.value.map((model) => model.id))
       selectedModels.value = Object.fromEntries(
-        roles.map((role) => [role, selectedModels.value[role] || firstModel]),
+        roles.map((role) => {
+          const current = selectedModels.value[role]
+          return [role, current && validModelIds.has(current) ? current : firstModel]
+        }),
       )
       modelTestResults.value = Object.fromEntries(
         roles.map((role) => [
@@ -431,18 +438,22 @@ export function useCouncil() {
 
   onUnmounted(() => closeEventStream?.())
 
+  // Re-fetches the model list and lets the [councilRoles, models] watcher above (re-)sync
+  // selectedModels/modelTestResults against it - the sole GET /models call site, reused by
+  // both startup (refreshAll) and ModelManagerPanel (Task 5) after a create/update/delete
+  // so a freshly added/removed model shows up in the role dropdowns without a page reload.
+  async function refreshModels() {
+    models.value = await getModels()
+  }
+
   async function refreshAll() {
     error.value = ''
     // Failure here doesn't block startup - refreshModeCatalog() already catches and
     // leaves modeCatalog on its local fallback data (see modes.ts), so the rest of
     // refreshAll proceeds exactly as it would if the backend catalog had loaded.
     await refreshModeCatalog()
-    models.value = await getModels()
+    await refreshModels()
     meetings.value = await getMeetings()
-    const firstModel = models.value[0]?.id ?? ''
-    selectedModels.value = Object.fromEntries(
-      councilRoles.value.map((role) => [role, selectedModels.value[role] || firstModel]),
-    )
     if (selectedMeeting.value) {
       await openMeeting(selectedMeeting.value.meeting_id)
     }
@@ -833,6 +844,7 @@ export function useCouncil() {
     currentStepProgress,
     // actions
     refreshAll,
+    refreshModels,
     createNewMeeting,
     openMeeting,
     startSelectedMeeting,

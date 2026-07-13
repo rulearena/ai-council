@@ -147,8 +147,58 @@ export type MeetingEventStreamMessage = {
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:5009'
 
+// Thrown by every *Json helper below on a non-2xx response. `detail` preserves the
+// response body's `detail` field verbatim - for /models write endpoints that's a 422
+// per-field array (`[{field, message}]`, see backend/ai_council/api.py's
+// RequestValidationError handler and save_model_or_422), which ModelManagerPanel (Task 5)
+// needs to show inline per-field errors rather than a single flattened message.
+export class ApiError extends Error {
+  readonly status: number
+  readonly detail?: unknown
+
+  constructor(message: string, status: number, detail?: unknown) {
+    super(message)
+    this.name = 'ApiError'
+    this.status = status
+    this.detail = detail
+  }
+}
+
+async function readErrorDetail(response: Response): Promise<unknown> {
+  try {
+    const body = await response.json()
+    return body && typeof body === 'object' && 'detail' in body ? (body as { detail: unknown }).detail : undefined
+  } catch {
+    return undefined
+  }
+}
+
+export type ModelConfigPayload = {
+  adapter: string
+  base_url?: string | null
+  model?: string | null
+  api_key_env?: string | null
+  supports_json_mode?: boolean
+  extra_body?: Record<string, unknown>
+  pricing?: ModelPricing | null
+  command?: string[] | null
+  timeout_seconds?: number
+}
+
 export async function getModels(): Promise<ModelConfig[]> {
   return getJson('/models')
+}
+
+export async function createModel(id: string, payload: ModelConfigPayload): Promise<ModelConfig> {
+  return postJson('/models', { id, ...payload })
+}
+
+export async function updateModel(id: string, payload: ModelConfigPayload): Promise<ModelConfig> {
+  return putJson(`/models/${id}`, payload)
+}
+
+export async function deleteModel(id: string): Promise<{ id: string; warning: string | null }> {
+  return deleteJson(`/models/${id}`)
 }
 
 export async function testModel(modelId: string): Promise<ModelTestResult> {
@@ -271,7 +321,9 @@ export function subscribeMeetingEvents(
 
 async function getJson<T>(path: string): Promise<T> {
   const response = await fetch(`${API_BASE}${path}`)
-  if (!response.ok) throw new Error(`GET ${path} failed: ${response.status}`)
+  if (!response.ok) {
+    throw new ApiError(`GET ${path} failed: ${response.status}`, response.status, await readErrorDetail(response))
+  }
   return response.json()
 }
 
@@ -281,7 +333,9 @@ async function postJson<T>(path: string, body: unknown): Promise<T> {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
   })
-  if (!response.ok) throw new Error(`POST ${path} failed: ${response.status}`)
+  if (!response.ok) {
+    throw new ApiError(`POST ${path} failed: ${response.status}`, response.status, await readErrorDetail(response))
+  }
   return response.json()
 }
 
@@ -291,7 +345,17 @@ async function putJson<T>(path: string, body: unknown): Promise<T> {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
   })
-  if (!response.ok) throw new Error(`PUT ${path} failed: ${response.status}`)
+  if (!response.ok) {
+    throw new ApiError(`PUT ${path} failed: ${response.status}`, response.status, await readErrorDetail(response))
+  }
+  return response.json()
+}
+
+async function deleteJson<T>(path: string): Promise<T> {
+  const response = await fetch(`${API_BASE}${path}`, { method: 'DELETE' })
+  if (!response.ok) {
+    throw new ApiError(`DELETE ${path} failed: ${response.status}`, response.status, await readErrorDetail(response))
+  }
   return response.json()
 }
 
