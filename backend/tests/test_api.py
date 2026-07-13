@@ -1154,6 +1154,30 @@ def test_meeting_close_endpoint_records_closure_and_projects_transcript(
     assert "**Status:** closed" in transcript
 
 
+def test_reopen_endpoint_restores_terminal_meeting_to_open_state(tmp_path: Path) -> None:
+    app = create_test_app(tmp_path)
+    client = TestClient(app)
+    meeting_id = client.post("/meetings", json={"topic": "誤按結案"}).json()["meeting_id"]
+    client.post(f"/meetings/{meeting_id}/close")
+
+    response = client.post(f"/meetings/{meeting_id}/reopen")
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "open"
+    reopened = client.get(f"/meetings/{meeting_id}").json()
+    assert reopened["status"] == "open"
+    assert reopened["activity_status"] == "waiting"
+    assert [event["status"] for event in reopened["events"]] == ["closed", "reopened"]
+
+    message_response = client.post(
+        f"/meetings/{meeting_id}/messages",
+        json={"content": "結案是誤按，補充脈絡。"},
+    )
+
+    assert message_response.status_code == 200
+    assert client.get(f"/meetings/{meeting_id}").json()["status"] == "open"
+
+
 def test_update_meeting_tags_replaces_tag_list(tmp_path: Path) -> None:
     app = create_test_app(tmp_path)
     client = TestClient(app)

@@ -18,6 +18,7 @@ REQUIRED_JSON_SCHEMA = (
     '"risks":[{"title":"string","detail":"string"}],"recommendation":"string"}'
 )
 REQUIRED_JSON_SCHEMA_HASH = hashlib.sha256(REQUIRED_JSON_SCHEMA.encode("utf-8")).hexdigest()
+LIFECYCLE_STATUSES = {"cancelled", "closed", "reopened"}
 
 
 class ModelAdapter(Protocol):
@@ -666,10 +667,12 @@ class MeetingRunner:
         }
 
     def _is_terminal(self, meeting_id: str) -> bool:
-        return any(
-            event.get("status") in {"cancelled", "closed"}
-            for event in self.repository.read_events(meeting_id)
-        )
+        latest_lifecycle_status = None
+        for event in self.repository.read_events(meeting_id):
+            status = event.get("status")
+            if status in LIFECYCLE_STATUSES:
+                latest_lifecycle_status = status
+        return latest_lifecycle_status in {"cancelled", "closed"}
 
     def _latest_event_for_step(self, meeting_id: str, step_id: str) -> dict[str, object] | None:
         matching_events = [

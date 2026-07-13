@@ -17,6 +17,7 @@ import {
   getTranscript,
   requestRoleResponse,
   requestRoleSequence,
+  reopenMeeting,
   retryStep,
   startMeeting,
   subscribeMeetingEvents,
@@ -339,9 +340,12 @@ export function useCouncil() {
   )
 
   const events = computed(() => selectedMeeting.value?.events ?? [])
-  const isTerminalMeeting = computed(() =>
-    events.value.some((event) => event.status === 'closed' || event.status === 'cancelled'),
-  )
+  const isTerminalMeeting = computed(() => {
+    const lifecycleEvent = [...events.value]
+      .reverse()
+      .find((event) => ['closed', 'cancelled', 'reopened'].includes(event.status))
+    return lifecycleEvent?.status === 'closed' || lifecycleEvent?.status === 'cancelled'
+  })
   const isMeetingRunning = computed(() => selectedMeeting.value?.activity_status === 'running')
   const startButtonLabel = computed(() => {
     if (isMeetingRunning.value) return '執行中...'
@@ -639,6 +643,15 @@ export function useCouncil() {
     })
   }
 
+  async function reopenSelectedMeeting() {
+    if (!selectedMeeting.value) return
+    if (!window.confirm('確定重新開啟這場會議？')) return
+    await runAction(async () => {
+      await reopenMeeting(selectedMeeting.value!.meeting_id)
+      await openMeeting(selectedMeeting.value!.meeting_id)
+    })
+  }
+
   async function deleteExistingMeeting(meeting: Meeting) {
     if (!window.confirm(`確定刪除「${meeting.topic}」？此操作無法復原。`)) return
     await runAction(async () => {
@@ -884,6 +897,7 @@ export function useCouncil() {
     startOrContinueMeeting,
     cancelSelectedMeeting,
     closeSelectedMeeting,
+    reopenSelectedMeeting,
     deleteExistingMeeting,
     editMeetingTags,
     toggleMeetingPinned,

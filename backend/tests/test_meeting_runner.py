@@ -707,6 +707,54 @@ def test_runner_terminal_events_are_idempotent(tmp_path: Path) -> None:
     ]
 
 
+def test_runner_allows_steps_after_reopened_terminal_event(tmp_path: Path) -> None:
+    adapter = FakeAdapter([VALID_OUTPUT] * 4)
+    runner = build_runner(tmp_path, adapter=adapter)
+    runner.repository.append_event(
+        "meeting-1",
+        {
+            "event_id": "meeting-1:closed",
+            "meeting_id": "meeting-1",
+            "step_id": "meeting",
+            "role": "System",
+            "attempt": 1,
+            "status": "closed",
+        },
+    )
+    runner.repository.append_event(
+        "meeting-1",
+        {
+            "event_id": "meeting-1:reopened:1",
+            "meeting_id": "meeting-1",
+            "step_id": "meeting",
+            "role": "System",
+            "attempt": 1,
+            "status": "reopened",
+        },
+    )
+
+    runner.start(
+        plan=RED_BLUE_PLAN,
+        meeting_id="meeting-1",
+        topic="先做後端？",
+        model_assignments={
+            "Blue": ModelConfig(id="mock-blue", adapter="mock"),
+            "Red": ModelConfig(id="mock-red", adapter="mock"),
+            "Judge": ModelConfig(id="mock-judge", adapter="mock"),
+        },
+    )
+
+    events = strip_created_at(runner.repository.read_events("meeting-1"))
+    assert [event["status"] for event in events] == [
+        "closed",
+        "reopened",
+        "completed",
+        "completed",
+        "completed",
+        "completed",
+    ]
+
+
 def test_runner_completes_courtroom_flow(tmp_path: Path) -> None:
     runner = build_runner(
         tmp_path,

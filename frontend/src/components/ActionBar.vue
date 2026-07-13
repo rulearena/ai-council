@@ -21,6 +21,7 @@ const {
   startSelectedMeeting,
   cancelSelectedMeeting,
   closeSelectedMeeting,
+  reopenSelectedMeeting,
   requestSelectedRoleSequence,
 } = store
 
@@ -156,6 +157,15 @@ const roundStepsSummary = computed(() => (activeMode.value.steps ?? []).map((ste
               :disabled="loading || !selectedMeeting || isTerminalMeeting"
             >
               結案
+            </button>
+            <button
+              type="button"
+              class="btn btn-secondary"
+              data-testid="reopen-meeting-button"
+              @click="reopenSelectedMeeting"
+              :disabled="loading || !selectedMeeting || !isTerminalMeeting"
+            >
+              重新開啟
             </button>
           </div>
         </div>

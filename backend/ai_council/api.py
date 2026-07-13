@@ -455,6 +455,20 @@ def create_app(
         runner.close(meeting_id)
         return {"status": "closed"}
 
+    @app.post("/meetings/{meeting_id}/reopen")
+    def reopen_meeting(meeting_id: str) -> dict[str, str]:
+        metadata_store.get(meeting_id)
+        event = {
+            "event_id": f"{meeting_id}:reopened:{uuid.uuid4().hex}",
+            "meeting_id": meeting_id,
+            "step_id": "meeting",
+            "role": "System",
+            "attempt": 1,
+            "status": "reopened",
+        }
+        repository.append_event(meeting_id, event)
+        return {"status": "open"}
+
     @app.delete("/meetings/{meeting_id}", status_code=204)
     def delete_meeting(meeting_id: str) -> Response:
         metadata_store.get(meeting_id)
@@ -1048,10 +1062,9 @@ def _meeting_matches_query(
 
 
 def reject_terminal_meeting(repository: MeetingRepository, meeting_id: str) -> None:
-    for event in repository.read_events(meeting_id):
-        status = event.get("status")
-        if status in {"closed", "cancelled"}:
-            raise HTTPException(status_code=409, detail=f"Meeting is terminal: {status}")
+    status = latest_lifecycle_status(repository.read_events(meeting_id))
+    if status in {"closed", "cancelled"}:
+        raise HTTPException(status_code=409, detail=f"Meeting is terminal: {status}")
 
 
 def recover_interrupted_executions(
@@ -1080,11 +1093,19 @@ def _step_has_finished(
 
 
 def project_meeting_status(events: list[dict[str, Any]]) -> str:
+    status = latest_lifecycle_status(events)
+    if status in {"closed", "cancelled"}:
+        return status
+    return "open"
+
+
+def latest_lifecycle_status(events: list[dict[str, Any]]) -> str | None:
+    latest_status = None
     for event in events:
         status = event.get("status")
-        if status in {"closed", "cancelled"}:
-            return str(status)
-    return "open"
+        if status in {"closed", "cancelled", "reopened"}:
+            latest_status = str(status)
+    return latest_status
 
 
 def open_meetings_referencing_model(
@@ -1126,6 +1147,8 @@ def project_activity_status(events: list[dict[str, Any]]) -> str:
     if terminal_status in {"closed", "cancelled"}:
         return terminal_status
     latest_event = events[-1]
+    if latest_event.get("status") == "reopened":
+        return "waiting"
     if latest_event.get("status") == "failed":
         base_step_id = str(latest_event.get("base_step_id", latest_event.get("step_id", "")))
         if base_step_id.startswith("member-"):

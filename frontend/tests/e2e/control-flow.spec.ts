@@ -816,6 +816,31 @@ test('cancelling or closing a meeting asks for confirmation first', async ({ pag
     .click()
 })
 
+test('reopening a closed meeting restores discussion actions', async ({ page }) => {
+  await page.goto('/')
+
+  const topic = `E2E reopen ${Date.now()}`
+  await createMeetingViaNewCase(page, topic)
+  await setModelsInSettings(page, { blue: 'mock-fast', red: 'mock-fast', judge: 'mock-fast' })
+  await closeSettings(page)
+
+  await openAdvancedOptions(page)
+  page.once('dialog', (dialog) => dialog.accept())
+  await page.getByTestId('close-meeting-button').click()
+  await expect(page.getByTestId('operation-status')).toContainText('狀態：closed')
+  await expect(page.getByTestId('start-new-round-button')).toBeDisabled()
+
+  page.once('dialog', async (dialog) => {
+    expect(dialog.message()).toContain('重新開啟')
+    await dialog.accept()
+  })
+  await page.getByTestId('reopen-meeting-button').click()
+
+  await expect(page.getByTestId('operation-status')).toContainText('狀態：waiting')
+  await expect(page.getByTestId('start-new-round-button')).toBeEnabled()
+  await closeAdvancedOptions(page)
+})
+
 const ALL_MODE_IDS = ['red-blue', 'courtroom', 'debate', 'brainstorm', 'six-hats', 'persona-testing']
 const AVAILABLE_MODE_IDS = ALL_MODE_IDS
 

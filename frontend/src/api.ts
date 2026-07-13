@@ -256,6 +256,10 @@ export async function closeMeeting(meetingId: string): Promise<void> {
   await postJson(`/meetings/${meetingId}/close`, {})
 }
 
+export async function reopenMeeting(meetingId: string): Promise<void> {
+  await postJson(`/meetings/${meetingId}/reopen`, {})
+}
+
 export async function deleteMeeting(meetingId: string): Promise<void> {
   const response = await fetch(`${API_BASE}/meetings/${meetingId}`, { method: 'DELETE' })
   if (!response.ok) throw new Error(`DELETE /meetings/${meetingId} failed: ${response.status}`)
