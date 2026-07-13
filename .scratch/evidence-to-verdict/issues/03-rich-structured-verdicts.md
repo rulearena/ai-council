@@ -1,6 +1,6 @@
 # 豐富結構化裁決
 
-Status: ready-for-agent
+Status: implemented / awaiting acceptance
 Blocked by: 01, 02
 
 ## Goal
@@ -58,3 +58,8 @@ Blocked by: 01, 02
 - Reviewer verdict pass。
 
 ## Comments
+
+- 2026-07-13：Executor commits `cb9b5aa`–`c597e32`；backend 241 passed、frontend build 綠、full Chromium 31 passed。
+- 實作中確認既有 spec §8 的 parse-only auto-retry 尚未落地；Orchestrator 裁定於共用 runner seam 補齊 relay/parallel，一般 AdapterError 不重試，未擴張至 backlog 39。
+- 第一次 review 發現 directed retry 跳號、parallel cancel 後仍 retry、non-string output 逸出、evidence ref/欄位驗證過寬及 mock prompt 判型。原 Executor 逐項 TDD 修復，Spec/Quality 複驗皆 pass。
+- Quality 複驗保留 non-blocking Minor：字元集合形狀會接受 `[證物十十]` 等系統不會生成的組合；Orchestrator 裁定不擴張為中文數字語法或引用存在性驗證。

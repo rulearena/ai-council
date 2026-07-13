@@ -24,9 +24,9 @@ Human Owner 已於 2026-07-13 核准「證據到可追溯裁決」批次，依�
 
 1. backlog 80：證據編號與引用錨點。——已完成（2026-07-13，`96cd1d9` / `837b6d8`）
 2. backlog 63/64：版本化角色輸出契約；舊 `role-output/v1` 與舊 events 維持相容。——已完成（2026-07-13，`a3a3382` / `c807f7a`）
-3. backlog 65：adjudicator rich structured verdicts。
+3. backlog 65：adjudicator rich structured verdicts。——已完成（2026-07-13，`cb9b5aa`–`c597e32`）
 
-批次計畫：`docs/plans/2026-07-13-evidence-to-verdict.md`；執行 tickets：`.scratch/evidence-to-verdict/`。完成前不需逐項重新取得授權。本檔不另行維護長期 backlog。
+批次計畫：`docs/plans/2026-07-13-evidence-to-verdict.md`；執行 tickets：`.scratch/evidence-to-verdict/`。三個 slice 均已實作並通過獨立 review，目前狀態為 `implemented / awaiting acceptance`。本檔不另行維護長期 backlog。
 
 **Human Owner follow-up**：新角色立繪由使用者自行產圖，不屬於 agent 開發佇列或產品執行批次。
 

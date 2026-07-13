@@ -1,6 +1,6 @@
 # Evidence to Verdict
 
-Status: ready-for-agent
+Status: implemented / awaiting acceptance
 
 ## Outcome
 
@@ -17,3 +17,4 @@ Status: ready-for-agent
 ## Comments
 
 - 2026-07-13：Human Owner 核准批次 A，允許按上述順序連續自主開發。
+- 2026-07-13：A1–A3 均完成 TDD、雙軸獨立 review、merge 與 worktree 清理；等待 Human Owner 驗收。
