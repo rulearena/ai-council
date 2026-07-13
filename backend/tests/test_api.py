@@ -1953,6 +1953,42 @@ def test_create_meeting_uses_reported_total_case_file_limit(tmp_path: Path) -> N
     assert response.json()["detail"] == "Case files exceed 120000 total characters"
 
 
+def test_case_file_limits_count_unicode_code_points_like_python_len(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("AI_COUNCIL_MAX_CASE_FILE_CHARS", "2")
+    monkeypatch.setenv("AI_COUNCIL_MAX_TOTAL_CASE_FILE_CHARS", "2")
+    client = TestClient(create_test_app(tmp_path))
+
+    accepted = client.post(
+        "/meetings",
+        json={
+            "topic": "emoji boundary",
+            "case_files": [
+                {"title": "two", "content": "😀😀", "visible_roles": ["Blue"]}
+            ],
+        },
+    )
+    rejected = client.post(
+        "/meetings",
+        json={
+            "topic": "emoji overflow",
+            "case_files": [
+                {"title": "three", "content": "😀😀😀", "visible_roles": ["Blue"]}
+            ],
+        },
+    )
+
+    assert client.get("/case-file-limits").json() == {
+        "per_file_chars": 2,
+        "total_chars": 2,
+    }
+    assert accepted.status_code == 200
+    assert rejected.status_code == 413
+    assert rejected.json()["detail"] == "Case file content exceeds 2 characters: three"
+
+
 def test_create_meeting_rejects_unknown_mode(tmp_path: Path) -> None:
     app = create_test_app(tmp_path)
     client = TestClient(app)

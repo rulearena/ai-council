@@ -238,6 +238,7 @@ export function useCouncil() {
   const transcript = ref('')
   const loading = ref(false)
   const error = ref('')
+  const meetingCreationError = ref('')
   const devMode = ref(false)
   let closeEventStream: (() => void) | null = null
 
@@ -499,11 +500,28 @@ export function useCouncil() {
       visible_roles: string[]
     }> = [],
   ) {
-    return await runAction(async () => {
+    loading.value = true
+    error.value = ''
+    meetingCreationError.value = ''
+    try {
       const meeting = await createMeeting(topic.value, { modeId, inputs, participants, caseFiles })
       meetings.value = await getMeetings()
       await openMeeting(meeting.meeting_id)
-    })
+      return true
+    } catch (caught) {
+      error.value = caught instanceof Error ? caught.message : String(caught)
+      meetingCreationError.value =
+        caught instanceof ApiError && typeof caught.detail === 'string'
+          ? caught.detail
+          : error.value
+      return false
+    } finally {
+      loading.value = false
+    }
+  }
+
+  function clearMeetingCreationError() {
+    meetingCreationError.value = ''
   }
 
   async function openMeeting(meetingId: string) {
@@ -849,12 +867,7 @@ export function useCouncil() {
       await action()
       return true
     } catch (caught) {
-      error.value =
-        caught instanceof ApiError && typeof caught.detail === 'string'
-          ? caught.detail
-          : caught instanceof Error
-            ? caught.message
-            : String(caught)
+      error.value = caught instanceof Error ? caught.message : String(caught)
       return false
     } finally {
       loading.value = false
@@ -879,6 +892,7 @@ export function useCouncil() {
     transcript,
     loading,
     error,
+    meetingCreationError,
     devMode,
     pendingRoles,
     meetingIdCopied,
@@ -903,6 +917,7 @@ export function useCouncil() {
     refreshAll,
     refreshModels,
     createNewMeeting,
+    clearMeetingCreationError,
     openMeeting,
     startSelectedMeeting,
     startOrContinueMeeting,

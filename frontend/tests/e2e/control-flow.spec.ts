@@ -1015,9 +1015,9 @@ test('New Case keeps user input when create fails', async ({ page }) => {
   await page.route('**/meetings', async (route) => {
     if (route.request().method() === 'POST') {
       await route.fulfill({
-        status: 404,
+        status: 413,
         contentType: 'application/json',
-        body: JSON.stringify({ detail: 'Unknown mode: red-blue' }),
+        body: JSON.stringify({ detail: 'Case file content exceeds 10 characters: 保留案卷' }),
       })
       return
     }
@@ -1047,18 +1047,34 @@ test('New Case keeps user input when create fails', async ({ page }) => {
   await expect(page.getByTestId('case-file-1-role-Blue')).toBeChecked()
   await expect(page.getByTestId('case-file-cost-note')).toContainText('目前 11 / 120000 字元')
   await expect(page.getByTestId('case-file-cost-note')).toContainText('粗估約 11 tokens')
-  await expect(page.getByTestId('new-case-server-error')).toHaveText('Unknown mode: red-blue')
+  await expect(page.getByTestId('new-case-server-error')).toHaveText(
+    'Case file content exceeds 10 characters: 保留案卷',
+  )
+  await expect(page.getByTestId('new-case-server-error')).toHaveAttribute('role', 'alert')
+  await expect(page.getByTestId('app-error')).toContainText('POST /meetings failed: 413')
+
+  await page.getByTestId('case-file-1-content').fill('編輯案卷後應清除舊錯誤')
+  await expect(page.getByTestId('new-case-server-error')).not.toBeVisible()
+  await page.getByTestId('create-meeting-button').click()
+  await expect(page.getByTestId('new-case-server-error')).toBeVisible()
+  await page.getByLabel('會議主題').fill('編輯主題後清除舊錯誤')
+  await expect(page.getByTestId('new-case-server-error')).not.toBeVisible()
 })
 
 test('New Case uses server case file limits and blocks oversized drafts before POST', async ({
   page,
 }) => {
-  await page.route('**/case-file-limits', (route) =>
-    route.fulfill({
+  let releaseLimits!: () => void
+  const limitsGate = new Promise<void>((resolve) => {
+    releaseLimits = resolve
+  })
+  await page.route('**/case-file-limits', async (route) => {
+    await limitsGate
+    await route.fulfill({
       contentType: 'application/json',
       body: JSON.stringify({ per_file_chars: 10, total_chars: 15 }),
-    }),
-  )
+    })
+  })
   let createRequests = 0
   await page.route('**/meetings', async (route) => {
     if (route.request().method() === 'POST') createRequests += 1
@@ -1076,9 +1092,23 @@ test('New Case uses server case file limits and blocks oversized drafts before P
   await page.getByTestId('case-file-1-content').fill('abcdefghijk')
   await page.getByTestId('case-file-1-role-Blue').check()
 
+  await expect(page.getByTestId('case-file-limits-status')).toHaveText('正在載入案卷限制…')
+  await expect(page.getByTestId('create-meeting-button')).toBeDisabled()
+  await page.getByTestId('create-meeting-button').evaluate((button: HTMLButtonElement) =>
+    button.click(),
+  )
+  await expect.poll(() => createRequests).toBe(0)
+  releaseLimits()
+  await expect(page.getByTestId('case-file-limits-status')).not.toBeVisible()
   await expect(page.getByTestId('case-file-1-char-count')).toHaveText('11 / 10 字元')
   await expect(page.getByTestId('case-file-1-limit-error')).toHaveText(
     '案卷 1 超過單份上限 10 字元',
+  )
+  await expect(page.getByTestId('case-file-1-limit-error')).toHaveAttribute('role', 'alert')
+  await expect(page.getByTestId('case-file-1-content')).toHaveAttribute('aria-invalid', 'true')
+  await expect(page.getByTestId('case-file-1-content')).toHaveAttribute(
+    'aria-describedby',
+    'case-file-1-char-count case-file-1-limit-error',
   )
   await expect(page.getByTestId('case-file-cost-note')).toContainText('目前 11 / 15 字元')
   await expect(page.getByTestId('case-file-cost-note')).toContainText('粗估約 3 tokens')
@@ -1094,6 +1124,7 @@ test('New Case uses server case file limits and blocks oversized drafts before P
   await expect(page.getByTestId('case-file-total-limit-error')).toHaveText(
     '全部案卷超過總量上限 15 字元',
   )
+  await expect(page.getByTestId('case-file-total-limit-error')).toHaveAttribute('role', 'alert')
   await expect(page.getByTestId('create-meeting-button')).toBeDisabled()
   await page.getByTestId('create-meeting-button').evaluate((button: HTMLButtonElement) =>
     button.click(),
@@ -1113,8 +1144,53 @@ test('New Case falls back to safe case file limits when limits endpoint is unava
     .click()
   await page.getByTestId('add-case-file-button').click()
 
+  await expect(page.getByTestId('case-file-limits-status')).not.toBeVisible()
   await expect(page.getByTestId('case-file-1-char-count')).toHaveText('0 / 50000 字元')
   await expect(page.getByTestId('case-file-cost-note')).toContainText('目前 0 / 120000 字元')
+})
+
+test('New Case counts emoji as Unicode code points at the server boundary', async ({ page }) => {
+  await page.route('**/case-file-limits', (route) =>
+    route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify({ per_file_chars: 2, total_chars: 2 }),
+    }),
+  )
+  await page.goto('/')
+  await page.getByTestId('new-case-button').click()
+  await page
+    .getByTestId('mode-select-card-red-blue')
+    .getByRole('button', { name: '選擇此模式' })
+    .click()
+  await page.getByLabel('會議主題').fill('emoji boundary')
+  await page.getByTestId('add-case-file-button').click()
+  await page.getByTestId('case-file-1-title').fill('emoji')
+  await page.getByTestId('case-file-1-role-Blue').check()
+  await page.getByTestId('case-file-1-content').fill('😀😀')
+
+  await expect(page.getByTestId('case-file-1-char-count')).toHaveText('2 / 2 字元')
+  await expect(page.getByTestId('create-meeting-button')).toBeEnabled()
+
+  await page.getByTestId('case-file-1-content').fill('😀😀😀')
+  await expect(page.getByTestId('case-file-1-char-count')).toHaveText('3 / 2 字元')
+  await expect(page.getByTestId('create-meeting-button')).toBeDisabled()
+})
+
+test('New Case token estimate treats Japanese and Hangul code points conservatively', async ({
+  page,
+}) => {
+  await page.goto('/')
+  await page.getByTestId('new-case-button').click()
+  await page
+    .getByTestId('mode-select-card-red-blue')
+    .getByRole('button', { name: '選擇此模式' })
+    .click()
+  await page.getByTestId('add-case-file-button').click()
+  await page.getByTestId('case-file-1-content').fill('かなカナ')
+  await expect(page.getByTestId('case-file-cost-note')).toContainText('粗估約 4 tokens')
+
+  await page.getByTestId('case-file-1-content').fill('한글테스트')
+  await expect(page.getByTestId('case-file-cost-note')).toContainText('粗估約 5 tokens')
 })
 
 test('New Case creates a meeting with numbered role-scoped case files', async ({ page }) => {

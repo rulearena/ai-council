@@ -17,7 +17,13 @@ const props = defineProps<{ show: boolean }>()
 const emit = defineEmits<{ close: [] }>()
 
 const store = inject(councilKey)!
-const { topic, loading, error, createNewMeeting } = store
+const {
+  topic,
+  loading,
+  meetingCreationError,
+  createNewMeeting,
+  clearMeetingCreationError,
+} = store
 
 type Step = 'mode' | 'participants'
 type DraftCaseFile = {
@@ -37,12 +43,12 @@ const selectedMode = computed<ModeDefinition>(
 // handled by the member editor below.
 const inputValues = ref<Record<string, string>>({})
 const caseFiles = ref<DraftCaseFile[]>([])
-const serverError = ref('')
 const fallbackCaseFileLimits: CaseFileLimits = {
   per_file_chars: 50_000,
   total_chars: 120_000,
 }
 const caseFileLimits = ref<CaseFileLimits>({ ...fallbackCaseFileLimits })
+const caseFileLimitsLoading = ref(false)
 const parallelMemberCount = ref(2)
 const parallelMembers = ref<Array<{ displayName: string; instancePrompt: string }>>([])
 const textInputs = computed(() => selectedMode.value.inputs.filter((input) => input.kind === 'text'))
@@ -55,22 +61,29 @@ const hasIncompleteCaseFile = computed(() =>
   ),
 )
 const totalCaseFileChars = computed(() =>
-  caseFiles.value.reduce((total, file) => total + file.content.length, 0),
+  caseFiles.value.reduce((total, file) => total + codePointLength(file.content), 0),
 )
 const hasOversizedCaseFile = computed(() =>
-  caseFiles.value.some((file) => file.content.length > caseFileLimits.value.per_file_chars),
+  caseFiles.value.some(
+    (file) => codePointLength(file.content) > caseFileLimits.value.per_file_chars,
+  ),
 )
 const hasOversizedCaseFileTotal = computed(
   () => totalCaseFileChars.value > caseFileLimits.value.total_chars,
 )
 const estimatedCaseFileTokens = computed(() => {
-  const content = caseFiles.value.map((file) => file.content).join('')
-  const cjkCount = (content.match(/[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]/g) ?? []).length
-  const otherNonWhitespaceCount = content
-    .replace(/[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]/g, '')
-    .replace(/\s/g, '').length
+  const codePoints = Array.from(caseFiles.value.map((file) => file.content).join(''))
+  const conservativeScript = /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}]/u
+  const cjkCount = codePoints.filter((character) => conservativeScript.test(character)).length
+  const otherNonWhitespaceCount = codePoints.filter(
+    (character) => !conservativeScript.test(character) && !/\s/u.test(character),
+  ).length
   return cjkCount + Math.ceil(otherNonWhitespaceCount / 4)
 })
+
+function codePointLength(value: string) {
+  return Array.from(value).length
+}
 const selectedModeParticipants = computed(() => {
   const mode = selectedMode.value
   if (mode.category !== 'parallel' || !mode.fanout || !mode.synthesis) return mode.roles
@@ -93,9 +106,10 @@ watch(
       step.value = 'mode'
       inputValues.value = {}
       caseFiles.value = []
-      serverError.value = ''
+      clearMeetingCreationError()
       resetParallelMembers(selectedMode.value)
       caseFileLimits.value = { ...fallbackCaseFileLimits }
+      caseFileLimitsLoading.value = true
       void refreshCaseFileLimits()
     }
   },
@@ -106,8 +120,12 @@ async function refreshCaseFileLimits() {
     caseFileLimits.value = await getCaseFileLimits()
   } catch {
     // Older or temporarily unreachable backends still get the documented safe defaults.
+  } finally {
+    caseFileLimitsLoading.value = false
   }
 }
+
+watch([topic, selectedModeId, inputValues, caseFiles], clearMeetingCreationError, { deep: true })
 
 function chooseMode(mode: ModeDefinition) {
   if (!mode.available) return
@@ -128,18 +146,14 @@ function backToModePicker() {
 }
 
 async function submit() {
-  serverError.value = ''
+  clearMeetingCreationError()
   const created = await createNewMeeting(
     selectedMode.value.id,
     { ...inputValues.value },
     buildParticipants(),
     buildCaseFiles(),
   )
-  if (created) {
-    emit('close')
-  } else {
-    serverError.value = error.value
-  }
+  if (created) emit('close')
 }
 
 function resetParallelMembers(mode: ModeDefinition) {
@@ -349,6 +363,15 @@ function buildParticipants() {
           </button>
         </div>
 
+        <p
+          v-if="caseFileLimitsLoading"
+          class="case-file-cost-note"
+          data-testid="case-file-limits-status"
+          role="status"
+        >
+          正在載入案卷限制…
+        </p>
+
         <article
           v-for="(file, index) in caseFiles"
           :key="index"
@@ -388,17 +411,26 @@ function buildParticipants() {
               v-model="file.content"
               :data-testid="`case-file-${index + 1}-content`"
               :aria-label="`案卷 ${index + 1} 內容`"
+              :aria-invalid="codePointLength(file.content) > caseFileLimits.per_file_chars"
+              :aria-describedby="
+                codePointLength(file.content) > caseFileLimits.per_file_chars
+                  ? `case-file-${index + 1}-char-count case-file-${index + 1}-limit-error`
+                  : `case-file-${index + 1}-char-count`
+              "
             />
             <span
+              :id="`case-file-${index + 1}-char-count`"
               class="case-file-char-count"
               :data-testid="`case-file-${index + 1}-char-count`"
             >
-              {{ file.content.length }} / {{ caseFileLimits.per_file_chars }} 字元
+              {{ codePointLength(file.content) }} / {{ caseFileLimits.per_file_chars }} 字元
             </span>
             <span
-              v-if="file.content.length > caseFileLimits.per_file_chars"
+              v-if="codePointLength(file.content) > caseFileLimits.per_file_chars"
+              :id="`case-file-${index + 1}-limit-error`"
               class="case-file-limit-error"
               :data-testid="`case-file-${index + 1}-limit-error`"
+              role="alert"
             >
               案卷 {{ index + 1 }} 超過單份上限 {{ caseFileLimits.per_file_chars }} 字元
             </span>
@@ -439,6 +471,7 @@ function buildParticipants() {
           v-if="hasOversizedCaseFileTotal"
           class="case-file-limit-error"
           data-testid="case-file-total-limit-error"
+          role="alert"
         >
           全部案卷超過總量上限 {{ caseFileLimits.total_chars }} 字元
         </p>
@@ -458,8 +491,13 @@ function buildParticipants() {
       </div>
       <p class="participant-setup-note">模型可於建立後在 Settings 中為每個角色指派。</p>
 
-      <p v-if="serverError" class="error" data-testid="new-case-server-error">
-        {{ serverError }}
+      <p
+        v-if="meetingCreationError"
+        class="error"
+        data-testid="new-case-server-error"
+        role="alert"
+      >
+        {{ meetingCreationError }}
       </p>
 
       <button
@@ -467,7 +505,7 @@ function buildParticipants() {
         class="btn btn-primary create-meeting-cta"
         data-testid="create-meeting-button"
         @click="submit"
-        :disabled="loading || !topic.trim() || hasEmptyRequiredInput || hasIncompleteCaseFile || hasOversizedCaseFile || hasOversizedCaseFileTotal"
+        :disabled="loading || caseFileLimitsLoading || !topic.trim() || hasEmptyRequiredInput || hasIncompleteCaseFile || hasOversizedCaseFile || hasOversizedCaseFileTotal"
       >
         建立
       </button>
