@@ -486,7 +486,7 @@ config/models.yaml.example
 10. Conditional branching between roles
 11. Regex purifier
 12. LLM fallback purifier
-13. Anonymization layer（設計已定，見 §16.3 彙整匿名化 hook；slice D 待實作，依賴 slice C）
+13. Anonymization layer（已完成 2026-07-13：parallel synthesis anonymization hook；設定見 `synthesis.anonymize_inputs`，實作見 §16.3/§16.7）
 14. Advanced meeting search
 15. Meeting tags/folders（已完成：tags 已落地，PUT /meetings/{id}/tags）
 16. Favorites/pinning（已完成：pinned 已落地，PUT /meetings/{id}/pinned）
@@ -542,7 +542,7 @@ config/models.yaml.example
 66. UI i18n
 67. Prompt language presets
 68. Per-meeting output language setting
-69. Full Playwright E2E suite（已落地：27 案例，隨功能持續擴充）
+69. Full Playwright E2E suite（已落地：31 案例，隨功能持續擴充）
 70. Frontend component tests
 71. Real provider integration tests
 72. Docker Compose setup
