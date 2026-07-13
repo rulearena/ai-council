@@ -2041,6 +2041,96 @@ pre {
   resize: vertical;
 }
 
+.case-file-editor {
+  display: grid;
+  gap: 10px;
+  padding: 10px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.case-file-editor-header,
+.case-file-card-header {
+  display: flex;
+  align-items: start;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.case-file-editor-header h4 {
+  margin: 0;
+  font-size: 13px;
+  color: var(--color-text);
+}
+
+.case-file-editor-header p {
+  margin: 3px 0 0;
+  font-size: 12px;
+  color: var(--color-text-muted);
+}
+
+.case-file-card {
+  display: grid;
+  gap: 10px;
+  padding: 10px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: rgba(0, 0, 0, 0.14);
+}
+
+.case-file-card-header strong {
+  font-size: 12px;
+  color: var(--color-text-secondary);
+}
+
+.case-file-card textarea {
+  min-height: 92px;
+  resize: vertical;
+}
+
+.case-file-visibility {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.case-file-visibility legend {
+  width: 100%;
+  margin-bottom: 2px;
+  font-size: 12px;
+  color: var(--color-text-secondary);
+}
+
+.case-file-role-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+  padding: 5px 9px;
+  border: 1px solid var(--role-color, var(--color-border));
+  border-radius: var(--radius-pill);
+  color: var(--role-color, var(--color-text));
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.case-file-role-toggle input {
+  flex: 0 0 auto;
+  width: 14px;
+  height: 14px;
+  accent-color: var(--role-color, var(--color-accent));
+}
+
+.case-file-role-toggle span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
 .participant-preview {
   display: flex;
   flex-wrap: wrap;
@@ -2072,5 +2162,16 @@ pre {
 @media (max-width: 640px) {
   .mode-card-grid {
     grid-template-columns: 1fr;
+  }
+
+  .case-file-editor-header,
+  .case-file-card-header {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .case-file-editor-header .btn,
+  .case-file-card-header .btn {
+    align-self: start;
   }
 }

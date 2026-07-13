@@ -36,7 +36,16 @@ export type Meeting = {
   pinned: boolean
   mode_id: string
   participants: MeetingParticipant[]
+  case_files?: CaseFile[]
   events?: MeetingEvent[]
+}
+
+export type CaseFile = {
+  id: string
+  title: string
+  content?: string
+  visible_roles: string[]
+  size: number
 }
 
 export type MeetingParticipant = {
@@ -227,6 +236,11 @@ export async function createMeeting(
       display_name?: string | null
       instance_prompt?: string | null
     }>
+    caseFiles?: Array<{
+      title: string
+      content: string
+      visible_roles: string[]
+    }>
   },
 ): Promise<Meeting> {
   return postJson('/meetings', {
@@ -234,6 +248,7 @@ export async function createMeeting(
     mode_id: options?.modeId ?? DEFAULT_MODE_ID,
     inputs: options?.inputs ?? {},
     participants: options?.participants ?? [],
+    case_files: options?.caseFiles ?? [],
   })
 }
 

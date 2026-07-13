@@ -19,6 +19,12 @@ const store = inject(councilKey)!
 const { topic, loading, createNewMeeting } = store
 
 type Step = 'mode' | 'participants'
+type DraftCaseFile = {
+  title: string
+  content: string
+  visibleRoles: string[]
+}
+
 const step = ref<Step>('mode')
 const selectedModeId = ref<string>(DEFAULT_MODE_ID)
 const selectedMode = computed<ModeDefinition>(
@@ -29,11 +35,17 @@ const selectedMode = computed<ModeDefinition>(
 // position_b - spec.md 16.2), keyed by input id. Parallel persona/member prompts are
 // handled by the member editor below.
 const inputValues = ref<Record<string, string>>({})
+const caseFiles = ref<DraftCaseFile[]>([])
 const parallelMemberCount = ref(2)
 const parallelMembers = ref<Array<{ displayName: string; instancePrompt: string }>>([])
 const textInputs = computed(() => selectedMode.value.inputs.filter((input) => input.kind === 'text'))
 const hasEmptyRequiredInput = computed(() =>
   textInputs.value.some((input) => !(inputValues.value[input.id] ?? '').trim()),
+)
+const hasIncompleteCaseFile = computed(() =>
+  caseFiles.value.some(
+    (file) => !file.title.trim() || !file.content.trim() || file.visibleRoles.length === 0,
+  ),
 )
 const selectedModeParticipants = computed(() => {
   const mode = selectedMode.value
@@ -56,6 +68,7 @@ watch(
     if (visible) {
       step.value = 'mode'
       inputValues.value = {}
+      caseFiles.value = []
       resetParallelMembers(selectedMode.value)
     }
   },
@@ -68,6 +81,7 @@ function chooseMode(mode: ModeDefinition) {
   // already typed. Reopening the modal fresh is still handled by the watch(show) above.
   if (mode.id !== selectedModeId.value) {
     inputValues.value = {}
+    caseFiles.value = []
     resetParallelMembers(mode)
   }
   selectedModeId.value = mode.id
@@ -79,7 +93,14 @@ function backToModePicker() {
 }
 
 async function submit() {
-  if (await createNewMeeting(selectedMode.value.id, { ...inputValues.value }, buildParticipants())) {
+  if (
+    await createNewMeeting(
+      selectedMode.value.id,
+      { ...inputValues.value },
+      buildParticipants(),
+      buildCaseFiles(),
+    )
+  ) {
     emit('close')
   }
 }
@@ -107,6 +128,30 @@ function setParallelMemberCount(nextCount: number) {
     parallelMembers.value.push({ displayName: `委員 ${index + 1}`, instancePrompt: '' })
   }
   parallelMembers.value.splice(clamped)
+}
+
+function addCaseFile() {
+  caseFiles.value.push({ title: '', content: '', visibleRoles: [] })
+}
+
+function removeCaseFile(index: number) {
+  caseFiles.value.splice(index, 1)
+}
+
+function toggleCaseFileRole(file: DraftCaseFile, roleId: string) {
+  if (file.visibleRoles.includes(roleId)) {
+    file.visibleRoles = file.visibleRoles.filter((role) => role !== roleId)
+    return
+  }
+  file.visibleRoles = [...file.visibleRoles, roleId]
+}
+
+function buildCaseFiles() {
+  return caseFiles.value.map((file) => ({
+    title: file.title.trim(),
+    content: file.content,
+    visible_roles: file.visibleRoles,
+  }))
 }
 
 function buildParticipants() {
@@ -208,6 +253,75 @@ function buildParticipants() {
         </label>
       </section>
 
+      <section class="case-file-editor" data-testid="case-file-editor">
+        <div class="case-file-editor-header">
+          <div>
+            <h4>案卷</h4>
+            <p>建立時附加純文字或 Markdown，並指定可見角色。</p>
+          </div>
+          <button
+            type="button"
+            class="btn btn-secondary btn-sm"
+            data-testid="add-case-file-button"
+            @click="addCaseFile"
+          >
+            新增案卷
+          </button>
+        </div>
+
+        <article
+          v-for="(file, index) in caseFiles"
+          :key="index"
+          class="case-file-card"
+          :data-testid="`case-file-${index + 1}`"
+        >
+          <div class="case-file-card-header">
+            <strong>案卷 {{ index + 1 }}</strong>
+            <button
+              type="button"
+              class="btn btn-ghost btn-sm"
+              :data-testid="`remove-case-file-${index + 1}-button`"
+              @click="removeCaseFile(index)"
+            >
+              移除
+            </button>
+          </div>
+          <label class="topic-input-row">
+            標題
+            <input
+              v-model="file.title"
+              :data-testid="`case-file-${index + 1}-title`"
+              :aria-label="`案卷 ${index + 1} 標題`"
+            />
+          </label>
+          <label class="topic-input-row">
+            內容
+            <textarea
+              v-model="file.content"
+              :data-testid="`case-file-${index + 1}-content`"
+              :aria-label="`案卷 ${index + 1} 內容`"
+            />
+          </label>
+          <fieldset class="case-file-visibility">
+            <legend>可見角色</legend>
+            <label
+              v-for="role in selectedModeParticipants"
+              :key="role.id"
+              class="case-file-role-toggle"
+              :style="{ '--role-color': role.color }"
+            >
+              <input
+                type="checkbox"
+                :checked="file.visibleRoles.includes(role.id)"
+                :data-testid="`case-file-${index + 1}-role-${role.id}`"
+                @change="toggleCaseFileRole(file, role.id)"
+              />
+              <span>{{ role.name }}</span>
+            </label>
+          </fieldset>
+        </article>
+      </section>
+
       <div class="participant-preview" data-testid="participant-preview">
         <span
           v-for="role in selectedModeParticipants"
@@ -227,7 +341,7 @@ function buildParticipants() {
         class="btn btn-primary create-meeting-cta"
         data-testid="create-meeting-button"
         @click="submit"
-        :disabled="loading || !topic.trim() || hasEmptyRequiredInput"
+        :disabled="loading || !topic.trim() || hasEmptyRequiredInput || hasIncompleteCaseFile"
       >
         建立
       </button>

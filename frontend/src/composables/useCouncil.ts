@@ -492,9 +492,14 @@ export function useCouncil() {
       display_name?: string | null
       instance_prompt?: string | null
     }> = [],
+    caseFiles: Array<{
+      title: string
+      content: string
+      visible_roles: string[]
+    }> = [],
   ) {
     return await runAction(async () => {
-      const meeting = await createMeeting(topic.value, { modeId, inputs, participants })
+      const meeting = await createMeeting(topic.value, { modeId, inputs, participants, caseFiles })
       meetings.value = await getMeetings()
       await openMeeting(meeting.meeting_id)
     })

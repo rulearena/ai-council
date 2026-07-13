@@ -7,7 +7,11 @@ import { expect, test, type Page } from '@playwright/test'
 async function createMeetingViaNewCase(
   page: Page,
   topic: string,
-  options: { modeId?: string; inputs?: Record<string, string> } = {},
+  options: {
+    modeId?: string
+    inputs?: Record<string, string>
+    caseFiles?: Array<{ title: string; content: string; visibleRoles: string[] }>
+  } = {},
 ) {
   const modeId = options.modeId ?? 'red-blue'
   await page.getByTestId('new-case-button').click()
@@ -24,6 +28,15 @@ async function createMeetingViaNewCase(
   // one labeled field per input id - see NewCaseModal.vue's textInputs.
   for (const [inputId, value] of Object.entries(options.inputs ?? {})) {
     await page.getByTestId(`mode-input-${inputId}`).fill(value)
+  }
+  for (const [index, file] of (options.caseFiles ?? []).entries()) {
+    const fileNumber = index + 1
+    await page.getByTestId('add-case-file-button').click()
+    await page.getByTestId(`case-file-${fileNumber}-title`).fill(file.title)
+    await page.getByTestId(`case-file-${fileNumber}-content`).fill(file.content)
+    for (const role of file.visibleRoles) {
+      await page.getByTestId(`case-file-${fileNumber}-role-${role}`).check()
+    }
   }
   await page.getByTestId('create-meeting-button').click()
   // NewCaseModal closes itself once createNewMeeting() resolves.
@@ -988,11 +1001,64 @@ test('New Case keeps user input when create fails', async ({ page }) => {
     .getByRole('button', { name: '選擇此模式' })
     .click()
   await page.getByLabel('會議主題').fill('保留這個輸入')
+  await page.getByTestId('add-case-file-button').click()
+  await page.getByTestId('case-file-1-title').fill('保留案卷')
+  await page.getByTestId('case-file-1-content').fill('失敗後不應清空這段內容')
+  await page.getByTestId('case-file-1-role-Blue').check()
   await page.getByTestId('create-meeting-button').click()
 
   await expect(page.getByTestId('new-case-modal')).toBeVisible()
   await expect(page.getByLabel('會議主題')).toHaveValue('保留這個輸入')
+  await expect(page.getByTestId('case-file-1-title')).toHaveValue('保留案卷')
+  await expect(page.getByTestId('case-file-1-content')).toHaveValue('失敗後不應清空這段內容')
+  await expect(page.getByTestId('case-file-1-role-Blue')).toBeChecked()
   await expect(page.getByTestId('app-error')).toContainText('POST /meetings failed: 404')
+})
+
+test('New Case creates a meeting with role-scoped case files', async ({ page }) => {
+  let createPayload: Record<string, unknown> | null = null
+  await page.route('**/meetings', async (route) => {
+    if (route.request().method() === 'POST') {
+      createPayload = route.request().postDataJSON() as Record<string, unknown>
+    }
+    await route.continue()
+  })
+  await page.goto('/')
+
+  const topic = `E2E case files ${Date.now()}`
+  await createMeetingViaNewCase(page, topic, {
+    modeId: 'courtroom',
+    caseFiles: [
+      {
+        title: '事故時間線',
+        content: '10:05 error rate spike\n10:07 rollback started',
+        visibleRoles: ['Prosecutor', 'Judge'],
+      },
+    ],
+  })
+
+  expect(createPayload).toMatchObject({
+    topic,
+    mode_id: 'courtroom',
+    case_files: [
+      {
+        title: '事故時間線',
+        content: '10:05 error rate spike\n10:07 rollback started',
+        visible_roles: ['Prosecutor', 'Judge'],
+      },
+    ],
+  })
+  await expect(page.getByTestId('role-seat-prosecutor')).toBeVisible()
+  await expect(page.getByTestId('role-seat-defense')).toBeVisible()
+  await expect(page.getByTestId('role-seat-judge')).toBeVisible()
+
+  await page.getByTestId('past-topics-button').click()
+  page.once('dialog', (dialog) => dialog.accept())
+  await page
+    .getByTestId('meeting-list-item')
+    .filter({ hasText: topic })
+    .getByTestId('delete-meeting-button')
+    .click()
 })
 
 test('seat nameplate shows the selected model, with a placeholder when unset, and updates live from Settings', async ({
