@@ -60,7 +60,7 @@ class MockModelAdapter:
                     {
                         "title": "Mock finding",
                         "detail": "Deterministic finding",
-                        "evidence_refs": [],
+                        "evidence_refs": _visible_case_file_anchors(request.prompt)[:1],
                     }
                 ],
                 "risks": [],
@@ -82,6 +82,18 @@ class MockModelAdapter:
             }
         )
         return ModelResponse(raw_output=json.dumps(payload, ensure_ascii=False))
+
+
+def _visible_case_file_anchors(prompt: str) -> list[str]:
+    heading = "Case files visible to you:"
+    start = prompt.find(heading)
+    if start == -1:
+        return []
+    start += len(heading)
+    end = prompt.find("\n\nPrior transcript:", start)
+    case_files_block = prompt[start:] if end == -1 else prompt[start:end]
+    anchors = re.findall(r"^### (\[證物[^\[\]\n]+\])", case_files_block, re.MULTILINE)
+    return list(dict.fromkeys(anchors))
 
 
 class SubscriptionCLIAdapter:

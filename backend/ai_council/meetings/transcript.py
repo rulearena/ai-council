@@ -38,6 +38,9 @@ class TranscriptProjector:
             return lines
 
         parsed_output = event.get("parsed_output") or {}
+        if event.get("output_schema_id") == "structured-verdict/v1":
+            lines.extend(self._render_structured_verdict(parsed_output))
+            return lines
         lines.extend(
             [
                 "",
@@ -60,6 +63,38 @@ class TranscriptProjector:
         )
         return lines
 
+    def _render_structured_verdict(self, parsed_output: dict[str, Any]) -> list[str]:
+        return [
+            "",
+            "### Summary",
+            "",
+            str(parsed_output.get("summary", "")),
+            "",
+            "### Decision",
+            "",
+            str(parsed_output.get("decision", "")),
+            "",
+            "### Findings",
+            "",
+            *self._render_verdict_items(parsed_output.get("findings") or []),
+            "",
+            "### Risks",
+            "",
+            *self._render_verdict_items(parsed_output.get("risks") or []),
+            "",
+            "### Recommendation",
+            "",
+            str(parsed_output.get("recommendation", "")),
+            "",
+            "### Conditions",
+            "",
+            *self._render_strings(parsed_output.get("conditions") or []),
+            "",
+            "### Unresolved Questions",
+            "",
+            *self._render_strings(parsed_output.get("unresolved_questions") or []),
+        ]
+
     @staticmethod
     def _render_items(items: list[dict[str, Any]]) -> list[str]:
         if not items:
@@ -68,3 +103,21 @@ class TranscriptProjector:
             f"- **{item.get('title', '')}:** {item.get('detail', '')}"
             for item in items
         ]
+
+    @staticmethod
+    def _render_verdict_items(items: list[dict[str, Any]]) -> list[str]:
+        if not items:
+            return ["_None_"]
+        lines: list[str] = []
+        for item in items:
+            lines.append(f"- **{item.get('title', '')}:** {item.get('detail', '')}")
+            evidence_refs = item.get("evidence_refs") or []
+            if evidence_refs:
+                lines.append(f"  - Evidence: {', '.join(str(ref) for ref in evidence_refs)}")
+        return lines
+
+    @staticmethod
+    def _render_strings(items: list[str]) -> list[str]:
+        if not items:
+            return ["_None_"]
+        return [f"- {item}" for item in items]

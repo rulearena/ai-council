@@ -67,6 +67,27 @@ def test_mock_adapter_returns_a_valid_verdict_when_prompt_requests_rich_schema()
     }
 
 
+def test_mock_verdict_reuses_an_anchor_from_the_visible_case_files_block() -> None:
+    codec = DEFAULT_OUTPUT_SCHEMA_REGISTRY.get("structured-verdict/v1")
+    prompt = (
+        "Case files visible to you:\n"
+        "### [證物二] 上線檢查表\n驗收完成。\n\n"
+        "Prior transcript:\n尚未發言\n\n"
+        f"Return exactly one JSON object matching this schema:\n{codec.schema}"
+    )
+
+    response = MockModelAdapter().complete(
+        ModelRequest(
+            prompt=prompt,
+            model_config=ModelConfig(id="mock-fast", adapter="mock"),
+        )
+    )
+
+    assert codec.parse(response.raw_output)["findings"][0]["evidence_refs"] == [
+        "[證物二]"
+    ]
+
+
 def test_mock_adapter_supports_configurable_delay(monkeypatch) -> None:
     delays: list[float] = []
     monkeypatch.setattr("ai_council.models.adapters.time.sleep", delays.append)

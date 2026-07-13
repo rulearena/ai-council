@@ -161,7 +161,15 @@ test('user can run a mock meeting and add chair feedback', async ({ page }) => {
   await page.goto('/')
 
   const topic = `E2E mock meeting ${Date.now()}`
-  await createMeetingViaNewCase(page, topic)
+  await createMeetingViaNewCase(page, topic, {
+    caseFiles: [
+      {
+        title: '上線檢查表',
+        content: '驗收測試已完成，回滾演練待確認。',
+        visibleRoles: ['Judge'],
+      },
+    ],
+  })
 
   await expect(page.getByTestId('operation-status')).toContainText('狀態：idle')
   await expect(page.getByTestId('role-seat-blue')).toHaveAttribute('data-status', 'waiting')
@@ -193,6 +201,15 @@ test('user can run a mock meeting and add chair feedback', async ({ page }) => {
   await expect(page.getByTestId('role-output-panel')).toContainText('Role Outputs')
   await expect(page.getByTestId('role-output-panel')).toContainText('judge-decide')
   await expect(page.getByTestId('role-output-panel')).toContainText('Recommendation')
+  await expect(page.getByTestId('rich-verdict-decision')).toContainText(
+    'approve-with-conditions',
+  )
+  await expect(page.getByTestId('rich-verdict-findings')).toContainText('Mock finding')
+  await expect(page.getByTestId('rich-verdict-findings')).toContainText('[證物一]')
+  await expect(page.getByTestId('rich-verdict-conditions')).toContainText('Verify the result.')
+  await expect(page.getByTestId('rich-verdict-unresolved')).toContainText(
+    'Is more evidence available?',
+  )
   const outputRoleBadge = page.getByTestId('role-output-panel').getByTestId('role-badge')
   await expect(outputRoleBadge.locator('img')).toHaveAttribute('alt', 'Judge')
   await expect(outputRoleBadge).toHaveClass(/role-judge/)

@@ -157,12 +157,24 @@ export type EstimatedCost = {
   amount: number
 }
 
-export type RoleOutput = {
+export type LegacyRoleOutput = {
   summary: string
   arguments: Array<{ title: string; detail: string }>
   risks: Array<{ title: string; detail: string }>
   recommendation: string
 }
+
+export type StructuredVerdict = {
+  summary: string
+  decision: 'approve' | 'approve-with-conditions' | 'reject' | 'insufficient-evidence'
+  findings: Array<{ title: string; detail: string; evidence_refs: string[] }>
+  risks: Array<{ title: string; detail: string; evidence_refs: string[] }>
+  recommendation: string
+  conditions: string[]
+  unresolved_questions: string[]
+}
+
+export type RoleOutput = LegacyRoleOutput | StructuredVerdict
 
 export type MeetingEventStreamMessage = {
   type: 'snapshot' | 'update'

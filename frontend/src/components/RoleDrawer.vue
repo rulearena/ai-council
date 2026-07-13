@@ -12,6 +12,7 @@ import {
 } from '../composables/useCouncil'
 import Drawer from './Drawer.vue'
 import RoleSilhouette from './RoleSilhouette.vue'
+import type { LegacyRoleOutput, StructuredVerdict } from '../api'
 
 const props = defineProps<{
   role: CouncilRole | 'Chairman' | null
@@ -35,6 +36,16 @@ const isChairman = computed(() => props.role === 'Chairman')
 const councilRole = computed<CouncilRole | null>(() => (props.role && isCouncilRole(props.role) ? props.role : null))
 
 const latestEvent = computed(() => (councilRole.value ? latestRoleEvent.value[councilRole.value] : null))
+const richVerdict = computed<StructuredVerdict | null>(() => {
+  const event = latestEvent.value
+  if (event?.output_schema_id !== 'structured-verdict/v1') return null
+  return (event.parsed_output as StructuredVerdict | undefined) ?? null
+})
+const legacyOutput = computed<LegacyRoleOutput | null>(() => {
+  const event = latestEvent.value
+  if (!event || event.output_schema_id === 'structured-verdict/v1') return null
+  return (event.parsed_output as LegacyRoleOutput | undefined) ?? null
+})
 const status = computed(() => {
   if (!latestEvent.value) return 'waiting'
   return latestEvent.value.status === 'failed' ? 'failed' : 'completed'
@@ -86,22 +97,64 @@ const title = computed(() => (isChairman.value ? '主席' : props.role ?? ''))
             </header>
             <h3>Role Outputs</h3>
             <p>{{ latestEvent.parsed_output?.summary }}</p>
-            <h3>Arguments</h3>
-            <ul>
-              <li v-for="argument in latestEvent.parsed_output?.arguments" :key="argument.title">
-                <strong>{{ argument.title }}</strong>
-                <span>{{ argument.detail }}</span>
-              </li>
-            </ul>
-            <h3>Risks</h3>
-            <ul>
-              <li v-for="risk in latestEvent.parsed_output?.risks" :key="risk.title">
-                <strong>{{ risk.title }}</strong>
-                <span>{{ risk.detail }}</span>
-              </li>
-            </ul>
+            <template v-if="richVerdict">
+              <section data-testid="rich-verdict-decision">
+                <h3>Decision</h3>
+                <p>{{ richVerdict.decision }}</p>
+              </section>
+              <section data-testid="rich-verdict-findings">
+                <h3>Findings</h3>
+                <ul>
+                  <li v-for="finding in richVerdict.findings" :key="finding.title">
+                    <strong>{{ finding.title }}</strong>
+                    <span>{{ finding.detail }}</span>
+                    <small v-for="evidenceRef in finding.evidence_refs" :key="evidenceRef">{{ evidenceRef }}</small>
+                  </li>
+                </ul>
+              </section>
+              <section data-testid="rich-verdict-risks">
+                <h3>Risks</h3>
+                <ul>
+                  <li v-for="risk in richVerdict.risks" :key="risk.title">
+                    <strong>{{ risk.title }}</strong>
+                    <span>{{ risk.detail }}</span>
+                    <small v-for="evidenceRef in risk.evidence_refs" :key="evidenceRef">{{ evidenceRef }}</small>
+                  </li>
+                </ul>
+              </section>
+            </template>
+            <template v-else-if="legacyOutput">
+              <h3>Arguments</h3>
+              <ul>
+                <li v-for="argument in legacyOutput.arguments" :key="argument.title">
+                  <strong>{{ argument.title }}</strong>
+                  <span>{{ argument.detail }}</span>
+                </li>
+              </ul>
+              <h3>Risks</h3>
+              <ul>
+                <li v-for="risk in legacyOutput.risks" :key="risk.title">
+                  <strong>{{ risk.title }}</strong>
+                  <span>{{ risk.detail }}</span>
+                </li>
+              </ul>
+            </template>
             <h3>Recommendation</h3>
             <p>{{ latestEvent.parsed_output?.recommendation }}</p>
+            <template v-if="richVerdict">
+              <section data-testid="rich-verdict-conditions">
+                <h3>Conditions</h3>
+                <ul>
+                  <li v-for="condition in richVerdict.conditions" :key="condition">{{ condition }}</li>
+                </ul>
+              </section>
+              <section data-testid="rich-verdict-unresolved">
+                <h3>Unresolved Questions</h3>
+                <ul>
+                  <li v-for="question in richVerdict.unresolved_questions" :key="question">{{ question }}</li>
+                </ul>
+              </section>
+            </template>
           </article>
         </template>
         <template v-else-if="status === 'failed' && latestEvent">

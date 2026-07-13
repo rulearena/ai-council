@@ -76,6 +76,78 @@ def test_projector_renders_completed_role_outputs() -> None:
     )
 
 
+def test_projector_renders_rich_verdict_with_evidence_and_follow_up() -> None:
+    events = [
+        {
+            "step_id": "judge-decide",
+            "role": "Judge",
+            "status": "completed",
+            "output_schema_id": "structured-verdict/v1",
+            "parsed_output": {
+                "summary": "有條件核准上線",
+                "decision": "approve-with-conditions",
+                "findings": [
+                    {
+                        "title": "驗收完成",
+                        "detail": "測試紀錄完整。",
+                        "evidence_refs": ["[證物一]", "[證物二]"],
+                    }
+                ],
+                "risks": [
+                    {
+                        "title": "回滾風險",
+                        "detail": "演練尚未完成。",
+                        "evidence_refs": ["[證物二]"],
+                    }
+                ],
+                "recommendation": "完成演練後上線。",
+                "conditions": ["完成回滾演練"],
+                "unresolved_questions": ["尖峰容量是否足夠？"],
+            },
+        }
+    ]
+
+    markdown = TranscriptProjector().project(events, title="上線審查")
+
+    assert markdown == (
+        "# 上線審查\n"
+        "\n"
+        "## Judge - judge-decide\n"
+        "\n"
+        "**Status:** completed\n"
+        "\n"
+        "### Summary\n"
+        "\n"
+        "有條件核准上線\n"
+        "\n"
+        "### Decision\n"
+        "\n"
+        "approve-with-conditions\n"
+        "\n"
+        "### Findings\n"
+        "\n"
+        "- **驗收完成:** 測試紀錄完整。\n"
+        "  - Evidence: [證物一], [證物二]\n"
+        "\n"
+        "### Risks\n"
+        "\n"
+        "- **回滾風險:** 演練尚未完成。\n"
+        "  - Evidence: [證物二]\n"
+        "\n"
+        "### Recommendation\n"
+        "\n"
+        "完成演練後上線。\n"
+        "\n"
+        "### Conditions\n"
+        "\n"
+        "- 完成回滾演練\n"
+        "\n"
+        "### Unresolved Questions\n"
+        "\n"
+        "- 尖峰容量是否足夠？\n"
+    )
+
+
 def test_projector_renders_failed_and_cancelled_status_entries() -> None:
     events = [
         {
