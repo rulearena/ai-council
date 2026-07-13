@@ -550,7 +550,12 @@ config/models.yaml.example
 74. Reverse proxy / production hosting guide
 75. Meeting reopen endpoint（誤按取消/結案的事件溯源復原：append `reopened` event，終端狀態投影需認得它）
 76. 測試 flake：`test_api.py` 的 `wait_for_activity` 2 秒 deadline 在機器負載下偏緊（背景執行緒跑四步偶爾超時；單獨重跑即過）——放寬到 5 秒
+
+> **個人版範圍外（2026-07-13 裁定）**：本工具定位為單人自用，多人/帳號/工作區類項目（18、40–44、50–53）不再排程，保留編號僅供追溯。
 77. Slice B 審查遺留（皆 non-blocker）：metadata 的 `mode_id` 指向已從 modes.yaml 移除的模式時 `GET /meetings` 整組 400（單筆髒資料炸全列表）；`"red-blue"` 預設值字面值散落三處可抽 DEFAULT_MODE_ID 常數；create 驗證錯誤碼不對稱（unknown mode 400 vs unknown participant model 404）；NewCaseModal submit 失敗仍關閉 modal（使用者輸入遺失）
+78. **案卷（Case Files）Phase 1**：建立會議時附多份文件（貼上/上傳純文字或 markdown，各有標題），**每份可指定可見角色**（法庭：控方證據/辯方書狀/雙方已提交卷宗給法官；紅藍：方案全文；辯論：參考資料；盲測：產品規格）。注入走既有 mode inputs 機制 + prompt 模板 `{{ case_files }}` 佔位符（slice B 的 renderer inputs 注入直接沿用）；全文注入 + 大小上限與 token 成本警告；存放於 meeting data dir（file-based，不建外部索引）。動機：法庭審理的災難覆盤需要事故時間軸/log/設計文件等卷宗，topic 單欄位明顯不足（2026-07-13 使用者提出）
+79. 案卷 Phase 2（僅在卷宗量超出 context window 才做）：檢索/摘要層（RAG）。Phase 1 刻意不做——個人使用量級全文注入即可，先上 RAG 是過度工程
+80. 證據編號引用：案卷文件賦予「證物一/證物二」式編號，prompt 要求角色引用時帶錨點——與 backlog 65（豐富裁決結構）銜接，依賴 78
 
 ## 16. 會議模式系統（Mode System）設計
 
