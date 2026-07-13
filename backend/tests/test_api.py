@@ -2160,6 +2160,50 @@ def test_case_files_reach_only_visible_role_prompts(tmp_path: Path) -> None:
         assert "不可假造不存在的證物錨點" in prompt
 
 
+def test_roles_without_visible_case_files_receive_citation_rules_without_evidence_leakage(
+    tmp_path: Path,
+) -> None:
+    app = create_test_app(tmp_path)
+    client = TestClient(app)
+    meeting_id = client.post(
+        "/meetings",
+        json={
+            "topic": "限制案卷可見範圍",
+            "mode_id": "courtroom",
+            "case_files": [
+                {
+                    "title": "裁判密件",
+                    "content": "Only the Judge may inspect this claim.",
+                    "visible_roles": ["Judge"],
+                }
+            ],
+        },
+    ).json()["meeting_id"]
+
+    client.post(
+        f"/meetings/{meeting_id}/start",
+        json={
+            "models": {
+                "Prosecutor": "mock-fast",
+                "Defense": "mock-fast",
+                "Judge": "mock-fast",
+            }
+        },
+    )
+    meeting = wait_for_activity(client, meeting_id, "completed")
+
+    prosecutor_prompt = next(
+        event["prompt_messages"][0]["content"]
+        for event in meeting["events"]
+        if event.get("status") == "completed" and event.get("role") == "Prosecutor"
+    )
+    assert "引用案卷中的事實或主張時，必須附上對應的 [證物…] 引用錨點" in prosecutor_prompt
+    assert "不可假造不存在的證物錨點" in prosecutor_prompt
+    assert "裁判密件" not in prosecutor_prompt
+    assert "Only the Judge may inspect this claim." not in prosecutor_prompt
+    assert "[證物一]" not in prosecutor_prompt
+
+
 def test_case_files_reach_parallel_member_instance_prompts(tmp_path: Path) -> None:
     app = create_test_app(tmp_path)
     client = TestClient(app)

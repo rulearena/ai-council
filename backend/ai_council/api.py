@@ -34,6 +34,7 @@ from ai_council.meetings.modes import (
 from ai_council.meetings.repository import MeetingRepository
 from ai_council.meetings.runner import (
     CASE_FILES_BY_ROLE_INPUT,
+    CASE_FILES_DEFAULT_ROLE,
     MeetingRunner,
     RunnerAdapters,
     TokenStreamEvent,
@@ -944,10 +945,12 @@ def case_files_by_role(case_files: list[dict[str, Any]]) -> dict[str, str]:
         "引用案卷中的事實或主張時，必須附上對應的 [證物…] 引用錨點；"
         "不可假造不存在的證物錨點。"
     )
-    return {
+    rendered = {
         role: instruction + "\n\n" + "\n\n".join(blocks)
         for role, blocks in grouped.items()
     }
+    rendered[CASE_FILES_DEFAULT_ROLE] = instruction
+    return rendered
 
 
 def validate_participant_ids(

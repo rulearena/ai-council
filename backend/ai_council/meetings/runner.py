@@ -21,6 +21,7 @@ REQUIRED_JSON_SCHEMA = (
 REQUIRED_JSON_SCHEMA_HASH = hashlib.sha256(REQUIRED_JSON_SCHEMA.encode("utf-8")).hexdigest()
 LIFECYCLE_STATUSES = {"cancelled", "closed", "reopened"}
 CASE_FILES_BY_ROLE_INPUT = "__case_files_by_role"
+CASE_FILES_DEFAULT_ROLE = "__default__"
 
 
 class ModelAdapter(Protocol):
@@ -697,7 +698,9 @@ class MeetingRunner:
         }
         case_files_by_role = (inputs or {}).get(CASE_FILES_BY_ROLE_INPUT)
         if isinstance(case_files_by_role, dict):
-            rendered["case_files"] = str(case_files_by_role.get(role, ""))
+            rendered["case_files"] = str(
+                case_files_by_role.get(role, case_files_by_role.get(CASE_FILES_DEFAULT_ROLE, ""))
+            )
         if extra:
             rendered.update(extra)
         return rendered
