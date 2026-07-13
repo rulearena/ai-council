@@ -2152,6 +2152,18 @@ pre {
   color: var(--color-text-muted);
 }
 
+.case-file-char-count {
+  justify-self: end;
+  font-size: 12px;
+  color: var(--color-text-muted);
+}
+
+.case-file-limit-error {
+  margin: 0;
+  font-size: 12px;
+  color: var(--color-danger-hover);
+}
+
 .participant-preview {
   display: flex;
   flex-wrap: wrap;

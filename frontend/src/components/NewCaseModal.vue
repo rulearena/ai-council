@@ -389,7 +389,10 @@ function buildParticipants() {
               :data-testid="`case-file-${index + 1}-content`"
               :aria-label="`案卷 ${index + 1} 內容`"
             />
-            <span :data-testid="`case-file-${index + 1}-char-count`">
+            <span
+              class="case-file-char-count"
+              :data-testid="`case-file-${index + 1}-char-count`"
+            >
               {{ file.content.length }} / {{ caseFileLimits.per_file_chars }} 字元
             </span>
             <span
