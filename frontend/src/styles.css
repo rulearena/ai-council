@@ -2164,6 +2164,13 @@ pre {
   color: var(--color-danger-hover);
 }
 
+.case-file-limits-error {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
 .participant-preview {
   display: flex;
   flex-wrap: wrap;

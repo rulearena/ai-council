@@ -43,12 +43,10 @@ const selectedMode = computed<ModeDefinition>(
 // handled by the member editor below.
 const inputValues = ref<Record<string, string>>({})
 const caseFiles = ref<DraftCaseFile[]>([])
-const fallbackCaseFileLimits: CaseFileLimits = {
-  per_file_chars: 50_000,
-  total_chars: 120_000,
-}
-const caseFileLimits = ref<CaseFileLimits>({ ...fallbackCaseFileLimits })
+const caseFileLimits = ref<CaseFileLimits | null>(null)
 const caseFileLimitsLoading = ref(false)
+const caseFileLimitsError = ref('')
+let caseFileLimitsRequestGeneration = 0
 const parallelMemberCount = ref(2)
 const parallelMembers = ref<Array<{ displayName: string; instancePrompt: string }>>([])
 const textInputs = computed(() => selectedMode.value.inputs.filter((input) => input.kind === 'text'))
@@ -64,16 +62,20 @@ const totalCaseFileChars = computed(() =>
   caseFiles.value.reduce((total, file) => total + codePointLength(file.content), 0),
 )
 const hasOversizedCaseFile = computed(() =>
-  caseFiles.value.some(
-    (file) => codePointLength(file.content) > caseFileLimits.value.per_file_chars,
-  ),
+  caseFileLimits.value
+    ? caseFiles.value.some(
+        (file) => codePointLength(file.content) > caseFileLimits.value!.per_file_chars,
+      )
+    : false,
 )
 const hasOversizedCaseFileTotal = computed(
-  () => totalCaseFileChars.value > caseFileLimits.value.total_chars,
+  () =>
+    caseFileLimits.value !== null &&
+    totalCaseFileChars.value > caseFileLimits.value.total_chars,
 )
 const estimatedCaseFileTokens = computed(() => {
   const codePoints = Array.from(caseFiles.value.map((file) => file.content).join(''))
-  const conservativeScript = /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}]/u
+  const conservativeScript = /[\p{Script_Extensions=Han}\p{Script_Extensions=Hiragana}\p{Script_Extensions=Katakana}\p{Script_Extensions=Hangul}\u30fc]/u
   const cjkCount = codePoints.filter((character) => conservativeScript.test(character)).length
   const otherNonWhitespaceCount = codePoints.filter(
     (character) => !conservativeScript.test(character) && !/\s/u.test(character),
@@ -102,30 +104,49 @@ const selectedModeParticipants = computed(() => {
 watch(
   () => props.show,
   (visible) => {
+    caseFileLimitsRequestGeneration += 1
     if (visible) {
       step.value = 'mode'
       inputValues.value = {}
       caseFiles.value = []
       clearMeetingCreationError()
       resetParallelMembers(selectedMode.value)
-      caseFileLimits.value = { ...fallbackCaseFileLimits }
-      caseFileLimitsLoading.value = true
-      void refreshCaseFileLimits()
+      caseFileLimits.value = null
+      void refreshCaseFileLimits(caseFileLimitsRequestGeneration)
+    } else {
+      caseFileLimitsLoading.value = false
     }
   },
 )
 
-async function refreshCaseFileLimits() {
+function retryCaseFileLimits() {
+  caseFileLimitsRequestGeneration += 1
+  void refreshCaseFileLimits(caseFileLimitsRequestGeneration)
+}
+
+async function refreshCaseFileLimits(generation: number) {
+  caseFileLimitsLoading.value = true
+  caseFileLimitsError.value = ''
   try {
-    caseFileLimits.value = await getCaseFileLimits()
+    const limits = await getCaseFileLimits()
+    if (generation !== caseFileLimitsRequestGeneration) return
+    caseFileLimits.value = limits
   } catch {
-    // Older or temporarily unreachable backends still get the documented safe defaults.
+    if (generation !== caseFileLimitsRequestGeneration) return
+    caseFileLimits.value = null
+    caseFileLimitsError.value = '無法載入案卷限制，請重試。'
   } finally {
-    caseFileLimitsLoading.value = false
+    if (generation === caseFileLimitsRequestGeneration) {
+      caseFileLimitsLoading.value = false
+    }
   }
 }
 
-watch([topic, selectedModeId, inputValues, caseFiles], clearMeetingCreationError, { deep: true })
+watch(
+  [topic, selectedModeId, inputValues, caseFiles, parallelMemberCount, parallelMembers],
+  clearMeetingCreationError,
+  { deep: true },
+)
 
 function chooseMode(mode: ModeDefinition) {
   if (!mode.available) return
@@ -267,6 +288,30 @@ function buildParticipants() {
 
 <template>
   <Modal :show="show" title="New Case" test-id="new-case-modal" close-test-id="new-case-close-button" @close="$emit('close')">
+    <p
+      v-if="caseFileLimitsLoading"
+      class="case-file-cost-note"
+      data-testid="case-file-limits-status"
+      role="status"
+    >
+      正在載入案卷限制…
+    </p>
+    <div
+      v-else-if="caseFileLimitsError"
+      class="error case-file-limits-error"
+      data-testid="case-file-limits-error"
+      role="alert"
+    >
+      <span>{{ caseFileLimitsError }}</span>
+      <button
+        type="button"
+        class="btn btn-secondary btn-sm"
+        data-testid="retry-case-file-limits-button"
+        @click="retryCaseFileLimits"
+      >
+        重試
+      </button>
+    </div>
     <div v-if="step === 'mode'" class="mode-picker" data-testid="mode-picker-step">
       <p class="mode-picker-hint">選擇本次會議的模式：</p>
       <div class="mode-card-grid">
@@ -363,15 +408,6 @@ function buildParticipants() {
           </button>
         </div>
 
-        <p
-          v-if="caseFileLimitsLoading"
-          class="case-file-cost-note"
-          data-testid="case-file-limits-status"
-          role="status"
-        >
-          正在載入案卷限制…
-        </p>
-
         <article
           v-for="(file, index) in caseFiles"
           :key="index"
@@ -411,14 +447,21 @@ function buildParticipants() {
               v-model="file.content"
               :data-testid="`case-file-${index + 1}-content`"
               :aria-label="`案卷 ${index + 1} 內容`"
-              :aria-invalid="codePointLength(file.content) > caseFileLimits.per_file_chars"
+              :aria-invalid="
+                caseFileLimits !== null &&
+                codePointLength(file.content) > caseFileLimits.per_file_chars
+              "
               :aria-describedby="
+                caseFileLimits !== null &&
                 codePointLength(file.content) > caseFileLimits.per_file_chars
                   ? `case-file-${index + 1}-char-count case-file-${index + 1}-limit-error`
-                  : `case-file-${index + 1}-char-count`
+                  : caseFileLimits
+                    ? `case-file-${index + 1}-char-count`
+                    : undefined
               "
             />
             <span
+              v-if="caseFileLimits"
               :id="`case-file-${index + 1}-char-count`"
               class="case-file-char-count"
               :data-testid="`case-file-${index + 1}-char-count`"
@@ -426,7 +469,10 @@ function buildParticipants() {
               {{ codePointLength(file.content) }} / {{ caseFileLimits.per_file_chars }} 字元
             </span>
             <span
-              v-if="codePointLength(file.content) > caseFileLimits.per_file_chars"
+              v-if="
+                caseFileLimits &&
+                codePointLength(file.content) > caseFileLimits.per_file_chars
+              "
               :id="`case-file-${index + 1}-limit-error`"
               class="case-file-limit-error"
               :data-testid="`case-file-${index + 1}-limit-error`"
@@ -462,7 +508,11 @@ function buildParticipants() {
             </label>
           </fieldset>
         </article>
-        <p v-if="caseFiles.length" class="case-file-cost-note" data-testid="case-file-cost-note">
+        <p
+          v-if="caseFiles.length && caseFileLimits"
+          class="case-file-cost-note"
+          data-testid="case-file-cost-note"
+        >
           案卷全文會加入 prompt 並計入模型成本；目前 {{ totalCaseFileChars }} /
           {{ caseFileLimits.total_chars }} 字元，粗估約 {{ estimatedCaseFileTokens }} tokens。
           大型案卷可能超出模型 context window。
@@ -473,7 +523,7 @@ function buildParticipants() {
           data-testid="case-file-total-limit-error"
           role="alert"
         >
-          全部案卷超過總量上限 {{ caseFileLimits.total_chars }} 字元
+          全部案卷超過總量上限 {{ caseFileLimits?.total_chars }} 字元
         </p>
       </section>
 
@@ -505,7 +555,7 @@ function buildParticipants() {
         class="btn btn-primary create-meeting-cta"
         data-testid="create-meeting-button"
         @click="submit"
-        :disabled="loading || caseFileLimitsLoading || !topic.trim() || hasEmptyRequiredInput || hasIncompleteCaseFile || hasOversizedCaseFile || hasOversizedCaseFileTotal"
+        :disabled="loading || caseFileLimitsLoading || !caseFileLimits || !topic.trim() || hasEmptyRequiredInput || hasIncompleteCaseFile || hasOversizedCaseFile || hasOversizedCaseFileTotal"
       >
         建立
       </button>
