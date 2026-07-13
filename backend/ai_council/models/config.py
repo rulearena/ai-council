@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal
@@ -95,10 +96,13 @@ class ModelConfigRepository:
 
     def _write_config(self, raw_config: dict[str, Any]) -> None:
         self.config_path.parent.mkdir(parents=True, exist_ok=True)
-        self.config_path.write_text(
-            yaml.safe_dump(raw_config, sort_keys=False, allow_unicode=True),
-            encoding="utf-8",
-        )
+        serialized = yaml.safe_dump(raw_config, sort_keys=False, allow_unicode=True)
+        temp_path = self.config_path.with_name(f".{self.config_path.name}.tmp")
+        try:
+            temp_path.write_text(serialized, encoding="utf-8")
+            os.replace(temp_path, self.config_path)
+        finally:
+            temp_path.unlink(missing_ok=True)
 
 
 def validate_model_config(model: ModelConfig) -> None:

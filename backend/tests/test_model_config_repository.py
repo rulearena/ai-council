@@ -247,3 +247,30 @@ models:
 
     with pytest.raises(ModelConfigError, match="Model entry requires id and adapter"):
         ModelConfigRepository(config_path).list_models()
+
+
+def test_write_failure_leaves_existing_file_intact(tmp_path: Path, monkeypatch) -> None:
+    config_path = tmp_path / "models.yaml"
+    repository = ModelConfigRepository(config_path)
+    repository.save_model(ModelConfig(id="keep-me", adapter="mock"))
+    original = config_path.read_text(encoding="utf-8")
+
+    def explode(*args, **kwargs):
+        raise RuntimeError("disk full")
+
+    monkeypatch.setattr("ai_council.models.config.os.replace", explode)
+
+    with pytest.raises(RuntimeError):
+        repository.save_model(ModelConfig(id="new-one", adapter="mock"))
+
+    assert config_path.read_text(encoding="utf-8") == original
+    leftovers = [p for p in tmp_path.iterdir() if p.name != "models.yaml"]
+    assert leftovers == []  # 不留半成品 temp 檔
+
+
+def test_atomic_write_round_trip(tmp_path: Path) -> None:
+    config_path = tmp_path / "models.yaml"
+    repository = ModelConfigRepository(config_path)
+    repository.save_model(ModelConfig(id="a", adapter="mock"))
+    repository.save_model(ModelConfig(id="b", adapter="mock"))
+    assert [m.id for m in repository.list_models()] == ["a", "b"]
