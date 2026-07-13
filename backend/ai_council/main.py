@@ -15,5 +15,11 @@ app = create_app(
             PROJECT_ROOT / "config" / "models.yaml",
         )
     ),
+    modes_config_path=Path(
+        os.environ.get(
+            "AI_COUNCIL_MODES_CONFIG_PATH",
+            PROJECT_ROOT / "config" / "modes.yaml",
+        )
+    ),
     prompt_dir=Path(os.environ.get("AI_COUNCIL_PROMPT_DIR", PROJECT_ROOT / "prompts")),
 )

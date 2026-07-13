@@ -36,11 +36,11 @@ function modelLabelTitle(role: SeatRole): string {
 // Chairman first (a fixed seat, not a mode role) then every AI role in the active
 // mode's roster - replaces the old hardcoded ['Chairman', 'Blue', 'Red', 'Judge']
 // literal, so a mode with a different roster renders however many seats it has.
-const seatRoles = computed<SeatRole[]>(() => ['Chairman', ...councilRoles])
+const seatRoles = computed<SeatRole[]>(() => ['Chairman', ...councilRoles.value])
 
 const roster = computed<SeatRosterEntry[]>(() => [
   { id: 'Chairman', kind: 'chair' },
-  ...activeModeRoles.map((role) => ({ id: role.id, kind: role.kind })),
+  ...activeModeRoles.value.map((role) => ({ id: role.id, kind: role.kind })),
 ])
 
 // Resolves the scene's slot groups (adjudicator/chair/podium[]/ring[]) against the

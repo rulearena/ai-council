@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, inject, ref } from 'vue'
-import { councilKey, formatDateTime, sequencePresets } from '../composables/useCouncil'
+import { activeMode, councilKey, formatDateTime, sequencePresets } from '../composables/useCouncil'
 
 const store = inject(councilKey)!
 const {
@@ -33,6 +33,11 @@ function onKeydown(event: KeyboardEvent) {
 const failedStepTitle = computed(() =>
   failedRole.value ? `${failedRole.value} 的回應失敗了，請點擊席位重試該步驟` : undefined,
 )
+
+// "開始新回合" runs the active mode's full step list from the top - describe it with
+// that mode's own step labels (spec.md 16.2) instead of a hardcoded red-blue sequence, so
+// this stays accurate for courtroom/debate/any future mode.
+const roundStepsSummary = computed(() => (activeMode.value.steps ?? []).map((step) => step.label).join(' → '))
 </script>
 
 <template>
@@ -131,7 +136,7 @@ const failedStepTitle = computed(() =>
             >
               開始新回合
             </button>
-            <small>重新跑完整流程：Blue 提案 → Red 質詢 → Blue 修訂 → Judge 裁決</small>
+            <small>重新跑完整流程：{{ roundStepsSummary }}</small>
           </section>
           <div class="advanced-options-actions">
             <button

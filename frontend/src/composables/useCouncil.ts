@@ -1,8 +1,9 @@
-import { computed, onMounted, onUnmounted, ref, type InjectionKey } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch, watchEffect, type InjectionKey } from 'vue'
 import roleBlueIcon from '../assets/roles/blue.png'
 import roleRedIcon from '../assets/roles/red.png'
 import roleJudgeIcon from '../assets/roles/judge.png'
-import { DEFAULT_MODE_ID, getModeById, type ModeRoleDefinition } from '../modes'
+import { DEFAULT_MODE_ID, getModeById, refreshModeCatalog, type ModeDefinition, type ModeRoleDefinition } from '../modes'
+import { applyModeScene } from '../scenes'
 import {
   addMeetingMessage,
   cancelMeeting,
@@ -29,10 +30,11 @@ import {
 } from '../api'
 
 // A role id as it appears in events.jsonl's `role` field. Used to be a hardcoded
-// 'Blue' | 'Red' | 'Judge' union; every meeting is still actually red-blue in slice A (no
-// backend mode_id yet - spec.md 16.7), but the type itself no longer bakes that in, so
-// seat rendering/pendingRoles/drawers/event bucketing generalize to any mode's roster
-// once slice B/C add real participants.
+// 'Blue' | 'Red' | 'Judge' union; as of slice B the backend supplies each meeting's
+// mode_id and participant roster (spec.md 16.7), and the type stays a plain string so
+// seat rendering/pendingRoles/drawers/event bucketing generalize to whichever mode's
+// roster the selected meeting actually has (resolved dynamically - see activeModeSource
+// below).
 export type CouncilRole = string
 export type SeatOccupant = CouncilRole | 'Chairman'
 export type SequencePreset = {
@@ -47,50 +49,74 @@ export type ModelTestView = {
 }
 export type RoleSeatStatus = 'waiting' | 'thinking' | 'completed' | 'failed'
 
-// The only mode slice A can actually create meetings for (spec.md 16.7). Every meeting
-// today is implicitly this mode - there's no per-meeting mode_id from the backend yet -
-// so this is the single source of truth for "which roles exist" until slice B ships
-// GET /modes and a real participants list per meeting. Exported so the step-progress
-// indicator (ActionBar.vue) can read its `steps`/`category` for display purposes.
-export const activeMode = getModeById(DEFAULT_MODE_ID)!
+// The mode currently driving the open meeting, defaulting to red-blue when no meeting is
+// selected (spec.md 16.7). A module-level singleton (not per-useCouncil() state) so every
+// module-level helper below (roleIcon/roleClass/...) and every component's import of
+// activeMode/activeModeRoles/councilRoles reads the one true "what's running right now" -
+// useCouncil()'s selectedMeeting watcher (see below) is the sole writer. This assumes
+// useCouncil() is only ever instantiated once (by App.vue) - a second concurrent instance
+// would fight over the same singleton.
+const activeModeSource = ref<ModeDefinition>(getModeById(DEFAULT_MODE_ID)!)
+
+// computed(...) wrappers (not activeModeSource itself) so existing `import { activeMode }`
+// call sites keep working unchanged in `<template>` (auto-unwrapped) and only need a
+// `.value` added where they're read from `<script>`.
+export const activeMode = computed(() => activeModeSource.value)
 
 // The active mode's roster (id + kind), for anything that needs to know each role's
 // *kind* rather than just its id - currently just CouncilStage.vue, to resolve which
 // scene slot (adjudicator/podium/ring) each role occupies (see scenes.ts's
 // resolveSceneSeats). Kept as its own export rather than making callers reach into
 // modes.ts directly, so there's one place that says "this is the mode running right now".
-export const activeModeRoles: ModeRoleDefinition[] = activeMode.roles
-
-export const sequencePresets: SequencePreset[] = [
-  { id: 'red-blue-judge', label: 'Red -> Blue -> Judge', roles: ['Red', 'Blue', 'Judge'] },
-  { id: 'blue-red-judge', label: 'Blue -> Red -> Judge', roles: ['Blue', 'Red', 'Judge'] },
-  { id: 'red-blue', label: 'Red -> Blue', roles: ['Red', 'Blue'] },
-  { id: 'judge-only', label: 'Judge only', roles: ['Judge'] },
-]
+export const activeModeRoles = computed(() => activeModeSource.value.roles)
 
 // Every AI role id in the active mode's roster, in display order - replaces the old
-// hardcoded `['Blue', 'Red', 'Judge']` literal with the same three ids, sourced from
-// modes.ts so there's exactly one place that spells out red-blue's roster.
-export const councilRoles: CouncilRole[] = activeMode.roles.map((role) => role.id)
+// hardcoded `['Blue', 'Red', 'Judge']` literal with whichever roster the active mode
+// (see activeModeSource above) actually has.
+export const councilRoles = computed<CouncilRole[]>(() => activeModeSource.value.roles.map((role) => role.id))
 
-// Backend fixed round flow (backend/ai_council/meetings/runner.py STEPS): retrying a
-// failed step re-runs it plus every step after it, in the same synchronous call. This
-// stays hand-written (not derived from modes.ts's steps[]) on purpose: the backend is
-// unchanged in slice A and only ever emits these four red-blue base_step_ids, so
-// deriving this from catalog data would add a mapping layer with no runtime benefit and
-// a real risk of silently drifting from what the backend actually does.
-const FIXED_ROUND_STEP_ROLES: Record<string, CouncilRole[]> = {
-  'blue-propose': ['Blue', 'Red', 'Blue', 'Judge'],
-  'red-critique': ['Red', 'Blue', 'Judge'],
-  'blue-revise': ['Blue', 'Judge'],
-  'judge-decide': ['Judge'],
+// Generic 2-role "auto-continue" presets, derived from the active mode's roster rather
+// than red-blue's three role ids: `members` is every `kind: 'member'` role (relay's two
+// peers), `adjudicator` is the first non-member role (relay's decision-maker). For
+// red-blue this produces the exact same four presets slice A hand-wrote (members
+// [Blue, Red], adjudicator Judge) - just under generic ids or a role-list roster of
+// fewer than 2 members can't build a meaningful "swap order" preset.
+export const sequencePresets = computed<SequencePreset[]>(() => {
+  const mode = activeModeSource.value
+  const members = mode.roles.filter((role) => role.kind === 'member').map((role) => role.id)
+  const adjudicator = mode.roles.find((role) => role.kind !== 'member')?.id
+  if (!adjudicator || members.length < 2) return []
+  const reversed = [...members].reverse()
+  const label = (roles: string[]) => roles.join(' -> ')
+  return [
+    { id: 'members-reversed-adj', label: label([...reversed, adjudicator]), roles: [...reversed, adjudicator] },
+    { id: 'members-adj', label: label([...members, adjudicator]), roles: [...members, adjudicator] },
+    { id: 'members-reversed', label: label(reversed), roles: reversed },
+    { id: 'adj-only', label: `${adjudicator} only`, roles: [adjudicator] },
+  ]
+})
+
+// The active mode's step_ids, in order (backend/ai_council/meetings/modes.py's
+// relay_plan: step_id = template name with `_` -> `-` - see docs/plans/2026-07-12-
+// mode-system-slice-b.md's naming convention). Derived from catalog data (not
+// hand-written per mode) now that the backend itself is mode-driven as of slice B, so
+// this tracks whichever mode is actually running instead of assuming red-blue's four
+// steps.
+const roundBaseSteps = computed(() =>
+  (activeModeSource.value.steps ?? []).map((step) => step.template.replace(/_/g, '-')),
+)
+
+// Retrying a failed step re-runs it plus every step after it in the same round (backend's
+// retry_failed_step - see runner.py). baseStepId is the failed event's base_step_id/
+// step_id; this returns that step's role plus every subsequent step's role, in the
+// active mode's step order. Falls back to just the failed role itself for a base_step_id
+// outside the round's steps (e.g. a directed/sequence response's own step_id).
+function retryCascadeRoles(baseStepId: string): CouncilRole[] {
+  const steps = activeModeSource.value.steps ?? []
+  const index = roundBaseSteps.value.indexOf(baseStepId)
+  if (index < 0) return []
+  return steps.slice(index).map((step) => step.role)
 }
-
-// The four base steps of one fixed round (backend/ai_council/meetings/runner.py STEPS).
-// Directed/sequence responses reuse the same roles but under different base_step_ids
-// ('blue-response' etc, see DIRECTED_RESPONSE_STEPS), so they never satisfy this list -
-// only a genuine blue-propose/red-critique/blue-revise/judge-decide completion does.
-const FIXED_ROUND_BASE_STEPS = ['blue-propose', 'red-critique', 'blue-revise', 'judge-decide'] as const
 
 // Maps modes.ts's abstract `portrait` key (the small-icon identity, not the scene's
 // full-body art) to the actual asset. Only three exist by hand today; any role without a
@@ -105,11 +131,11 @@ const ROLE_ICON_ASSETS: Partial<Record<string, string>> = {
 const NEUTRAL_ROLE_COLOR = '#9aa5b5'
 
 function activeRoleDefinition(role: string): ModeRoleDefinition | undefined {
-  return activeMode.roles.find((candidate) => candidate.id === role)
+  return activeModeSource.value.roles.find((candidate) => candidate.id === role)
 }
 
 export function isCouncilRole(role: string): role is CouncilRole {
-  return councilRoles.includes(role)
+  return councilRoles.value.includes(role)
 }
 
 // undefined => no hand-drawn icon asset for this role; callers render RoleSilhouette
@@ -169,25 +195,27 @@ export function formatDateTime(value: string | undefined): string {
   return date.toLocaleString()
 }
 
+// The mode a given meeting resolves to (or the default mode for no meeting/an unknown
+// mode_id) - shared by the two watchers below so both agree on "what mode is this" without
+// one depending on the other having already run (see the scene-override watcher's comment
+// for why that independence matters).
+function resolveActiveMode(meeting: Meeting | null): ModeDefinition {
+  return getModeById(meeting?.mode_id ?? DEFAULT_MODE_ID) ?? getModeById(DEFAULT_MODE_ID)!
+}
+
 export function useCouncil() {
   const models = ref<ModelConfig[]>([])
   const meetings = ref<Meeting[]>([])
   const selectedMeeting = ref<Meeting | null>(null)
   const selectedEvent = ref<MeetingEvent | null>(null)
   const topic = ref('先做後端核心流程')
-  // Built from councilRoles (not a hardcoded {Blue,Red,Judge} literal) so the model-slot
-  // set generalizes to whatever the active mode's roster is - still exactly those three
-  // keys today since councilRoles itself is still just red-blue's roster (see modes.ts).
-  const selectedModels = ref<Record<CouncilRole, string>>(
-    Object.fromEntries(councilRoles.map((role) => [role, ''])),
-  )
-  const modelTestResults = ref<Record<CouncilRole, ModelTestView>>(
-    Object.fromEntries(
-      councilRoles.map((role) => [role, { status: 'unknown', testedAt: '', error: '' } satisfies ModelTestView]),
-    ),
-  )
+  // Populated by the councilRoles watcher below - the roster (and therefore which keys
+  // these need) now changes whenever the selected meeting's mode does, not just once at
+  // startup.
+  const selectedModels = ref<Record<CouncilRole, string>>({})
+  const modelTestResults = ref<Record<CouncilRole, ModelTestView>>({})
   const chairMessage = ref('')
-  const selectedSequencePresetId = ref(sequencePresets[0].id)
+  const selectedSequencePresetId = ref(sequencePresets.value[0]?.id ?? '')
   const meetingSearch = ref('')
   const statusFilter = ref<'all' | Meeting['status']>('all')
   const transcriptSearchQuery = ref('')
@@ -228,6 +256,65 @@ export function useCouncil() {
   // by any actual role action (see clearContinueHint), not by a timer.
   const showContinueHint = ref(false)
 
+  // Drives activeModeSource (module-level, see top of file) from whichever meeting is
+  // currently selected - the whole point of slice B's mode system: the active mode
+  // follows the open meeting instead of being a fixed red-blue constant. `watchEffect`
+  // (not `watch(selectedMeeting, ...)`) on purpose: it also re-reads `getModeById` after
+  // `refreshModeCatalog()` (called from refreshAll() on mount, further down) replaces
+  // modeCatalog's contents (a `splice`, tracked the same way `selectedMeeting` is), so a
+  // mode fetched from the backend after this effect's first run still gets picked up - a
+  // plain `watch(selectedMeeting, ...)` would only re-run on a meeting change and could
+  // stay stuck on the local fallback mode object. No meeting selected (back at the list)
+  // falls back to DEFAULT_MODE_ID, same as before any meeting is ever opened.
+  watchEffect(() => {
+    activeModeSource.value = resolveActiveMode(selectedMeeting.value)
+  })
+
+  // Applies (spec.md 16.7) the resolved mode's default_scene as a non-persisted scene
+  // override (see scenes.ts's applyModeScene) - deliberately a *separate* watcher from the
+  // activeModeSource one above, keyed on a `${meeting_id}::${defaultScene}` string rather
+  // than `selectedMeeting` itself. `selectedMeeting.value` gets reassigned to a brand-new
+  // object on every websocket event/run-start/openMeeting call while staying the *same*
+  // meeting (see e.g. the WS handler and openMeeting further down) - a watcher keyed on
+  // the ref (or on a freshly-built tuple/array, which Vue also treats as a new identity
+  // every run) would re-fire on every one of those and reapply default_scene each time,
+  // silently stomping a scene the user just picked manually in Settings mid-meeting. A
+  // primitive string key only changes value when the meeting identity or its mode's
+  // default_scene actually changes, so the override is (re-)applied exactly on a genuine
+  // meeting switch (reopening it after switching away included) and left alone otherwise -
+  // matching setScene's "manual pick wins for the rest of this meeting" contract.
+  const sceneOverrideKey = computed(() => {
+    const meeting = selectedMeeting.value
+    return meeting ? `${meeting.meeting_id}::${resolveActiveMode(meeting).defaultScene}` : null
+  })
+  watch(sceneOverrideKey, () => {
+    const meeting = selectedMeeting.value
+    applyModeScene(meeting ? resolveActiveMode(meeting).defaultScene : null)
+  })
+
+  // Keeps selectedModels/modelTestResults' keys in sync with whichever roster is active
+  // right now (councilRoles, driven by activeModeSource - see the selectedMeeting watcher
+  // below). Existing values for roles that are still around survive a mode switch;
+  // a role that's newly in the roster gets the first available model (selectedModels) or
+  // an 'unknown' test result (modelTestResults). `immediate: true` also does this
+  // composable's original one-time startup seeding, so no separate init is needed.
+  watch(
+    councilRoles,
+    (roles) => {
+      const firstModel = models.value[0]?.id ?? ''
+      selectedModels.value = Object.fromEntries(
+        roles.map((role) => [role, selectedModels.value[role] || firstModel]),
+      )
+      modelTestResults.value = Object.fromEntries(
+        roles.map((role) => [
+          role,
+          modelTestResults.value[role] ?? ({ status: 'unknown', testedAt: '', error: '' } satisfies ModelTestView),
+        ]),
+      )
+    },
+    { immediate: true },
+  )
+
   const events = computed(() => selectedMeeting.value?.events ?? [])
   const isTerminalMeeting = computed(() =>
     events.value.some((event) => event.status === 'closed' || event.status === 'cancelled'),
@@ -238,7 +325,9 @@ export function useCouncil() {
     return events.value.length ? '繼續討論' : '開始審議'
   })
   const selectedSequencePreset = computed(
-    () => sequencePresets.find((preset) => preset.id === selectedSequencePresetId.value) ?? sequencePresets[0],
+    () =>
+      sequencePresets.value.find((preset) => preset.id === selectedSequencePresetId.value) ??
+      sequencePresets.value[0],
   )
   const operationStatus = computed(() => {
     if (loading.value) return 'running'
@@ -263,7 +352,7 @@ export function useCouncil() {
   )
   const latestRoleEvent = computed<Record<CouncilRole, MeetingEvent | null>>(() => {
     const result: Record<CouncilRole, MeetingEvent | null> = Object.fromEntries(
-      councilRoles.map((role) => [role, null]),
+      councilRoles.value.map((role) => [role, null]),
     )
     for (const event of events.value) {
       if (isCouncilRole(event.role) && (event.status === 'completed' || event.status === 'failed')) {
@@ -281,9 +370,9 @@ export function useCouncil() {
   // see startOrContinueMeeting.
   const isFixedRoundComplete = computed(() => {
     const roundEvents = events.value.filter((event) => isCouncilRole(event.role))
-    if (!roundEvents.length) return false
+    if (!roundEvents.length || !roundBaseSteps.value.length) return false
     const latestRound = Math.max(...roundEvents.map((event) => event.round ?? 1))
-    return FIXED_ROUND_BASE_STEPS.every((baseStepId) =>
+    return roundBaseSteps.value.every((baseStepId) =>
       roundEvents.some(
         (event) =>
           (event.base_step_id ?? event.step_id) === baseStepId &&
@@ -297,7 +386,7 @@ export function useCouncil() {
       selectedMeeting.value &&
       !isTerminalMeeting.value &&
       !isMeetingRunning.value &&
-      councilRoles.every((role) => selectedModels.value[role]),
+      councilRoles.value.every((role) => selectedModels.value[role]),
   )
   // The role whose latest event is a failure, if any. Both /start and /sequences are a
   // known silent no-op once a step has failed (confirmed against the real backend: it
@@ -307,26 +396,27 @@ export function useCouncil() {
   // forward, so callers use this to disable the round-level actions and point the user
   // at the failed seat instead of letting them hit that trap.
   const failedRole = computed<CouncilRole | null>(
-    () => councilRoles.find((role) => roleSeatStatus(role) === 'failed') ?? null,
+    () => councilRoles.value.find((role) => roleSeatStatus(role) === 'failed') ?? null,
   )
 
   // Relay step-progress display (spec.md 16.6: "第 2 步／共 4 步：紅軍質詢中"), derived
   // purely from mode.steps + pendingRoles - display-only, and deliberately does not
-  // drive any runtime behavior (see the FIXED_ROUND_STEP_ROLES comment above for why the
-  // real queue logic stays independent of this catalog). pendingRoles reflects whichever
-  // action queued it (a fresh round, a retried tail, a directed response, a sequence
-  // preset) - this only renders when that queue happens to line up with a *suffix* of
-  // the mode's full step list. That's always true for a fresh round ("開始審議"/"開始新回合")
-  // and for any retry (retrying re-queues the failed step through the end - see
+  // drive any runtime behavior (the actual queue logic - applyPendingRoleUpdates et al -
+  // stays independent of this catalog read). pendingRoles reflects whichever action
+  // queued it (a fresh round, a retried tail, a directed response, a sequence preset) -
+  // this only renders when that queue happens to line up with a *suffix* of the mode's
+  // full step list. That's always true for a fresh round ("開始審議"/"開始新回合") and for
+  // any retry (retrying re-queues the failed step through the end - see
   // retrySelectedStep). It also happens to be true for some directed responses/sequence
-  // presets whose roles coincide with a real tail (e.g. a lone Judge directed response,
-  // or the "red-blue-judge" preset) - harmless, since the label is accurate in those
-  // cases too (that role genuinely is thinking at that point in the flow); a preset like
-  // "red-blue" that doesn't match any tail correctly shows nothing instead.
+  // presets whose roles coincide with a real tail (e.g. a lone adjudicator directed
+  // response, or the "members-reversed-adj" preset) - harmless, since the label is
+  // accurate in those cases too (that role genuinely is thinking at that point in the
+  // flow); a preset like "members-reversed" that doesn't match any tail correctly shows
+  // nothing instead.
   const currentStepProgress = computed<{ index: number; total: number; label: string } | null>(() => {
-    const steps = activeMode.steps
+    const steps = activeMode.value.steps
     const pending = pendingRoles.value
-    if (activeMode.category !== 'relay' || !steps || !pending.length || pending.length > steps.length) {
+    if (activeMode.value.category !== 'relay' || !steps || !pending.length || pending.length > steps.length) {
       return null
     }
     const startIndex = steps.length - pending.length
@@ -343,20 +433,28 @@ export function useCouncil() {
 
   async function refreshAll() {
     error.value = ''
+    // Failure here doesn't block startup - refreshModeCatalog() already catches and
+    // leaves modeCatalog on its local fallback data (see modes.ts), so the rest of
+    // refreshAll proceeds exactly as it would if the backend catalog had loaded.
+    await refreshModeCatalog()
     models.value = await getModels()
     meetings.value = await getMeetings()
     const firstModel = models.value[0]?.id ?? ''
     selectedModels.value = Object.fromEntries(
-      councilRoles.map((role) => [role, selectedModels.value[role] || firstModel]),
+      councilRoles.value.map((role) => [role, selectedModels.value[role] || firstModel]),
     )
     if (selectedMeeting.value) {
       await openMeeting(selectedMeeting.value.meeting_id)
     }
   }
 
-  async function createNewMeeting() {
+  // NewCaseModal passes the user's actual mode picker choice (selectedMode.id) and the
+  // participants step's input form values here. modeId/inputs still default to
+  // red-blue/{} as a defensive fallback for any other/future call site that omits them,
+  // not because anything live still relies on that default.
+  async function createNewMeeting(modeId: string = DEFAULT_MODE_ID, inputs: Record<string, string> = {}) {
     await runAction(async () => {
-      const meeting = await createMeeting(topic.value)
+      const meeting = await createMeeting(topic.value, { modeId, inputs })
       meetings.value = await getMeetings()
       await openMeeting(meeting.meeting_id)
     })
@@ -399,7 +497,10 @@ export function useCouncil() {
     if (!selectedMeeting.value || !canRun.value) return
     clearContinueHint()
     const meetingId = selectedMeeting.value.meeting_id
-    pendingRoles.value.push('Blue', 'Red', 'Blue', 'Judge')
+    // The active mode's full step roster, in order (was a literal ['Blue','Red','Blue',
+    // 'Judge']) - a round always runs every step, so this is roundBaseSteps' roles, not
+    // just retryCascadeRoles' tail.
+    pendingRoles.value.push(...(activeModeSource.value.steps ?? []).map((step) => step.role))
     connectMeetingEvents(meetingId)
     await runAction(async () => {
       await startMeeting(meetingId, selectedModels.value)
@@ -606,7 +707,12 @@ export function useCouncil() {
   }
 
   async function requestSelectedRoleSequence() {
-    if (!selectedMeeting.value || !canRun.value) return
+    // selectedSequencePreset can be undefined when the active mode's roster can't build
+    // any presets (fewer than 2 members, or no adjudicator - see sequencePresets above,
+    // which returns []). No mode buildable today hits that (all three `parallel` modes
+    // are still `available: false`), but this guards against the TypeError up front
+    // rather than relying on that staying true.
+    if (!selectedMeeting.value || !canRun.value || !selectedSequencePreset.value) return
     clearContinueHint()
     pendingRoles.value.push(...selectedSequencePreset.value.roles)
     await runAction(async () => {
@@ -623,7 +729,8 @@ export function useCouncil() {
     if (!selectedMeeting.value || !canRun.value || event.status !== 'failed') return
     clearContinueHint()
     const baseStepId = event.base_step_id ?? event.step_id
-    const remainingRoles = FIXED_ROUND_STEP_ROLES[baseStepId] ?? (isCouncilRole(event.role) ? [event.role] : [])
+    const cascade = retryCascadeRoles(baseStepId)
+    const remainingRoles = cascade.length ? cascade : isCouncilRole(event.role) ? [event.role] : []
     pendingRoles.value.push(...remainingRoles)
     await runAction(async () => {
       await retryStep(selectedMeeting.value!.meeting_id, event.step_id, selectedModels.value)

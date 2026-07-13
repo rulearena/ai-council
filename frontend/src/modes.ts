@@ -1,13 +1,26 @@
-// Local mode catalog - slice A's stand-in for the future `GET /modes` endpoint (spec.md
-// section 16.5). Same schema (16.2) so swapping the data source later is a fetch, not a
-// rewrite: components should keep importing `modeCatalog`/`getModeById` from here, and a
-// later slice replaces the *body* of this module with a fetched-and-cached copy behind
-// the same exports.
+// Mode catalog. Primary data source is `GET /modes` (spec.md section 16.5), fetched via
+// `refreshModeCatalog()` below - called once at app startup (slice B task 9 wires the
+// call site). The six local consts further down (redBlueMode, courtroomMode, ...) seed
+// `modeCatalog`'s initial value and double as the fallback catalog whenever the backend
+// is unreachable, so behavior degrades to slice A's rather than breaking. Same schema
+// (16.2) either way, so components should keep importing `modeCatalog`/`getModeById`
+// from here regardless of which data source is currently live.
 //
-// Only `red-blue` is buildable in slice A (no backend support yet for the other five -
-// see spec.md 16.5/16.7). The rest exist so the New Case mode picker has real content to
-// browse (name/category/tagline/when-to-use/SOP) with their "即將推出" state wired to an
-// actual `available: false` flag rather than a hardcoded exception list.
+// The local fallback consts' `available` flags mirror slice A: only `red-blue` true, the
+// rest false. Once the backend catalog loads, its own `available` values win instead -
+// see mapBackendMode. The local copies exist so the New Case mode picker always has real
+// content to browse (name/category/tagline/when-to-use/SOP) even before/without a
+// successful fetch.
+import { reactive } from 'vue'
+import {
+  getModes,
+  type BackendModeDefinition,
+  type BackendModeFanout,
+  type BackendModeInput,
+  type BackendModeRole,
+  type BackendModeStep,
+  type BackendModeSynthesis,
+} from './api'
 
 export type ModeCategory = 'relay' | 'parallel'
 
@@ -81,8 +94,12 @@ export type ModeDefinition = {
   steps?: RelayStep[]
   fanout?: FanoutConfig
   synthesis?: SynthesisConfig
-  // Only red-blue is wired to a real backend today (spec.md 16.7, slice A). The rest
-  // render fully (card, tagline, SOP) but their "建立" action stays disabled.
+  // As of slice B, sourced from the backend catalog (GET /modes - see
+  // refreshModeCatalog/mapBackendMode below) once it loads: every `relay` mode
+  // (red-blue/courtroom/debate) is buildable, while `parallel` modes still render fully
+  // (card, tagline, SOP) but stay disabled until slice C wires up the parallel executor
+  // (spec.md 16.7). The local fallback consts further down hardcode the same slice-A-era
+  // values (only red-blue true) for whenever the backend is unreachable.
   available: boolean
 }
 
@@ -256,33 +273,98 @@ export const personaTestingMode: ModeDefinition = {
   available: false,
 }
 
-export const modeCatalog: ModeDefinition[] = [
+// `reactive` (not a plain array) so `refreshModeCatalog`'s in-place splice below is
+// visible to every component's `v-for`/`.find()` over `modeCatalog` without them
+// re-importing anything - same array identity, new contents.
+export const modeCatalog = reactive<ModeDefinition[]>([
   redBlueMode,
   courtroomMode,
   debateMode,
   brainstormMode,
   sixHatsMode,
   personaTestingMode,
-]
+])
+
+function mapBackendRole(role: BackendModeRole): ModeRoleDefinition {
+  return {
+    id: role.id,
+    name: role.name,
+    color: role.color,
+    portrait: role.portrait ?? undefined,
+    // Backend already validated `kind` against VALID_ROLE_KINDS (modes.py) when it
+    // parsed config/modes.yaml, so it's already one of RoleKind's members here.
+    kind: role.kind as RoleKind,
+  }
+}
+
+function mapBackendStep(step: BackendModeStep): RelayStep {
+  return { role: step.role, label: step.label, template: step.template }
+}
+
+function mapBackendInput(input: BackendModeInput): ModeInputField {
+  // Backend already validated `id`/`kind` against the yaml schema; the frontend's
+  // ModeInputField discriminated union doesn't need to re-verify that overlap here.
+  return { id: input.id, label: input.label, kind: input.kind } as ModeInputField
+}
+
+function mapBackendFanout(fanout: BackendModeFanout): FanoutConfig {
+  return {
+    role: fanout.role,
+    label: fanout.label,
+    template: fanout.template,
+    minInstances: fanout.min_instances,
+    maxInstances: fanout.max_instances,
+    instancePrompt: fanout.instance_prompt,
+  }
+}
+
+function mapBackendSynthesis(synthesis: BackendModeSynthesis): SynthesisConfig {
+  return { role: synthesis.role, label: synthesis.label, template: synthesis.template }
+}
+
+// snake_case (backend/spec.md 16.2) -> camelCase (this module's existing ModeDefinition
+// shape). `steps`/`fanout`/`synthesis` are optional both sides - the backend omits the
+// key entirely for a mode that doesn't have it, so this only sets them when present
+// rather than writing `undefined` over top.
+export function mapBackendMode(raw: BackendModeDefinition): ModeDefinition {
+  const mode: ModeDefinition = {
+    id: raw.id,
+    name: raw.name,
+    // Backend already validated `category` against VALID_CATEGORIES (modes.py) when it
+    // parsed config/modes.yaml, so it's already one of ModeCategory's members here.
+    category: raw.category as ModeCategory,
+    tagline: raw.tagline,
+    whenToUse: raw.when_to_use,
+    sop: raw.sop,
+    defaultScene: raw.default_scene,
+    inputs: raw.inputs.map(mapBackendInput),
+    roles: raw.roles.map(mapBackendRole),
+    available: raw.available,
+  }
+  if (raw.steps) mode.steps = raw.steps.map(mapBackendStep)
+  if (raw.fanout) mode.fanout = mapBackendFanout(raw.fanout)
+  if (raw.synthesis) mode.synthesis = mapBackendSynthesis(raw.synthesis)
+  return mode
+}
+
+// Swaps `modeCatalog`'s contents for the live backend catalog, in place (so existing
+// references stay valid - see the `reactive` note above). Falls back to whatever
+// `modeCatalog` already holds (the local consts, on first call) if the backend is
+// unreachable or returns nothing, so a failed fetch degrades to slice A's behavior
+// instead of leaving the picker empty.
+export async function refreshModeCatalog(): Promise<void> {
+  try {
+    const fetched = await getModes()
+    if (fetched.length) modeCatalog.splice(0, modeCatalog.length, ...fetched.map(mapBackendMode))
+  } catch (error) {
+    console.warn('GET /modes failed; using local mode catalog fallback', error)
+  }
+}
 
 export const DEFAULT_MODE_ID = 'red-blue'
 
 export function getModeById(id: string): ModeDefinition | undefined {
   return modeCatalog.find((mode) => mode.id === id)
-}
-
-// Every role id this catalog knows about, across every mode - used by useCouncil.ts to
-// tell a genuine AI-role event apart from the human chair's ('Human') without hardcoding
-// a per-mode list. Only red-blue's ids are ever actually exercised in slice A (it's the
-// only buildable mode), but this stays mode-agnostic on purpose so slice B/C don't need
-// to touch it.
-export function allKnownRoleIds(): string[] {
-  const ids = new Set<string>()
-  for (const mode of modeCatalog) {
-    for (const role of mode.roles) ids.add(role.id)
-    if (mode.fanout) ids.add(mode.fanout.role)
-  }
-  return [...ids]
 }
 
 // Pure, side-effect-free point layout for a `ring[]` seat group (spec.md 16.6): N seats

@@ -12,9 +12,13 @@ defineEmits<{ close: [] }>()
 const store = inject(councilKey)!
 const { models, selectedModels, modelTestResults, devMode, testSelectedModel, loading } = store
 
-const { scenes, selectedSceneId, setScene } = useScenePreference()
+const { scenes, currentScene, setScene } = useScenePreference()
+// Reads currentScene (not the persisted selectedSceneId) so the dropdown always matches
+// what the stage is actually showing, including while a mode's default_scene override is
+// in play - selecting an option here calls setScene(), which clears any override, so the
+// picker never lags behind a manual pick either.
 const sceneModel = computed({
-  get: () => selectedSceneId.value,
+  get: () => currentScene.value.id,
   set: (id: string) => setScene(id),
 })
 </script>

@@ -47,18 +47,10 @@ class StepDefinition:
     template_name: str
 
 
-STEPS = [
-    StepDefinition("blue-propose", "Blue", "blue_propose"),
-    StepDefinition("red-critique", "Red", "red"),
-    StepDefinition("blue-revise", "Blue", "blue_revise"),
-    StepDefinition("judge-decide", "Judge", "judge"),
-]
-
-DIRECTED_RESPONSE_STEPS = {
-    "Blue": StepDefinition("blue-response", "Blue", "blue_revise"),
-    "Red": StepDefinition("red-response", "Red", "red"),
-    "Judge": StepDefinition("judge-response", "Judge", "judge"),
-}
+@dataclass(frozen=True)
+class RelayPlan:
+    steps: list[StepDefinition]
+    directed_steps: dict[str, StepDefinition]
 
 
 class MeetingRunner:
@@ -85,17 +77,21 @@ class MeetingRunner:
         meeting_id: str,
         topic: str,
         model_assignments: dict[str, ModelConfig],
+        plan: RelayPlan,
+        inputs: dict[str, str] | None = None,
     ) -> None:
         if self._is_terminal(meeting_id):
             return
-        round_number = self._next_round_number(meeting_id)
-        start_index = self._first_incomplete_step_index(meeting_id, round_number)
+        round_number = self._next_round_number(meeting_id, plan)
+        start_index = self._first_incomplete_step_index(meeting_id, round_number, plan.steps)
         if start_index is None:
             return
         self._run_from_step(
             meeting_id=meeting_id,
             topic=topic,
             model_assignments=model_assignments,
+            steps=plan.steps,
+            inputs=inputs,
             start_index=start_index,
             attempt_override=None,
             round_number=round_number,
@@ -108,16 +104,25 @@ class MeetingRunner:
         step_id: str,
         topic: str,
         model_assignments: dict[str, ModelConfig],
+        plan: RelayPlan,
+        inputs: dict[str, str] | None = None,
     ) -> None:
         failed_event = self._latest_event_for_step(meeting_id, step_id)
         if not failed_event or failed_event.get("status") != "failed":
             raise ValueError(f"Step is not failed: {step_id}")
         base_step_id = str(failed_event.get("base_step_id", failed_event.get("step_id")))
-        start_index = next(index for index, step in enumerate(STEPS) if step.step_id == base_step_id)
+        try:
+            start_index = next(
+                index for index, step in enumerate(plan.steps) if step.step_id == base_step_id
+            )
+        except StopIteration as error:
+            raise ValueError(f"Step is not part of this meeting's mode: {base_step_id}") from error
         self._run_from_step(
             meeting_id=meeting_id,
             topic=topic,
             model_assignments=model_assignments,
+            steps=plan.steps,
+            inputs=inputs,
             start_index=start_index,
             attempt_override=int(failed_event.get("attempt", 1)) + 1,
             round_number=int(failed_event.get("round", 1)),
@@ -130,10 +135,12 @@ class MeetingRunner:
         topic: str,
         role: str,
         model_assignments: dict[str, ModelConfig],
+        plan: RelayPlan,
+        inputs: dict[str, str] | None = None,
     ) -> None:
         if self._is_terminal(meeting_id):
             return
-        step = DIRECTED_RESPONSE_STEPS.get(role)
+        step = plan.directed_steps.get(role)
         if step is None:
             raise ValueError(f"Unknown role: {role}")
         if role not in model_assignments:
@@ -143,9 +150,10 @@ class MeetingRunner:
             meeting_id=meeting_id,
             topic=topic,
             model_assignments=model_assignments,
+            inputs=inputs,
             step=step,
             attempt=1,
-            round_number=self._next_round_number(meeting_id),
+            round_number=self._next_round_number(meeting_id, plan),
             event_step_id=f"directed-{directed_sequence}-{role.lower()}-response",
             extra_event_fields={
                 "interaction_type": "directed-role-response",
@@ -160,6 +168,8 @@ class MeetingRunner:
         topic: str,
         roles: list[str],
         model_assignments: dict[str, ModelConfig],
+        plan: RelayPlan,
+        inputs: dict[str, str] | None = None,
     ) -> None:
         if self._is_terminal(meeting_id):
             return
@@ -170,7 +180,7 @@ class MeetingRunner:
 
         steps: list[StepDefinition] = []
         for role in roles:
-            step = DIRECTED_RESPONSE_STEPS.get(role)
+            step = plan.directed_steps.get(role)
             if step is None:
                 raise ValueError(f"Unknown role: {role}")
             if role not in model_assignments:
@@ -178,7 +188,7 @@ class MeetingRunner:
             steps.append(step)
 
         sequence_number = self._next_role_sequence_number(meeting_id)
-        round_number = self._next_round_number(meeting_id)
+        round_number = self._next_round_number(meeting_id, plan)
         for index, step in enumerate(steps, start=1):
             if self._is_terminal(meeting_id):
                 return
@@ -186,6 +196,7 @@ class MeetingRunner:
                 meeting_id=meeting_id,
                 topic=topic,
                 model_assignments=model_assignments,
+                inputs=inputs,
                 step=step,
                 attempt=1,
                 round_number=round_number,
@@ -238,11 +249,13 @@ class MeetingRunner:
         meeting_id: str,
         topic: str,
         model_assignments: dict[str, ModelConfig],
+        steps: list[StepDefinition],
+        inputs: dict[str, str] | None,
         start_index: int,
         attempt_override: int | None,
         round_number: int,
     ) -> None:
-        for index, step in enumerate(STEPS[start_index:], start=start_index):
+        for index, step in enumerate(steps[start_index:], start=start_index):
             if self._is_terminal(meeting_id):
                 return
             attempt = attempt_override if index == start_index and attempt_override else 1
@@ -250,6 +263,7 @@ class MeetingRunner:
                 meeting_id=meeting_id,
                 topic=topic,
                 model_assignments=model_assignments,
+                inputs=inputs,
                 step=step,
                 attempt=attempt,
                 round_number=round_number,
@@ -264,6 +278,7 @@ class MeetingRunner:
         meeting_id: str,
         topic: str,
         model_assignments: dict[str, ModelConfig],
+        inputs: dict[str, str] | None,
         step: StepDefinition,
         attempt: int,
         round_number: int,
@@ -283,6 +298,7 @@ class MeetingRunner:
                 title=topic,
             ),
             required_json_schema=REQUIRED_JSON_SCHEMA,
+            inputs=inputs,
         )
 
         def emit_token_delta(content: str) -> None:
@@ -432,9 +448,11 @@ class MeetingRunner:
         ]
         return matching_events[-1] if matching_events else None
 
-    def _first_incomplete_step_index(self, meeting_id: str, round_number: int) -> int | None:
+    def _first_incomplete_step_index(
+        self, meeting_id: str, round_number: int, steps: list[StepDefinition]
+    ) -> int | None:
         events = self.repository.read_events(meeting_id)
-        for index, step in enumerate(STEPS):
+        for index, step in enumerate(steps):
             event_step_id = self._event_step_id(step.step_id, round_number)
             matching_events = [event for event in events if event.get("step_id") == event_step_id]
             if not matching_events:
@@ -443,14 +461,15 @@ class MeetingRunner:
                 return None
         return None
 
-    def _next_round_number(self, meeting_id: str) -> int:
-        completed_judge_events = [
+    def _next_round_number(self, meeting_id: str, plan: RelayPlan) -> int:
+        final_step_id = plan.steps[-1].step_id
+        completed_final_step_events = [
             event
             for event in self.repository.read_events(meeting_id)
             if event.get("status") == "completed"
-            and event.get("base_step_id", event.get("step_id")) == "judge-decide"
+            and event.get("base_step_id", event.get("step_id")) == final_step_id
         ]
-        return len(completed_judge_events) + 1
+        return len(completed_final_step_events) + 1
 
     def _next_directed_response_number(self, meeting_id: str) -> int:
         directed_events = [

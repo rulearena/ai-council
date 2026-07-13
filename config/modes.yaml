@@ -1,0 +1,136 @@
+modes:
+  - id: red-blue
+    name: 紅藍對抗
+    category: relay
+    tagline: 藍軍提案、紅軍質詢、裁判定案 —— 最扎實的方案壓力測試。
+    when_to_use: 需要對單一方案做深度攻防、揪出被忽略的風險與反例時使用。
+    sop:
+      - 輸入要被驗證的方案主題
+      - 為藍軍/紅軍/裁判挑選模型
+      - 開始審議，觀察紅軍指出的缺陷
+      - 對裁決不滿可追問或開新回合
+    default_scene: meeting-room
+    inputs: []
+    roles:
+      - { id: Blue, name: 藍軍, color: "#4d8dff", portrait: blue, kind: member }
+      - { id: Red, name: 紅軍, color: "#ff6b5e", portrait: red, kind: member }
+      - { id: Judge, name: 裁判, color: "#e8b44c", portrait: judge, kind: adjudicator }
+    steps:
+      - { role: Blue, template: blue_propose, label: 藍軍提案 }
+      - { role: Red, template: red_critique, label: 紅軍質詢 }
+      - { role: Blue, template: blue_revise, label: 藍軍修訂 }
+      - { role: Judge, template: judge_decide, label: 裁判裁決 }
+
+  - id: courtroom
+    name: 法庭審理
+    category: relay
+    tagline: 像一場真實庭審一樣，逐條指控、逐條辯護，逼近事故或架構決策的真相。
+    when_to_use: 適合災難覆盤、複雜架構除錯 —— 把「被審理的事故/設計」當被告，交互詰問到水落石出。
+    sop:
+      - 輸入要被審理的事故或架構決策
+      - 為檢察官/辯護律師/法官挑選模型
+      - 開始審理，依序觀察指控、辯護、再質詢
+      - 參考法官判決；對判決不滿可追問或開新回合
+    default_scene: courtroom
+    inputs: []
+    roles:
+      - { id: Prosecutor, name: 檢察官, color: "#ff6b5e", kind: member }
+      - { id: Defense, name: 辯護律師, color: "#4d8dff", kind: member }
+      - { id: Judge, name: 法官, color: "#e8b44c", kind: adjudicator }
+    steps:
+      - { role: Prosecutor, template: courtroom_charge, label: 檢察官指控 }
+      - { role: Defense, template: courtroom_defense, label: 辯護律師答辯 }
+      - { role: Prosecutor, template: courtroom_rebuttal, label: 檢察官再質詢 }
+      - { role: Judge, template: courtroom_verdict, label: 法官判決 }
+
+  - id: debate
+    name: 辯論
+    category: relay
+    tagline: 正反雙方各自申論、交叉質詢，仲裁人裁定哪條路線更站得住腳。
+    when_to_use: 適合在兩條明確對立的路線（position A vs. B）間做決策時使用。
+    sop:
+      - 輸入正方/反方各自的立場
+      - 為正方/反方/仲裁人挑選模型
+      - 開始辯論，依序觀察申論與交叉質詢
+      - 參考仲裁人裁決；對裁決不滿可追問或開新回合
+    default_scene: meeting-room
+    inputs:
+      - { id: position_a, label: 正方立場, kind: text }
+      - { id: position_b, label: 反方立場, kind: text }
+    roles:
+      - { id: Pro, name: 正方, color: "#4d8dff", kind: member }
+      - { id: Con, name: 反方, color: "#ff6b5e", kind: member }
+      - { id: Arbiter, name: 仲裁人, color: "#e8b44c", kind: adjudicator }
+    steps:
+      - { role: Pro, template: debate_statement_pro, label: 正方申論 }
+      - { role: Con, template: debate_statement_con, label: 反方申論 }
+      - { role: Pro, template: debate_cross_pro, label: 正方質詢 }
+      - { role: Con, template: debate_cross_con, label: 反方質詢 }
+      - { role: Arbiter, template: debate_verdict, label: 仲裁人裁決 }
+
+  - id: brainstorm
+    name: 腦力激盪
+    category: parallel
+    tagline: 多位委員同時發散思考，主持人彙整出共識、分歧與結論。
+    when_to_use: 適合早期發散、廣度優先探索多種可能性的場合，而非驗證單一方案。
+    sop:
+      - 輸入要腦力激盪的主題
+      - 決定委員人數（2–6 位），可為每位委員指定自訂視角
+      - 為所有委員與主持人挑選模型
+      - 開始討論，等待全部委員完成後觸發彙整
+    default_scene: meeting-room
+    inputs: []
+    roles:
+      - { id: Moderator, name: 主持人, color: "#8b6dd9", kind: synthesizer }
+    fanout:
+      role: Member
+      template: brainstorm_member
+      label: 委員發想
+      min_instances: 2
+      max_instances: 6
+      instance_prompt: true
+    synthesis: { role: Moderator, template: brainstorm_synthesis, label: 主持人彙整 }
+
+  - id: six-hats
+    name: 六頂思考帽
+    category: parallel
+    tagline: 白/紅/黑/黃/綠五頂帽子各司其職同時發言，藍帽統整成一份完整報告。
+    when_to_use: 適合需要系統性覆蓋事實、直覺、風險、樂觀、創意五種視角，不遺漏任何一面時使用。
+    sop:
+      - 輸入要討論的主題
+      - 為五頂帽子與藍帽統整挑選模型
+      - 開始討論：白/紅/黑/黃/綠帽同時發言
+      - 等待五頂帽子完成後，查看藍帽統整報告
+    default_scene: meeting-room
+    inputs: []
+    roles:
+      - { id: HatWhite, name: 白帽（事實數據）, color: "#e8e8ec", kind: member }
+      - { id: HatRed, name: 紅帽（直覺感受）, color: "#ff6b5e", kind: member }
+      - { id: HatBlack, name: 黑帽（風險批判）, color: "#8a8f9c", kind: member }
+      - { id: HatYellow, name: 黃帽（價值樂觀）, color: "#f0c05a", kind: member }
+      - { id: HatGreen, name: 綠帽（創意發想）, color: "#3dd68c", kind: member }
+      - { id: HatBlue, name: 藍帽（流程統整）, color: "#4d8dff", kind: synthesizer }
+
+  - id: persona-testing
+    name: 盲測用戶
+    category: parallel
+    tagline: 一群使用者輪番對產品/方案做出真實反應，產品顧問彙整成一份可行動的報告。
+    when_to_use: 適合在正式上線或投放前，快速蒐集不同用戶輪廓對方案的第一反應。
+    sop:
+      - 輸入要盲測的產品或方案描述
+      - 定義每個 persona 的名稱與描述（2–6 位）
+      - 為所有 persona 與產品顧問挑選模型
+      - 開始測試，等待全部 persona 反應完成後查看彙整報告
+    default_scene: meeting-room
+    inputs:
+      - { id: personas, label: Persona 清單（名稱＋描述）, kind: persona-list }
+    roles:
+      - { id: ProductAdvisor, name: 產品顧問, color: "#8b6dd9", kind: synthesizer }
+    fanout:
+      role: Persona
+      template: persona_member
+      label: Persona 反應
+      min_instances: 2
+      max_instances: 6
+      instance_prompt: true
+    synthesis: { role: ProductAdvisor, template: persona_synthesis, label: 產品顧問彙整 }

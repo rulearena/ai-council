@@ -16,9 +16,11 @@ class PromptRenderer:
         topic: str,
         prior_transcript: str,
         required_json_schema: str,
+        inputs: dict[str, str] | None = None,
     ) -> str:
         template = self._read_template(template_name)
         values = {
+            **{key: str(value) for key, value in (inputs or {}).items()},
             "role": role,
             "topic": topic,
             "prior_transcript": prior_transcript,

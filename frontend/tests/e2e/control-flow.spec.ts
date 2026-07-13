@@ -4,29 +4,47 @@ import { expect, test, type Page } from '@playwright/test'
 // need a small amount of "open this surface, do the thing, close it" choreography.
 // These helpers keep the actual test bodies readable.
 
-async function createMeetingViaNewCase(page: Page, topic: string) {
+async function createMeetingViaNewCase(
+  page: Page,
+  topic: string,
+  options: { modeId?: string; inputs?: Record<string, string> } = {},
+) {
+  const modeId = options.modeId ?? 'red-blue'
   await page.getByTestId('new-case-button').click()
-  // NewCaseModal step 1 (mode picker): red-blue is the only mode with a live "選擇此模式"
-  // button - everything else renders but stays disabled ("即將推出").
+  // NewCaseModal step 1 (mode picker): as of mode-system slice B, every `relay` mode
+  // (red-blue/courtroom/debate) has a live "選擇此模式" button - the three `parallel`
+  // modes still render but stay disabled ("即將推出") until slice C.
   await page
-    .getByTestId('mode-select-card-red-blue')
+    .getByTestId(`mode-select-card-${modeId}`)
     .getByRole('button', { name: '選擇此模式' })
     .click()
   // Step 2 (participant setup): the topic input moved here from the old flat form.
   await page.getByLabel('會議主題').fill(topic)
+  // debate's position_a/position_b (or any future mode's `kind: 'text'` inputs) render as
+  // one labeled field per input id - see NewCaseModal.vue's textInputs.
+  for (const [inputId, value] of Object.entries(options.inputs ?? {})) {
+    await page.getByTestId(`mode-input-${inputId}`).fill(value)
+  }
   await page.getByTestId('create-meeting-button').click()
   // NewCaseModal closes itself once createNewMeeting() resolves.
   await expect(page.getByTestId('new-case-modal')).not.toBeVisible()
+}
+
+// Generalized model-assignment helper (mode-system slice B task 9 made the model-select
+// testid role-derived - `${role.toLowerCase()}-model-select` - for any mode's roster, not
+// just red-blue's Blue/Red/Judge). Leaves the Settings modal open, same as before.
+async function setRoleModelsInSettings(page: Page, assignments: Record<string, string>) {
+  await page.getByTestId('settings-button').click()
+  for (const [role, model] of Object.entries(assignments)) {
+    await page.getByTestId(`${role.toLowerCase()}-model-select`).selectOption(model)
+  }
 }
 
 async function setModelsInSettings(
   page: Page,
   models: { blue: string; red: string; judge: string },
 ) {
-  await page.getByTestId('settings-button').click()
-  await page.getByTestId('blue-model-select').selectOption(models.blue)
-  await page.getByTestId('red-model-select').selectOption(models.red)
-  await page.getByTestId('judge-model-select').selectOption(models.judge)
+  await setRoleModelsInSettings(page, { Blue: models.blue, Red: models.red, Judge: models.judge })
 }
 
 async function closeSettings(page: Page) {
@@ -188,7 +206,9 @@ test('user can run a mock meeting and add chair feedback', async ({ page }) => {
 
   await openAdvancedOptions(page)
   await expect(page.getByTestId('role-sequence-controls')).toBeVisible()
-  await page.getByTestId('sequence-preset-select').selectOption('red-blue-judge')
+  // Preset ids are now generic (mode-system slice B task 9): 'members-reversed-adj' is
+  // red-blue's [Red, Blue, Judge] preset, same roles/label as the old 'red-blue-judge' id.
+  await page.getByTestId('sequence-preset-select').selectOption('members-reversed-adj')
   await page.getByTestId('run-sequence-button').click()
 
   // Sequence roles are also pushed synchronously before the network call.
@@ -524,8 +544,11 @@ test('the explicit "開始新回合" button always starts a fresh fixed round', 
   await expect(page.getByTestId('operation-status')).toContainText('狀態：completed')
 
   await openAdvancedOptions(page)
+  // Mode-system slice B (feat: drive active mode from the selected meeting) replaced the
+  // hardcoded English role summary with the active mode's own catalog step labels
+  // (ActionBar.vue's roundStepsSummary) - red-blue's are Chinese.
   await expect(page.getByTestId('new-round-panel')).toContainText(
-    'Blue 提案 → Red 質詢 → Blue 修訂 → Judge 裁決',
+    '藍軍提案 → 紅軍質詢 → 藍軍修訂 → 裁判裁決',
   )
   await page.getByTestId('start-new-round-button').click()
 
@@ -787,8 +810,15 @@ test('cancelling or closing a meeting asks for confirmation first', async ({ pag
 })
 
 const ALL_MODE_IDS = ['red-blue', 'courtroom', 'debate', 'brainstorm', 'six-hats', 'persona-testing']
+// Mode-system slice B (feat: create courtroom and debate meetings from the mode picker)
+// unlocked every `relay` mode - only the three `parallel` modes remain "即將推出" until
+// slice C wires up the parallel executor.
+const AVAILABLE_MODE_IDS = ['red-blue', 'courtroom', 'debate']
+const COMING_SOON_MODE_IDS = ['brainstorm', 'six-hats', 'persona-testing']
 
-test('New Case mode picker shows all six modes, but only red-blue can be created', async ({ page }) => {
+test('New Case mode picker shows all six modes; the three relay modes can be created, the three parallel modes stay "即將推出"', async ({
+  page,
+}) => {
   await page.goto('/')
 
   await page.getByTestId('new-case-button').click()
@@ -798,16 +828,19 @@ test('New Case mode picker shows all six modes, but only red-blue can be created
     await expect(page.getByTestId(`mode-select-card-${modeId}`)).toBeVisible()
   }
 
-  const redBlueCard = page.getByTestId('mode-select-card-red-blue')
-  await expect(redBlueCard.getByRole('button', { name: '選擇此模式' })).toBeEnabled()
+  for (const modeId of AVAILABLE_MODE_IDS) {
+    const card = page.getByTestId(`mode-select-card-${modeId}`)
+    await expect(card.getByRole('button', { name: '選擇此模式' })).toBeEnabled()
+  }
 
-  for (const modeId of ALL_MODE_IDS.filter((id) => id !== 'red-blue')) {
+  for (const modeId of COMING_SOON_MODE_IDS) {
     const card = page.getByTestId(`mode-select-card-${modeId}`)
     await expect(card.getByRole('button', { name: '即將推出' })).toBeDisabled()
   }
 
-  // Clicking a disabled card's CTA must not advance to step 2 - still on the picker.
-  await page.getByTestId('mode-select-card-courtroom').getByRole('button', { name: '即將推出' }).click({ force: true })
+  // Clicking a disabled (parallel-mode) card's CTA must not advance to step 2 - still on
+  // the picker.
+  await page.getByTestId('mode-select-card-brainstorm').getByRole('button', { name: '即將推出' }).click({ force: true })
   await expect(page.getByTestId('mode-picker-step')).toBeVisible()
 
   await page.getByTestId('new-case-close-button').click()
@@ -963,4 +996,158 @@ test('seat nameplate shows the selected model, with a placeholder when unset, an
     .filter({ hasText: topic })
     .getByTestId('delete-meeting-button')
     .click()
+})
+
+test('courtroom mode runs its full four-step relay and renders the Prosecutor/Defense/Judge roster', async ({
+  page,
+}) => {
+  await page.goto('/')
+
+  const topic = `E2E courtroom happy path ${Date.now()}`
+  await createMeetingViaNewCase(page, topic, { modeId: 'courtroom' })
+
+  // Selecting courtroom in the mode picker produces a courtroom-shaped roster, not the
+  // red-blue triple - CouncilStage's seat testids are role-derived (role.toLowerCase()).
+  await expect(page.getByTestId('role-seat-prosecutor')).toBeVisible()
+  await expect(page.getByTestId('role-seat-defense')).toBeVisible()
+  await expect(page.getByTestId('role-seat-judge')).toBeVisible()
+  await expect(page.getByTestId('role-seat-blue')).toHaveCount(0)
+
+  await setRoleModelsInSettings(page, { Prosecutor: 'mock-slow', Defense: 'mock-slow', Judge: 'mock-slow' })
+  await closeSettings(page)
+
+  await page.getByTestId('start-meeting-button').click()
+
+  // Same synchronous pendingRoles push as the red-blue flow - Prosecutor (courtroom's
+  // first step) flips to "thinking" immediately.
+  await expect(page.getByTestId('role-seat-prosecutor')).toHaveAttribute('data-status', 'thinking')
+
+  await expect(page.getByTestId('operation-status')).toContainText('狀態：completed', { timeout: 15000 })
+  await expect(page.getByTestId('operation-status')).toContainText('最後步驟：courtroom-verdict')
+  await expect(page.getByTestId('role-seat-prosecutor')).toHaveAttribute('data-status', 'completed')
+  await expect(page.getByTestId('role-seat-defense')).toHaveAttribute('data-status', 'completed')
+  await expect(page.getByTestId('role-seat-judge')).toHaveAttribute('data-status', 'completed')
+
+  // Full step_id sequence in the records drawer confirms the relay actually ran
+  // courtroom's mode-derived plan (courtroom-charge -> courtroom-defense ->
+  // courtroom-rebuttal -> courtroom-verdict), not the red-blue fixed round.
+  await page.getByTestId('records-button').click()
+  const courtroomStepIds = ['courtroom-charge', 'courtroom-defense', 'courtroom-rebuttal', 'courtroom-verdict']
+  for (const stepId of courtroomStepIds) {
+    await expect(page.getByTestId('step-timeline')).toContainText(stepId)
+  }
+  // Presence alone (the loop above) would also pass if the steps ran out of order -
+  // execution order is the relay executor's core guarantee, so read each row's step_id
+  // (RecordsDrawer.vue renders `events` - and therefore these rows - in event order) and
+  // assert courtroom's four steps appear in ascending position, not just somewhere.
+  const renderedStepIds = await page.getByTestId('step-timeline').locator('.timeline-row strong').allTextContents()
+  const observedPositions = courtroomStepIds.map((stepId) => renderedStepIds.indexOf(stepId))
+  expect(observedPositions.every((position) => position >= 0)).toBe(true)
+  expect(observedPositions).toEqual([...observedPositions].sort((a, b) => a - b))
+  await page.getByTestId('records-close-button').click()
+
+  await page.getByTestId('past-topics-button').click()
+  page.once('dialog', (dialog) => dialog.accept())
+  await page
+    .getByTestId('meeting-list-item')
+    .filter({ hasText: topic })
+    .getByTestId('delete-meeting-button')
+    .click()
+})
+
+test('debate mode gates creation on both position inputs, then builds a Pro/Con/Arbiter meeting', async ({
+  page,
+}) => {
+  await page.goto('/')
+
+  await page.getByTestId('new-case-button').click()
+  await page
+    .getByTestId('mode-select-card-debate')
+    .getByRole('button', { name: '選擇此模式' })
+    .click()
+
+  const topic = `E2E debate inputs ${Date.now()}`
+  await page.getByLabel('會議主題').fill(topic)
+
+  // Both position_a/position_b are required `kind: 'text'` inputs (NewCaseModal.vue's
+  // hasEmptyRequiredInput) - the create CTA must stay disabled until both are filled,
+  // even once the topic itself is valid.
+  await expect(page.getByTestId('create-meeting-button')).toBeDisabled()
+
+  await page.getByTestId('mode-input-position_a').fill('先做後端')
+  await expect(page.getByTestId('create-meeting-button')).toBeDisabled()
+
+  await page.getByTestId('mode-input-position_b').fill('先做前端')
+  await expect(page.getByTestId('create-meeting-button')).toBeEnabled()
+
+  await page.getByTestId('create-meeting-button').click()
+  await expect(page.getByTestId('new-case-modal')).not.toBeVisible()
+
+  // Created with a debate-shaped roster (Pro/Con/Arbiter), confirming the create actually
+  // went through rather than silently no-oping. (Whether position_a/position_b themselves
+  // reach the prompts is covered at the backend unit level - test_debate_inputs_reach_prompts,
+  // Task 6 - not re-verified here.)
+  await expect(page.getByTestId('role-seat-pro')).toBeVisible()
+  await expect(page.getByTestId('role-seat-con')).toBeVisible()
+  await expect(page.getByTestId('role-seat-arbiter')).toBeVisible()
+
+  await page.getByTestId('past-topics-button').click()
+  page.once('dialog', (dialog) => dialog.accept())
+  await page
+    .getByTestId('meeting-list-item')
+    .filter({ hasText: topic })
+    .getByTestId('delete-meeting-button')
+    .click()
+})
+
+test('opening a courtroom meeting switches the stage to the courtroom scene, and a red-blue meeting switches it back', async ({
+  page,
+}) => {
+  await page.goto('/')
+
+  const courtroomTopic = `E2E scene auto-switch courtroom ${Date.now()}`
+  await createMeetingViaNewCase(page, courtroomTopic, { modeId: 'courtroom' })
+  // courtroom's default_scene (config/modes.yaml) applies automatically on open/create -
+  // spec.md 16.7 / scenes.ts's applyModeScene - without the user ever touching Settings.
+  await expect(page.getByTestId('council-stage').locator('.stage-scene')).toHaveAttribute(
+    'data-scene',
+    'courtroom',
+  )
+
+  const redBlueTopic = `E2E scene auto-switch red-blue ${Date.now()}`
+  await createMeetingViaNewCase(page, redBlueTopic)
+  await expect(page.getByTestId('council-stage').locator('.stage-scene')).toHaveAttribute(
+    'data-scene',
+    'meeting-room',
+  )
+
+  // Reopening the courtroom meeting re-applies its default scene - this is a live
+  // mode-driven switch on every meeting selection, not a one-time effect from creation.
+  await page.getByTestId('past-topics-button').click()
+  await page
+    .getByTestId('meeting-list-item')
+    .filter({ hasText: courtroomTopic })
+    .locator('.meeting-item')
+    .click()
+  await expect(page.getByTestId('council-stage').locator('.stage-scene')).toHaveAttribute(
+    'data-scene',
+    'courtroom',
+  )
+  // MeetingsModal.selectMeeting() sets selectedMeeting (which the scene assertion above
+  // reacts to) *before* it emits close - openMeeting() itself resolves first, then the
+  // modal closes as a separate step. Without waiting for the modal to actually be gone,
+  // the very next past-topics-button click below can race its still-open (or
+  // still-closing) overlay and land on the wrong target.
+  await expect(page.getByTestId('meetings-modal')).not.toBeVisible()
+
+  await page.getByTestId('past-topics-button').click()
+  for (const topic of [courtroomTopic, redBlueTopic]) {
+    page.once('dialog', (dialog) => dialog.accept())
+    await page
+      .getByTestId('meeting-list-item')
+      .filter({ hasText: topic })
+      .getByTestId('delete-meeting-button')
+      .click()
+  }
+  await page.getByTestId('meetings-close-button').click()
 })
