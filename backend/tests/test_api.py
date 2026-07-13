@@ -168,7 +168,8 @@ def test_model_config_crud_endpoints_update_models_yaml(tmp_path: Path) -> None:
 
     deleted = client.delete("/models/qwen27")
 
-    assert deleted.status_code == 204
+    assert deleted.status_code == 200
+    assert deleted.json() == {"id": "qwen27", "warning": None}
     assert [model["id"] for model in client.get("/models").json()] == ["mock-fast"]
 
 
@@ -207,6 +208,55 @@ def test_model_config_crud_reports_validation_errors(tmp_path: Path) -> None:
 
     assert missing_adapter.status_code == 422
     assert any(item["field"] == "adapter" for item in missing_adapter.json()["detail"])
+
+
+def test_delete_model_returns_warning_when_referenced_by_open_meeting(tmp_path: Path) -> None:
+    app = create_test_app(tmp_path)
+    client = TestClient(app)
+
+    meeting_id = client.post("/meetings", json={"topic": "先做後端？"}).json()["meeting_id"]
+    client.post(
+        f"/meetings/{meeting_id}/start",
+        json={"models": {"Blue": "mock-fast", "Red": "mock-fast", "Judge": "mock-fast"}},
+    )
+    wait_for_activity(client, meeting_id, "completed")
+
+    deleted = client.delete("/models/mock-fast")
+
+    assert deleted.status_code == 200
+    body = deleted.json()
+    assert body["id"] == "mock-fast"
+    assert body["warning"] is not None
+    assert meeting_id in body["warning"]
+    assert client.get("/models").json() == []
+
+
+def test_delete_model_no_warning_when_meeting_closed(tmp_path: Path) -> None:
+    app = create_test_app(tmp_path)
+    client = TestClient(app)
+
+    meeting_id = client.post("/meetings", json={"topic": "先做後端？"}).json()["meeting_id"]
+    client.post(
+        f"/meetings/{meeting_id}/start",
+        json={"models": {"Blue": "mock-fast", "Red": "mock-fast", "Judge": "mock-fast"}},
+    )
+    wait_for_activity(client, meeting_id, "completed")
+    close_response = client.post(f"/meetings/{meeting_id}/close")
+    assert close_response.status_code == 200
+
+    deleted = client.delete("/models/mock-fast")
+
+    assert deleted.status_code == 200
+    assert deleted.json() == {"id": "mock-fast", "warning": None}
+
+
+def test_delete_unknown_model_still_404(tmp_path: Path) -> None:
+    app = create_test_app(tmp_path)
+    client = TestClient(app)
+
+    response = client.delete("/models/does-not-exist")
+
+    assert response.status_code == 404
 
 
 def test_post_models_creates_and_resets_status(tmp_path: Path) -> None:

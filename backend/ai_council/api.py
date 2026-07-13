@@ -237,12 +237,22 @@ def create_app(
             write_lock=model_write_lock,
         )
 
-    @app.delete("/models/{model_config_id}", status_code=204)
-    def delete_model(model_config_id: str) -> Response:
+    @app.delete("/models/{model_config_id}")
+    def delete_model(model_config_id: str) -> dict[str, Any]:
         with model_write_lock:
             if not model_repository.delete_model(model_config_id):
                 raise HTTPException(status_code=404, detail=f"Unknown model: {model_config_id}")
-        return Response(status_code=204)
+            model_health.clear(model_config_id)
+        referencing = open_meetings_referencing_model(
+            metadata_store, repository, model_config_id
+        )
+        warning = None
+        if referencing:
+            warning = (
+                f"Model is the latest selection in {len(referencing)} open meeting(s): "
+                + ", ".join(referencing[:5])
+            )
+        return {"id": model_config_id, "warning": warning}
 
     @app.post("/models/{model_config_id}/test")
     def test_model(model_config_id: str) -> dict[str, str]:
@@ -870,6 +880,38 @@ def project_meeting_status(events: list[dict[str, Any]]) -> str:
         if status in {"closed", "cancelled"}:
             return str(status)
     return "open"
+
+
+def open_meetings_referencing_model(
+    metadata_store: MeetingMetadataStore,
+    repository: MeetingRepository,
+    model_config_id: str,
+) -> list[str]:
+    """Open meetings whose latest per-role model selection is `model_config_id`.
+
+    "Latest selection" means either the model recorded on a role's most
+    recent event that carries a model_config_id, or the model stored on the
+    meeting's participants metadata (covers roles that haven't run a step
+    yet, e.g. right after meeting creation but before start).
+    """
+    referencing: list[str] = []
+    for metadata in metadata_store.list():
+        meeting_id = metadata["meeting_id"]
+        events = repository.read_events(meeting_id)
+        if project_meeting_status(events) != "open":
+            continue
+        stored = {
+            item.get("model_config_id")
+            for item in (metadata.get("participants") or [])
+            if isinstance(item, dict)
+        }
+        latest_by_role: dict[str, Any] = {}
+        for event in events:
+            if isinstance(event.get("model_config_id"), str):
+                latest_by_role[str(event.get("role"))] = event["model_config_id"]
+        if model_config_id in stored or model_config_id in latest_by_role.values():
+            referencing.append(meeting_id)
+    return referencing
 
 
 def project_activity_status(events: list[dict[str, Any]]) -> str:
