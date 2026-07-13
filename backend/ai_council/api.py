@@ -27,6 +27,7 @@ from ai_council.meetings.modes import (
     ModeCatalogRepository,
     ModeConfigError,
     ModeDefinition,
+    parallel_plan,
     relay_plan,
 )
 from ai_council.meetings.repository import MeetingRepository
@@ -295,22 +296,7 @@ def create_app(
                 status_code=400,
                 detail=f"Mode is not yet supported: {mode.id}",
             )
-        role_ids = set(mode.role_ids())
-        seen_role_ids: set[str] = set()
-        for participant in request.participants:
-            if participant.role_id not in role_ids:
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"Unknown role for mode {mode.id}: {participant.role_id}",
-                )
-            if participant.role_id in seen_role_ids:
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"Duplicate participant role: {participant.role_id}",
-                )
-            seen_role_ids.add(participant.role_id)
-            if participant.model_config_id is not None:
-                get_model(model_repository, participant.model_config_id)
+        participants = normalize_participants(mode, request.participants, model_repository)
 
         declared_input_ids = {item.id for item in mode.inputs}
         unknown_inputs = sorted(set(request.inputs.keys()) - declared_input_ids)
@@ -335,7 +321,7 @@ def create_app(
             "tags": [],
             "pinned": False,
             "mode_id": mode.id,
-            "participants": [participant.model_dump() for participant in request.participants],
+            "participants": participants,
             "inputs": request.inputs,
         }
         metadata_store.save(metadata)
@@ -365,7 +351,7 @@ def create_app(
                     events,
                     mode=mode,
                     model_pricing=pricing,
-                    activity_status=live_activity_status(events, jobs.is_running(meeting_id)),
+                    activity_status=live_activity_status(events, jobs.is_running(meeting_id), mode),
                 )
             )
         return summaries
@@ -380,7 +366,11 @@ def create_app(
                 events,
                 mode=meeting_mode(mode_catalog, metadata),
                 model_pricing=model_pricing_by_id(model_repository),
-                activity_status=live_activity_status(events, jobs.is_running(meeting_id)),
+                activity_status=live_activity_status(
+                    events,
+                    jobs.is_running(meeting_id),
+                    meeting_mode(mode_catalog, metadata),
+                ),
             ),
             "events": events,
         }
@@ -396,7 +386,11 @@ def create_app(
             events,
             mode=meeting_mode(mode_catalog, metadata),
             model_pricing=model_pricing_by_id(model_repository),
-            activity_status=live_activity_status(events, jobs.is_running(meeting_id)),
+            activity_status=live_activity_status(
+                events,
+                jobs.is_running(meeting_id),
+                meeting_mode(mode_catalog, metadata),
+            ),
         )
 
     @app.put("/meetings/{meeting_id}/pinned")
@@ -413,7 +407,11 @@ def create_app(
             events,
             mode=meeting_mode(mode_catalog, metadata),
             model_pricing=model_pricing_by_id(model_repository),
-            activity_status=live_activity_status(events, jobs.is_running(meeting_id)),
+            activity_status=live_activity_status(
+                events,
+                jobs.is_running(meeting_id),
+                meeting_mode(mode_catalog, metadata),
+            ),
         )
 
     @app.post("/meetings/{meeting_id}/start", status_code=202)
@@ -421,7 +419,8 @@ def create_app(
         metadata = metadata_store.get(meeting_id)
         reject_terminal_meeting(repository, meeting_id)
         mode = meeting_mode(mode_catalog, metadata)
-        missing_roles = sorted(set(mode.role_ids()) - request.models.keys())
+        participant_roles = {item["role_id"] for item in project_participants(mode, metadata)}
+        missing_roles = sorted(participant_roles - request.models.keys())
         if missing_roles:
             raise HTTPException(
                 status_code=400,
@@ -433,12 +432,11 @@ def create_app(
         }
         if not jobs.start(
             meeting_id,
-            lambda: runner.start(
-                meeting_id=meeting_id,
-                topic=metadata["topic"],
+            lambda: start_runner_for_mode(
+                runner=runner,
+                mode=mode,
+                metadata=metadata,
                 model_assignments=model_assignments,
-                plan=relay_plan(mode),
-                inputs=metadata.get("inputs") or {},
             ),
         ):
             raise HTTPException(status_code=409, detail="Meeting is already running")
@@ -525,6 +523,8 @@ def create_app(
         metadata = metadata_store.get(meeting_id)
         reject_terminal_meeting(repository, meeting_id)
         mode = meeting_mode(mode_catalog, metadata)
+        if mode.category != "relay":
+            raise HTTPException(status_code=400, detail=f"Mode does not support directed responses: {mode.id}")
         try:
             runner.respond_as_role(
                 meeting_id=meeting_id,
@@ -549,6 +549,8 @@ def create_app(
         metadata = metadata_store.get(meeting_id)
         reject_terminal_meeting(repository, meeting_id)
         mode = meeting_mode(mode_catalog, metadata)
+        if mode.category != "relay":
+            raise HTTPException(status_code=400, detail=f"Mode does not support role sequences: {mode.id}")
         try:
             runner.respond_as_sequence(
                 meeting_id=meeting_id,
@@ -574,18 +576,29 @@ def create_app(
         metadata = metadata_store.get(meeting_id)
         reject_terminal_meeting(repository, meeting_id)
         mode = meeting_mode(mode_catalog, metadata)
+        model_assignments = {
+            role: get_model(model_repository, model_id)
+            for role, model_id in request.models.items()
+        }
         try:
-            runner.retry_failed_step(
-                meeting_id=meeting_id,
-                step_id=step_id,
-                topic=metadata["topic"],
-                model_assignments={
-                    role: get_model(model_repository, model_id)
-                    for role, model_id in request.models.items()
-                },
-                plan=relay_plan(mode),
-                inputs=metadata.get("inputs") or {},
-            )
+            if mode.category == "relay":
+                runner.retry_failed_step(
+                    meeting_id=meeting_id,
+                    step_id=step_id,
+                    topic=metadata["topic"],
+                    model_assignments=model_assignments,
+                    plan=relay_plan(mode),
+                    inputs=metadata.get("inputs") or {},
+                )
+            else:
+                runner.retry_failed_parallel_step(
+                    meeting_id=meeting_id,
+                    step_id=step_id,
+                    topic=metadata["topic"],
+                    model_assignments=model_assignments,
+                    plan=parallel_plan(mode, project_participants(mode, metadata)),
+                    inputs=metadata.get("inputs") or {},
+                )
         except ValueError as error:
             raise HTTPException(status_code=400, detail=str(error)) from error
         return {"status": project_activity_status(repository.read_events(meeting_id))}
@@ -601,10 +614,11 @@ def create_app(
 
     @app.websocket("/meetings/{meeting_id}/events")
     async def meeting_events(websocket: WebSocket, meeting_id: str) -> None:
-        metadata_store.get(meeting_id)
+        metadata = metadata_store.get(meeting_id)
+        mode = meeting_mode(mode_catalog, metadata)
         await websocket.accept()
         events = repository.read_events(meeting_id)
-        activity_status = live_activity_status(events, jobs.is_running(meeting_id))
+        activity_status = live_activity_status(events, jobs.is_running(meeting_id), mode)
         try:
             await websocket.send_json(
                 {
@@ -623,7 +637,7 @@ def create_app(
                     pass
                 events = repository.read_events(meeting_id)
                 stream_events = stream_bus.events_since(meeting_id, stream_cursor)
-                next_activity_status = live_activity_status(events, jobs.is_running(meeting_id))
+                next_activity_status = live_activity_status(events, jobs.is_running(meeting_id), mode)
                 if (
                     len(events) != event_count
                     or stream_events
@@ -707,7 +721,125 @@ def project_mode(mode: ModeDefinition) -> dict[str, Any]:
     return result
 
 
+def normalize_participants(
+    mode: ModeDefinition,
+    requested: list[MeetingParticipantRequest],
+    model_repository: ModelConfigRepository,
+) -> list[dict[str, Any]]:
+    if mode.category == "relay":
+        participants = [participant.model_dump() for participant in requested]
+        role_ids = set(mode.role_ids())
+        validate_participant_ids(
+            mode=mode,
+            participants=participants,
+            allowed_role_ids=role_ids,
+            model_repository=model_repository,
+        )
+        return participants
+
+    if mode.fanout is None or mode.synthesis is None:
+        raise HTTPException(status_code=500, detail=f"Parallel mode is incomplete: {mode.id}")
+
+    participants = [participant.model_dump() for participant in requested]
+    if not participants:
+        participants = [
+            {"role_id": f"{mode.fanout.role}-{index}", "model_config_id": None}
+            for index in range(1, mode.fanout.min_instances + 1)
+        ]
+        participants.append({"role_id": mode.synthesis.role, "model_config_id": None})
+
+    validate_participant_ids(
+        mode=mode,
+        participants=participants,
+        allowed_role_ids=parallel_allowed_role_ids(mode, participants),
+        model_repository=model_repository,
+    )
+    member_ids = parallel_member_role_ids(mode, participants)
+    if not (mode.fanout.min_instances <= len(member_ids) <= mode.fanout.max_instances):
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Mode {mode.id} requires {mode.fanout.min_instances}-"
+                f"{mode.fanout.max_instances} fanout members"
+            ),
+        )
+    if mode.synthesis.role not in {str(item.get("role_id")) for item in participants}:
+        participants.append({"role_id": mode.synthesis.role, "model_config_id": None})
+    return participants
+
+
+def validate_participant_ids(
+    *,
+    mode: ModeDefinition,
+    participants: list[dict[str, Any]],
+    allowed_role_ids: set[str],
+    model_repository: ModelConfigRepository,
+) -> None:
+    seen_role_ids: set[str] = set()
+    for participant in participants:
+        role_id = str(participant.get("role_id"))
+        if role_id not in allowed_role_ids:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Unknown role for mode {mode.id}: {role_id}",
+            )
+        if role_id in seen_role_ids:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Duplicate participant role: {role_id}",
+            )
+        seen_role_ids.add(role_id)
+        model_config_id = participant.get("model_config_id")
+        if model_config_id is not None:
+            get_model(model_repository, str(model_config_id))
+
+
+def parallel_allowed_role_ids(
+    mode: ModeDefinition,
+    participants: list[dict[str, Any]],
+) -> set[str]:
+    if mode.fanout is None or mode.synthesis is None:
+        return set()
+    fixed_member_ids = {role.id for role in mode.roles if role.kind == "member"}
+    allowed = {mode.synthesis.role, *fixed_member_ids}
+    if fixed_member_ids:
+        return allowed
+    for participant in participants:
+        role_id = str(participant.get("role_id"))
+        if is_fanout_instance_role(mode.fanout.role, role_id):
+            allowed.add(role_id)
+    return allowed
+
+
+def parallel_member_role_ids(mode: ModeDefinition, participants: list[dict[str, Any]]) -> list[str]:
+    if mode.fanout is None:
+        return []
+    fixed_member_ids = {role.id for role in mode.roles if role.kind == "member"}
+    member_ids: list[str] = []
+    for participant in participants:
+        role_id = str(participant.get("role_id"))
+        if fixed_member_ids:
+            if role_id in fixed_member_ids:
+                member_ids.append(role_id)
+        elif is_fanout_instance_role(mode.fanout.role, role_id):
+            member_ids.append(role_id)
+    return member_ids
+
+
+def is_fanout_instance_role(prototype_role: str, role_id: str) -> bool:
+    prefix = f"{prototype_role}-"
+    return role_id.startswith(prefix) and role_id[len(prefix) :].isdigit()
+
+
+def fanout_instance_index(role_id: str) -> int:
+    suffix = role_id.rsplit("-", 1)[-1]
+    return int(suffix) if suffix.isdigit() else 0
+
+
 def project_participants(mode: ModeDefinition, metadata: dict[str, Any]) -> list[dict[str, Any]]:
+    if mode.category == "parallel":
+        return project_parallel_participants(mode, metadata)
+
     stored = {
         str(item.get("role_id")): item
         for item in (metadata.get("participants") or [])
@@ -729,6 +861,78 @@ def project_participants(mode: ModeDefinition, metadata: dict[str, Any]) -> list
             }
         )
     return projected
+
+
+def project_parallel_participants(mode: ModeDefinition, metadata: dict[str, Any]) -> list[dict[str, Any]]:
+    role_defs = {role.id: role for role in mode.roles}
+    stored = [
+        item
+        for item in (metadata.get("participants") or [])
+        if isinstance(item, dict) and isinstance(item.get("role_id"), str)
+    ]
+    stored.sort(key=lambda item: parallel_participant_sort_key(mode, str(item["role_id"])))
+    projected: list[dict[str, Any]] = []
+    for entry in stored:
+        role_id = str(entry["role_id"])
+        role_def = role_defs.get(role_id)
+        is_member_instance = (
+            mode.fanout is not None and is_fanout_instance_role(mode.fanout.role, role_id)
+        )
+        if role_def is None and not is_member_instance:
+            continue
+        index = fanout_instance_index(role_id)
+        default_name = (
+            role_def.name
+            if role_def is not None
+            else f"{mode.fanout.label} {index}" if mode.fanout is not None else role_id
+        )
+        projected.append(
+            {
+                "role_id": role_id,
+                "name": default_name,
+                "color": role_def.color if role_def is not None else "#4d8dff",
+                "kind": role_def.kind if role_def is not None else "member",
+                "portrait": role_def.portrait if role_def is not None else None,
+                "model_config_id": entry.get("model_config_id"),
+                "display_name": entry.get("display_name") or default_name,
+                "instance_prompt": entry.get("instance_prompt"),
+            }
+        )
+    return projected
+
+
+def parallel_participant_sort_key(mode: ModeDefinition, role_id: str) -> tuple[int, int, str]:
+    if mode.fanout is not None and is_fanout_instance_role(mode.fanout.role, role_id):
+        return (0, fanout_instance_index(role_id), role_id)
+    role_def = next((role for role in mode.roles if role.id == role_id), None)
+    if role_def is not None and role_def.kind == "member":
+        return (0, mode.role_ids().index(role_id), role_id)
+    return (1, 0, role_id)
+
+
+def start_runner_for_mode(
+    *,
+    runner: MeetingRunner,
+    mode: ModeDefinition,
+    metadata: dict[str, Any],
+    model_assignments: dict[str, ModelConfig],
+) -> None:
+    if mode.category == "relay":
+        runner.start(
+            meeting_id=metadata["meeting_id"],
+            topic=metadata["topic"],
+            model_assignments=model_assignments,
+            plan=relay_plan(mode),
+            inputs=metadata.get("inputs") or {},
+        )
+        return
+    runner.start_parallel(
+        meeting_id=metadata["meeting_id"],
+        topic=metadata["topic"],
+        model_assignments=model_assignments,
+        plan=parallel_plan(mode, project_participants(mode, metadata)),
+        inputs=metadata.get("inputs") or {},
+    )
 
 
 def get_model(repository: ModelConfigRepository, model_id: str) -> ModelConfig:
@@ -922,17 +1126,44 @@ def project_activity_status(events: list[dict[str, Any]]) -> str:
         return terminal_status
     latest_event = events[-1]
     if latest_event.get("status") == "failed":
+        base_step_id = str(latest_event.get("base_step_id", latest_event.get("step_id", "")))
+        if base_step_id.startswith("member-"):
+            return "waiting"
         return "failed"
     if latest_event.get("role") == "Human":
         return "waiting"
     return "completed"
 
 
-def live_activity_status(events: list[dict[str, Any]], is_running: bool) -> str:
-    projected = project_activity_status(events)
+def live_activity_status(
+    events: list[dict[str, Any]],
+    is_running: bool,
+    mode: ModeDefinition | None = None,
+) -> str:
+    projected = project_activity_status_for_mode(events, mode)
     if projected in {"closed", "cancelled"}:
         return projected
     return "running" if is_running else projected
+
+
+def project_activity_status_for_mode(
+    events: list[dict[str, Any]],
+    mode: ModeDefinition | None,
+) -> str:
+    projected = project_activity_status(events)
+    if mode is None or projected != "completed":
+        return projected
+    latest_event = events[-1]
+    if latest_event.get("interaction_type") in {"directed-role-response", "role-sequence-response"}:
+        return "completed"
+    if mode.category == "parallel":
+        base_step_id = str(latest_event.get("base_step_id", latest_event.get("step_id", "")))
+        return "completed" if base_step_id == "synthesis" else "running"
+    if not mode.steps:
+        return projected
+    final_step_id = mode.steps[-1].template.replace("_", "-")
+    base_step_id = str(latest_event.get("base_step_id", latest_event.get("step_id", "")))
+    return "completed" if base_step_id == final_step_id else "running"
 
 
 def project_meeting_summary(

@@ -4,34 +4,30 @@
 
 ## 1. 現況：什麼已經完成
 
-main（`ac44fef`）包含三個已合併的大功能，全部驗證通過：
+目前分支包含四個已完成的大功能，全部驗證通過：
 
 | 功能 | Merge commit | 內容 |
 |------|--------------|------|
 | Mode system slice A | `981f355` | 前端席位動態化、模式卡片牆、本地 catalog |
 | Mode system slice B | `059dcbe` | `config/modes.yaml` + `GET /modes` + relay 執行器參數化 + 法庭審理/辯論上線（實作計畫留檔：`docs/plans/2026-07-12-mode-system-slice-b.md`） |
 | Model config mgmt（spec §17） | `ac44fef` | 模型 CRUD API + Settings 模型管理分頁（實作計畫：`docs/plans/2026-07-13-model-config-management.md`） |
+| Mode system slice C | 本次分支 | parallel 執行器 + per-member retry/synthesis gating + 腦力激盪上線；六帽/盲測設定與 prompt 補齊（實作計畫：`docs/plans/2026-07-13-mode-system-slice-c.md`） |
 
-**驗收基線（任何改動後不得低於此）**：後端 `pytest` **171 passed**；前端 `npm run build` 綠；e2e **27/27**。
+**驗收基線（任何改動後不得低於此）**：後端 `pytest` **180 passed**；前端 `npm run build` 綠；e2e **28/28**。
 
 ## 2. 待辦佇列（優先序）
 
-1. **Slice C：平行執行器**（spec §16.3「parallel」、§16.7 切片 C）→ 腦力激盪上線；六帽/盲測為純設定追加（modes.yaml 已含三個 parallel 模式定義，`available` 由 `ModeDefinition.available` property 控制——目前寫死 `category == "relay"`，slice C 完成後改為全部 true）。
-   - 扇出：成員實例併發（asyncio gather 或 thread pool——現行 runner 是同步的，注意 MeetingJobManager 已有 per-meeting 單 run 保證），step_id `fanout-{round}-member-{k}`；個別失敗不中止其他成員；全部結束後有失敗 → 投影 `waiting`，成員可單獨 retry。
-   - 彙整：全部成員成功（或使用者明示跳過）後觸發，step_id `synthesis-{round}`，彙整 prompt 收到全部成員輸出。
-   - 匿名化 hook 預留（掛在彙整輸入組裝點）但**預設關閉**——啟用是 slice D。
-   - 需要新 prompt 檔：brainstorm_member / brainstorm_synthesis / hat_white / hat_red / hat_black / hat_yellow / hat_green / hat_blue_synthesis / persona_member / persona_synthesis（風格照 `prompts/courtroom_charge.md` 的既有鷹架）。
-   - 前端：POST /meetings 的 participants 已支援 instance slot 欄位（`role_id`/`display_name`/`instance_prompt`/`model_config_id`）；NewCaseModal 需開放 parallel 模式建立（成員增減 min/max 來自 mode.fanout、persona 編輯）；場景 ring[] 席位已就緒（`scenes.ts` 的 ringSeatLayout）。
-2. **Backlog 76–77 清理**（小）：測試 flake timeout 放寬；ghost mode_id 防禦、DEFAULT_MODE_ID 常數、錯誤碼對稱、NewCaseModal 失敗保留輸入。
-3. **Reopen endpoint**（backlog 75）：append `reopened` event；`api.py` 的 `project_meeting_status`/`reject_terminal_meeting` 與 `runner._is_terminal` 的終端判定需認得它（掃到 cancelled/closed 之後若有 reopened 則不算終端）。
-4. **案卷 Phase 1**（backlog 78）：per-role 可見的文件注入。沿用 slice B 建的 inputs 注入機制（`PromptRenderer.render(inputs=...)`）+ `{{ case_files }}` 佔位符。**不做 RAG**（backlog 79 明文延後）。
+1. **Backlog 76–77 清理**（小）：測試 flake timeout 放寬；ghost mode_id 防禦、DEFAULT_MODE_ID 常數、錯誤碼對稱、NewCaseModal 失敗保留輸入。
+2. **Reopen endpoint**（backlog 75）：append `reopened` event；`api.py` 的 `project_meeting_status`/`reject_terminal_meeting` 與 `runner._is_terminal` 的終端判定需認得它（掃到 cancelled/closed 之後若有 reopened 則不算終端）。
+3. **案卷 Phase 1**（backlog 78）：per-role 可見的文件注入。沿用 slice B 建的 inputs 注入機制（`PromptRenderer.render(inputs=...)`）+ `{{ case_files }}` 佔位符。**不做 RAG**（backlog 79 明文延後）。
+4. **Slice D：彙整匿名化 hook 啟用**（spec §16.3、§16.7 切片 D）：slice C 已預留彙整輸入組裝點，預設仍關閉。
 5. 新角色立繪：使用者自行產圖，不是 agent 工作。
 
 ## 3. 架構關鍵事實（改動前必讀）
 
-- **模式是設定不是程式碼**：`config/modes.yaml`（六模式）→ `backend/ai_council/meetings/modes.py`（`ModeCatalogRepository` + `relay_plan()`）。step_id 慣例 = template 名把 `_` 換 `-`。directed response = 該角色**最後一個** step 的 template，step_id `{role小寫}-response`。
+- **模式是設定不是程式碼**：`config/modes.yaml`（六模式）→ `backend/ai_council/meetings/modes.py`（`ModeCatalogRepository` + `relay_plan()`/`parallel_plan()`）。relay step_id 慣例 = template 名把 `_` 換 `-`；parallel fanout step_id = `fanout-{round}-member-{k}`，base_step_id = `member-{k}`，synthesis step_id = `synthesis-{round}`。directed response = relay 角色**最後一個** step 的 template，step_id `{role小寫}-response`。
 - **相容鐵則**：events.jsonl 既有 step_id（`blue-propose`、`round-N-*`、`directed-N-*`、`sequence-N-*`）不可變；無 `mode_id` 的舊會議投影為 red-blue；共用 output schema（spec §8）不變。守門測試：`backend/tests/test_mode_catalog.py::test_repo_modes_yaml_is_loadable`。
-- **Runner**：`MeetingRunner` 的公開方法都收 `plan: RelayPlan` + `inputs`（API 層用 `meeting_mode()` → `relay_plan(mode)` 解析）。round 計數 = `plan.steps[-1].step_id` 完成次數。slice C 的 parallel 執行器是**新增**，不是改 relay。
+- **Runner**：relay 公開方法收 `plan: RelayPlan` + `inputs`（API 層用 `meeting_mode()` → `relay_plan(mode)` 解析）。relay round 計數 = `plan.steps[-1].step_id` 完成次數。parallel 走 `MeetingRunner.start_parallel()` / `retry_failed_parallel_step()` + `ParallelPlan`；fanout adapter calls 併發，事件按 member index 寫入，member failure 投影 `waiting`，retry 成功且全員完成後觸發 synthesis。
 - **模型寫入紀律**（§17 實作）：所有 models.yaml 寫入走 `model_write_lock`（存在性檢查+寫入+health clear 同鎖）；health store 有 generation token——**generation 取值必須在讀 model config 之前**（先取 gen → 讀 config → 檢查 → record(gen)，過期即丟棄）；`_write_config` 是 temp+rename 原子寫。
 - **422 契約**：/models 寫入路徑的驗證錯誤（含 pydantic 層）統一 `[{"field", "message"}]`，前端 `ApiError.detail` 依 field 對應表單欄位。
 - **前端 active mode**：`useCouncil.ts` 的 `activeModeSource`（module ref）跟著 `selectedMeeting.mode_id` 走（watchEffect，catalog splice 會重解析）；場景 override 是 keyed watch（`meeting_id::defaultScene` 字串）——**不要 watch 整顆 meeting 物件**（串流事件會整物件替換）。catalog 來源 = `GET /modes`，`modes.ts` 本地常數只是後端不可達時的 fallback。
@@ -64,6 +60,6 @@ main（`ac44fef`）包含三個已合併的大功能，全部驗證通過：
 
 ## 6. 交接時的未結事項
 
-- 無未合併分支、無未 commit 變更（`git status` 乾淨、只有 main）。
-- spec §16 slices C/D 未實作（本文件第 2 節第 1 項）；§17 已完成。
+- `mode-system-slice-c` worktree/branch 完成待 merge；驗收已通過：backend 180 passed、frontend build 綠、e2e 28/28。
+- spec §16 slice D 未實作；§17 已完成。
 - 使用者已裁定：個人版不做多人/帳號（backlog 有註記）；案卷 Phase 1 不做 RAG。

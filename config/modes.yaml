@@ -110,6 +110,20 @@ modes:
       - { id: HatYellow, name: 黃帽（價值樂觀）, color: "#f0c05a", kind: member }
       - { id: HatGreen, name: 綠帽（創意發想）, color: "#3dd68c", kind: member }
       - { id: HatBlue, name: 藍帽（流程統整）, color: "#4d8dff", kind: synthesizer }
+    fanout:
+      role: Hat
+      template: hat_white
+      label: 帽子發言
+      min_instances: 5
+      max_instances: 5
+      instance_prompt: false
+      templates_by_role:
+        HatWhite: hat_white
+        HatRed: hat_red
+        HatBlack: hat_black
+        HatYellow: hat_yellow
+        HatGreen: hat_green
+    synthesis: { role: HatBlue, template: hat_blue_synthesis, label: 藍帽統整 }
 
   - id: persona-testing
     name: 盲測用戶

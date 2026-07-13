@@ -6,7 +6,14 @@ from pathlib import Path
 import pytest
 
 from ai_council.meetings.repository import MeetingRepository
-from ai_council.meetings.runner import MeetingRunner, RelayPlan, RunnerAdapters, StepDefinition
+from ai_council.meetings.runner import (
+    MeetingRunner,
+    ParallelMemberStep,
+    ParallelPlan,
+    RelayPlan,
+    RunnerAdapters,
+    StepDefinition,
+)
 from ai_council.models.adapters import AdapterError, ModelRequest, ModelResponse
 from ai_council.models.config import ModelConfig
 from ai_council.prompting.renderer import PromptRenderer
@@ -54,6 +61,36 @@ COURTROOM_PLAN = RelayPlan(
         "Defense": StepDefinition("defense-response", "Defense", "courtroom_defense"),
         "Judge": StepDefinition("judge-response", "Judge", "courtroom_verdict"),
     },
+)
+
+PARALLEL_PLAN = ParallelPlan(
+    members=[
+        ParallelMemberStep(
+            step_id="member-1",
+            role="Member-1",
+            template_name="brainstorm_member",
+            display_name="委員 1",
+            instance_prompt="成本視角",
+            index=1,
+        ),
+        ParallelMemberStep(
+            step_id="member-2",
+            role="Member-2",
+            template_name="brainstorm_member",
+            display_name="委員 2",
+            instance_prompt="使用者視角",
+            index=2,
+        ),
+        ParallelMemberStep(
+            step_id="member-3",
+            role="Member-3",
+            template_name="brainstorm_member",
+            display_name="委員 3",
+            instance_prompt="營運視角",
+            index=3,
+        ),
+    ],
+    synthesis=StepDefinition("synthesis", "Moderator", "brainstorm_synthesis"),
 )
 
 
@@ -746,6 +783,148 @@ def test_runner_renders_mode_inputs_into_prompt(tmp_path: Path) -> None:
     assert "先做後端" in completed_event["prompt_messages"][0]["content"]
 
 
+def test_parallel_runner_completes_fanout_then_synthesis(tmp_path: Path) -> None:
+    runner = build_runner(
+        tmp_path,
+        adapter=FakeAdapter([VALID_OUTPUT] * 4),
+        templates=("brainstorm_member", "brainstorm_synthesis"),
+        extra_placeholders=" {{ instance_prompt }} {{ fanout_outputs }}",
+    )
+
+    runner.start_parallel(
+        plan=PARALLEL_PLAN,
+        meeting_id="meeting-1",
+        topic="如何改善 onboarding？",
+        model_assignments=parallel_model_assignments(),
+    )
+
+    events = runner.repository.read_events("meeting-1")
+    completed = [event for event in events if event["status"] == "completed"]
+    assert [event["step_id"] for event in completed] == [
+        "fanout-1-member-1",
+        "fanout-1-member-2",
+        "fanout-1-member-3",
+        "synthesis-1",
+    ]
+    assert [event["base_step_id"] for event in completed] == [
+        "member-1",
+        "member-2",
+        "member-3",
+        "synthesis",
+    ]
+    synthesis_prompt = completed[-1]["prompt_messages"][0]["content"]
+    assert "Member-1" in synthesis_prompt
+    assert "Continue" in synthesis_prompt
+
+
+def test_parallel_runner_records_individual_failures_without_stopping_other_members(
+    tmp_path: Path,
+) -> None:
+    runner = build_runner(
+        tmp_path,
+        adapter=SelectiveFailingAdapter(failing_model_ids={"mock-member-2"}),
+        templates=("brainstorm_member", "brainstorm_synthesis"),
+    )
+
+    runner.start_parallel(
+        plan=PARALLEL_PLAN,
+        meeting_id="meeting-1",
+        topic="如何改善 onboarding？",
+        model_assignments=parallel_model_assignments(),
+    )
+
+    events = runner.repository.read_events("meeting-1")
+    assert [(event["step_id"], event["status"]) for event in events] == [
+        ("fanout-1-member-1", "completed"),
+        ("fanout-1-member-2", "failed"),
+        ("fanout-1-member-3", "completed"),
+    ]
+    assert all(event["step_id"] != "synthesis-1" for event in events)
+
+
+def test_parallel_runner_retry_failed_member_runs_only_that_member_then_synthesizes(
+    tmp_path: Path,
+) -> None:
+    adapter = SelectiveFailingAdapter(failing_model_ids={"mock-member-2"})
+    runner = build_runner(
+        tmp_path,
+        adapter=adapter,
+        templates=("brainstorm_member", "brainstorm_synthesis"),
+    )
+    model_assignments = parallel_model_assignments()
+    runner.start_parallel(
+        plan=PARALLEL_PLAN,
+        meeting_id="meeting-1",
+        topic="如何改善 onboarding？",
+        model_assignments=model_assignments,
+    )
+    adapter.failing_model_ids.clear()
+
+    runner.retry_failed_parallel_step(
+        plan=PARALLEL_PLAN,
+        meeting_id="meeting-1",
+        step_id="fanout-1-member-2",
+        topic="如何改善 onboarding？",
+        model_assignments=model_assignments,
+    )
+
+    events = runner.repository.read_events("meeting-1")
+    assert [(event["step_id"], event["attempt"], event["status"]) for event in events] == [
+        ("fanout-1-member-1", 1, "completed"),
+        ("fanout-1-member-2", 1, "failed"),
+        ("fanout-1-member-3", 1, "completed"),
+        ("fanout-1-member-2", 2, "completed"),
+        ("synthesis-1", 1, "completed"),
+    ]
+
+
+def test_parallel_runner_starts_next_round_after_synthesis_complete(tmp_path: Path) -> None:
+    runner = build_runner(
+        tmp_path,
+        adapter=FakeAdapter([VALID_OUTPUT] * 8),
+        templates=("brainstorm_member", "brainstorm_synthesis"),
+    )
+    model_assignments = parallel_model_assignments()
+
+    runner.start_parallel(
+        plan=PARALLEL_PLAN,
+        meeting_id="meeting-1",
+        topic="如何改善 onboarding？",
+        model_assignments=model_assignments,
+    )
+    runner.start_parallel(
+        plan=PARALLEL_PLAN,
+        meeting_id="meeting-1",
+        topic="如何改善 onboarding？",
+        model_assignments=model_assignments,
+    )
+
+    completed_step_ids = [
+        event["step_id"]
+        for event in runner.repository.read_events("meeting-1")
+        if event["status"] == "completed"
+    ]
+    assert completed_step_ids == [
+        "fanout-1-member-1",
+        "fanout-1-member-2",
+        "fanout-1-member-3",
+        "synthesis-1",
+        "fanout-2-member-1",
+        "fanout-2-member-2",
+        "fanout-2-member-3",
+        "synthesis-2",
+    ]
+
+
+def parallel_model_assignments() -> dict[str, ModelConfig]:
+    return {
+        "Member-1": ModelConfig(id="mock-member-1", adapter="mock"),
+        "Member-2": ModelConfig(id="mock-member-2", adapter="mock"),
+        "Member-3": ModelConfig(id="mock-member-3", adapter="mock"),
+        "Moderator": ModelConfig(id="mock-moderator", adapter="mock"),
+    }
+
+
 def build_runner(
     tmp_path: Path,
     *,
@@ -799,6 +978,18 @@ class FakeAdapter:
 class FailingAdapter:
     def complete(self, request: ModelRequest) -> ModelResponse:
         raise AdapterError("adapter boom")
+
+
+class SelectiveFailingAdapter:
+    def __init__(self, failing_model_ids: set[str]) -> None:
+        self.failing_model_ids = failing_model_ids
+        self.requests: list[ModelRequest] = []
+
+    def complete(self, request: ModelRequest) -> ModelResponse:
+        self.requests.append(request)
+        if request.model_config.id in self.failing_model_ids:
+            raise AdapterError("adapter boom")
+        return ModelResponse(raw_output=VALID_OUTPUT)
 
 
 class CancellableFakeAdapter(FakeAdapter):

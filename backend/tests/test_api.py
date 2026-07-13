@@ -11,7 +11,7 @@ from pathlib import Path
 from fastapi.testclient import TestClient
 
 from ai_council.api import ModelHealthCheckResult, ModelHealthCheckStore, create_app
-from ai_council.models.adapters import MockModelAdapter, ModelResponse
+from ai_council.models.adapters import AdapterError, MockModelAdapter, ModelRequest, ModelResponse
 from ai_council.models.config import ModelConfigRepository
 
 TEST_BLUE_PROPOSE_TEMPLATE_HASH = "81abba70bd2c176005a3fd28dd13ef9bda68f441de574976e8d7161e23fb5f9d"
@@ -1574,7 +1574,7 @@ def test_modes_endpoint_returns_catalog(tmp_path: Path) -> None:
         {"role": "Judge", "template": "judge_decide", "label": "裁判裁決"},
     ]
     brainstorm = next(mode for mode in modes if mode["id"] == "brainstorm")
-    assert brainstorm["available"] is False
+    assert brainstorm["available"] is True
     assert brainstorm["fanout"]["min_instances"] == 2
 
 
@@ -1645,14 +1645,58 @@ def test_create_meeting_rejects_unknown_mode(tmp_path: Path) -> None:
     assert response.json()["detail"] == "Unknown mode: does-not-exist"
 
 
-def test_create_meeting_rejects_parallel_mode(tmp_path: Path) -> None:
+def test_create_brainstorm_meeting_accepts_member_instances(tmp_path: Path) -> None:
     app = create_test_app(tmp_path)
     client = TestClient(app)
 
-    response = client.post("/meetings", json={"topic": "T", "mode_id": "brainstorm"})
+    response = client.post(
+        "/meetings",
+        json={
+            "topic": "T",
+            "mode_id": "brainstorm",
+            "participants": [
+                {
+                    "role_id": "Member-1",
+                    "model_config_id": "mock-fast",
+                    "display_name": "成本委員",
+                    "instance_prompt": "從成本角度發想",
+                },
+                {
+                    "role_id": "Member-2",
+                    "model_config_id": "mock-fast",
+                    "display_name": "使用者委員",
+                    "instance_prompt": "從使用者角度發想",
+                },
+                {"role_id": "Moderator", "model_config_id": "mock-fast"},
+            ],
+        },
+    )
+
+    assert response.status_code == 200
+    participants = response.json()["participants"]
+    assert [p["role_id"] for p in participants] == ["Member-1", "Member-2", "Moderator"]
+    assert participants[0]["display_name"] == "成本委員"
+    assert participants[0]["instance_prompt"] == "從成本角度發想"
+
+
+def test_create_brainstorm_rejects_member_count_outside_fanout_range(tmp_path: Path) -> None:
+    app = create_test_app(tmp_path)
+    client = TestClient(app)
+
+    response = client.post(
+        "/meetings",
+        json={
+            "topic": "T",
+            "mode_id": "brainstorm",
+            "participants": [
+                {"role_id": "Member-1", "model_config_id": "mock-fast"},
+                {"role_id": "Moderator", "model_config_id": "mock-fast"},
+            ],
+        },
+    )
 
     assert response.status_code == 400
-    assert response.json()["detail"] == "Mode is not yet supported: brainstorm"
+    assert response.json()["detail"] == "Mode brainstorm requires 2-6 fanout members"
 
 
 def test_create_meeting_requires_debate_positions(tmp_path: Path) -> None:
@@ -1850,6 +1894,109 @@ def test_debate_inputs_reach_prompts(tmp_path: Path) -> None:
     assert "先做後端" in first_completed["prompt_messages"][0]["content"]
 
 
+def test_start_brainstorm_meeting_runs_parallel_steps(tmp_path: Path) -> None:
+    app = create_test_app(tmp_path)
+    client = TestClient(app)
+    meeting_id = client.post(
+        "/meetings",
+        json={
+            "topic": "腦力激盪",
+            "mode_id": "brainstorm",
+            "participants": [
+                {"role_id": "Member-1", "model_config_id": "mock-fast"},
+                {"role_id": "Member-2", "model_config_id": "mock-fast"},
+                {"role_id": "Moderator", "model_config_id": "mock-fast"},
+            ],
+        },
+    ).json()["meeting_id"]
+
+    response = client.post(
+        f"/meetings/{meeting_id}/start",
+        json={
+            "models": {
+                "Member-1": "mock-fast",
+                "Member-2": "mock-fast",
+                "Moderator": "mock-fast",
+            }
+        },
+    )
+
+    assert response.status_code == 202
+    meeting = wait_for_activity(client, meeting_id, "completed")
+    completed_steps = [
+        event["step_id"] for event in meeting["events"] if event["status"] == "completed"
+    ]
+    assert completed_steps == [
+        "fanout-1-member-1",
+        "fanout-1-member-2",
+        "synthesis-1",
+    ]
+
+
+def test_parallel_failure_projects_waiting_and_retry_synthesizes(tmp_path: Path, monkeypatch) -> None:
+    app = create_test_app(
+        tmp_path,
+        models_yaml="""
+models:
+  - id: mock-member-1
+    adapter: mock
+  - id: mock-member-2
+    adapter: mock
+  - id: mock-moderator
+    adapter: mock
+""".strip(),
+    )
+    client = TestClient(app)
+    failing_model_ids = {"mock-member-2"}
+    original_complete = MockModelAdapter.complete
+
+    def fail_member_2_once(self: MockModelAdapter, request: ModelRequest) -> ModelResponse:
+        if request.model_config.id in failing_model_ids:
+            raise AdapterError("adapter boom")
+        return original_complete(self, request)
+
+    monkeypatch.setattr(MockModelAdapter, "complete", fail_member_2_once)
+    meeting_id = client.post(
+        "/meetings",
+        json={
+            "topic": "腦力激盪",
+            "mode_id": "brainstorm",
+            "participants": [
+                {"role_id": "Member-1", "model_config_id": "mock-member-1"},
+                {"role_id": "Member-2", "model_config_id": "mock-member-2"},
+                {"role_id": "Moderator", "model_config_id": "mock-moderator"},
+            ],
+        },
+    ).json()["meeting_id"]
+    models = {
+        "Member-1": "mock-member-1",
+        "Member-2": "mock-member-2",
+        "Moderator": "mock-moderator",
+    }
+
+    client.post(f"/meetings/{meeting_id}/start", json={"models": models})
+    meeting = wait_for_activity(client, meeting_id, "waiting")
+    assert [event["step_id"] for event in meeting["events"]] == [
+        "fanout-1-member-1",
+        "fanout-1-member-2",
+    ]
+    assert meeting["events"][-1]["status"] == "failed"
+
+    failing_model_ids.clear()
+    retry = client.post(
+        f"/meetings/{meeting_id}/steps/fanout-1-member-2/retry",
+        json={"models": models},
+    )
+    assert retry.status_code == 200
+    meeting = wait_for_activity(client, meeting_id, "completed")
+    assert [event["step_id"] for event in meeting["events"]] == [
+        "fanout-1-member-1",
+        "fanout-1-member-2",
+        "fanout-1-member-2",
+        "synthesis-1",
+    ]
+
+
 def test_respond_as_role_accepts_mode_roles(tmp_path: Path) -> None:
     app = create_test_app(tmp_path)
     client = TestClient(app)
@@ -1927,6 +2074,16 @@ RELAY_PROMPT_TEMPLATES = [
     "debate_cross_pro",
     "debate_cross_con",
     "debate_verdict",
+    "brainstorm_member",
+    "brainstorm_synthesis",
+    "hat_white",
+    "hat_red",
+    "hat_black",
+    "hat_yellow",
+    "hat_green",
+    "hat_blue_synthesis",
+    "persona_member",
+    "persona_synthesis",
 ]
 
 DEBATE_PROMPT_TEMPLATES = {
@@ -1961,6 +2118,10 @@ models:
         )
         if template in DEBATE_PROMPT_TEMPLATES:
             content += " {{ position_a }} {{ position_b }}"
+        if template in {"brainstorm_member", "persona_member"}:
+            content += " {{ instance_prompt }}"
+        if template in {"brainstorm_synthesis", "hat_blue_synthesis", "persona_synthesis"}:
+            content += " {{ fanout_outputs }}"
         (prompt_dir / f"{template}.md").write_text(content, encoding="utf-8")
     return create_app(
         data_dir=tmp_path / "data",
