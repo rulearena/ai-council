@@ -64,9 +64,46 @@ from ai_council.prompting.schemas import (
 )
 
 MODEL_TEST_PROMPT = 'Return {"summary":"OK","arguments":[],"risks":[],"recommendation":"OK"}'
-MAX_CASE_FILE_CHARS = 20_000
-MAX_TOTAL_CASE_FILE_CHARS = 60_000
 CHINESE_DIGITS = "零一二三四五六七八九"
+
+
+@dataclass(frozen=True)
+class CaseFileLimits:
+    per_file_chars: int = 50_000
+    total_chars: int = 120_000
+
+    def __post_init__(self) -> None:
+        if self.per_file_chars <= 0:
+            raise ValueError("AI_COUNCIL_MAX_CASE_FILE_CHARS must be a positive integer")
+        if self.total_chars <= 0:
+            raise ValueError("AI_COUNCIL_MAX_TOTAL_CASE_FILE_CHARS must be a positive integer")
+        if self.total_chars < self.per_file_chars:
+            raise ValueError(
+                "AI_COUNCIL_MAX_TOTAL_CASE_FILE_CHARS must be greater than or equal to "
+                "AI_COUNCIL_MAX_CASE_FILE_CHARS"
+            )
+
+    @classmethod
+    def from_environment(cls) -> CaseFileLimits:
+        return cls(
+            per_file_chars=_positive_integer_environment(
+                "AI_COUNCIL_MAX_CASE_FILE_CHARS", 50_000
+            ),
+            total_chars=_positive_integer_environment(
+                "AI_COUNCIL_MAX_TOTAL_CASE_FILE_CHARS", 120_000
+            ),
+        )
+
+
+def _positive_integer_environment(name: str, default: int) -> int:
+    raw = os.environ.get(name, str(default))
+    try:
+        value = int(raw)
+    except ValueError as error:
+        raise ValueError(f"{name} must be a positive integer") from error
+    if value <= 0:
+        raise ValueError(f"{name} must be a positive integer")
+    return value
 
 
 class MeetingParticipantRequest(BaseModel):
@@ -144,7 +181,9 @@ def create_app(
     modes_config_path: Path | str,
     prompt_dir: Path | str,
     start_model_health_checks: bool = True,
+    case_file_limits: CaseFileLimits | None = None,
 ) -> FastAPI:
+    limits = case_file_limits or CaseFileLimits.from_environment()
     app = FastAPI()
     app.add_middleware(
         CORSMiddleware,
@@ -314,6 +353,13 @@ def create_app(
             raise HTTPException(status_code=500, detail=str(error)) from error
         return [project_mode(mode) for mode in modes]
 
+    @app.get("/case-file-limits")
+    def get_case_file_limits() -> dict[str, int]:
+        return {
+            "per_file_chars": limits.per_file_chars,
+            "total_chars": limits.total_chars,
+        }
+
     @app.post("/meetings")
     def create_meeting(request: CreateMeetingRequest) -> dict[str, Any]:
         mode = get_mode_or_400(mode_catalog, request.mode_id)
@@ -323,7 +369,7 @@ def create_app(
                 detail=f"Mode is not yet supported: {mode.id}",
             )
         participants = normalize_participants(mode, request.participants, model_repository)
-        case_files = normalize_case_files(mode, participants, request.case_files)
+        case_files = normalize_case_files(mode, participants, request.case_files, limits)
 
         declared_input_ids = {item.id for item in mode.inputs}
         unknown_inputs = sorted(set(request.inputs.keys()) - declared_input_ids)
@@ -834,6 +880,7 @@ def normalize_case_files(
     mode: ModeDefinition,
     participants: list[dict[str, Any]],
     requested: list[CaseFileRequest],
+    limits: CaseFileLimits,
 ) -> list[dict[str, Any]]:
     if not requested:
         return []
@@ -860,16 +907,16 @@ def normalize_case_files(
                     detail=f"Unknown case file visible role for mode {mode.id}: {role}",
                 )
         size = len(content)
-        if size > MAX_CASE_FILE_CHARS:
+        if size > limits.per_file_chars:
             raise HTTPException(
                 status_code=413,
-                detail=f"Case file content exceeds {MAX_CASE_FILE_CHARS} characters: {title}",
+                detail=f"Case file content exceeds {limits.per_file_chars} characters: {title}",
             )
         total_size += size
-        if total_size > MAX_TOTAL_CASE_FILE_CHARS:
+        if total_size > limits.total_chars:
             raise HTTPException(
                 status_code=413,
-                detail=f"Case files exceed {MAX_TOTAL_CASE_FILE_CHARS} total characters",
+                detail=f"Case files exceed {limits.total_chars} total characters",
             )
         case_files.append(
             {

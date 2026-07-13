@@ -8,6 +8,7 @@ import time
 import urllib.error
 from pathlib import Path
 
+import pytest
 from fastapi.testclient import TestClient
 
 from ai_council.api import ModelHealthCheckResult, ModelHealthCheckStore, create_app
@@ -44,6 +45,56 @@ def test_models_endpoint_lists_configured_models(tmp_path: Path) -> None:
             "credential": None,
         }
     ]
+
+
+def test_case_file_limits_endpoint_reports_default_limits(tmp_path: Path) -> None:
+    client = TestClient(create_test_app(tmp_path))
+
+    response = client.get("/case-file-limits")
+
+    assert response.status_code == 200
+    assert response.json() == {"per_file_chars": 50_000, "total_chars": 120_000}
+
+
+def test_case_file_limits_endpoint_reports_environment_overrides(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("AI_COUNCIL_MAX_CASE_FILE_CHARS", "70000")
+    monkeypatch.setenv("AI_COUNCIL_MAX_TOTAL_CASE_FILE_CHARS", "150000")
+    client = TestClient(create_test_app(tmp_path))
+
+    response = client.get("/case-file-limits")
+
+    assert response.status_code == 200
+    assert response.json() == {"per_file_chars": 70_000, "total_chars": 150_000}
+
+
+@pytest.mark.parametrize(
+    ("per_file", "total", "message"),
+    [
+        ("not-a-number", "120000", "AI_COUNCIL_MAX_CASE_FILE_CHARS must be a positive integer"),
+        ("0", "120000", "AI_COUNCIL_MAX_CASE_FILE_CHARS must be a positive integer"),
+        ("50000", "-1", "AI_COUNCIL_MAX_TOTAL_CASE_FILE_CHARS must be a positive integer"),
+        (
+            "50000",
+            "49999",
+            "AI_COUNCIL_MAX_TOTAL_CASE_FILE_CHARS must be greater than or equal to AI_COUNCIL_MAX_CASE_FILE_CHARS",
+        ),
+    ],
+)
+def test_invalid_case_file_limit_environment_fails_app_startup_clearly(
+    tmp_path: Path,
+    monkeypatch,
+    per_file: str,
+    total: str,
+    message: str,
+) -> None:
+    monkeypatch.setenv("AI_COUNCIL_MAX_CASE_FILE_CHARS", per_file)
+    monkeypatch.setenv("AI_COUNCIL_MAX_TOTAL_CASE_FILE_CHARS", total)
+
+    with pytest.raises(ValueError, match=f"^{message}$"):
+        create_test_app(tmp_path)
 
 
 def test_startup_health_check_marks_mock_model_available(tmp_path: Path) -> None:
@@ -1844,9 +1895,44 @@ def test_create_meeting_rejects_case_files_for_unknown_roles(tmp_path: Path) -> 
     assert response.json()["detail"] == "Unknown case file visible role for mode courtroom: Blue"
 
 
-def test_create_meeting_rejects_oversized_case_files(tmp_path: Path) -> None:
+def test_create_meeting_uses_reported_per_file_limit(tmp_path: Path) -> None:
     app = create_test_app(tmp_path)
     client = TestClient(app)
+
+    accepted = client.post(
+        "/meetings",
+        json={
+            "topic": "事故覆盤",
+            "case_files": [
+                {
+                    "title": "at limit",
+                    "content": "x" * 50_000,
+                    "visible_roles": ["Blue"],
+                }
+            ],
+        },
+    )
+    rejected = client.post(
+        "/meetings",
+        json={
+            "topic": "事故覆盤",
+            "case_files": [
+                {
+                    "title": "too large",
+                    "content": "x" * 50_001,
+                    "visible_roles": ["Blue"],
+                }
+            ],
+        },
+    )
+
+    assert accepted.status_code == 200
+    assert rejected.status_code == 413
+    assert rejected.json()["detail"] == "Case file content exceeds 50000 characters: too large"
+
+
+def test_create_meeting_uses_reported_total_case_file_limit(tmp_path: Path) -> None:
+    client = TestClient(create_test_app(tmp_path))
 
     response = client.post(
         "/meetings",
@@ -1854,16 +1940,17 @@ def test_create_meeting_rejects_oversized_case_files(tmp_path: Path) -> None:
             "topic": "事故覆盤",
             "case_files": [
                 {
-                    "title": "too large",
-                    "content": "x" * 20001,
+                    "title": f"part {index}",
+                    "content": "x" * size,
                     "visible_roles": ["Blue"],
                 }
+                for index, size in enumerate((40_000, 40_000, 40_001), start=1)
             ],
         },
     )
 
     assert response.status_code == 413
-    assert response.json()["detail"] == "Case file content exceeds 20000 characters: too large"
+    assert response.json()["detail"] == "Case files exceed 120000 total characters"
 
 
 def test_create_meeting_rejects_unknown_mode(tmp_path: Path) -> None:
