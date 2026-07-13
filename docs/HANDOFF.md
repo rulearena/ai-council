@@ -20,7 +20,13 @@
 
 ## 2. Agent 開發佇列與目前核准批次
 
-Agent 開發佇列目前已完成，沒有尚未交付的已核准產品批次。未來要執行的產品工作，先從 `spec.md` §15 選定並核准，再把該批次的範圍與驗收條件寫入本檔；本檔不另行維護長期 backlog。
+Human Owner 已於 2026-07-13 核准「證據到可追溯裁決」批次，依序自主執行：
+
+1. backlog 80：證據編號與引用錨點。
+2. backlog 63/64：版本化角色輸出契約；舊 `role-output/v1` 與舊 events 維持相容。
+3. backlog 65：adjudicator rich structured verdicts。
+
+批次計畫：`docs/plans/2026-07-13-evidence-to-verdict.md`；執行 tickets：`.scratch/evidence-to-verdict/`。完成前不需逐項重新取得授權。本檔不另行維護長期 backlog。
 
 **Human Owner follow-up**：新角色立繪由使用者自行產圖，不屬於 agent 開發佇列或產品執行批次。
 
