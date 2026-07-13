@@ -16,14 +16,15 @@
 | Case Files Phase 1 | `48e2f34` / `74780f9` / `088b5bc` | 建立會議時貼上/上傳多份純文字或 Markdown 案卷；每份指定可見角色；runner 依角色注入 `{{ case_files }}`（實作計畫：`docs/plans/2026-07-13-case-files-phase-1.md`） |
 | Mode system slice D | `e7237c9` | parallel synthesis anonymization hook：per-mode `synthesis.anonymize_inputs` 啟用後，彙整 prompt 僅看匿名委員代稱與過濾後輸出（實作計畫：`docs/plans/2026-07-13-mode-system-slice-d.md`） |
 | Evidence to Verdict | `96cd1d9`–`c597e32` | 證物引用錨點、versioned per-role output schema、adjudicator rich structured verdict、parse-only auto retry 與新舊輸出呈現（實作計畫：`docs/plans/2026-07-13-evidence-to-verdict.md`） |
+| Configurable Case File Limits | `2c3f069`–`b51052a` | 案卷單份/總量限制環境變數化（預設 50,000/120,000）、公開實際限制、建立前字元/token/context 提示、超限阻擋與 413 detail 保留（實作計畫：`docs/plans/2026-07-13-configurable-case-file-limits.md`） |
 
-**驗收基線（任何改動後不得低於此）**：後端 `pytest` **241 passed**；前端 `npm run build` 綠；e2e **31 passed**。
+**驗收基線（任何改動後不得低於此）**：後端 `pytest` **249 passed**；前端 `npm run build` 綠；e2e **37 passed**。
 
 ## 2. Agent 開發佇列與目前核准批次
 
 Evidence to Verdict 批次已實作並等待 Human Owner acceptance。
 
-Human Owner 另於 2026-07-13 核准 backlog 81「案卷容量限制設定化與建立前提示」：預設單份/總量提高為 50,000/120,000 字元，環境變數可覆寫，前端顯示實際限制、token/context 風險與 inline 錯誤。執行計畫：`docs/plans/2026-07-13-configurable-case-file-limits.md`；ticket：`.scratch/configurable-case-file-limits/`。
+Backlog 81「案卷容量限制設定化與建立前提示」已實作並通過雙軸 review 與完整驗收，等待 Human Owner acceptance。預設單份/總量為 50,000/120,000 字元，環境變數可覆寫；前端僅在取得後端實際限制後允許建立，並顯示 token/context 風險、inline 錯誤與後端 413 detail。執行計畫：`docs/plans/2026-07-13-configurable-case-file-limits.md`；ticket：`.scratch/configurable-case-file-limits/`。
 
 已完成的 Evidence to Verdict 範圍：
 
@@ -74,4 +75,5 @@ Human Owner 另於 2026-07-13 核准 backlog 81「案卷容量限制設定化與
 
 - Mode system slice A–D、§17、Backlog 75–78 均已完成並驗證。
 - Evidence to Verdict 批次（backlog 80、63–65）已實作、雙軸 review 與完整驗收通過，等待 Human Owner acceptance。
+- Backlog 81 已實作、雙軸 review 與完整驗收通過，等待 Human Owner acceptance。
 - 使用者已裁定：個人版不做多人/帳號（backlog 有註記）；案卷 Phase 2/RAG 仍延後到 backlog 79。
