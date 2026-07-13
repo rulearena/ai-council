@@ -23,11 +23,9 @@ function toggleSop() {
   sopOpen.value = !sopOpen.value
 }
 
-// Parallel modes don't have a stage yet in slice A (no parallel mode is buildable), so
-// this is the one place ringSeatLayout (scenes.ts/modes.ts) actually renders anything -
-// a small preview of how N concurrent members would be seated once slice C ships a real
-// parallel scene. Member count: the fanout's minimum for a prototype+N mode (brainstorm,
-// persona-testing), or the fixed member count for a fully-named roster (six-hats).
+// Small preview of how N concurrent members are seated in a parallel mode. Member count:
+// the fanout's minimum for a prototype+N mode (brainstorm, persona-testing), or the fixed
+// member count for a fully-named roster (six-hats).
 const previewMemberCount = computed(() =>
   props.mode.fanout ? props.mode.fanout.minInstances : props.mode.roles.filter((role) => role.kind === 'member').length,
 )

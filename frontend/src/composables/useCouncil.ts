@@ -752,9 +752,8 @@ export function useCouncil() {
   async function requestSelectedRoleSequence() {
     // selectedSequencePreset can be undefined when the active mode's roster can't build
     // any presets (fewer than 2 members, or no adjudicator - see sequencePresets above,
-    // which returns []). No mode buildable today hits that (all three `parallel` modes
-    // are still `available: false`), but this guards against the TypeError up front
-    // rather than relying on that staying true.
+    // which returns []). Parallel modes deliberately have no sequence presets, so guard
+    // against the TypeError up front.
     if (!selectedMeeting.value || !canRun.value || !selectedSequencePreset.value) return
     clearContinueHint()
     pendingRoles.value.push(...selectedSequencePreset.value.roles)

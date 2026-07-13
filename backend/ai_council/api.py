@@ -614,8 +614,8 @@ def create_app(
 
     @app.websocket("/meetings/{meeting_id}/events")
     async def meeting_events(websocket: WebSocket, meeting_id: str) -> None:
-        metadata_store.get(meeting_id)
-        mode = meeting_mode(mode_catalog, metadata_store.get(meeting_id))
+        metadata = metadata_store.get(meeting_id)
+        mode = meeting_mode(mode_catalog, metadata)
         await websocket.accept()
         events = repository.read_events(meeting_id)
         activity_status = live_activity_status(events, jobs.is_running(meeting_id), mode)

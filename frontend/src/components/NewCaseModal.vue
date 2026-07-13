@@ -2,11 +2,9 @@
 // Two-step New Case flow (spec.md 16.6): (1) browse the mode catalog, (2) confirm
 // participants and the topic. Which cards are actually selectable is data-driven
 // (`mode.available`, sourced from GET /modes - see modes.ts's refreshModeCatalog): as of
-// slice B that's every `relay` mode (red-blue/courtroom/debate), while `parallel` modes
-// still render fully (name/tagline/when-to-use/SOP) but stay disabled until slice C wires
-// up the parallel executor (spec.md 16.7). Choosing red-blue and creating still ends up
-// calling createNewMeeting() the same way the old flat form did, so a user who never
-// looks at the mode picker gets today's behavior unchanged.
+// slice C that's every backend-supported mode, including parallel modes. Choosing red-blue
+// and creating still ends up calling createNewMeeting() the same way the old flat form did,
+// so a user who never looks at the mode picker gets today's behavior unchanged.
 import { computed, inject, ref, watch } from 'vue'
 import { councilKey, roleIcon } from '../composables/useCouncil'
 import { modeCatalog, type ModeDefinition } from '../modes'
@@ -28,10 +26,8 @@ const selectedMode = computed<ModeDefinition>(
 )
 
 // Values for the selected mode's `kind: 'text'` inputs (e.g. debate's position_a/
-// position_b - spec.md 16.2), keyed by input id. `persona-list` inputs don't appear here:
-// no mode that carries one is buildable yet (all `category: 'parallel'` modes stay
-// `available: false` until slice C), so this form only ever needs to render plain text
-// fields.
+// position_b - spec.md 16.2), keyed by input id. Parallel persona/member prompts are
+// handled by the member editor below.
 const inputValues = ref<Record<string, string>>({})
 const parallelMemberCount = ref(2)
 const parallelMembers = ref<Array<{ displayName: string; instancePrompt: string }>>([])
@@ -132,7 +128,7 @@ function buildParticipants() {
 <template>
   <Modal :show="show" title="New Case" test-id="new-case-modal" close-test-id="new-case-close-button" @close="$emit('close')">
     <div v-if="step === 'mode'" class="mode-picker" data-testid="mode-picker-step">
-      <p class="mode-picker-hint">選擇本次會議的模式 —— 灰階「即將推出」卡片尚未開放建立：</p>
+      <p class="mode-picker-hint">選擇本次會議的模式：</p>
       <div class="mode-card-grid">
         <ModeCard
           v-for="mode in modeCatalog"

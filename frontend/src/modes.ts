@@ -94,12 +94,9 @@ export type ModeDefinition = {
   steps?: RelayStep[]
   fanout?: FanoutConfig
   synthesis?: SynthesisConfig
-  // As of slice B, sourced from the backend catalog (GET /modes - see
-  // refreshModeCatalog/mapBackendMode below) once it loads: every `relay` mode
-  // (red-blue/courtroom/debate) is buildable, while `parallel` modes still render fully
-  // (card, tagline, SOP) but stay disabled until slice C wires up the parallel executor
-  // (spec.md 16.7). The local fallback consts further down hardcode the same slice-A-era
-  // values (only red-blue true) for whenever the backend is unreachable.
+  // Sourced from the backend catalog (GET /modes - see refreshModeCatalog/mapBackendMode
+  // below) once it loads. The local fallback consts further down intentionally stay
+  // conservative for whenever the backend is unreachable.
   available: boolean
 }
 
@@ -368,10 +365,7 @@ export function getModeById(id: string): ModeDefinition | undefined {
 }
 
 // Pure, side-effect-free point layout for a `ring[]` seat group (spec.md 16.6): N seats
-// evenly spaced along an arc, for parallel modes' N concurrent members. Exercised in
-// slice A via the mode help drawer's parallel-mode ring preview (no scene populates a
-// real ring[] yet since no parallel mode is buildable) - kept pure/exported so slice C's
-// actual parallel scenes can reuse it verbatim instead of re-deriving the math.
+// evenly spaced along an arc, for parallel modes' N concurrent members.
 export function ringSeatLayout(
   count: number,
   options: { centerX?: number; topY?: number; bottomY?: number; radiusX?: number } = {},
