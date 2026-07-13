@@ -98,7 +98,9 @@ continues the fixed round, and closes the meeting.
 
 ## Model Configuration
 
-`config/models.yaml` contains one or more model configs:
+`config/models.yaml` contains one or more model configs. You can edit this file by hand as
+described below, or use the **Settings → 模型管理** tab in the app to add, edit, test, and
+delete model configs from the UI (writes back to this same file atomically):
 
 ```yaml
 models:
