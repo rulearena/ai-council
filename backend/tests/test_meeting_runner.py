@@ -377,6 +377,36 @@ def test_rich_parse_failure_is_recorded_then_automatically_retried_once(
     assert events[-1]["parsed_output"]["decision"] == "approve-with-conditions"
 
 
+def test_non_string_model_output_uses_parse_failure_retry_flow(tmp_path: Path) -> None:
+    class NonStringThenValidAdapter:
+        calls = 0
+
+        def complete(self, request: ModelRequest) -> ModelResponse:
+            self.calls += 1
+            if self.calls == 1:
+                return ModelResponse(raw_output=None)  # type: ignore[arg-type]
+            return ModelResponse(raw_output=VALID_OUTPUT)
+
+    adapter = NonStringThenValidAdapter()
+    runner = build_runner(tmp_path, adapter=adapter)
+
+    runner.respond_as_role(
+        plan=RED_BLUE_PLAN,
+        meeting_id="meeting-1",
+        topic="非字串輸出",
+        role="Blue",
+        model_assignments={"Blue": ModelConfig(id="mock-blue", adapter="mock")},
+    )
+
+    events = runner.repository.read_events("meeting-1")
+    assert adapter.calls == 2
+    assert [(event["attempt"], event["status"]) for event in events] == [
+        (1, "failed"),
+        (2, "completed"),
+    ]
+    assert "Model output must be a string" in events[0]["error"]
+
+
 def test_injected_registry_is_shared_from_catalog_through_plan_and_runner(
     tmp_path: Path,
 ) -> None:

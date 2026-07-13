@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
@@ -83,6 +84,135 @@ def test_structured_verdict_v1_registry_rejects_invalid_payloads_as_parse_errors
         codec.parse(raw_output)
 
     assert error.value.raw_output == raw_output
+
+
+@pytest.mark.parametrize(
+    "evidence_ref",
+    ["[證物十]", "[證物一百零一]", "[證物一萬零三]"],
+)
+def test_structured_verdict_accepts_system_generated_chinese_evidence_anchors(
+    evidence_ref: str,
+) -> None:
+    codec = DEFAULT_OUTPUT_SCHEMA_REGISTRY.get("structured-verdict/v1")
+    payload = {
+        "summary": "S",
+        "decision": "approve",
+        "findings": [
+            {"title": "F", "detail": "D", "evidence_refs": [evidence_ref]}
+        ],
+        "risks": [],
+        "recommendation": "R",
+        "conditions": [],
+        "unresolved_questions": [],
+    }
+
+    assert codec.parse(json.dumps(payload, ensure_ascii=False))["findings"][0][
+        "evidence_refs"
+    ] == [evidence_ref]
+
+
+@pytest.mark.parametrize(
+    "evidence_ref",
+    [
+        "[證物…]",
+        "[證物A]",
+        "[證物 一]",
+        "[證物一 ]",
+        "[證物一\n]",
+        " [證物一]",
+        "[證物一] ",
+    ],
+)
+def test_structured_verdict_rejects_non_system_evidence_anchor_shapes(
+    evidence_ref: str,
+) -> None:
+    codec = DEFAULT_OUTPUT_SCHEMA_REGISTRY.get("structured-verdict/v1")
+    payload = {
+        "summary": "S",
+        "decision": "reject",
+        "findings": [
+            {"title": "F", "detail": "D", "evidence_refs": [evidence_ref]}
+        ],
+        "risks": [],
+        "recommendation": "R",
+        "conditions": [],
+        "unresolved_questions": [],
+    }
+    raw_output = json.dumps(payload, ensure_ascii=False)
+
+    with pytest.raises(OutputParseError):
+        codec.parse(raw_output)
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {
+            "summary": "S",
+            "decision": "approve",
+            "findings": [],
+            "risks": [],
+            "recommendation": "R",
+            "conditions": [],
+            "unresolved_questions": [],
+            "extra": "not allowed",
+        },
+        {
+            "summary": "S",
+            "decision": "approve",
+            "findings": [
+                {
+                    "title": "F",
+                    "detail": "D",
+                    "evidence_refs": [],
+                    "extra": "not allowed",
+                }
+            ],
+            "risks": [],
+            "recommendation": "R",
+            "conditions": [],
+            "unresolved_questions": [],
+        },
+        {
+            "summary": "S",
+            "decision": "approve",
+            "findings": [],
+            "risks": [],
+            "recommendation": "R",
+            "conditions": [],
+        },
+        {
+            "summary": "S",
+            "decision": "approve",
+            "findings": [{"title": "F", "evidence_refs": []}],
+            "risks": [],
+            "recommendation": "R",
+            "conditions": [],
+            "unresolved_questions": [],
+        },
+    ],
+)
+def test_structured_verdict_rejects_unknown_or_missing_fields(
+    payload: dict[str, object],
+) -> None:
+    codec = DEFAULT_OUTPUT_SCHEMA_REGISTRY.get("structured-verdict/v1")
+
+    with pytest.raises(OutputParseError):
+        codec.parse(json.dumps(payload, ensure_ascii=False))
+
+
+@pytest.mark.parametrize("schema_id", ["role-output/v1", "structured-verdict/v1"])
+@pytest.mark.parametrize("raw_output", [None, {"summary": "not serialized"}])
+def test_output_schema_codecs_normalize_non_string_content_as_parse_errors(
+    schema_id: str,
+    raw_output: object,
+) -> None:
+    codec = DEFAULT_OUTPUT_SCHEMA_REGISTRY.get(schema_id)
+
+    with pytest.raises(OutputParseError) as error:
+        codec.parse(raw_output)  # type: ignore[arg-type]
+
+    assert error.value.raw_output is raw_output
 
 
 def test_role_output_v1_registry_preserves_literal_hash_and_parser_contract() -> None:

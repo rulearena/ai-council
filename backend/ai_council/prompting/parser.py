@@ -32,7 +32,17 @@ VERDICT_DECISIONS = {
     "reject",
     "insufficient-evidence",
 }
-EVIDENCE_REF_PATTERN = re.compile(r"^\[證物[^\[\]]+\]$")
+EVIDENCE_REF_PATTERN = re.compile(r"\[證物[零一二三四五六七八九十百千萬]+\]")
+STRUCTURED_VERDICT_FIELDS = {
+    "summary",
+    "decision",
+    "findings",
+    "risks",
+    "recommendation",
+    "conditions",
+    "unresolved_questions",
+}
+VERDICT_ITEM_FIELDS = {"title", "detail", "evidence_refs"}
 
 
 @dataclass(frozen=True)
@@ -54,7 +64,7 @@ class StructuredVerdict:
 
 
 class OutputParseError(ValueError):
-    def __init__(self, message: str, *, raw_output: str) -> None:
+    def __init__(self, message: str, *, raw_output: object) -> None:
         super().__init__(message)
         self.raw_output = raw_output
 
@@ -79,6 +89,7 @@ class StructuredVerdictParser:
             payload = json.loads(extract_first_json_object(raw_output))
             if not isinstance(payload, dict):
                 raise TypeError("verdict must be an object")
+            require_exact_keys(payload, STRUCTURED_VERDICT_FIELDS, "verdict")
             decision = require_string(payload, "decision")
             if decision not in VERDICT_DECISIONS:
                 raise ValueError(f"Unknown verdict decision: {decision}")
@@ -168,6 +179,7 @@ def parse_verdict_items(payload: dict[str, Any], key: str) -> list[VerdictItem]:
 def parse_verdict_item(item: Any) -> VerdictItem:
     if not isinstance(item, dict):
         raise TypeError("verdict item must be an object")
+    require_exact_keys(item, VERDICT_ITEM_FIELDS, "verdict item")
     evidence_refs = parse_strings(item, "evidence_refs")
     for evidence_ref in evidence_refs:
         if EVIDENCE_REF_PATTERN.fullmatch(evidence_ref) is None:
@@ -177,3 +189,20 @@ def parse_verdict_item(item: Any) -> VerdictItem:
         detail=require_string(item, "detail"),
         evidence_refs=evidence_refs,
     )
+
+
+def require_exact_keys(
+    payload: dict[str, Any],
+    expected: set[str],
+    context: str,
+) -> None:
+    actual = set(payload)
+    if actual != expected:
+        missing = sorted(expected - actual)
+        unknown = sorted(actual - expected)
+        details = []
+        if missing:
+            details.append(f"missing {', '.join(missing)}")
+        if unknown:
+            details.append(f"unknown {', '.join(unknown)}")
+        raise TypeError(f"{context} has invalid fields: {'; '.join(details)}")

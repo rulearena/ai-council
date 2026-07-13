@@ -40,7 +40,12 @@ class OutputSchemaCodec:
     def hash(self) -> str:
         return hashlib.sha256(self.schema.encode("utf-8")).hexdigest()
 
-    def parse(self, raw_output: str) -> dict[str, Any]:
+    def parse(self, raw_output: object) -> dict[str, Any]:
+        if not isinstance(raw_output, str):
+            raise OutputParseError(
+                "Model output must be a string",
+                raw_output=raw_output,
+            )
         try:
             parsed = self.parser.parse(raw_output)
         except OutputParseError:
