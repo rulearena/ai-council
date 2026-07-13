@@ -38,6 +38,10 @@ async function createMeetingViaNewCase(
       await page.getByTestId(`case-file-${fileNumber}-role-${role}`).check()
     }
   }
+  if (options.caseFiles?.length) {
+    const totalChars = options.caseFiles.reduce((total, file) => total + file.content.length, 0)
+    await expect(page.getByTestId('case-file-cost-note')).toContainText(`目前 ${totalChars} 字元`)
+  }
   await page.getByTestId('create-meeting-button').click()
   // NewCaseModal closes itself once createNewMeeting() resolves.
   await expect(page.getByTestId('new-case-modal')).not.toBeVisible()
@@ -1002,8 +1006,11 @@ test('New Case keeps user input when create fails', async ({ page }) => {
     .click()
   await page.getByLabel('會議主題').fill('保留這個輸入')
   await page.getByTestId('add-case-file-button').click()
-  await page.getByTestId('case-file-1-title').fill('保留案卷')
-  await page.getByTestId('case-file-1-content').fill('失敗後不應清空這段內容')
+  await page.getByTestId('case-file-1-upload').setInputFiles({
+    name: '保留案卷.md',
+    mimeType: 'text/markdown',
+    buffer: Buffer.from('失敗後不應清空這段內容'),
+  })
   await page.getByTestId('case-file-1-role-Blue').check()
   await page.getByTestId('create-meeting-button').click()
 
@@ -1012,6 +1019,7 @@ test('New Case keeps user input when create fails', async ({ page }) => {
   await expect(page.getByTestId('case-file-1-title')).toHaveValue('保留案卷')
   await expect(page.getByTestId('case-file-1-content')).toHaveValue('失敗後不應清空這段內容')
   await expect(page.getByTestId('case-file-1-role-Blue')).toBeChecked()
+  await expect(page.getByTestId('case-file-cost-note')).toContainText('目前 11 字元')
   await expect(page.getByTestId('app-error')).toContainText('POST /meetings failed: 404')
 })
 

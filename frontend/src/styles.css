@@ -2089,6 +2089,21 @@ pre {
   resize: vertical;
 }
 
+.case-file-upload {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+  font-size: 12px;
+  color: var(--color-text-secondary);
+}
+
+.case-file-upload input {
+  width: 100%;
+  min-width: 0;
+  font-size: 12px;
+  color: var(--color-text-muted);
+}
+
 .case-file-visibility {
   display: flex;
   flex-wrap: wrap;
@@ -2129,6 +2144,12 @@ pre {
 .case-file-role-toggle span {
   min-width: 0;
   overflow-wrap: anywhere;
+}
+
+.case-file-cost-note {
+  margin: 0;
+  font-size: 12px;
+  color: var(--color-text-muted);
 }
 
 .participant-preview {

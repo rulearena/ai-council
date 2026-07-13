@@ -47,6 +47,9 @@ const hasIncompleteCaseFile = computed(() =>
     (file) => !file.title.trim() || !file.content.trim() || file.visibleRoles.length === 0,
   ),
 )
+const totalCaseFileChars = computed(() =>
+  caseFiles.value.reduce((total, file) => total + file.content.length, 0),
+)
 const selectedModeParticipants = computed(() => {
   const mode = selectedMode.value
   if (mode.category !== 'parallel' || !mode.fanout || !mode.synthesis) return mode.roles
@@ -144,6 +147,17 @@ function toggleCaseFileRole(file: DraftCaseFile, roleId: string) {
     return
   }
   file.visibleRoles = [...file.visibleRoles, roleId]
+}
+
+async function loadCaseFileUpload(file: DraftCaseFile, event: Event) {
+  const input = event.target as HTMLInputElement
+  const selected = input.files?.[0]
+  if (!selected) return
+  file.content = await selected.text()
+  if (!file.title.trim()) {
+    file.title = selected.name.replace(/\.(md|markdown|txt)$/i, '')
+  }
+  input.value = ''
 }
 
 function buildCaseFiles() {
@@ -302,6 +316,15 @@ function buildParticipants() {
               :aria-label="`案卷 ${index + 1} 內容`"
             />
           </label>
+          <label class="case-file-upload">
+            <span>匯入 .txt / .md</span>
+            <input
+              type="file"
+              accept=".txt,.md,.markdown,text/plain,text/markdown"
+              :data-testid="`case-file-${index + 1}-upload`"
+              @change="loadCaseFileUpload(file, $event)"
+            />
+          </label>
           <fieldset class="case-file-visibility">
             <legend>可見角色</legend>
             <label
@@ -320,6 +343,9 @@ function buildParticipants() {
             </label>
           </fieldset>
         </article>
+        <p v-if="caseFiles.length" class="case-file-cost-note" data-testid="case-file-cost-note">
+          案卷全文會加入 prompt 並計入模型成本；目前 {{ totalCaseFileChars }} 字元。
+        </p>
       </section>
 
       <div class="participant-preview" data-testid="participant-preview">
