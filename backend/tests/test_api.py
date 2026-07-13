@@ -133,9 +133,10 @@ def test_model_config_crud_endpoints_update_models_yaml(tmp_path: Path) -> None:
     app = create_test_app(tmp_path)
     client = TestClient(app)
 
-    created = client.put(
-        "/models/qwen27",
+    created = client.post(
+        "/models",
         json={
+            "id": "qwen27",
             "adapter": "openai-compatible-http",
             "base_url": "http://192.168.50.80:8487/v1",
             "model": "bartowski/Qwen_Qwen3.6-27B-GGUF",
@@ -145,7 +146,7 @@ def test_model_config_crud_endpoints_update_models_yaml(tmp_path: Path) -> None:
         },
     )
 
-    assert created.status_code == 200
+    assert created.status_code == 201
     assert created.json()["id"] == "qwen27"
     assert created.json()["supports_json_mode"] is True
     assert [model["id"] for model in client.get("/models").json()] == ["mock-fast", "qwen27"]
@@ -179,8 +180,9 @@ def test_model_config_crud_reports_validation_errors(tmp_path: Path) -> None:
         json={"adapter": "openai-compatible-http"},
     )
 
-    assert response.status_code == 400
-    assert "base_url and model" in response.json()["detail"]
+    assert response.status_code == 422
+    fields = {item["field"] for item in response.json()["detail"]}
+    assert {"base_url", "model"} <= fields
 
     pricing_response = client.put(
         "/models/broken-pricing",
@@ -194,11 +196,98 @@ def test_model_config_crud_reports_validation_errors(tmp_path: Path) -> None:
         },
     )
 
-    assert pricing_response.status_code == 400
+    assert pricing_response.status_code == 422
 
     missing_adapter = client.put("/models/broken", json={})
 
-    assert missing_adapter.status_code == 400
+    assert missing_adapter.status_code == 422
+
+
+def test_post_models_creates_and_resets_status(tmp_path: Path) -> None:
+    app = create_test_app(tmp_path, start_model_health_checks=True)
+    client = TestClient(app)
+    wait_for_model_status(client, "mock-fast", "available")
+
+    created = client.post(
+        "/models",
+        json={
+            "id": "qwen",
+            "adapter": "openai-compatible-http",
+            "base_url": "http://192.168.50.80:8487/v1",
+            "model": "bartowski/Qwen_Qwen3.6-27B-GGUF",
+        },
+    )
+
+    assert created.status_code == 201
+    assert created.json()["id"] == "qwen"
+    assert {model["id"] for model in client.get("/models").json()} == {"mock-fast", "qwen"}
+
+    duplicate = client.post(
+        "/models",
+        json={
+            "id": "qwen",
+            "adapter": "openai-compatible-http",
+            "base_url": "http://192.168.50.80:8487/v1",
+            "model": "bartowski/Qwen_Qwen3.6-27B-GGUF",
+        },
+    )
+
+    assert duplicate.status_code == 422
+    assert any(item["field"] == "id" for item in duplicate.json()["detail"])
+
+    # mock-fast was already marked "available" by the startup health checker;
+    # saving it via PUT must clear that record so status resets to "unknown".
+    updated = client.put("/models/mock-fast", json={"adapter": "mock"})
+
+    assert updated.status_code == 200
+    assert updated.json()["status"] == "unknown"
+    refreshed = next(model for model in client.get("/models").json() if model["id"] == "mock-fast")
+    assert refreshed["status"] == "unknown"
+
+
+def test_post_models_validates_id_format(tmp_path: Path) -> None:
+    app = create_test_app(tmp_path)
+    client = TestClient(app)
+
+    bad_characters = client.post("/models", json={"id": "bad id!", "adapter": "mock"})
+
+    assert bad_characters.status_code == 422
+    assert any(item["field"] == "id" for item in bad_characters.json()["detail"])
+
+    leading_dash = client.post("/models", json={"id": "-leading-dash", "adapter": "mock"})
+
+    assert leading_dash.status_code == 422
+    assert any(item["field"] == "id" for item in leading_dash.json()["detail"])
+
+
+def test_put_models_is_update_only(tmp_path: Path) -> None:
+    app = create_test_app(tmp_path)
+    client = TestClient(app)
+
+    response = client.put("/models/never-created", json={"adapter": "mock"})
+
+    assert response.status_code == 404
+
+
+def test_model_validation_errors_are_per_field_422(tmp_path: Path) -> None:
+    app = create_test_app(tmp_path)
+    client = TestClient(app)
+
+    missing_fields = client.post("/models", json={"id": "x", "adapter": "openai-compatible-http"})
+
+    assert missing_fields.status_code == 422
+    fields = {item["field"] for item in missing_fields.json()["detail"]}
+    assert {"base_url", "model"} <= fields
+
+    unknown_adapter = client.post("/models", json={"id": "y", "adapter": "no-such-adapter"})
+
+    assert unknown_adapter.status_code == 422
+    assert any(item["field"] == "adapter" for item in unknown_adapter.json()["detail"])
+
+    missing_command = client.post("/models", json={"id": "z", "adapter": "subscription-cli"})
+
+    assert missing_command.status_code == 422
+    assert any(item["field"] == "command" for item in missing_command.json()["detail"])
 
 
 def test_models_endpoint_reports_invalid_config_file(tmp_path: Path) -> None:

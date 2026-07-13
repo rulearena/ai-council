@@ -42,7 +42,12 @@ from ai_council.models.adapters import (
     SubscriptionCLIAdapter,
     TokenUsage,
 )
-from ai_council.models.config import ModelConfig, ModelConfigError, ModelConfigRepository
+from ai_council.models.config import (
+    ModelConfig,
+    ModelConfigError,
+    ModelConfigRepository,
+    validate_model_config_fields,
+)
 from ai_council.models.config import ModelPricing as ConfigModelPricing
 from ai_council.prompting.renderer import PromptRenderer
 
@@ -100,6 +105,10 @@ class UpsertModelConfigRequest(BaseModel):
     timeout_seconds: float = 120
 
 
+class CreateModelConfigRequest(UpsertModelConfigRequest):
+    id: str
+
+
 class ModelPricingRequest(BaseModel):
     currency: str
     input_per_1m_tokens: float = Field(ge=0)
@@ -131,8 +140,6 @@ def create_app(
         request: Request,
         exc: RequestValidationError,
     ) -> JSONResponse:
-        if request.method == "PUT" and request.url.path.startswith("/models/"):
-            return JSONResponse(status_code=400, content={"detail": exc.errors()})
         return JSONResponse(status_code=422, content={"detail": exc.errors()})
 
     data_path = Path(data_dir)
@@ -174,26 +181,37 @@ def create_app(
             raise HTTPException(status_code=400, detail=str(error)) from error
         return [project_model_config(model, model_health.get(model.id)) for model in models]
 
+    @app.post("/models", status_code=201)
+    def create_model(request: CreateModelConfigRequest) -> dict[str, Any]:
+        model = ModelConfig(
+            id=request.id,
+            adapter=request.adapter,
+            base_url=request.base_url,
+            model=request.model,
+            api_key_env=request.api_key_env,
+            supports_json_mode=request.supports_json_mode,
+            extra_body=request.extra_body,
+            pricing=project_model_pricing_request(request.pricing),
+            command=request.command,
+            timeout_seconds=request.timeout_seconds,
+        )
+        return save_model_or_422(model_repository, model_health, model, expect_existing=False)
+
     @app.put("/models/{model_config_id}")
-    def upsert_model(model_config_id: str, request: UpsertModelConfigRequest) -> dict[str, Any]:
-        try:
-            model = model_repository.save_model(
-                ModelConfig(
-                    id=model_config_id,
-                    adapter=request.adapter,
-                    base_url=request.base_url,
-                    model=request.model,
-                    api_key_env=request.api_key_env,
-                    supports_json_mode=request.supports_json_mode,
-                    extra_body=request.extra_body,
-                    pricing=project_model_pricing_request(request.pricing),
-                    command=request.command,
-                    timeout_seconds=request.timeout_seconds,
-                )
-            )
-        except ModelConfigError as error:
-            raise HTTPException(status_code=400, detail=str(error)) from error
-        return project_model_config(model, model_health.get(model.id))
+    def update_model(model_config_id: str, request: UpsertModelConfigRequest) -> dict[str, Any]:
+        model = ModelConfig(
+            id=model_config_id,
+            adapter=request.adapter,
+            base_url=request.base_url,
+            model=request.model,
+            api_key_env=request.api_key_env,
+            supports_json_mode=request.supports_json_mode,
+            extra_body=request.extra_body,
+            pricing=project_model_pricing_request(request.pricing),
+            command=request.command,
+            timeout_seconds=request.timeout_seconds,
+        )
+        return save_model_or_422(model_repository, model_health, model, expect_existing=True)
 
     @app.delete("/models/{model_config_id}", status_code=204)
     def delete_model(model_config_id: str) -> Response:
@@ -687,6 +705,39 @@ def get_model(repository: ModelConfigRepository, model_id: str) -> ModelConfig:
     raise HTTPException(status_code=404, detail=f"Unknown model: {model_id}")
 
 
+def save_model_or_422(
+    model_repository: ModelConfigRepository,
+    model_health: ModelHealthCheckStore,
+    model: ModelConfig,
+    *,
+    expect_existing: bool,
+) -> dict[str, Any]:
+    errors = validate_model_config_fields(model)
+    if errors:
+        raise HTTPException(status_code=422, detail=errors)
+    try:
+        existing_models = model_repository.list_models()
+    except ModelConfigError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+    already_exists = any(existing.id == model.id for existing in existing_models)
+    if expect_existing and not already_exists:
+        raise HTTPException(status_code=404, detail=f"Unknown model: {model.id}")
+    if not expect_existing and already_exists:
+        raise HTTPException(
+            status_code=422,
+            detail=[{"field": "id", "message": "Model id already exists"}],
+        )
+    try:
+        saved = model_repository.save_model(model)
+    except ModelConfigError as error:
+        raise HTTPException(
+            status_code=422,
+            detail=[{"field": "", "message": str(error)}],
+        ) from error
+    model_health.clear(saved.id)
+    return project_model_config(saved, model_health.get(saved.id))
+
+
 def project_model_config(
     model: ModelConfig,
     health: ModelHealthCheckResult | None = None,
@@ -956,6 +1007,10 @@ class ModelHealthCheckStore:
     def get(self, model_id: str) -> ModelHealthCheckResult | None:
         with self._lock:
             return self._checks.get(model_id)
+
+    def clear(self, model_id: str) -> None:
+        with self._lock:
+            self._checks.pop(model_id, None)
 
 
 class ModelHealthChecker:
