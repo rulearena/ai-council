@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from typing import Callable, Literal, Protocol, TypedDict
 
@@ -225,6 +226,85 @@ class MeetingRunner:
             ):
                 return
 
+    def start_parallel(
+        self,
+        *,
+        meeting_id: str,
+        topic: str,
+        model_assignments: dict[str, ModelConfig],
+        plan: ParallelPlan,
+        inputs: dict[str, str] | None = None,
+    ) -> None:
+        if self._is_terminal(meeting_id):
+            return
+        round_number = self._next_parallel_round_number(meeting_id)
+        events = self.repository.read_events(meeting_id)
+        if self._parallel_synthesis_completed(events, round_number):
+            return
+        if self._parallel_has_failed_member(events, round_number):
+            return
+
+        pending_members = [
+            member
+            for member in plan.members
+            if not self._parallel_member_completed(events, member, round_number)
+        ]
+        if pending_members:
+            self._run_parallel_members(
+                meeting_id=meeting_id,
+                topic=topic,
+                model_assignments=model_assignments,
+                members=pending_members,
+                inputs=inputs,
+                round_number=round_number,
+                attempt=1,
+            )
+        self._run_parallel_synthesis_if_ready(
+            meeting_id=meeting_id,
+            topic=topic,
+            model_assignments=model_assignments,
+            plan=plan,
+            inputs=inputs,
+            round_number=round_number,
+        )
+
+    def retry_failed_parallel_step(
+        self,
+        *,
+        meeting_id: str,
+        step_id: str,
+        topic: str,
+        model_assignments: dict[str, ModelConfig],
+        plan: ParallelPlan,
+        inputs: dict[str, str] | None = None,
+    ) -> None:
+        failed_event = self._latest_event_for_step(meeting_id, step_id)
+        if not failed_event or failed_event.get("status") != "failed":
+            raise ValueError(f"Step is not failed: {step_id}")
+        base_step_id = str(failed_event.get("base_step_id", failed_event.get("step_id")))
+        member = next((candidate for candidate in plan.members if candidate.step_id == base_step_id), None)
+        if member is None:
+            raise ValueError(f"Step is not part of this meeting's parallel fanout: {base_step_id}")
+        round_number = int(failed_event.get("round", 1))
+        attempt = int(failed_event.get("attempt", 1)) + 1
+        self._run_parallel_members(
+            meeting_id=meeting_id,
+            topic=topic,
+            model_assignments=model_assignments,
+            members=[member],
+            inputs=inputs,
+            round_number=round_number,
+            attempt=attempt,
+        )
+        self._run_parallel_synthesis_if_ready(
+            meeting_id=meeting_id,
+            topic=topic,
+            model_assignments=model_assignments,
+            plan=plan,
+            inputs=inputs,
+            round_number=round_number,
+        )
+
     def cancel(self, meeting_id: str) -> None:
         if self._is_terminal(meeting_id):
             return
@@ -408,6 +488,141 @@ class MeetingRunner:
         )
         return True
 
+    def _run_parallel_members(
+        self,
+        *,
+        meeting_id: str,
+        topic: str,
+        model_assignments: dict[str, ModelConfig],
+        members: list[ParallelMemberStep],
+        inputs: dict[str, str] | None,
+        round_number: int,
+        attempt: int,
+    ) -> None:
+        if not members:
+            return
+        with ThreadPoolExecutor(max_workers=len(members)) as executor:
+            futures = [
+                executor.submit(
+                    self._build_parallel_member_event,
+                    meeting_id=meeting_id,
+                    topic=topic,
+                    model_assignments=model_assignments,
+                    member=member,
+                    inputs=inputs,
+                    round_number=round_number,
+                    attempt=attempt,
+                )
+                for member in members
+            ]
+            events = [future.result() for future in futures]
+        for event in events:
+            if self._is_terminal(meeting_id):
+                return
+            self.repository.append_event(meeting_id, event)
+
+    def _build_parallel_member_event(
+        self,
+        *,
+        meeting_id: str,
+        topic: str,
+        model_assignments: dict[str, ModelConfig],
+        member: ParallelMemberStep,
+        inputs: dict[str, str] | None,
+        round_number: int,
+        attempt: int,
+    ) -> dict[str, object]:
+        config = model_assignments[member.role]
+        event_step_id = f"fanout-{round_number}-member-{member.index}"
+        prompt_metadata = self._prompt_metadata(member.template_name)
+        prompt = self.prompt_renderer.render(
+            template_name=member.template_name,
+            role=member.role,
+            topic=topic,
+            prior_transcript=self.transcript_projector.project(
+                self.repository.read_events(meeting_id),
+                title=topic,
+            ),
+            required_json_schema=REQUIRED_JSON_SCHEMA,
+            inputs={
+                **(inputs or {}),
+                "instance_prompt": member.instance_prompt,
+                "display_name": member.display_name,
+            },
+        )
+        try:
+            response = self.adapters.by_name[config.adapter].complete(
+                ModelRequest(prompt=prompt, model_config=config, meeting_id=meeting_id)
+            )
+            parsed = self.output_parser.parse(response.raw_output)
+        except (AdapterError, OutputParseError, KeyError) as error:
+            return {
+                "event_id": f"{meeting_id}:{event_step_id}:attempt-{attempt}:failed",
+                "meeting_id": meeting_id,
+                "step_id": event_step_id,
+                "base_step_id": member.step_id,
+                "round": round_number,
+                "role": member.role,
+                "attempt": attempt,
+                "status": "failed",
+                "error": str(error),
+                **prompt_metadata,
+            }
+
+        completed_event: dict[str, object] = {
+            "event_id": f"{meeting_id}:{event_step_id}:attempt-{attempt}:completed",
+            "meeting_id": meeting_id,
+            "step_id": event_step_id,
+            "base_step_id": member.step_id,
+            "round": round_number,
+            "role": member.role,
+            "attempt": attempt,
+            "model_config_id": config.id,
+            **prompt_metadata,
+            "prompt_messages": [{"role": "user", "content": prompt}],
+            "raw_output": response.raw_output,
+            "parsed_output": {
+                "summary": parsed.summary,
+                "arguments": [item.__dict__ for item in parsed.arguments],
+                "risks": [item.__dict__ for item in parsed.risks],
+                "recommendation": parsed.recommendation,
+            },
+            "status": "completed",
+        }
+        if response.token_usage is not None:
+            completed_event["token_usage"] = response.token_usage
+        return completed_event
+
+    def _run_parallel_synthesis_if_ready(
+        self,
+        *,
+        meeting_id: str,
+        topic: str,
+        model_assignments: dict[str, ModelConfig],
+        plan: ParallelPlan,
+        inputs: dict[str, str] | None,
+        round_number: int,
+    ) -> None:
+        events = self.repository.read_events(meeting_id)
+        if self._parallel_synthesis_completed(events, round_number):
+            return
+        if not all(self._parallel_member_completed(events, member, round_number) for member in plan.members):
+            return
+        self._run_step(
+            meeting_id=meeting_id,
+            topic=topic,
+            model_assignments=model_assignments,
+            inputs={
+                **(inputs or {}),
+                "fanout_outputs": self._fanout_outputs(events, plan.members, round_number),
+            },
+            step=plan.synthesis,
+            attempt=1,
+            round_number=round_number,
+            event_step_id=f"synthesis-{round_number}",
+            extra_event_fields=None,
+        )
+
     def _save_active_execution(
         self,
         *,
@@ -486,6 +701,83 @@ class MeetingRunner:
             and event.get("base_step_id", event.get("step_id")) == final_step_id
         ]
         return len(completed_final_step_events) + 1
+
+    def _next_parallel_round_number(self, meeting_id: str) -> int:
+        completed_synthesis_events = [
+            event
+            for event in self.repository.read_events(meeting_id)
+            if event.get("status") == "completed"
+            and event.get("base_step_id", event.get("step_id")) == "synthesis"
+        ]
+        return len(completed_synthesis_events) + 1
+
+    def _parallel_member_completed(
+        self,
+        events: list[dict[str, object]],
+        member: ParallelMemberStep,
+        round_number: int,
+    ) -> bool:
+        matching = [
+            event
+            for event in events
+            if event.get("round") == round_number
+            and event.get("base_step_id", event.get("step_id")) == member.step_id
+        ]
+        return bool(matching) and matching[-1].get("status") == "completed"
+
+    def _parallel_has_failed_member(
+        self,
+        events: list[dict[str, object]],
+        round_number: int,
+    ) -> bool:
+        latest_by_step: dict[str, dict[str, object]] = {}
+        for event in events:
+            if event.get("round") != round_number:
+                continue
+            base_step_id = str(event.get("base_step_id", event.get("step_id")))
+            if not base_step_id.startswith("member-"):
+                continue
+            latest_by_step[base_step_id] = event
+        return any(event.get("status") == "failed" for event in latest_by_step.values())
+
+    def _parallel_synthesis_completed(
+        self,
+        events: list[dict[str, object]],
+        round_number: int,
+    ) -> bool:
+        return any(
+            event.get("round") == round_number
+            and event.get("base_step_id", event.get("step_id")) == "synthesis"
+            and event.get("status") == "completed"
+            for event in events
+        )
+
+    def _fanout_outputs(
+        self,
+        events: list[dict[str, object]],
+        members: list[ParallelMemberStep],
+        round_number: int,
+    ) -> str:
+        lines: list[str] = []
+        for member in members:
+            matching = [
+                event
+                for event in events
+                if event.get("round") == round_number
+                and event.get("base_step_id", event.get("step_id")) == member.step_id
+                and event.get("status") == "completed"
+            ]
+            if not matching:
+                continue
+            parsed = matching[-1].get("parsed_output")
+            summary = parsed.get("summary") if isinstance(parsed, dict) else ""
+            recommendation = parsed.get("recommendation") if isinstance(parsed, dict) else ""
+            lines.append(
+                f"{member.role} ({member.display_name})\n"
+                f"Summary: {summary}\n"
+                f"Recommendation: {recommendation}"
+            )
+        return "\n\n".join(lines)
 
     def _next_directed_response_number(self, meeting_id: str) -> int:
         directed_events = [
