@@ -578,6 +578,40 @@ def test_model_health_store_drops_stale_generation_record() -> None:
     assert store.get("m") == fresh_result
 
 
+def test_test_model_endpoint_drops_stale_check_when_save_races_between_read_and_generation(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    app = create_test_app(tmp_path)
+    client = TestClient(app)
+
+    from ai_council import api as api_module
+
+    original_get_model = api_module.get_model
+
+    def get_model_then_race(repository, model_id):
+        # Return the model as it was read, but land a concurrent PUT (which
+        # saves + clears the health record) before the caller can capture a
+        # generation for its own in-flight check. A correct implementation
+        # must capture its generation *before* reading the model config, so
+        # this race can never land inside that window.
+        model = original_get_model(repository, model_id)
+        response = client.put(f"/models/{model_id}", json={"adapter": "mock"})
+        assert response.status_code == 200
+        return model
+
+    monkeypatch.setattr(api_module, "get_model", get_model_then_race)
+
+    test_response = client.post("/models/mock-fast/test")
+
+    assert test_response.status_code == 200
+
+    # The manual test's result was computed against a pre-race config read
+    # and must not clobber the fresher "unknown" reset the racing PUT made.
+    listed = next(model for model in client.get("/models").json() if model["id"] == "mock-fast")
+    assert listed["status"] == "unknown"
+
+
 def test_meeting_create_list_get_start_and_transcript(tmp_path: Path) -> None:
     app = create_test_app(tmp_path)
     client = TestClient(app)

@@ -246,8 +246,8 @@ def create_app(
 
     @app.post("/models/{model_config_id}/test")
     def test_model(model_config_id: str) -> dict[str, str]:
-        model = get_model(model_repository, model_config_id)
         generation = model_health.generation(model_config_id)
+        model = get_model(model_repository, model_config_id)
         result = check_model_health(model, model_adapters.get(model.adapter))
         model_health.record(model_config_id, result, generation)
         response = {"status": result.status, "tested_at": result.checked_at}
@@ -1080,12 +1080,30 @@ class ModelHealthChecker:
         except ModelConfigError:
             return
         for model in models:
-            self._check_model(model)
+            self._check_model(model.id)
 
-    def _check_model(self, model: ModelConfig) -> None:
-        generation = self.store.generation(model.id)
+    def _check_model(self, model_id: str) -> None:
+        # Capture the generation before re-reading the config, so a save
+        # that races in between is guaranteed to be caught: either it lands
+        # before this read (we'd then check the fresh config, but that's
+        # fine) or after (its clear() bumps the generation past what we
+        # captured, so our record() below is correctly dropped as stale).
+        generation = self.store.generation(model_id)
+        model = self._find_model(model_id)
+        if model is None:
+            return
         result = check_model_health(model, self.adapters.get(model.adapter))
-        self.store.record(model.id, result, generation)
+        self.store.record(model_id, result, generation)
+
+    def _find_model(self, model_id: str) -> ModelConfig | None:
+        try:
+            models = self.repository.list_models()
+        except ModelConfigError:
+            return None
+        for model in models:
+            if model.id == model_id:
+                return model
+        return None
 
 
 class MeetingJobManager:
