@@ -752,6 +752,7 @@ def project_mode(mode: ModeDefinition) -> dict[str, Any]:
             "role": mode.synthesis.role,
             "template": mode.synthesis.template,
             "label": mode.synthesis.label,
+            "anonymize_inputs": mode.synthesis.anonymize_inputs,
         }
     return result
 

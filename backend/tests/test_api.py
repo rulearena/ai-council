@@ -1600,6 +1600,7 @@ def test_modes_endpoint_returns_catalog(tmp_path: Path) -> None:
     brainstorm = next(mode for mode in modes if mode["id"] == "brainstorm")
     assert brainstorm["available"] is True
     assert brainstorm["fanout"]["min_instances"] == 2
+    assert brainstorm["synthesis"]["anonymize_inputs"] is True
 
 
 def test_create_meeting_defaults_to_red_blue(tmp_path: Path) -> None:

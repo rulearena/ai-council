@@ -68,6 +68,7 @@ modes:
       role: HatBlue
       template: hat_blue_synthesis
       label: 藍帽統整
+      anonymize_inputs: true
 """
 
 
@@ -160,6 +161,24 @@ modes:
         ),
     ]
     assert plan.synthesis == StepDefinition("synthesis", "Moderator", "brainstorm_synthesis")
+
+
+def test_parallel_plan_carries_synthesis_anonymization_flag(tmp_path: Path) -> None:
+    config_path = _write_yaml(tmp_path, PARALLEL_MODE_YAML)
+    mode = ModeCatalogRepository(config_path).get_mode("six-hats")
+    assert mode is not None
+    assert mode.synthesis is not None
+    assert mode.synthesis.anonymize_inputs is True
+
+    plan = parallel_plan(
+        mode,
+        [
+            {"role_id": "HatWhite", "display_name": "白帽"},
+            {"role_id": "HatBlue", "display_name": "藍帽"},
+        ],
+    )
+
+    assert plan.anonymize_synthesis_inputs is True
 
 
 def test_catalog_rejects_parallel_mode_without_fanout_or_synthesis(tmp_path: Path) -> None:

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import re
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from typing import Any, Callable, Literal, Protocol, TypedDict
@@ -70,6 +71,7 @@ class ParallelMemberStep:
 class ParallelPlan:
     members: list[ParallelMemberStep]
     synthesis: StepDefinition
+    anonymize_synthesis_inputs: bool = False
 
 
 class MeetingRunner:
@@ -178,6 +180,7 @@ class MeetingRunner:
                 "interaction_type": "directed-role-response",
                 "directed_sequence": directed_sequence,
             },
+            prior_transcript_override=None,
         )
 
     def respond_as_sequence(
@@ -225,6 +228,7 @@ class MeetingRunner:
                     "sequence": sequence_number,
                     "sequence_index": index,
                 },
+                prior_transcript_override=None,
             ):
                 return
 
@@ -367,6 +371,7 @@ class MeetingRunner:
                 round_number=round_number,
                 event_step_id=None,
                 extra_event_fields=None,
+                prior_transcript_override=None,
             ):
                 return
 
@@ -382,6 +387,7 @@ class MeetingRunner:
         round_number: int,
         event_step_id: str | None,
         extra_event_fields: dict[str, object] | None,
+        prior_transcript_override: str | None,
     ) -> bool:
         config = model_assignments[step.role]
         event_step_id = event_step_id or self._event_step_id(step.step_id, round_number)
@@ -391,9 +397,13 @@ class MeetingRunner:
             template_name=step.template_name,
             role=step.role,
             topic=topic,
-            prior_transcript=self.transcript_projector.project(
-                self.repository.read_events(meeting_id),
-                title=topic,
+            prior_transcript=(
+                prior_transcript_override
+                if prior_transcript_override is not None
+                else self.transcript_projector.project(
+                    self.repository.read_events(meeting_id),
+                    title=topic,
+                )
             ),
             required_json_schema=REQUIRED_JSON_SCHEMA,
             inputs=self._inputs_for_role(inputs, step.role),
@@ -617,15 +627,18 @@ class MeetingRunner:
             meeting_id=meeting_id,
             topic=topic,
             model_assignments=model_assignments,
-            inputs={
-                **(inputs or {}),
-                "fanout_outputs": self._fanout_outputs(events, plan.members, round_number),
-            },
+            inputs=self._synthesis_inputs(
+                inputs,
+                events,
+                plan,
+                round_number,
+            ),
             step=plan.synthesis,
             attempt=1,
             round_number=round_number,
             event_step_id=f"synthesis-{round_number}",
             extra_event_fields=None,
+            prior_transcript_override="" if plan.anonymize_synthesis_inputs else None,
         )
 
     def _save_active_execution(
@@ -778,14 +791,33 @@ class MeetingRunner:
             for event in events
         )
 
+    def _synthesis_inputs(
+        self,
+        inputs: dict[str, str] | None,
+        events: list[dict[str, object]],
+        plan: ParallelPlan,
+        round_number: int,
+    ) -> dict[str, str]:
+        return {
+            **(inputs or {}),
+            "fanout_outputs": self._fanout_outputs(
+                events,
+                plan.members,
+                round_number,
+                anonymize=plan.anonymize_synthesis_inputs,
+            ),
+        }
+
     def _fanout_outputs(
         self,
         events: list[dict[str, object]],
         members: list[ParallelMemberStep],
         round_number: int,
+        *,
+        anonymize: bool = False,
     ) -> str:
         lines: list[str] = []
-        for member in members:
+        for label_index, member in enumerate(members, start=1):
             matching = [
                 event
                 for event in events
@@ -798,12 +830,44 @@ class MeetingRunner:
             parsed = matching[-1].get("parsed_output")
             summary = parsed.get("summary") if isinstance(parsed, dict) else ""
             recommendation = parsed.get("recommendation") if isinstance(parsed, dict) else ""
+            if anonymize:
+                label = self._anonymous_member_label(label_index)
+                summary = self._strip_self_identification(str(summary))
+                recommendation = self._strip_self_identification(str(recommendation))
+                lines.append(
+                    f"{label}\n"
+                    f"Summary: {summary}\n"
+                    f"Recommendation: {recommendation}"
+                )
+                continue
             lines.append(
                 f"{member.role} ({member.display_name})\n"
                 f"Summary: {summary}\n"
                 f"Recommendation: {recommendation}"
             )
         return "\n\n".join(lines)
+
+    @staticmethod
+    def _anonymous_member_label(index: int) -> str:
+        alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+        if 1 <= index <= len(alphabet):
+            return f"委員{alphabet[index - 1]}"
+        return f"委員{index}"
+
+    @staticmethod
+    def _strip_self_identification(value: str) -> str:
+        patterns = [
+            r"\bAs\s+ChatGPT,?\s*",
+            r"\bAs\s+an\s+AI\s+language\s+model,?\s*",
+            r"身為\s*ChatGPT[，,]?\s*",
+            r"作為\s*ChatGPT[，,]?\s*",
+            r"身為\s*AI\s*語言模型[，,]?\s*",
+            r"作為\s*AI\s*語言模型[，,]?\s*",
+        ]
+        result = value
+        for pattern in patterns:
+            result = re.sub(pattern, "", result, flags=re.IGNORECASE)
+        return result.strip()
 
     def _next_directed_response_number(self, meeting_id: str) -> int:
         directed_events = [

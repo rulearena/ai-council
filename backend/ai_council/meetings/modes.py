@@ -57,6 +57,7 @@ class ModeSynthesis:
     role: str
     template: str
     label: str
+    anonymize_inputs: bool = False
 
 
 @dataclass(frozen=True)
@@ -138,6 +139,7 @@ def parallel_plan(mode: ModeDefinition, participants: list[dict[str, Any]]) -> P
     return ParallelPlan(
         members=members,
         synthesis=StepDefinition("synthesis", synthesizer_role, mode.synthesis.template),
+        anonymize_synthesis_inputs=mode.synthesis.anonymize_inputs,
     )
 
 
@@ -336,7 +338,12 @@ def _synthesis_from_yaml(mode_id: str, raw_synthesis: Any) -> ModeSynthesis | No
     label = raw_synthesis.get("label")
     if not role or not template or not label:
         raise ModeConfigError(f"Mode {mode_id!r} has a synthesis missing role/template/label")
-    return ModeSynthesis(role=role, template=template, label=label)
+    return ModeSynthesis(
+        role=role,
+        template=template,
+        label=label,
+        anonymize_inputs=bool(raw_synthesis.get("anonymize_inputs", False)),
+    )
 
 
 def _string_map_from_yaml(mode_id: str, raw_map: Any, field_name: str) -> dict[str, str]:

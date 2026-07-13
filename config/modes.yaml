@@ -89,7 +89,7 @@ modes:
       min_instances: 2
       max_instances: 6
       instance_prompt: true
-    synthesis: { role: Moderator, template: brainstorm_synthesis, label: 主持人彙整 }
+    synthesis: { role: Moderator, template: brainstorm_synthesis, label: 主持人彙整, anonymize_inputs: true }
 
   - id: six-hats
     name: 六頂思考帽
@@ -123,7 +123,7 @@ modes:
         HatBlack: hat_black
         HatYellow: hat_yellow
         HatGreen: hat_green
-    synthesis: { role: HatBlue, template: hat_blue_synthesis, label: 藍帽統整 }
+    synthesis: { role: HatBlue, template: hat_blue_synthesis, label: 藍帽統整, anonymize_inputs: true }
 
   - id: persona-testing
     name: 盲測用戶
@@ -147,4 +147,4 @@ modes:
       min_instances: 2
       max_instances: 6
       instance_prompt: true
-    synthesis: { role: ProductAdvisor, template: persona_synthesis, label: 產品顧問彙整 }
+    synthesis: { role: ProductAdvisor, template: persona_synthesis, label: 產品顧問彙整, anonymize_inputs: true }

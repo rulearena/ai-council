@@ -70,7 +70,12 @@ export type BackendModeFanout = {
   max_instances: number
   instance_prompt: boolean
 }
-export type BackendModeSynthesis = { role: string; template: string; label: string }
+export type BackendModeSynthesis = {
+  role: string
+  template: string
+  label: string
+  anonymize_inputs?: boolean
+}
 export type BackendModeDefinition = {
   id: string
   name: string

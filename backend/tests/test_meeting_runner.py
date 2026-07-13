@@ -94,6 +94,13 @@ PARALLEL_PLAN = ParallelPlan(
 )
 
 
+ANONYMIZED_PARALLEL_PLAN = ParallelPlan(
+    members=PARALLEL_PLAN.members,
+    synthesis=PARALLEL_PLAN.synthesis,
+    anonymize_synthesis_inputs=True,
+)
+
+
 def test_runner_completes_fixed_red_blue_judge_flow(tmp_path: Path) -> None:
     runner = build_runner(tmp_path, adapter=FakeAdapter([VALID_OUTPUT] * 4))
 
@@ -863,6 +870,61 @@ def test_parallel_runner_completes_fanout_then_synthesis(tmp_path: Path) -> None
     synthesis_prompt = completed[-1]["prompt_messages"][0]["content"]
     assert "Member-1" in synthesis_prompt
     assert "Continue" in synthesis_prompt
+
+
+def test_parallel_runner_can_anonymize_synthesis_inputs(tmp_path: Path) -> None:
+    outputs = [
+        json.dumps(
+            {
+                "summary": "身為 ChatGPT，我建議先做低成本 onboarding。",
+                "arguments": [],
+                "risks": [],
+                "recommendation": "Use a checklist.",
+            }
+        ),
+        json.dumps(
+            {
+                "summary": "As ChatGPT, I would simplify the first run.",
+                "arguments": [],
+                "risks": [],
+                "recommendation": "Trim setup steps.",
+            }
+        ),
+        json.dumps(
+            {
+                "summary": "營運上先控制客服量。",
+                "arguments": [],
+                "risks": [],
+                "recommendation": "Add staged rollout.",
+            }
+        ),
+        VALID_OUTPUT,
+    ]
+    runner = build_runner(
+        tmp_path,
+        adapter=FakeAdapter(outputs),
+        templates=("brainstorm_member", "brainstorm_synthesis"),
+        extra_placeholders=" {{ fanout_outputs }}",
+    )
+
+    runner.start_parallel(
+        plan=ANONYMIZED_PARALLEL_PLAN,
+        meeting_id="meeting-1",
+        topic="如何改善 onboarding？",
+        model_assignments=parallel_model_assignments(),
+    )
+
+    synthesis_event = runner.repository.read_events("meeting-1")[-1]
+    synthesis_prompt = synthesis_event["prompt_messages"][0]["content"]
+    assert "委員A" in synthesis_prompt
+    assert "委員B" in synthesis_prompt
+    assert "委員C" in synthesis_prompt
+    assert "Member-1" not in synthesis_prompt
+    assert "委員 1" not in synthesis_prompt
+    assert "身為 ChatGPT" not in synthesis_prompt
+    assert "As ChatGPT" not in synthesis_prompt
+    assert "低成本 onboarding" in synthesis_prompt
+    assert "Trim setup steps." in synthesis_prompt
 
 
 def test_parallel_runner_records_individual_failures_without_stopping_other_members(
