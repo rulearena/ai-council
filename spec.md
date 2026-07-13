@@ -665,7 +665,7 @@ POST /meetings/{id}/sequences              # roles 陣列同上
 - **切片 A（前端先行，不依賴後端）**：席位動態化重構 + 場景席位槽 + 本地 mode catalog + New Case 模式選擇器與指引 UI。六模式卡片全部可瀏覽（含 SOP），但僅 `red-blue` 可建立，其餘標示「即將推出」。既有功能與 e2e 全數保留。
 - **切片 B（後端）**：`config/modes.yaml` + `GET /modes` + relay 執行器參數化 + `POST /meetings` 收 mode_id/participants/inputs → `courtroom`、`debate` 上線。——已完成（2026-07-13）
 - **切片 C（後端）**：parallel 執行器（含 per-member retry 與 synthesis gating）→ `brainstorm` 上線；`six-hats`、`persona-testing` 為純設定追加。——已完成（2026-07-13）
-- **切片 D（後端）**：彙整匿名化 hook 啟用（方向五）。
+- **切片 D（後端）**：彙整匿名化 hook 啟用（方向五）。——已完成（2026-07-13）
 - **美術（使用者產圖，隨切片 B/C 進度）**：檢察官/辯護律師/仲裁人立繪、六帽委員立繪、persona 通用立繪；辯論場景（可選，預設沿用議事廳）。
 
 ## 17. 前端模型設定管理（Model Config Management）設計
