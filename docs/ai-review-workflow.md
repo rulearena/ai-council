@@ -4,14 +4,16 @@
 
 本文件描述的是角色責任，不綁死特定工具或廠商。Codex、Claude 或其他 coding agent 都可以扮演不同角色，依當次任務調整。
 
+> **正式規範優先**：本文件是協作角色與交付流程的摘要；涉及執行行為、設定語意、API、測試邏輯或使用者流程時，優先遵循 [`docs/agents/multi-agent-development.md`](multi-agent-development.md) 的 Executor/Reviewer、worktree、TDD 與驗收規範。只有純文件、拼字及明確低風險修正可由 Orchestrator 直接完成。
+
 ## 1. 核心原則
 
 - 使用者不是 AI 之間的訊息搬運工。
 - Agent 預設自己拆工、實作、測試、review、修正到可交付。
 - 只有產品 scope、風險接受、重依賴、外部資源、無法本地驗證等決策才詢問使用者。
 - 後端核心邏輯預設 TDD。
-- 先不做但未來可能有價值的項目要放入 backlog；明確不做的項目標為 not planned。
-- 流程可以彈性採 single-session 或 orchestrator/executor/reviewer 分工，不把 Codex/Claude 寫死在某個角色。
+- 先不做但未來可能有價值的產品項目要記入 `spec.md` §15；明確不做的項目標為 not planned。`.scratch/` 只保存已核准工作的執行資料。
+- Codex、Claude 或其他 agent 可以彈性分配角色，但不得以角色分配取代正式規範要求的 Executor/Reviewer 流程。
 
 ## 2. 角色
 
@@ -26,8 +28,8 @@
 
 目前常見組合：
 
-- 小任務：同一個主控 agent 同時扮演 Orchestrator + Executor，並做 self-review。
-- 大任務：主控 agent 扮演 Orchestrator，另一個 agent 扮演 Executor，第三方或不同模型系 agent 扮演 Reviewer。
+- 純文件或明確低風險修正：Orchestrator 可直接完成並自我檢查。
+- 涉及執行行為的工作：依正式規範使用 Orchestrator、Executor、Reviewer 分工與獨立驗證；不因任務大小省略必要關卡。
 - Codex 與 Claude 可以互換角色；原則是責任清楚、review 盡量獨立。
 
 如果 Executor 與 Reviewer 是不同 agent，Reviewer finding 預設由 Orchestrator 裁決並派修；只有需要產品決策或風險接受時才問使用者。
@@ -38,13 +40,13 @@
 
 ```text
 需求討論
--> 對齊 spec.md
--> 自動拆 PRD / tickets 到 .scratch/
+-> 對齊 spec.md §15
+-> 核准批次後拆 PRD / tickets 到 .scratch/
 -> 從第一張可執行 ticket 開始
 -> TDD 實作
 -> 跑相關測試
 -> self-review diff
--> 視風險啟用 independent reviewer
+-> 依正式規範完成 independent reviewer 與必要複驗
 -> 修 findings
 -> 文件/backlog 同步檢查
 -> 交付使用者驗收
@@ -75,7 +77,7 @@ Agent 不需要等使用者逐張核准 ticket。只要 ticket 沒有改變 MVP 
 - 補必要測試
 - 不改 scope 的 backlog 記錄
 
-## 5. Ticket 與 Backlog
+## 5. Ticket 與執行區
 
 本專案使用 local markdown issue tracker：
 
@@ -86,11 +88,13 @@ Agent 不需要等使用者逐張核准 ticket。只要 ticket 沒有改變 MVP 
 
 規則：
 
+- `spec.md` §15 是唯一的 canonical product backlog SoR；`.scratch/` 不是另一份 backlog。
+- `.scratch/` 只收錄已核准工作的 PRD、implementation tickets 與執行紀錄；deferred product work 必須先同步到 `spec.md` §15。
 - Agent 可依需求自動建立 PRD 與 implementation tickets。
 - 每張 implementation ticket 必須包含目標、範圍、驗收方式、測試策略。
 - 後端核心 ticket 預設 TDD。
 - Ticket 完成後要更新狀態或留下完成紀錄。
-- 現階段不做但未來可能有價值的項目放入 backlog。
+- 現階段不做但未來可能有價值的產品項目先放入 `spec.md` §15，再於獲得核准後建立執行 ticket。
 - 明確不做或不符合產品方向的項目標為 not planned，不混入 backlog。
 
 ## 6. TDD 規則
@@ -132,7 +136,7 @@ Review 採兩層制。
 - 跑相關測試
 - 檢查文件/backlog 是否需要同步
 
-以下情況啟用 independent reviewer：
+涉及執行行為的工作，依正式規範必須完成 independent reviewer；以下情況特別需要逐項檢查：
 
 - 後端核心狀態機、persistence、retry、cancel
 - model adapter、prompt rendering、schema parser
@@ -149,7 +153,7 @@ Reviewer finding 預設由 agent 自己修到通過。只有 finding 會改變�
 
 - `spec.md`
 - `docs/ai-review-workflow.md`
-- `.scratch/` PRD / tickets / backlog
+- `spec.md` §15 的 backlog，以及 `.scratch/` 中對應的 PRD / tickets
 - `README.md`
 - `config/*.example`
 - `prompts/*.md`
@@ -180,24 +184,18 @@ Reviewer finding 預設由 agent 自己修到通過。只有 finding 會改變�
 
 ## 10. Orchestrator / Executor 分工
 
-預設用 single-session execution，避免小任務被流程成本拖慢。
+角色可依任務安排，但不得以 single-session execution 省略正式規範要求的 Executor/Reviewer 流程。
 
-適合 single-session：
+可由 Orchestrator 直接處理：
 
-- 小修
-- 單一 ticket
-- 文件更新
-- 範圍清楚的後端核心模組
-- 不需要平行化的工作
+- 純文件更新
+- 拼字修正
+- 明確低風險修正
 
-適合升級成 orchestrator/executor/reviewer split：
+需要完整 orchestrator/executor/reviewer split：
 
-- 多 ticket 批次
-- 大範圍功能
-- 需要平行處理
-- 需要隔離 context
-- 需要獨立 reviewer 抓 executor 盲點
-- 使用者希望 Codex 與 Claude 協同作業
+- 涉及執行行為、設定語意、API、測試邏輯或使用者流程的工作
+- 其他依正式規範需要 Executor 與 Reviewer 的工作
 
 分工時的責任：
 
@@ -260,7 +258,7 @@ backend skeleton + MeetingRepository append/read events tests
 
 一般任務不需要 goal。
 
-只有長時間、多 ticket、可無人看管的批次工作，agent 可以建議使用 goal。只有使用者明確同意或要求時才建立 goal。
+只有長時間、多 ticket、可無人看管的**已核准批次**，agent 可以依 `docs/agents/multi-agent-development.md` 建議使用 goal。產品批次仍須先從 `spec.md` §15 選定並記入 HANDOFF；只有使用者明確同意或要求時才建立 goal。
 
 ## 13. 現階段不作為預設的流程
 

@@ -1,6 +1,8 @@
 # Issue tracker: Local Markdown
 
-Issues and PRDs for this repo live as markdown files in `.scratch/`.
+`spec.md` §15 是唯一的 canonical product backlog Source of Record（SoR）。`.scratch/` 是已核准工作的 PRD/ticket 執行區，不是另一份產品 backlog；`docs/HANDOFF.md` 只記錄當前狀態、驗收基線與目前已核准批次。
+
+任何 deferred product work 若仍可能實作，必須先同步記錄到 `spec.md` §15，再建立或更新 `.scratch/` 下對應的 PRD/ticket。執行完成後，狀態可在 ticket 留下完成紀錄，產品 backlog 的完成標記仍回寫 `spec.md` §15。
 
 ## Conventions
 
@@ -12,7 +14,7 @@ Issues and PRDs for this repo live as markdown files in `.scratch/`.
 
 ## When a skill says "publish to the issue tracker"
 
-Create a new file under `.scratch/<feature-slug>/` (creating the directory if needed).
+確認工作已在 `spec.md` §15 被選定或核准後，建立新檔於 `.scratch/<feature-slug>/`（必要時建立目錄）。不要把 `.scratch/` 檔案當成產品 backlog 的新增來源。
 
 ## When a skill says "fetch the relevant ticket"
 

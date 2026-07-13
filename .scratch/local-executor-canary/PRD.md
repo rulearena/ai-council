@@ -1,5 +1,7 @@
 # Local Executor Canary PRD
 
+> **獨立實驗 backlog**：本目錄是 local executor canary 的受控實驗記錄，不屬於產品 backlog，也不取代 `spec.md` §15。其項目不應視為已核准的產品工作。
+
 ## Goal
 
 Evaluate whether the local LLM endpoints `qwen27` and `ornith` can act as coding Executors for this project under controlled conditions.

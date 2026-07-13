@@ -474,6 +474,8 @@ config/models.yaml.example
 
 ## 15. Backlog
 
+> **Backlog Source of Record（SoR）**：本節是本產品唯一的 canonical product backlog。所有延期但仍可能實作的產品工作，都必須在此記錄；不得以 `.scratch/` 或 `docs/HANDOFF.md` 維護另一份產品 backlog。`.scratch/` 僅存放已核准工作的 PRD/ticket 執行資料，`docs/HANDOFF.md` 僅快照目前狀態、驗收基線與目前已核准批次。
+
 1. Human message editing/correction：主席發言送出後的修正策略與事件記錄（已落地為 append-only correction event）
 2. Token streaming：Agent 逐字輸出到前端（backend WebSocket foundation 已落地；真 provider streaming 與 UI 顯示待後續）
 3. 自動恢復執行中任務：後端重啟或 API 呼叫中斷時判斷是否能安全重送（backend interrupted-state detection 已落地；不自動重送）

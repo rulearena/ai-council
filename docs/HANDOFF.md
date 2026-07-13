@@ -18,9 +18,11 @@
 
 **驗收基線（任何改動後不得低於此）**：後端 `pytest` **190 passed**；前端 `npm run build` 綠；e2e **31 passed**。
 
-## 2. 待辦佇列（優先序）
+## 2. Agent 開發佇列與目前核准批次
 
-1. 新角色立繪：使用者自行產圖，不是 agent 工作。
+Agent 開發佇列目前已完成，沒有尚未交付的已核准產品批次。未來要執行的產品工作，先從 `spec.md` §15 選定並核准，再把該批次的範圍與驗收條件寫入本檔；本檔不另行維護長期 backlog。
+
+**Human Owner follow-up**：新角色立繪由使用者自行產圖，不屬於 agent 開發佇列或產品執行批次。
 
 ## 3. 架構關鍵事實（改動前必讀）
 
@@ -50,11 +52,11 @@
 
 ## 5. 工作規範（使用者的既定政策）
 
-- **一個 feature 一個 worktree**（前後端可共用），完成即 merge 回 main 並刪 worktree/branch——**不批次**。trivial 單檔修改可直接 main。
+- **一個 feature 一個 worktree**（前後端可共用），完成即 merge 回 main 並刪 worktree/branch。已由 Human Owner 核准的整批工作，可依 `docs/agents/multi-agent-development.md` 的規範自主、連續執行，不需逐項重新取得授權；trivial 單檔修改可直接 main。
 - **TDD**：先寫 failing test、確認紅燈（且紅得有意義——參考兩份留檔計畫裡的紅燈驗證寫法）、再實作。
 - 寫計畫：大 feature 先寫 `docs/plans/YYYY-MM-DD-<name>.md`（兩份現有計畫是格式範本），bite-sized tasks、完整程式碼、明確驗收線。
 - 註解風格：解釋 why、不留實作史（不要寫「Task 5 加的」）；spec.md 與文件用繁體中文。
-- 完成一項就在 spec.md backlog 標記（已完成 YYYY-MM-DD）。
+- 完成一項就在 `spec.md` §15 這份 canonical backlog 標記（已完成 YYYY-MM-DD）；HANDOFF 只同步當前狀態與已核准批次快照。
 - Commit 訊息慣例照 git log；使用者信任「測試綠 + 真瀏覽器冒煙」為驗收，冒煙要真的開瀏覽器操作，不是只跑測試。
 
 ## 6. 交接時的未結事項
