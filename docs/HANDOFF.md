@@ -12,14 +12,15 @@
 | Mode system slice B | `059dcbe` | `config/modes.yaml` + `GET /modes` + relay 執行器參數化 + 法庭審理/辯論上線（實作計畫留檔：`docs/plans/2026-07-12-mode-system-slice-b.md`） |
 | Model config mgmt（spec §17） | `ac44fef` | 模型 CRUD API + Settings 模型管理分頁（實作計畫：`docs/plans/2026-07-13-model-config-management.md`） |
 | Mode system slice C | `711640d` | parallel 執行器 + per-member retry/synthesis gating + 腦力激盪上線；六帽/盲測設定與 prompt 補齊（實作計畫：`docs/plans/2026-07-13-mode-system-slice-c.md`） |
+| Backlog 75–77 cleanup | `5adbffa` | reopening cancelled/closed meetings；mode fallback/API error/New Case failure retention cleanup |
+| Case Files Phase 1 | `48e2f34` / `74780f9` / `088b5bc` | 建立會議時貼上/上傳多份純文字或 Markdown 案卷；每份指定可見角色；runner 依角色注入 `{{ case_files }}`（實作計畫：`docs/plans/2026-07-13-case-files-phase-1.md`） |
 
-**驗收基線（任何改動後不得低於此）**：後端 `pytest` **180 passed**；前端 `npm run build` 綠；e2e **28/28**。
+**驗收基線（任何改動後不得低於此）**：後端 `pytest` **183+ passed**；前端 `npm run build` 綠；e2e **30+ passed**（Case Files Phase 1 完成後預期更高，依本次全套驗證結果更新）。
 
 ## 2. 待辦佇列（優先序）
 
-1. **案卷 Phase 1**（backlog 78）：per-role 可見的文件注入。沿用 slice B 建的 inputs 注入機制（`PromptRenderer.render(inputs=...)`）+ `{{ case_files }}` 佔位符。**不做 RAG**（backlog 79 明文延後）。
-2. **Slice D：彙整匿名化 hook 啟用**（spec §16.3、§16.7 切片 D）：slice C 已預留彙整輸入組裝點，預設仍關閉。
-3. 新角色立繪：使用者自行產圖，不是 agent 工作。
+1. **Slice D：彙整匿名化 hook 啟用**（spec §16.3、§16.7 切片 D）：slice C 已預留彙整輸入組裝點，預設仍關閉。
+2. 新角色立繪：使用者自行產圖，不是 agent 工作。
 
 ## 3. 架構關鍵事實（改動前必讀）
 
@@ -60,4 +61,4 @@
 
 - Mode system slice C 已 merge 回 `main`（`711640d`）；驗收已通過：backend 180 passed、frontend build 綠、e2e 28/28。
 - spec §16 slice D 未實作；§17 已完成。
-- 使用者已裁定：個人版不做多人/帳號（backlog 有註記）；案卷 Phase 1 不做 RAG。
+- 使用者已裁定：個人版不做多人/帳號（backlog 有註記）；案卷 Phase 2/RAG 仍延後到 backlog 79。
