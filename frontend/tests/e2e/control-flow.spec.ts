@@ -247,6 +247,9 @@ test('user can run a mock meeting and add chair feedback', async ({ page }) => {
   await expect(page.getByTestId('role-seat-blue')).toHaveAttribute('data-status', 'thinking')
   await expect(page.getByTestId('operation-status')).toContainText('狀態：completed')
   await expect(page.getByTestId('role-output-panel')).toContainText('directed-1-blue-response')
+  await expect(page.getByTestId('role-output-panel')).toContainText('Arguments')
+  await expect(page.getByTestId('role-output-panel')).toContainText('Mock argument')
+  await expect(page.getByTestId('rich-verdict-decision')).toHaveCount(0)
   await closeRoleDrawer(page)
 
   await openAdvancedOptions(page)
