@@ -247,7 +247,7 @@ export function useScenePreference() {
   // override here is what makes that true even while a meeting with a default_scene is
   // open. Trade-off (spec.md 16.7): this only lasts for the current meeting - useCouncil.ts's
   // sceneOverrideKey watcher re-applies the mode's default_scene via applyModeScene on the
-  // *next* meeting switch (including re-opening the same meeting), so a manual switch never
+  // *next* meeting switch (re-opening it after switching away included), so a manual switch never
   // becomes a persistent override for that mode. It does last for the rest of the *current*
   // meeting, including while it's actively running: that watcher is keyed on meeting
   // identity + default_scene, not on every mutation of the meeting object, so a stream of

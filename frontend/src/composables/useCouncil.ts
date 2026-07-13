@@ -281,7 +281,7 @@ export function useCouncil() {
   // silently stomping a scene the user just picked manually in Settings mid-meeting. A
   // primitive string key only changes value when the meeting identity or its mode's
   // default_scene actually changes, so the override is (re-)applied exactly on a genuine
-  // meeting switch (including reopening the same meeting later) and left alone otherwise -
+  // meeting switch (reopening it after switching away included) and left alone otherwise -
   // matching setScene's "manual pick wins for the rest of this meeting" contract.
   const sceneOverrideKey = computed(() => {
     const meeting = selectedMeeting.value
