@@ -2503,6 +2503,54 @@ test('model manager discovers and saves exact Anthropic and Gemini model IDs', a
   await closeSettings(page)
 })
 
+test('model discovery search filters a large list and preserves exact model selection', async ({
+  page,
+}) => {
+  await page.route('**/models/available-models', async (route) => {
+    if (route.request().method() !== 'POST') return route.continue()
+    await route.fulfill({
+      json: {
+        models: [
+          'gemini-2.0-flash',
+          'gemini-2.5-flash',
+          'gemini-2.5-pro',
+          'gemini-exp-1206',
+        ],
+      },
+    })
+  })
+  await page.goto('/')
+  await page.getByTestId('settings-button').click()
+  await page.getByTestId('model-manager-tab').click()
+  await page.getByTestId('add-model-button').click()
+  await page.getByTestId('model-form-provider-select').selectOption('gemini')
+  await page.getByTestId('model-form-discover-button').click()
+
+  const search = page.getByRole('searchbox', { name: '搜尋已載入模型' })
+  const modelSelect = page.getByTestId('model-form-discovered-model-select')
+  await expect(modelSelect.locator('option')).toHaveCount(4)
+  await search.fill('2.5')
+  await expect(modelSelect.locator('option')).toHaveCount(2)
+  await search.fill('not-a-provider-model')
+  const noMatch = page.getByTestId('model-form-discovery-no-match')
+  await expect(noMatch).toHaveText('找不到符合的模型。')
+  await expect(noMatch).toHaveAttribute('role', 'status')
+  await search.clear()
+  await expect(modelSelect.locator('option')).toHaveCount(4)
+  await search.fill('2.5-pro')
+  await expect(modelSelect.locator('option')).toHaveCount(1)
+  await modelSelect.selectOption('gemini-2.5-pro')
+
+  const modelId = `e2e-gemini-search-${Date.now()}`
+  await page.getByTestId('model-form-id-input').fill(modelId)
+  await page.getByTestId('model-form-save').click()
+  await expect(modelManagerRow(page, modelId)).toContainText('Gemini · gemini-2.5-pro')
+
+  page.once('dialog', (dialog) => dialog.accept())
+  await page.getByTestId(`delete-model-button-${modelId}`).click()
+  await closeSettings(page)
+})
+
 test('model manager creates a subscription config from a guided CLI preset', async ({ page }) => {
   let createPayload: Record<string, unknown> | null = null
   await page.route('**/models', async (route) => {
@@ -2692,6 +2740,43 @@ test('editing an existing config refreshes discovery through its saved-config en
   await page.getByTestId('model-form-discover-button').click()
   await expect.poll(() => existingDiscoveryRequests).toBe(1)
   await expect(page.getByTestId('model-form-discovered-model-select')).toHaveValue('qwen/existing')
+  await page.getByTestId('model-form-cancel').click()
+  await closeSettings(page)
+})
+
+test('editing with changed connection fields previews the current draft instead of saved config', async ({
+  page,
+}) => {
+  let savedConfigRequests = 0
+  const previewPayloads: Record<string, unknown>[] = []
+  await page.route('**/models/qwen27/available-models', async (route) => {
+    savedConfigRequests += 1
+    await route.fulfill({ json: { models: ['must-not-use-saved-connection'] } })
+  })
+  await page.route('**/models/available-models', async (route) => {
+    if (route.request().method() !== 'POST') return route.continue()
+    previewPayloads.push(route.request().postDataJSON() as Record<string, unknown>)
+    await route.fulfill({ json: { models: ['claude-current-draft'] } })
+  })
+
+  await page.goto('/')
+  await page.getByTestId('settings-button').click()
+  await page.getByTestId('model-manager-tab').click()
+  await page.getByTestId('edit-model-button-qwen27').click()
+  await page.getByTestId('model-form-provider-select').selectOption('anthropic')
+  await page.getByTestId('model-form-base-url-input').fill('https://anthropic-proxy.example.test/v1')
+  await page.getByTestId('model-form-api-key-env-input').fill('ANTHROPIC_PROXY_KEY')
+  await page.getByTestId('model-form-discover-button').click()
+
+  await expect(page.getByTestId('model-form-discovered-model-select')).toHaveValue(
+    'claude-current-draft',
+  )
+  expect(previewPayloads).toEqual([{
+    adapter: 'anthropic-http',
+    base_url: 'https://anthropic-proxy.example.test/v1',
+    api_key_env: 'ANTHROPIC_PROXY_KEY',
+  }])
+  expect(savedConfigRequests).toBe(0)
   await page.getByTestId('model-form-cancel').click()
   await closeSettings(page)
 })

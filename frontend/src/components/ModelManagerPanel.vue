@@ -174,6 +174,11 @@ onBeforeUnmount(() => {
 // -------- create/edit form --------
 
 type FormMode = 'create' | 'edit'
+type DiscoveryConnection = {
+  adapter: string
+  baseUrl: string | null
+  apiKeyEnv: string | null
+}
 const showForm = ref(false)
 const formMode = ref<FormMode>('create')
 const formId = ref('')
@@ -196,14 +201,21 @@ const formCommandText = ref('')
 const formExtraBody = ref<Record<string, unknown>>({})
 const formPricing = ref<ModelConfig['pricing']>(null)
 const discoveryModels = ref<string[]>([])
+const discoveryQuery = ref('')
 const discoveryLoading = ref(false)
 const discoveryMessage = ref('')
 const manualModelEntry = ref(true)
+const originalDiscoveryConnection = ref<DiscoveryConnection | null>(null)
 const discoveryRequest = new LatestDiscoveryRequest()
 
 const providerDefinition = computed(() => getProvider(formProvider.value))
 const formAdapter = computed(() => providerDefinition.value.adapter)
 const supportsDiscovery = computed(() => providerDefinition.value.discovery !== 'manual-only')
+const filteredDiscoveryModels = computed(() => {
+  const query = discoveryQuery.value.trim().toLocaleLowerCase()
+  if (!query) return discoveryModels.value
+  return discoveryModels.value.filter((modelId) => modelId.toLocaleLowerCase().includes(query))
+})
 
 const saving = ref(false)
 const fieldErrors = ref<Record<string, string>>({})
@@ -224,6 +236,7 @@ function resetFormErrors() {
 function resetDiscovery() {
   discoveryRequest.invalidate()
   discoveryModels.value = []
+  discoveryQuery.value = ''
   discoveryLoading.value = false
   discoveryMessage.value = ''
   manualModelEntry.value = true
@@ -232,6 +245,7 @@ function resetDiscovery() {
 function handleManualModelInput() {
   discoveryRequest.manualModelEdited()
   discoveryModels.value = []
+  discoveryQuery.value = ''
   discoveryLoading.value = false
   discoveryMessage.value = ''
   manualModelEntry.value = true
@@ -272,6 +286,7 @@ function openCreateForm() {
   formCommandText.value = ''
   formExtraBody.value = {}
   formPricing.value = null
+  originalDiscoveryConnection.value = null
   resetDiscovery()
   resetFormErrors()
   showForm.value = true
@@ -295,6 +310,11 @@ function openEditForm(model: ModelConfig) {
   formPreserveCliProviderMarker.value = isCliAdapter(model.adapter)
   formCommandText.value = cliProjection.command.join('\n')
   formPricing.value = model.pricing ?? null
+  originalDiscoveryConnection.value = {
+    adapter: model.adapter,
+    baseUrl: model.base_url?.trim() || null,
+    apiKeyEnv: model.api_key_env?.trim() || null,
+  }
   resetDiscovery()
   resetFormErrors()
   showForm.value = true
@@ -349,7 +369,12 @@ async function discoverModels() {
     apiKeyEnv: formApiKeyEnv.value.trim() || null,
   }
   const identity = JSON.stringify(snapshot)
-  const load = snapshot.mode === 'edit'
+  const original = originalDiscoveryConnection.value
+  const connectionIsUnchanged = original !== null
+    && snapshot.adapter === original.adapter
+    && snapshot.baseUrl === original.baseUrl
+    && snapshot.apiKeyEnv === original.apiKeyEnv
+  const load = snapshot.mode === 'edit' && connectionIsUnchanged
     ? () => getAvailableModels(snapshot.id)
     : () => previewAvailableModels({
         adapter: snapshot.adapter,
@@ -561,9 +586,24 @@ async function saveForm() {
         </p>
         <p v-if="discoveryMessage" class="error" data-testid="model-form-discovery-message" role="alert">{{ discoveryMessage }}</p>
         <label v-if="discoveryModels.length && !manualModelEntry" class="topic-input-row">
+          搜尋已載入模型
+          <input
+            v-model="discoveryQuery"
+            type="search"
+            data-testid="model-form-discovery-search"
+            aria-label="搜尋已載入模型"
+          />
+        </label>
+        <p
+          v-if="discoveryModels.length && !manualModelEntry && discoveryQuery.trim() && !filteredDiscoveryModels.length"
+          class="model-form-hint"
+          data-testid="model-form-discovery-no-match"
+          role="status"
+        >找不到符合的模型。</p>
+        <label v-if="filteredDiscoveryModels.length && !manualModelEntry" class="topic-input-row">
           Exact model ID
           <select v-model="formModel" data-testid="model-form-discovered-model-select" @change="handleDiscoveredModelChange">
-            <option v-for="modelId in discoveryModels" :key="modelId" :value="modelId">{{ modelId }}</option>
+            <option v-for="modelId in filteredDiscoveryModels" :key="modelId" :value="modelId">{{ modelId }}</option>
           </select>
         </label>
         <button
