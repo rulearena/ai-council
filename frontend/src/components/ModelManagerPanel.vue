@@ -28,6 +28,7 @@ import {
   modelDisplayLabel,
   providerIdForModel,
   projectCliConfig,
+  type CliModelMode,
   type CliPresetId,
   type ProviderId,
 } from '../providers'
@@ -183,6 +184,10 @@ const formApiKeyEnv = ref('')
 const formSupportsJsonMode = ref(false)
 const formTimeoutSeconds = ref(120)
 const formCliPreset = ref<CliPresetId>('claude')
+const formCliModelMode = ref<CliModelMode>('default')
+const formCliExactModelId = ref('')
+const formPreserveCliProviderMarker = ref(false)
+const formCliExactModelError = ref('')
 const formCommandText = ref('')
 // Not rendered as inputs (round-trip only, per the fidelity requirement below) -
 // carried through from the model being edited and sent back unchanged on save so a PUT
@@ -213,6 +218,7 @@ function fieldError(field: string): string {
 function resetFormErrors() {
   fieldErrors.value = {}
   formGeneralError.value = ''
+  formCliExactModelError.value = ''
 }
 
 function resetDiscovery() {
@@ -243,6 +249,9 @@ function handleProviderChange() {
   formApiKeyEnv.value = provider.defaultApiKeyEnv ?? ''
   formModel.value = ''
   formCliPreset.value = 'claude'
+  formCliModelMode.value = 'default'
+  formCliExactModelId.value = ''
+  formPreserveCliProviderMarker.value = false
   formCommandText.value = ''
   resetDiscovery()
 }
@@ -257,6 +266,9 @@ function openCreateForm() {
   formSupportsJsonMode.value = false
   formTimeoutSeconds.value = 120
   formCliPreset.value = 'claude'
+  formCliModelMode.value = 'default'
+  formCliExactModelId.value = ''
+  formPreserveCliProviderMarker.value = false
   formCommandText.value = ''
   formExtraBody.value = {}
   formPricing.value = null
@@ -278,6 +290,9 @@ function openEditForm(model: ModelConfig) {
   formExtraBody.value = model.extra_body ?? {}
   const cliProjection = projectCliConfig(model)
   formCliPreset.value = cliProjection.presetId
+  formCliModelMode.value = cliProjection.modelMode
+  formCliExactModelId.value = cliProjection.exactModelId
+  formPreserveCliProviderMarker.value = isCliAdapter(model.adapter)
   formCommandText.value = cliProjection.command.join('\n')
   formPricing.value = model.pricing ?? null
   resetDiscovery()
@@ -290,12 +305,28 @@ function closeForm() {
   showForm.value = false
 }
 
+function handleCliPresetChange() {
+  formPreserveCliProviderMarker.value = false
+  formCliModelMode.value = 'default'
+  formCliExactModelId.value = ''
+  formCliExactModelError.value = ''
+}
+
+function handleCliModelModeChange() {
+  formCliExactModelError.value = ''
+  if (formCliModelMode.value === 'default') formCliExactModelId.value = ''
+}
+
 function buildPayload(): ModelConfigPayload {
   const customCommand = formCommandText.value
     .split('\n')
     .map((line) => line.trim())
     .filter(Boolean)
-  const cliConfig = cliConfigPayload(formCliPreset.value, customCommand, formExtraBody.value)
+  const cliConfig = cliConfigPayload(formCliPreset.value, customCommand, formExtraBody.value, {
+    modelMode: formCliModelMode.value,
+    exactModelId: formCliExactModelId.value,
+    preserveProviderMarker: formPreserveCliProviderMarker.value,
+  })
   return modelConfigPayloadForProvider(formProvider.value, {
     base_url: formBaseUrl.value,
     model: formModel.value,
@@ -383,6 +414,13 @@ function applySaveError(caught: unknown) {
 
 async function saveForm() {
   resetFormErrors()
+  if (isCliAdapter(formAdapter.value)
+    && formCliPreset.value !== 'custom'
+    && formCliModelMode.value === 'exact'
+    && !formCliExactModelId.value.trim()) {
+    formCliExactModelError.value = '請輸入 exact model ID。'
+    return
+  }
   saving.value = true
   try {
     const payload = buildPayload()
@@ -560,15 +598,29 @@ async function saveForm() {
       <template v-else-if="isCliAdapter(formAdapter)">
         <label class="topic-input-row">
           CLI Provider
-          <select v-model="formCliPreset" data-testid="model-form-cli-preset-select">
+          <select v-model="formCliPreset" data-testid="model-form-cli-preset-select" @change="handleCliPresetChange">
             <option v-for="preset in CLI_PRESETS" :key="preset.id" :value="preset.id">{{ preset.name }}</option>
           </select>
         </label>
-        <p v-if="formCliPreset !== 'custom'" class="model-form-hint" data-testid="model-form-cli-model-default">
-          使用 CLI 自動選擇模型（推薦）。命令與 prompt 參數會由 preset 安全產生，不需手動輸入。
-        </p>
+        <template v-if="formCliPreset !== 'custom'">
+          <label class="topic-input-row">
+            模型選擇
+            <select v-model="formCliModelMode" data-testid="model-form-cli-model-mode-select" @change="handleCliModelModeChange">
+              <option value="default">使用 CLI 預設模型</option>
+              <option value="exact">指定 exact model ID</option>
+            </select>
+          </label>
+          <p v-if="formCliModelMode === 'default'" class="model-form-hint" data-testid="model-form-cli-model-default">
+            使用 CLI 自動選擇模型（推薦）。命令與 prompt 參數會由 preset 安全產生，不需手動輸入。
+          </p>
+          <label v-else class="topic-input-row">
+            Exact model ID
+            <input v-model="formCliExactModelId" data-testid="model-form-cli-exact-model-input" aria-label="CLI exact model ID" @input="formCliExactModelError = ''" />
+            <em v-if="formCliExactModelError" class="model-form-field-error" data-testid="model-form-cli-exact-model-error">{{ formCliExactModelError }}</em>
+          </label>
+        </template>
         <p v-else class="model-form-hint" data-testid="model-form-cli-custom-hint">
-          若需指定 exact model ID，請依該 CLI 版本的參數使用 Custom CLI；未知的既有命令會保持原樣，不會自動改寫。
+          Custom CLI 是進階逃生路徑；未知的既有命令會保持原樣，不會自動改寫。
         </p>
         <label v-if="formCliPreset === 'custom'" class="topic-input-row">
           command（一行一個參數，需含 {prompt} 佔位符）

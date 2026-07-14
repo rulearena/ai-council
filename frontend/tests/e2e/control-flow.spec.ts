@@ -2518,6 +2518,7 @@ test('model manager creates a subscription config from a guided CLI preset', asy
   await page.getByTestId('model-form-provider-select').selectOption('subscription-cli')
 
   await expect(page.getByTestId('model-form-cli-preset-select')).toHaveValue('claude')
+  await expect(page.getByTestId('model-form-cli-model-mode-select')).toHaveValue('default')
   await expect(page.getByTestId('model-form-cli-model-default')).toContainText(
     '使用 CLI 自動選擇模型',
   )
@@ -2534,6 +2535,45 @@ test('model manager creates a subscription config from a guided CLI preset', asy
     extra_body: { cli_provider: 'agy' },
   })
 
+  page.once('dialog', (dialog) => dialog.accept())
+  await page.getByTestId(`delete-model-button-${modelId}`).click()
+  await closeSettings(page)
+})
+
+test('guided CLI preset validates and saves an advanced exact model ID', async ({ page }) => {
+  let createRequests = 0
+  let createPayload: Record<string, unknown> | null = null
+  await page.route('**/models', async (route) => {
+    if (route.request().method() === 'POST') {
+      createRequests += 1
+      createPayload = route.request().postDataJSON() as Record<string, unknown>
+    }
+    await route.continue()
+  })
+  await page.goto('/')
+  await page.getByTestId('settings-button').click()
+  await page.getByTestId('model-manager-tab').click()
+  await page.getByTestId('add-model-button').click()
+  await page.getByTestId('model-form-provider-select').selectOption('subscription-cli')
+  const modelId = `e2e-cli-exact-${Date.now()}`
+  await page.getByTestId('model-form-id-input').fill(modelId)
+  await page.getByTestId('model-form-cli-preset-select').selectOption('codex')
+  await page.getByTestId('model-form-cli-model-mode-select').selectOption('exact')
+
+  await page.getByTestId('model-form-save').click()
+  await expect(page.getByTestId('model-form-cli-exact-model-error')).toContainText(
+    '請輸入 exact model ID',
+  )
+  expect(createRequests).toBe(0)
+
+  await page.getByTestId('model-form-cli-exact-model-input').fill('gpt-exact-x')
+  await page.getByTestId('model-form-save').click()
+  expect(createRequests).toBe(1)
+  expect(createPayload).toMatchObject({
+    adapter: 'subscription-cli',
+    command: ['codex', 'exec', '--model', 'gpt-exact-x', '{prompt}'],
+    extra_body: { cli_provider: 'codex' },
+  })
   page.once('dialog', (dialog) => dialog.accept())
   await page.getByTestId(`delete-model-button-${modelId}`).click()
   await closeSettings(page)
@@ -2716,6 +2756,29 @@ test('provider-guided edits preserve legacy extra body, pricing, and CLI command
 
   page.once('dialog', (dialog) => dialog.accept())
   await page.getByTestId(`delete-model-button-${modelId}`).click()
+  await closeSettings(page)
+})
+
+test('saving a recognized markerless CLI preset does not inject cli_provider', async ({ page }) => {
+  await page.goto('/')
+  await page.getByTestId('settings-button').click()
+  await page.getByTestId('model-manager-tab').click()
+
+  let updatePayload: Record<string, unknown> | null = null
+  await page.route('**/models/claude-subscription', async (route) => {
+    if (route.request().method() === 'PUT') {
+      updatePayload = route.request().postDataJSON() as Record<string, unknown>
+    }
+    await route.continue()
+  })
+  await page.getByTestId('edit-model-button-claude-subscription').click()
+  await expect(page.getByTestId('model-form-cli-preset-select')).toHaveValue('claude')
+  await expect(page.getByTestId('model-form-cli-model-mode-select')).toHaveValue('default')
+  await page.getByTestId('model-form-save').click()
+  expect(updatePayload).toMatchObject({
+    command: ['claude', '-p', '{prompt}'],
+    extra_body: {},
+  })
   await closeSettings(page)
 })
 

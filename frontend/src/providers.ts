@@ -89,6 +89,7 @@ export type ProviderModelDraft = {
 }
 
 export type CliPresetId = 'claude' | 'codex' | 'agy' | 'custom'
+export type CliModelMode = 'default' | 'exact'
 
 export type CliPresetDefinition = {
   id: CliPresetId
@@ -98,8 +99,16 @@ export type CliPresetDefinition = {
 
 export type CliConfigProjection = {
   presetId: CliPresetId
+  modelMode: CliModelMode
+  exactModelId: string
   command: string[]
   extraBody: Record<string, unknown>
+}
+
+export type CliConfigOptions = {
+  modelMode?: CliModelMode
+  exactModelId?: string
+  preserveProviderMarker?: boolean
 }
 
 export const CLI_PRESETS: readonly CliPresetDefinition[] = [
@@ -117,14 +126,23 @@ export function cliConfigPayload(
   presetId: CliPresetId,
   customCommand: readonly string[] = [],
   extraBody: Record<string, unknown> = {},
+  options: CliConfigOptions = {},
 ): Pick<ModelConfigPayload, 'command' | 'extra_body'> {
   const preset = CLI_PRESET_BY_ID.get(presetId)!
   if (preset.id === 'custom') {
     return { command: [...customCommand], extra_body: { ...extraBody } }
   }
+  const command = [...preset.command!]
+  if (options.modelMode === 'exact') {
+    const exactModelId = options.exactModelId?.trim() ?? ''
+    if (!exactModelId) throw new Error('exact model ID is required')
+    command.splice(command.length - 1, 0, '--model', exactModelId)
+  }
+  const projectedExtraBody = { ...extraBody }
+  if (!options.preserveProviderMarker) projectedExtraBody.cli_provider = preset.id
   return {
-    command: [...preset.command!],
-    extra_body: { ...extraBody, cli_provider: preset.id },
+    command,
+    extra_body: projectedExtraBody,
   }
 }
 
@@ -134,11 +152,13 @@ export function projectCliConfig(model: {
 }): CliConfigProjection {
   const command = [...(model.command ?? [])]
   const extraBody = { ...(model.extra_body ?? {}) }
-  const preset = CLI_PRESETS.find((candidate) =>
-    candidate.id !== 'custom' && arraysEqual(candidate.command!, command),
-  )
+  const defaultPreset = CLI_PRESETS.find((candidate) =>
+    candidate.id !== 'custom' && arraysEqual(candidate.command!, command))
+  const exactProjection = defaultPreset ? null : projectExactCliCommand(command)
   return {
-    presetId: preset?.id ?? 'custom',
+    presetId: defaultPreset?.id ?? exactProjection?.presetId ?? 'custom',
+    modelMode: exactProjection ? 'exact' : 'default',
+    exactModelId: exactProjection?.exactModelId ?? '',
     command,
     extraBody,
   }
@@ -221,4 +241,22 @@ function trimNullable(value: string | null | undefined): string | null {
 
 function arraysEqual(left: readonly string[], right: readonly string[]): boolean {
   return left.length === right.length && left.every((value, index) => value === right[index])
+}
+
+function projectExactCliCommand(command: readonly string[]): {
+  presetId: Exclude<CliPresetId, 'custom'>
+  exactModelId: string
+} | null {
+  for (const preset of CLI_PRESETS) {
+    if (preset.id === 'custom') continue
+    const defaultCommand = preset.command!
+    const prefix = defaultCommand.slice(0, -1)
+    if (command.length !== defaultCommand.length + 2) continue
+    if (!arraysEqual(prefix, command.slice(0, prefix.length))) continue
+    if (command[prefix.length] !== '--model') continue
+    const exactModelId = command[prefix.length + 1]
+    if (!exactModelId?.trim() || command.at(-1) !== '{prompt}') continue
+    return { presetId: preset.id, exactModelId }
+  }
+  return null
 }

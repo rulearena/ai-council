@@ -35,6 +35,73 @@ test('subscription CLI presets generate safe default argv without user-authored 
   })
 })
 
+test('subscription CLI presets generate and project advanced exact model argv', () => {
+  assert.deepEqual(
+    cliConfigPayload('claude', [], {}, { modelMode: 'exact', exactModelId: ' claude-opus-x ' }),
+    {
+      command: ['claude', '-p', '--model', 'claude-opus-x', '{prompt}'],
+      extra_body: { cli_provider: 'claude' },
+    },
+  )
+  assert.deepEqual(
+    cliConfigPayload('codex', [], {}, { modelMode: 'exact', exactModelId: 'gpt-x' }),
+    {
+      command: ['codex', 'exec', '--model', 'gpt-x', '{prompt}'],
+      extra_body: { cli_provider: 'codex' },
+    },
+  )
+  assert.deepEqual(
+    cliConfigPayload('agy', [], {}, { modelMode: 'exact', exactModelId: 'agy-x' }),
+    {
+      command: ['agy', '-p', '--model', 'agy-x', '{prompt}'],
+      extra_body: { cli_provider: 'agy' },
+    },
+  )
+  assert.throws(
+    () => cliConfigPayload('claude', [], {}, { modelMode: 'exact', exactModelId: '  ' }),
+    /exact model ID is required/,
+  )
+  assert.deepEqual(
+    projectCliConfig({
+      command: ['codex', 'exec', '--model', 'gpt-x', '{prompt}'],
+      extra_body: { cli_provider: 'codex' },
+    }),
+    {
+      presetId: 'codex',
+      modelMode: 'exact',
+      exactModelId: 'gpt-x',
+      command: ['codex', 'exec', '--model', 'gpt-x', '{prompt}'],
+      extraBody: { cli_provider: 'codex' },
+    },
+  )
+})
+
+test('saving an unchanged recognized legacy preset preserves provider marker absence or value', () => {
+  const withoutMarker = projectCliConfig({ command: ['claude', '-p', '{prompt}'], extra_body: {} })
+  assert.deepEqual(
+    cliConfigPayload(
+      withoutMarker.presetId,
+      withoutMarker.command,
+      withoutMarker.extraBody,
+      {
+        modelMode: withoutMarker.modelMode,
+        exactModelId: withoutMarker.exactModelId,
+        preserveProviderMarker: true,
+      },
+    ),
+    { command: ['claude', '-p', '{prompt}'], extra_body: {} },
+  )
+
+  const existingExtraBody = { cli_provider: 'codex', profile: 'work' }
+  assert.deepEqual(
+    cliConfigPayload('codex', [], existingExtraBody, { preserveProviderMarker: true }),
+    {
+      command: ['codex', 'exec', '{prompt}'],
+      extra_body: existingExtraBody,
+    },
+  )
+})
+
 test('subscription CLI projection recognizes presets and preserves unknown legacy commands as custom', () => {
   assert.deepEqual(
     projectCliConfig({
@@ -43,6 +110,8 @@ test('subscription CLI projection recognizes presets and preserves unknown legac
     }),
     {
       presetId: 'codex',
+      modelMode: 'default',
+      exactModelId: '',
       command: ['codex', 'exec', '{prompt}'],
       extraBody: { cli_provider: 'codex', profile: 'work' },
     },
@@ -55,6 +124,8 @@ test('subscription CLI projection recognizes presets and preserves unknown legac
   const projected = projectCliConfig(legacy)
   assert.deepEqual(projected, {
     presetId: 'custom',
+    modelMode: 'default',
+    exactModelId: '',
     command: ['company-wrapper', '--stdin', '{prompt}'],
     extraBody: { cli_provider: 'company-internal', keep: true },
   })
