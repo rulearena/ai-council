@@ -1,6 +1,6 @@
 # 02 — 中文 presentation module 與會議識別
 
-Status: ready-for-agent
+Status: implemented / awaiting acceptance
 
 Blocked by: 01
 

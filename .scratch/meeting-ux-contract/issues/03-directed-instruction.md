@@ -1,6 +1,6 @@
 # 03 — 帶明確問題的定向角色追問
 
-Status: ready-for-agent
+Status: implemented / awaiting acceptance
 
 Blocked by: 01, 02
 

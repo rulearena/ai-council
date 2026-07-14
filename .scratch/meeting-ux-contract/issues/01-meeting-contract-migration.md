@@ -1,6 +1,6 @@
 # 01 — Meeting title/goal contract 與明示遷移
 
-Status: ready-for-agent
+Status: implemented / awaiting acceptance
 
 Blocked by: none
 

@@ -1,6 +1,6 @@
 # 會議語意與中文化 UX
 
-Status: approved / implementing
+Status: implemented / awaiting acceptance
 
 Canonical backlog: `spec.md` §15 #86
 
