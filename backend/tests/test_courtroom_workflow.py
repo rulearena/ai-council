@@ -5,9 +5,11 @@ import shutil
 import time
 from pathlib import Path
 
+import pytest
 from fastapi.testclient import TestClient
 
 from ai_council.api import create_app
+from ai_council.meetings.courtroom import project_courtroom
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -382,7 +384,7 @@ def test_failed_issue_phase_retry_preserves_issue_revision_and_continues_argumen
     failed = wait_for_courtroom(
         client,
         meeting_id,
-        lambda courtroom: courtroom["issues"][0]["status"] == "arguments-in-progress",
+        lambda courtroom: courtroom["issues"][0]["status"] == "failed",
     )
     failed_charge = next(
         event
@@ -616,3 +618,117 @@ def test_failed_final_verdict_can_only_retry_the_linked_final_flow(tmp_path: Pat
         if event.get("courtroom_operation") == "final-verdict"
     ]
     assert len(reservations) == 1
+
+
+@pytest.mark.parametrize("failed_phase", ["charge", "defense", "rebuttal", "ruling"])
+def test_latest_failed_issue_phase_overrides_prior_completed_attempts(
+    failed_phase: str,
+) -> None:
+    metadata = {
+        "mode_id": "courtroom",
+        "courtroom_docket": {
+            "schema_version": 1,
+            "revision": 2,
+            "confirmed": True,
+            "next_issue_number": 2,
+            "issues": [{"id": "issue-1", "title": "占有權源"}],
+        },
+    }
+    phases = ["charge", "defense", "rebuttal", "ruling"]
+    events = []
+    for phase in phases[: phases.index(failed_phase) + 1]:
+        events.append(
+            {
+                "step_id": f"courtroom-r2-issue-1-{phase}",
+                "interaction_type": "courtroom-issue-phase",
+                "docket_revision": 2,
+                "issue_id": "issue-1",
+                "issue_phase": phase,
+                "attempt": 1,
+                "status": "completed",
+                "parsed_output": {"outcome": "proponent-wins"} if phase == "ruling" else {},
+            }
+        )
+    events.append(
+        {
+            "step_id": f"courtroom-r2-issue-1-{failed_phase}",
+            "interaction_type": "courtroom-issue-phase",
+            "docket_revision": 2,
+            "issue_id": "issue-1",
+            "issue_phase": failed_phase,
+            "attempt": 2,
+            "status": "failed",
+            "failure_kind": "timeout",
+        }
+    )
+
+    projected = project_courtroom(metadata, events)
+
+    assert projected is not None
+    assert projected["issues"][0]["status"] == "failed"
+    assert projected["issues"][0]["failed_step_id"] == (
+        f"courtroom-r2-issue-1-{failed_phase}"
+    )
+    assert projected["issues"][0]["failed_phase"] == failed_phase
+    assert projected["available_actions"] == ["retry-failed-step"]
+
+
+def test_failed_ruling_requires_retry_and_reuses_the_original_step(tmp_path: Path) -> None:
+    client = create_client(tmp_path)
+    meeting_id = create_courtroom(client)
+    client.put(
+        f"/meetings/{meeting_id}/courtroom/issues",
+        json={"revision": 0, "issues": [{"title": "占有權源"}]},
+    )
+    client.post(
+        f"/meetings/{meeting_id}/courtroom/issues/confirm",
+        json={"revision": 1},
+    )
+    client.post(f"/meetings/{meeting_id}/courtroom/issues/issue-1/arguments")
+    wait_for_courtroom(
+        client,
+        meeting_id,
+        lambda courtroom: courtroom["issues"][0]["status"] == "awaiting-ruling",
+    )
+    client.put(
+        "/models/mock-fast",
+        json={"adapter": "mock", "extra_body": {"mock_error": "ruling timeout"}},
+    )
+    assert client.post(
+        f"/meetings/{meeting_id}/courtroom/issues/issue-1/ruling"
+    ).status_code == 202
+    failed = wait_for_courtroom(
+        client,
+        meeting_id,
+        lambda courtroom: courtroom["issues"][0]["status"] == "failed",
+    )
+    failed_ruling = next(
+        event
+        for event in failed["events"]
+        if event.get("issue_phase") == "ruling" and event["status"] == "failed"
+    )
+    assert failed["courtroom"]["available_actions"] == ["retry-failed-step"]
+    assert client.post(
+        f"/meetings/{meeting_id}/courtroom/issues/issue-1/ruling"
+    ).status_code == 409
+
+    client.put("/models/mock-fast", json={"adapter": "mock", "extra_body": {}})
+    time.sleep(0.02)
+    assert client.post(
+        f"/meetings/{meeting_id}/steps/{failed_ruling['step_id']}/retry",
+        json={},
+    ).status_code == 202
+    completed = wait_for_courtroom(
+        client,
+        meeting_id,
+        lambda courtroom: courtroom["issues"][0]["status"] == "ruled",
+    )
+    attempts = [
+        event
+        for event in completed["events"]
+        if event.get("issue_phase") == "ruling"
+    ]
+    assert [(event["step_id"], event["attempt"], event["status"]) for event in attempts] == [
+        (failed_ruling["step_id"], 1, "failed"),
+        (failed_ruling["step_id"], 2, "completed"),
+    ]

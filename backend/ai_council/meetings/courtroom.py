@@ -41,16 +41,27 @@ def project_courtroom(
     current_issue_id = None
     for position, issue in enumerate(docket.get("issues") or [], start=1):
         issue_id = str(issue["id"])
-        phase_status = {
-            phase: _latest_phase_status(events, revision, issue_id, phase)
+        phase_events = {
+            phase: _latest_phase_event(events, revision, issue_id, phase)
             for phase in ("charge", "defense", "rebuttal", "ruling")
         }
-        if phase_status["ruling"] == "completed":
+        latest_failed = next(
+            (
+                event
+                for event in reversed(list(phase_events.values()))
+                if event is not None and event.get("status") == "failed"
+            ),
+            None,
+        )
+        if latest_failed is not None:
+            status = "failed"
+            current_issue_id = issue_id
+        elif (phase_events["ruling"] or {}).get("status") == "completed":
             status = "ruled"
-        elif phase_status["rebuttal"] == "completed":
+        elif (phase_events["rebuttal"] or {}).get("status") == "completed":
             status = "awaiting-ruling"
             current_issue_id = issue_id
-        elif any(value is not None for value in phase_status.values()):
+        elif any(value is not None for value in phase_events.values()):
             status = "arguments-in-progress"
             current_issue_id = issue_id
         else:
@@ -61,8 +72,16 @@ def project_courtroom(
             "position": position,
             "status": status,
         }
-        ruling = _latest_completed_event(events, revision, issue_id, "ruling")
-        if ruling is not None:
+        if latest_failed is not None:
+            projected_issue.update(
+                {
+                    "failed_step_id": str(latest_failed.get("step_id", "")),
+                    "failed_phase": str(latest_failed.get("issue_phase", "")),
+                    "failure_kind": latest_failed.get("failure_kind"),
+                }
+            )
+        ruling = phase_events["ruling"]
+        if ruling is not None and ruling.get("status") == "completed":
             projected_issue["ruling"] = ruling.get("parsed_output")
         issues.append(projected_issue)
     all_ruled = bool(issues) and all(issue["status"] == "ruled" for issue in issues)
@@ -104,21 +123,7 @@ def project_courtroom(
     }
 
 
-def _latest_phase_status(
-    events: list[dict[str, Any]], revision: int, issue_id: str, phase: str
-) -> str | None:
-    matching = [
-        event
-        for event in events
-        if event.get("interaction_type") == "courtroom-issue-phase"
-        and event.get("docket_revision") == revision
-        and event.get("issue_id") == issue_id
-        and event.get("issue_phase") == phase
-    ]
-    return str(matching[-1].get("status")) if matching else None
-
-
-def _latest_completed_event(
+def _latest_phase_event(
     events: list[dict[str, Any]], revision: int, issue_id: str, phase: str
 ) -> dict[str, Any] | None:
     matching = [
@@ -128,7 +133,6 @@ def _latest_completed_event(
         and event.get("docket_revision") == revision
         and event.get("issue_id") == issue_id
         and event.get("issue_phase") == phase
-        and event.get("status") == "completed"
     ]
     return matching[-1] if matching else None
 
