@@ -21,7 +21,7 @@ Canonical backlog: `spec.md` §15 #87
 
 ## Source of Truth
 
-- `metadata.courtroom_issues`: 主席可編修、排序與確認的 issue definitions。
+- `metadata.courtroom_docket`: 主席可編修、排序與確認的 issue definitions、revision 與 confirmed marker。
 - `events.jsonl`: issue attack/defense/rebuttal、主席指示、issue ruling、final verdict 與 goal change audit。
 - `goal`: 全案最終裁判問題；`current_issue` 只限制當次攻防焦點，不取代 goal。
 - final readiness 必須由 confirmed issue roster 與 append-only completed ruling events 投影，不以 frontend memory 判斷。
