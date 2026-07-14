@@ -625,7 +625,274 @@ def test_model_discovery_preview_preserves_an_empty_model_list(
     assert response.json() == {"models": []}
 
 
-@pytest.mark.parametrize("adapter", ["anthropic-http", "gemini-http", "subscription-cli", "mock"])
+def test_anthropic_model_discovery_preview_uses_provider_contract_and_normalizes_models(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("ANTHROPIC_DISCOVERY_KEY", "anthropic-secret")
+
+    def fake_urlopen(request, timeout):
+        assert request.full_url == "https://api.anthropic.test/v1/models"
+        assert request.get_header("X-api-key") == "anthropic-secret"
+        assert request.get_header("Anthropic-version") == "2023-06-01"
+        return FakeHTTPResponse(
+            {
+                "data": [
+                    {"id": "claude-z"},
+                    {"id": "claude-a"},
+                    {"id": "claude-z"},
+                ],
+                "has_more": False,
+            }
+        )
+
+    monkeypatch.setattr("ai_council.models.adapters.urllib.request.urlopen", fake_urlopen)
+    client = TestClient(create_test_app(tmp_path))
+
+    response = client.post(
+        "/models/available-models",
+        json={
+            "adapter": "anthropic-http",
+            "base_url": "https://api.anthropic.test/v1/",
+            "api_key_env": "ANTHROPIC_DISCOVERY_KEY",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {"models": ["claude-a", "claude-z"]}
+
+
+def test_anthropic_existing_model_discovery_follows_provider_pagination(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("ANTHROPIC_EXISTING_KEY", "existing-secret")
+    requests = []
+
+    def fake_urlopen(request, timeout):
+        requests.append(request)
+        if request.full_url == "https://api.anthropic.test/v1/models":
+            return FakeHTTPResponse(
+                {
+                    "data": [{"id": "claude-b"}, {"id": "claude-a"}],
+                    "has_more": True,
+                    "last_id": "claude-b",
+                }
+            )
+        assert request.full_url == (
+            "https://api.anthropic.test/v1/models?after_id=claude-b"
+        )
+        return FakeHTTPResponse(
+            {
+                "data": [{"id": "claude-c"}, {"id": "claude-a"}],
+                "has_more": False,
+            }
+        )
+
+    monkeypatch.setattr("ai_council.models.adapters.urllib.request.urlopen", fake_urlopen)
+    client = TestClient(
+        create_test_app(
+            tmp_path,
+            models_yaml="""
+models:
+  - id: claude-existing
+    adapter: anthropic-http
+    base_url: https://api.anthropic.test/v1
+    model: claude-a
+    api_key_env: ANTHROPIC_EXISTING_KEY
+""".strip(),
+        )
+    )
+
+    response = client.get("/models/claude-existing/available-models")
+
+    assert response.status_code == 200
+    assert response.json() == {"models": ["claude-a", "claude-b", "claude-c"]}
+    assert len(requests) == 2
+    assert all(request.get_header("X-api-key") == "existing-secret" for request in requests)
+
+
+def test_gemini_model_discovery_preview_uses_provider_contract_and_paginates(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("GEMINI_DISCOVERY_KEY", "gemini-secret")
+    requested_urls = []
+
+    def fake_urlopen(request, timeout):
+        requested_urls.append(request.full_url)
+        if request.full_url == (
+            "https://generativelanguage.googleapis.test/v1beta/models?key=gemini-secret"
+        ):
+            return FakeHTTPResponse(
+                {
+                    "models": [
+                        {"name": "models/gemini-z"},
+                        {"name": "models/gemini-a"},
+                    ],
+                    "nextPageToken": "page two",
+                }
+            )
+        assert request.full_url == (
+            "https://generativelanguage.googleapis.test/v1beta/models"
+            "?key=gemini-secret&pageToken=page+two"
+        )
+        return FakeHTTPResponse(
+            {"models": [{"name": "models/gemini-a"}, {"name": "models/gemini-m"}]}
+        )
+
+    monkeypatch.setattr("ai_council.models.adapters.urllib.request.urlopen", fake_urlopen)
+    client = TestClient(create_test_app(tmp_path))
+
+    response = client.post(
+        "/models/available-models",
+        json={
+            "adapter": "gemini-http",
+            "base_url": "https://generativelanguage.googleapis.test/v1beta/",
+            "api_key_env": "GEMINI_DISCOVERY_KEY",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {"models": ["gemini-a", "gemini-m", "gemini-z"]}
+    assert len(requested_urls) == 2
+
+
+def test_gemini_existing_model_discovery_lists_only_generate_content_models(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("GEMINI_EXISTING_KEY", "existing-gemini-secret")
+
+    def fake_urlopen(request, timeout):
+        assert request.full_url == (
+            "https://generativelanguage.googleapis.test/v1beta/models"
+            "?key=existing-gemini-secret"
+        )
+        return FakeHTTPResponse(
+            {
+                "models": [
+                    {
+                        "name": "models/gemini-generative",
+                        "supportedGenerationMethods": ["generateContent", "countTokens"],
+                    },
+                    {
+                        "name": "models/text-embedding-only",
+                        "supportedGenerationMethods": ["embedContent"],
+                    },
+                ]
+            }
+        )
+
+    monkeypatch.setattr("ai_council.models.adapters.urllib.request.urlopen", fake_urlopen)
+    client = TestClient(
+        create_test_app(
+            tmp_path,
+            models_yaml="""
+models:
+  - id: gemini-existing
+    adapter: gemini-http
+    base_url: https://generativelanguage.googleapis.test/v1beta
+    model: gemini-generative
+    api_key_env: GEMINI_EXISTING_KEY
+""".strip(),
+        )
+    )
+
+    response = client.get("/models/gemini-existing/available-models")
+
+    assert response.status_code == 200
+    assert response.json() == {"models": ["gemini-generative"]}
+
+
+@pytest.mark.parametrize(
+    ("adapter", "payload"),
+    [
+        ("anthropic-http", {"data": [], "has_more": False}),
+        ("gemini-http", {"models": []}),
+    ],
+)
+def test_provider_model_discovery_preserves_empty_lists(
+    tmp_path: Path,
+    monkeypatch,
+    adapter: str,
+    payload: dict[str, object],
+) -> None:
+    monkeypatch.setattr(
+        "ai_council.models.adapters.urllib.request.urlopen",
+        lambda request, timeout: FakeHTTPResponse(payload),
+    )
+    client = TestClient(create_test_app(tmp_path))
+
+    response = client.post(
+        "/models/available-models",
+        json={"adapter": adapter, "base_url": "https://empty.example.test/v1"},
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {"models": []}
+
+
+@pytest.mark.parametrize("adapter", ["anthropic-http", "gemini-http"])
+def test_provider_model_discovery_redacts_upstream_errors(
+    tmp_path: Path,
+    monkeypatch,
+    adapter: str,
+) -> None:
+    secret = f"{adapter}-secret"
+    monkeypatch.setenv("PROVIDER_DISCOVERY_KEY", secret)
+
+    def reject_request(request, timeout):
+        raise urllib.error.URLError(f"provider rejected credential {secret}")
+
+    monkeypatch.setattr(
+        "ai_council.models.adapters.urllib.request.urlopen",
+        reject_request,
+    )
+    client = TestClient(create_test_app(tmp_path))
+
+    response = client.post(
+        "/models/available-models",
+        json={
+            "adapter": adapter,
+            "base_url": "https://failure.example.test/v1",
+            "api_key_env": "PROVIDER_DISCOVERY_KEY",
+        },
+    )
+
+    assert response.status_code == 502
+    serialized = json.dumps(response.json())
+    assert secret not in serialized
+    assert "[REDACTED]" in serialized
+
+
+@pytest.mark.parametrize("adapter", ["anthropic-http", "gemini-http"])
+def test_provider_model_discovery_reports_missing_credential_environment(
+    tmp_path: Path,
+    monkeypatch,
+    adapter: str,
+) -> None:
+    monkeypatch.delenv("MISSING_PROVIDER_DISCOVERY_KEY", raising=False)
+    client = TestClient(create_test_app(tmp_path))
+
+    response = client.post(
+        "/models/available-models",
+        json={
+            "adapter": adapter,
+            "base_url": "https://unused.example.test/v1",
+            "api_key_env": "MISSING_PROVIDER_DISCOVERY_KEY",
+        },
+    )
+
+    assert response.status_code == 502
+    assert response.json() == {
+        "detail": (
+            "Environment variable MISSING_PROVIDER_DISCOVERY_KEY is not set for API key"
+        )
+    }
+
+
+@pytest.mark.parametrize("adapter", ["subscription-cli", "mock"])
 def test_model_discovery_preview_rejects_unsupported_adapters(
     tmp_path: Path,
     adapter: str,

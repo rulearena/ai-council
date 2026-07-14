@@ -364,6 +364,36 @@ class AnthropicHTTPAdapter:
         except (KeyError, IndexError, TypeError) as error:
             raise AdapterError("Malformed Anthropic response") from error
 
+    def discover_models(self, config: ModelConfig) -> list[str]:
+        if not config.base_url:
+            raise AdapterError(
+                "HTTP model config requires base_url", failure_kind="configuration_error"
+            )
+        headers = {"anthropic-version": "2023-06-01"}
+        api_key = _resolve_api_key(config.api_key_env)
+        if api_key:
+            headers["x-api-key"] = api_key
+        url = f"{config.base_url.rstrip('/')}/models"
+        model_ids: set[str] = set()
+        seen_cursors: set[str] = set()
+        while True:
+            body = _request_json(url, method="GET", headers=headers)
+            try:
+                model_ids.update(str(model["id"]) for model in body["data"])
+                has_more = body.get("has_more", False)
+                if not has_more:
+                    return sorted(model_ids)
+                cursor = str(body["last_id"])
+            except (KeyError, TypeError) as error:
+                raise AdapterError("Malformed Anthropic models response") from error
+            if not cursor or cursor in seen_cursors:
+                raise AdapterError("Malformed Anthropic models pagination")
+            seen_cursors.add(cursor)
+            url = (
+                f"{config.base_url.rstrip('/')}/models?"
+                f"{urllib.parse.urlencode({'after_id': cursor})}"
+            )
+
 
 class GeminiHTTPAdapter:
     def complete(self, request: ModelRequest) -> ModelResponse:
@@ -393,6 +423,47 @@ class GeminiHTTPAdapter:
             )
         except (KeyError, IndexError, TypeError) as error:
             raise AdapterError("Malformed Gemini response") from error
+
+    def discover_models(self, config: ModelConfig) -> list[str]:
+        if not config.base_url:
+            raise AdapterError(
+                "HTTP model config requires base_url", failure_kind="configuration_error"
+            )
+        api_key = _resolve_api_key(config.api_key_env)
+        model_ids: set[str] = set()
+        page_token: str | None = None
+        seen_page_tokens: set[str] = set()
+        while True:
+            query: dict[str, str] = {}
+            if api_key:
+                query["key"] = api_key
+            if page_token:
+                query["pageToken"] = page_token
+            url = f"{config.base_url.rstrip('/')}/models"
+            if query:
+                url = f"{url}?{urllib.parse.urlencode(query)}"
+            body = _request_json(url, method="GET", headers={})
+            try:
+                for model in body["models"]:
+                    name = str(model["name"])
+                    if not name.startswith("models/") or name == "models/":
+                        raise KeyError("name")
+                    supported_methods = model.get("supportedGenerationMethods")
+                    if supported_methods is not None:
+                        if not isinstance(supported_methods, list):
+                            raise TypeError("supportedGenerationMethods")
+                        if "generateContent" not in supported_methods:
+                            continue
+                    model_ids.add(name.removeprefix("models/"))
+            except (KeyError, TypeError) as error:
+                raise AdapterError("Malformed Gemini models response") from error
+            next_page_token = body.get("nextPageToken")
+            if not next_page_token:
+                return sorted(model_ids)
+            page_token = str(next_page_token)
+            if page_token in seen_page_tokens:
+                raise AdapterError("Malformed Gemini models pagination")
+            seen_page_tokens.add(page_token)
 
 
 def _openai_token_usage(body: dict[str, object]) -> TokenUsage | None:

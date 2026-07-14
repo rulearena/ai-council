@@ -359,13 +359,14 @@ def create_app(
     def discover_available_models(model_config_id: str) -> dict[str, list[str]]:
         model = get_model(model_repository, model_config_id)
         adapter = model_adapters.get(model.adapter)
-        if not isinstance(adapter, OpenAICompatibleHTTPAdapter):
+        discover_models = getattr(adapter, "discover_models", None)
+        if not callable(discover_models):
             raise HTTPException(
                 status_code=400,
                 detail=f"Model discovery is not supported for adapter: {model.adapter}",
             )
         try:
-            return {"models": adapter.discover_models(model)}
+            return {"models": discover_models(model)}
         except AdapterError as error:
             raise HTTPException(
                 status_code=502,
@@ -377,7 +378,8 @@ def create_app(
         request: ModelDiscoveryPreviewRequest,
     ) -> dict[str, list[str]]:
         adapter = model_adapters.get(request.adapter)
-        if not isinstance(adapter, OpenAICompatibleHTTPAdapter):
+        discover_models = getattr(adapter, "discover_models", None)
+        if not callable(discover_models):
             raise HTTPException(
                 status_code=400,
                 detail=f"Model discovery is not supported for adapter: {request.adapter}",
@@ -389,7 +391,7 @@ def create_app(
             api_key_env=request.api_key_env,
         )
         try:
-            return {"models": adapter.discover_models(model)}
+            return {"models": discover_models(model)}
         except AdapterError as error:
             raise HTTPException(
                 status_code=502,
