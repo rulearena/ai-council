@@ -36,10 +36,12 @@ test('subscription CLI presets generate safe default argv without user-authored 
 })
 
 test('subscription CLI presets generate and project advanced exact model argv', () => {
+  // Canonical argv literals are the Human Owner-approved backlog #85 / PRD contract.
+  // They intentionally remain independent expected values rather than being derived from CLI_PRESETS.
   assert.deepEqual(
     cliConfigPayload('claude', [], {}, { modelMode: 'exact', exactModelId: ' claude-opus-x ' }),
     {
-      command: ['claude', '-p', '--model', 'claude-opus-x', '{prompt}'],
+      command: ['claude', '--model', 'claude-opus-x', '-p', '{prompt}'],
       extra_body: { cli_provider: 'claude' },
     },
   )
@@ -53,13 +55,26 @@ test('subscription CLI presets generate and project advanced exact model argv', 
   assert.deepEqual(
     cliConfigPayload('agy', [], {}, { modelMode: 'exact', exactModelId: 'agy-x' }),
     {
-      command: ['agy', '-p', '--model', 'agy-x', '{prompt}'],
+      command: ['agy', '--model', 'agy-x', '-p', '{prompt}'],
       extra_body: { cli_provider: 'agy' },
     },
   )
   assert.throws(
     () => cliConfigPayload('claude', [], {}, { modelMode: 'exact', exactModelId: '  ' }),
     /exact model ID is required/,
+  )
+  assert.deepEqual(
+    projectCliConfig({
+      command: ['claude', '--model', 'claude-opus-x', '-p', '{prompt}'],
+      extra_body: {},
+    }),
+    {
+      presetId: 'claude',
+      modelMode: 'exact',
+      exactModelId: 'claude-opus-x',
+      command: ['claude', '--model', 'claude-opus-x', '-p', '{prompt}'],
+      extraBody: {},
+    },
   )
   assert.deepEqual(
     projectCliConfig({
@@ -72,6 +87,19 @@ test('subscription CLI presets generate and project advanced exact model argv', 
       exactModelId: 'gpt-x',
       command: ['codex', 'exec', '--model', 'gpt-x', '{prompt}'],
       extraBody: { cli_provider: 'codex' },
+    },
+  )
+  assert.deepEqual(
+    projectCliConfig({
+      command: ['agy', '--model', 'agy-x', '-p', '{prompt}'],
+      extra_body: { cli_provider: 'agy' },
+    }),
+    {
+      presetId: 'agy',
+      modelMode: 'exact',
+      exactModelId: 'agy-x',
+      command: ['agy', '--model', 'agy-x', '-p', '{prompt}'],
+      extraBody: { cli_provider: 'agy' },
     },
   )
 })
@@ -309,7 +337,7 @@ test('model labels use provider and exact model id without exposing adapters', (
       adapter: 'subscription-cli',
       base_url: null,
       model: null,
-      command: ['claude', '-p', '--model', 'claude-opus-4-1', '{prompt}'],
+      command: ['claude', '--model', 'claude-opus-4-1', '-p', '{prompt}'],
       extra_body: { cli_provider: 'claude' },
     }),
     'Subscription CLI · Claude CLI · claude-opus-4-1',

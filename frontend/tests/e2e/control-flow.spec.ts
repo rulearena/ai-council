@@ -2738,7 +2738,7 @@ test('guided CLI preset validates and saves an advanced exact model ID', async (
   await page.getByTestId('model-form-provider-select').selectOption('subscription-cli')
   const modelId = `e2e-cli-exact-${Date.now()}`
   await page.getByTestId('model-form-id-input').fill(modelId)
-  await page.getByTestId('model-form-cli-preset-select').selectOption('codex')
+  await page.getByTestId('model-form-cli-preset-select').selectOption('agy')
   await page.getByTestId('model-form-cli-model-mode-select').selectOption('exact')
 
   await page.getByTestId('model-form-save').click()
@@ -2747,20 +2747,20 @@ test('guided CLI preset validates and saves an advanced exact model ID', async (
   )
   expect(createRequests).toBe(0)
 
-  await page.getByTestId('model-form-cli-exact-model-input').fill('gpt-exact-x')
+  await page.getByTestId('model-form-cli-exact-model-input').fill('agy-exact-x')
   await page.getByTestId('model-form-save').click()
   expect(createRequests).toBe(1)
   expect(createPayload).toMatchObject({
     adapter: 'subscription-cli',
-    command: ['codex', 'exec', '--model', 'gpt-exact-x', '{prompt}'],
-    extra_body: { cli_provider: 'codex' },
+    command: ['agy', '--model', 'agy-exact-x', '-p', '{prompt}'],
+    extra_body: { cli_provider: 'agy' },
   })
   await expect(modelManagerRow(page, modelId)).toContainText(
-    'Subscription CLI · Codex CLI · gpt-exact-x',
+    'Subscription CLI · AGY · agy-exact-x',
   )
   await page.getByTestId('general-tab').click()
   await expect(page.getByTestId('blue-model-select').locator(`option[value="${modelId}"]`)).toHaveText(
-    'Subscription CLI · Codex CLI · gpt-exact-x',
+    'Subscription CLI · AGY · agy-exact-x',
   )
   await page.getByTestId('model-manager-tab').click()
   page.once('dialog', (dialog) => dialog.accept())
@@ -2986,18 +2986,33 @@ test('provider-guided edits preserve legacy extra body, pricing, and CLI command
 })
 
 test('saving a recognized markerless CLI preset does not inject cli_provider', async ({ page }) => {
+  const modelsResponsePromise = page.waitForResponse(
+    (response) => response.request().method() === 'GET' && response.url().endsWith('/models'),
+  )
   await page.goto('/')
+  const apiOrigin = new URL((await modelsResponsePromise).url()).origin
+  const modelId = `e2e-markerless-cli-${Date.now()}`
+  expect((await page.request.post(`${apiOrigin}/models`, {
+    data: {
+      id: modelId,
+      adapter: 'subscription-cli',
+      command: ['claude', '-p', '{prompt}'],
+      extra_body: {},
+      timeout_seconds: 300,
+    },
+  })).ok()).toBeTruthy()
+  await page.reload()
   await page.getByTestId('settings-button').click()
   await page.getByTestId('model-manager-tab').click()
 
   let updatePayload: Record<string, unknown> | null = null
-  await page.route('**/models/claude-subscription', async (route) => {
+  await page.route(`**/models/${modelId}`, async (route) => {
     if (route.request().method() === 'PUT') {
       updatePayload = route.request().postDataJSON() as Record<string, unknown>
     }
     await route.continue()
   })
-  await page.getByTestId('edit-model-button-claude-subscription').click()
+  await page.getByTestId(`edit-model-button-${modelId}`).click()
   await expect(page.getByTestId('model-form-cli-preset-select')).toHaveValue('claude')
   await expect(page.getByTestId('model-form-cli-model-mode-select')).toHaveValue('default')
   await page.getByTestId('model-form-save').click()
@@ -3005,6 +3020,20 @@ test('saving a recognized markerless CLI preset does not inject cli_provider', a
     command: ['claude', '-p', '{prompt}'],
     extra_body: {},
   })
+  await expect(page.getByTestId('model-form')).not.toBeVisible()
+
+  updatePayload = null
+  await page.getByTestId(`edit-model-button-${modelId}`).click()
+  await page.getByTestId('model-form-cli-model-mode-select').selectOption('exact')
+  await page.getByTestId('model-form-cli-exact-model-input').fill('claude-exact-x')
+  await page.getByTestId('model-form-save').click()
+  expect(updatePayload).toMatchObject({
+    command: ['claude', '--model', 'claude-exact-x', '-p', '{prompt}'],
+    extra_body: { cli_provider: 'claude' },
+  })
+  await expect(page.getByTestId('model-form')).not.toBeVisible()
+  page.once('dialog', (dialog) => dialog.accept())
+  await page.getByTestId(`delete-model-button-${modelId}`).click()
   await closeSettings(page)
 })
 

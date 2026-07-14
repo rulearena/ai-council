@@ -349,8 +349,14 @@ function handleCliPresetChange() {
 }
 
 function handleCliModelModeChange() {
+  formPreserveCliProviderMarker.value = false
   formCliExactModelError.value = ''
   if (formCliModelMode.value === 'default') formCliExactModelId.value = ''
+}
+
+function handleCliExactModelInput() {
+  formPreserveCliProviderMarker.value = false
+  formCliExactModelError.value = ''
 }
 
 function buildPayload(): ModelConfigPayload {
@@ -672,7 +678,7 @@ async function saveForm() {
           </p>
           <label v-else class="topic-input-row">
             Exact model ID
-            <input v-model="formCliExactModelId" data-testid="model-form-cli-exact-model-input" aria-label="CLI exact model ID" @input="formCliExactModelError = ''" />
+            <input v-model="formCliExactModelId" data-testid="model-form-cli-exact-model-input" aria-label="CLI exact model ID" @input="handleCliExactModelInput" />
             <em v-if="formCliExactModelError" class="model-form-field-error" data-testid="model-form-cli-exact-model-error">{{ formCliExactModelError }}</em>
           </label>
         </template>

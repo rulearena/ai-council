@@ -96,7 +96,11 @@ export type CliModelMode = 'default' | 'exact'
 export type CliPresetDefinition = {
   id: CliPresetId
   name: string
-  command: readonly string[] | null
+  defaultCommand: readonly string[] | null
+  exact: {
+    build: (exactModelId: string) => string[]
+    parse: (command: readonly string[]) => string | null
+  } | null
 }
 
 export type CliConfigProjection = {
@@ -114,10 +118,55 @@ export type CliConfigOptions = {
 }
 
 export const CLI_PRESETS: readonly CliPresetDefinition[] = [
-  { id: 'claude', name: 'Claude CLI', command: ['claude', '-p', '{prompt}'] },
-  { id: 'codex', name: 'Codex CLI', command: ['codex', 'exec', '{prompt}'] },
-  { id: 'agy', name: 'AGY', command: ['agy', '-p', '{prompt}'] },
-  { id: 'custom', name: 'Custom CLI', command: null },
+  {
+    id: 'claude',
+    name: 'Claude CLI',
+    defaultCommand: ['claude', '-p', '{prompt}'],
+    exact: {
+      build: (exactModelId) => ['claude', '--model', exactModelId, '-p', '{prompt}'],
+      parse: (command) => command.length === 5
+        && command[0] === 'claude'
+        && command[1] === '--model'
+        && Boolean(command[2]?.trim())
+        && command[3] === '-p'
+        && command[4] === '{prompt}'
+          ? command[2]
+          : null,
+    },
+  },
+  {
+    id: 'codex',
+    name: 'Codex CLI',
+    defaultCommand: ['codex', 'exec', '{prompt}'],
+    exact: {
+      build: (exactModelId) => ['codex', 'exec', '--model', exactModelId, '{prompt}'],
+      parse: (command) => command.length === 5
+        && command[0] === 'codex'
+        && command[1] === 'exec'
+        && command[2] === '--model'
+        && Boolean(command[3]?.trim())
+        && command[4] === '{prompt}'
+          ? command[3]
+          : null,
+    },
+  },
+  {
+    id: 'agy',
+    name: 'AGY',
+    defaultCommand: ['agy', '-p', '{prompt}'],
+    exact: {
+      build: (exactModelId) => ['agy', '--model', exactModelId, '-p', '{prompt}'],
+      parse: (command) => command.length === 5
+        && command[0] === 'agy'
+        && command[1] === '--model'
+        && Boolean(command[2]?.trim())
+        && command[3] === '-p'
+        && command[4] === '{prompt}'
+          ? command[2]
+          : null,
+    },
+  },
+  { id: 'custom', name: 'Custom CLI', defaultCommand: null, exact: null },
 ]
 
 const PROVIDER_BY_ID = new Map(PROVIDERS.map((provider) => [provider.id, provider]))
@@ -134,11 +183,11 @@ export function cliConfigPayload(
   if (preset.id === 'custom') {
     return { command: [...customCommand], extra_body: { ...extraBody } }
   }
-  const command = [...preset.command!]
+  let command = [...preset.defaultCommand!]
   if (options.modelMode === 'exact') {
     const exactModelId = options.exactModelId?.trim() ?? ''
     if (!exactModelId) throw new Error('exact model ID is required')
-    command.splice(command.length - 1, 0, '--model', exactModelId)
+    command = preset.exact!.build(exactModelId)
   }
   const projectedExtraBody = { ...extraBody }
   if (!options.preserveProviderMarker) projectedExtraBody.cli_provider = preset.id
@@ -155,7 +204,7 @@ export function projectCliConfig(model: {
   const command = [...(model.command ?? [])]
   const extraBody = { ...(model.extra_body ?? {}) }
   const defaultPreset = CLI_PRESETS.find((candidate) =>
-    candidate.id !== 'custom' && arraysEqual(candidate.command!, command))
+    candidate.id !== 'custom' && arraysEqual(candidate.defaultCommand!, command))
   const exactProjection = defaultPreset ? null : projectExactCliCommand(command)
   return {
     presetId: defaultPreset?.id ?? exactProjection?.presetId ?? 'custom',
@@ -256,14 +305,8 @@ function projectExactCliCommand(command: readonly string[]): {
 } | null {
   for (const preset of CLI_PRESETS) {
     if (preset.id === 'custom') continue
-    const defaultCommand = preset.command!
-    const prefix = defaultCommand.slice(0, -1)
-    if (command.length !== defaultCommand.length + 2) continue
-    if (!arraysEqual(prefix, command.slice(0, prefix.length))) continue
-    if (command[prefix.length] !== '--model') continue
-    const exactModelId = command[prefix.length + 1]
-    if (!exactModelId?.trim() || command.at(-1) !== '{prompt}') continue
-    return { presetId: preset.id, exactModelId }
+    const exactModelId = preset.exact!.parse(command)
+    if (exactModelId !== null) return { presetId: preset.id, exactModelId }
   }
   return null
 }
