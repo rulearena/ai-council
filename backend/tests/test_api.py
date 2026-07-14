@@ -1531,6 +1531,134 @@ def test_start_returns_while_model_execution_continues_in_background(
         wait_for_activity(client, meeting_id, "completed")
 
 
+@pytest.mark.parametrize("operation", ["start", "sequence", "directed"])
+def test_generic_ai_reservation_blocks_details_until_model_execution_finishes(
+    tmp_path: Path,
+    monkeypatch,
+    operation: str,
+) -> None:
+    model_entered = threading.Event()
+    release_model = threading.Event()
+    original_complete = MockModelAdapter.complete
+
+    def blocked_complete(self, request):
+        model_entered.set()
+        assert release_model.wait(timeout=5)
+        return original_complete(self, request)
+
+    monkeypatch.setattr(MockModelAdapter, "complete", blocked_complete)
+    client = TestClient(create_test_app(tmp_path))
+    meeting_id = client.post(
+        "/meetings",
+        json={"title": "原標題", "goal": "原目標"},
+    ).json()["meeting_id"]
+    requests = {
+        "start": (f"/meetings/{meeting_id}/start", {}),
+        "sequence": (f"/meetings/{meeting_id}/sequences", {"roles": ["Blue"]}),
+        "directed": (
+            f"/meetings/{meeting_id}/roles/Blue/respond",
+            {"instruction": "請補充"},
+        ),
+    }
+
+    try:
+        url, payload = requests[operation]
+        response = client.post(url, json=payload)
+        assert response.status_code == 202
+        assert response.json() == {"status": "running"}
+        assert model_entered.wait(timeout=2)
+
+        details = client.put(
+            f"/meetings/{meeting_id}/details",
+            json={"title": "途中改名", "goal": "途中改目標"},
+        )
+        assert details.status_code == 409
+        assert details.json()["detail"] == "Meeting is already running"
+    finally:
+        release_model.set()
+        wait_for_activity(client, meeting_id, "completed")
+
+
+def test_delete_that_reserves_transition_first_leaves_no_orphan_after_start_attempt(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    delete_entered = threading.Event()
+    release_delete = threading.Event()
+    original_delete = MeetingRepository.delete
+
+    def blocked_delete(self, meeting_id):
+        delete_entered.set()
+        assert release_delete.wait(timeout=5)
+        return original_delete(self, meeting_id)
+
+    monkeypatch.setattr(MeetingRepository, "delete", blocked_delete)
+    client = TestClient(create_test_app(tmp_path))
+    meeting_id = client.post(
+        "/meetings",
+        json={"title": "刪除競態", "goal": "不得留下孤兒"},
+    ).json()["meeting_id"]
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        delete_future = executor.submit(client.delete, f"/meetings/{meeting_id}")
+        assert delete_entered.wait(timeout=2)
+        start_future = executor.submit(
+            client.post,
+            f"/meetings/{meeting_id}/start",
+            json={},
+        )
+        release_delete.set()
+        assert delete_future.result(timeout=5).status_code == 204
+        assert start_future.result(timeout=5).status_code == 404
+
+    assert not (tmp_path / "data" / "meetings" / meeting_id).exists()
+
+
+def test_generic_retry_reservation_blocks_details_until_model_execution_finishes(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    model_entered = threading.Event()
+    release_model = threading.Event()
+    should_fail = True
+    original_complete = MockModelAdapter.complete
+
+    def controlled_complete(self, request):
+        nonlocal should_fail
+        if should_fail:
+            raise AdapterError("retry barrier setup")
+        model_entered.set()
+        assert release_model.wait(timeout=5)
+        return original_complete(self, request)
+
+    monkeypatch.setattr(MockModelAdapter, "complete", controlled_complete)
+    client = TestClient(create_test_app(tmp_path))
+    meeting_id = client.post(
+        "/meetings",
+        json={"title": "重試競態", "goal": "重試使用同一 snapshot"},
+    ).json()["meeting_id"]
+    assert client.post(f"/meetings/{meeting_id}/start", json={}).status_code == 202
+    failed = wait_for_activity(client, meeting_id, "failed")["events"][-1]
+    should_fail = False
+
+    try:
+        retry = client.post(
+            f"/meetings/{meeting_id}/steps/{failed['step_id']}/retry",
+            json={},
+        )
+        assert retry.status_code == 202
+        assert model_entered.wait(timeout=2)
+        details = client.put(
+            f"/meetings/{meeting_id}/details",
+            json={"title": "途中改名", "goal": "途中改目標"},
+        )
+        assert details.status_code == 409
+        assert details.json()["detail"] == "Meeting is already running"
+    finally:
+        release_model.set()
+        wait_for_activity(client, meeting_id, "completed")
+
+
 def test_running_step_persists_and_clears_recovery_state(
     tmp_path: Path,
     monkeypatch,
@@ -2142,8 +2270,8 @@ def test_chair_can_request_single_role_response(tmp_path: Path) -> None:
         json={"instruction": "請先回答最小可行方案。"},
     )
 
-    assert response.status_code == 200
-    events = client.get(f"/meetings/{meeting_id}").json()["events"]
+    assert response.status_code == 202
+    events = wait_for_event_count(client, meeting_id, 2)
     assert events[-2]["step_id"] == "human-directed-message"
     assert events[-2]["interaction_type"] == "directed-role-instruction"
     assert events[-2]["target_role_id"] == "Blue"
@@ -2177,6 +2305,25 @@ def test_directed_role_response_rejects_blank_instruction(tmp_path: Path) -> Non
     assert client.get(f"/meetings/{meeting_id}").json()["events"] == []
 
 
+def test_directed_role_response_rejects_unknown_role_before_job_reservation(
+    tmp_path: Path,
+) -> None:
+    client = TestClient(create_test_app(tmp_path))
+    meeting_id = client.post(
+        "/meetings",
+        json={"title": "互動會議", "goal": "找出可行方案"},
+    ).json()["meeting_id"]
+
+    response = client.post(
+        f"/meetings/{meeting_id}/roles/Chair/respond",
+        json={"instruction": "請回應。"},
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "Unknown role: Chair"
+    assert client.get(f"/meetings/{meeting_id}").json()["events"] == []
+
+
 def test_retry_failed_directed_response_keeps_the_original_instruction_and_linkage(
     tmp_path: Path,
 ) -> None:
@@ -2205,11 +2352,12 @@ models:
         },
     ).json()["meeting_id"]
 
-    client.post(
+    started = client.post(
         f"/meetings/{meeting_id}/roles/Blue/respond",
         json={"instruction": "請針對一週內交付補充說明"},
     )
-    failed_events = client.get(f"/meetings/{meeting_id}").json()["events"]
+    assert started.status_code == 202
+    failed_events = wait_for_activity(client, meeting_id, "failed")["events"]
     instruction, failed = failed_events
     assert failed["status"] == "failed"
 
@@ -2228,8 +2376,8 @@ models:
         json={},
     )
 
-    assert retried.status_code == 200
-    events = client.get(f"/meetings/{meeting_id}").json()["events"]
+    assert retried.status_code == 202
+    events = wait_for_event_count(client, meeting_id, 3)
     assert len([event for event in events if event["role"] == "Human"]) == 1
     completed = events[-1]
     assert completed["status"] == "completed"
@@ -2336,8 +2484,8 @@ def test_chair_can_request_role_sequence_response(tmp_path: Path) -> None:
         },
     )
 
-    assert response.status_code == 200
-    events = client.get(f"/meetings/{meeting_id}").json()["events"]
+    assert response.status_code == 202
+    events = wait_for_event_count(client, meeting_id, 4)
     ai_events = [event for event in events if event["role"] != "Human"]
     assert [event["step_id"] for event in ai_events] == [
         "sequence-1-red-response",
@@ -2398,12 +2546,14 @@ models:
         },
     )
 
-    assert directed.status_code == 200
-    assert sequence.status_code == 200
-    assert client.get(f"/meetings/{directed_id}").json()["events"][-1]["model_config_id"] == "persisted-model"
+    assert directed.status_code == 202
+    assert sequence.status_code == 202
+    directed_events = wait_for_event_count(client, directed_id, 2)
+    sequence_events = wait_for_event_count(client, sequence_id, 3)
+    assert directed_events[-1]["model_config_id"] == "persisted-model"
     assert {
         event["model_config_id"]
-        for event in client.get(f"/meetings/{sequence_id}").json()["events"]
+        for event in sequence_events
     } == {"persisted-model"}
 
 
@@ -2451,8 +2601,8 @@ def test_chair_role_response_ignores_incomplete_legacy_request_models(tmp_path: 
         json={"instruction": "請回答目前方案"},
     )
 
-    assert response.status_code == 200
-    event = client.get(f"/meetings/{meeting_id}").json()["events"][-1]
+    assert response.status_code == 202
+    event = wait_for_event_count(client, meeting_id, 2)[-1]
     assert event["role"] == "Blue"
     assert event["model_config_id"] == "mock-fast"
 
@@ -3826,7 +3976,7 @@ models:
         f"/meetings/{meeting_id}/steps/fanout-1-member-2/retry",
         json={"models": request_models},
     )
-    assert retry.status_code == 200
+    assert retry.status_code == 202
     meeting = wait_for_activity(client, meeting_id, "completed")
     assert [event["step_id"] for event in meeting["events"]] == [
         "fanout-1-member-1",
@@ -4076,6 +4226,21 @@ def wait_for_activity(
             return meeting
         time.sleep(0.01)
     raise AssertionError(f"Meeting did not reach activity status: {expected_status}")
+
+
+def wait_for_event_count(
+    client: TestClient,
+    meeting_id: str,
+    expected_count: int,
+    timeout: float = 5,
+) -> list[dict[str, object]]:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        events = client.get(f"/meetings/{meeting_id}").json()["events"]
+        if len(events) >= expected_count:
+            return events
+        time.sleep(0.01)
+    raise AssertionError(f"Meeting did not reach event count: {expected_count}")
 
 
 def run_single_courtroom_issue(

@@ -815,6 +815,7 @@ def create_app(
         )
 
     @app.put("/meetings/{meeting_id}/tags")
+    @meeting_transitions.synchronized
     def update_meeting_tags(meeting_id: str, request: UpdateMeetingTagsRequest) -> dict[str, Any]:
         reject_running_meeting(jobs, meeting_id)
         metadata = metadata_store.update(
@@ -836,6 +837,7 @@ def create_app(
         )
 
     @app.put("/meetings/{meeting_id}/pinned")
+    @meeting_transitions.synchronized
     def update_meeting_pinned(
         meeting_id: str,
         request: UpdateMeetingPinnedRequest,
@@ -888,6 +890,7 @@ def create_app(
         )
 
     @app.post("/meetings/{meeting_id}/start", status_code=202)
+    @meeting_transitions.synchronized
     def start_meeting(meeting_id: str, request: StartMeetingRequest) -> dict[str, str]:
         metadata = metadata_store.get(meeting_id)
         require_meeting_goal(metadata)
@@ -917,18 +920,21 @@ def create_app(
         return {"status": "running"}
 
     @app.post("/meetings/{meeting_id}/cancel")
+    @meeting_transitions.synchronized
     def cancel_meeting(meeting_id: str) -> dict[str, str]:
         metadata_store.get(meeting_id)
         runner.cancel(meeting_id)
         return {"status": "cancelled"}
 
     @app.post("/meetings/{meeting_id}/close")
+    @meeting_transitions.synchronized
     def close_meeting(meeting_id: str) -> dict[str, str]:
         metadata_store.get(meeting_id)
         runner.close(meeting_id)
         return {"status": "closed"}
 
     @app.post("/meetings/{meeting_id}/reopen")
+    @meeting_transitions.synchronized
     def reopen_meeting(meeting_id: str) -> dict[str, str]:
         metadata_store.get(meeting_id)
         event = {
@@ -943,6 +949,7 @@ def create_app(
         return {"status": "open"}
 
     @app.delete("/meetings/{meeting_id}", status_code=204)
+    @meeting_transitions.synchronized
     def delete_meeting(meeting_id: str) -> Response:
         metadata_store.get(meeting_id)
         if jobs.is_running(meeting_id):
@@ -1158,15 +1165,9 @@ def create_app(
                 context_fields=directed_context,
             )
 
-        if mode.id == "courtroom":
-            if not jobs.start(meeting_id, run_directed_response):
-                raise HTTPException(status_code=409, detail="Meeting is already running")
-            return JSONResponse(status_code=202, content={"status": "running"})
-        try:
-            run_directed_response()
-        except ValueError as error:
-            raise HTTPException(status_code=400, detail=str(error)) from error
-        return {"status": project_activity_status(repository.read_events(meeting_id))}
+        if not jobs.start(meeting_id, run_directed_response):
+            raise HTTPException(status_code=409, detail="Meeting is already running")
+        return JSONResponse(status_code=202, content={"status": "running"})
 
     @app.post("/meetings/{meeting_id}/roles/{role}/respond")
     def respond_as_role(
@@ -1175,16 +1176,15 @@ def create_app(
         request: DirectedRoleResponseRequest,
     ) -> Any:
         with meeting_transitions.guard(meeting_id):
-            metadata = metadata_store.get(meeting_id)
-            if meeting_mode(mode_catalog, metadata).id == "courtroom":
-                return perform_role_response(meeting_id, role, request)
-        return perform_role_response(meeting_id, role, request)
+            return perform_role_response(meeting_id, role, request)
 
-    @app.post("/meetings/{meeting_id}/sequences")
+    @app.post("/meetings/{meeting_id}/sequences", status_code=202)
+    @meeting_transitions.synchronized
     def respond_as_sequence(
         meeting_id: str,
         request: RunRoleSequenceRequest,
     ) -> dict[str, str]:
+        reject_running_meeting(jobs, meeting_id)
         metadata = metadata_store.get(meeting_id)
         require_meeting_goal(metadata)
         reject_terminal_meeting(repository, meeting_id)
@@ -1209,34 +1209,51 @@ def create_app(
                     f"{failed.get('step_id')}"
                 ),
             )
-        try:
-            runner.respond_as_sequence(
+        if not request.roles:
+            raise HTTPException(status_code=400, detail="Role sequence cannot be empty")
+        if len(set(request.roles)) != len(request.roles):
+            raise HTTPException(
+                status_code=400,
+                detail="Role sequence cannot contain duplicate roles",
+            )
+        model_assignments = resolved_meeting_models(
+            meeting_assignments,
+            metadata,
+            mode,
+        )
+        for role in request.roles:
+            if role not in plan.directed_steps:
+                raise HTTPException(status_code=400, detail=f"Unknown role: {role}")
+            if role not in model_assignments:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Missing model assignment for role: {role}",
+                )
+        inputs = meeting_inputs_for_runner(metadata, repository.read_case_files(meeting_id))
+        if not jobs.start(
+            meeting_id,
+            lambda: runner.respond_as_sequence(
                 meeting_id=meeting_id,
                 goal=metadata["goal"],
                 roles=request.roles,
-                model_assignments=resolved_meeting_models(
-                    meeting_assignments,
-                    metadata,
-                    mode,
-                ),
+                model_assignments=model_assignments,
                 plan=plan,
-                inputs=meeting_inputs_for_runner(metadata, repository.read_case_files(meeting_id)),
-            )
-        except ValueError as error:
-            raise HTTPException(status_code=400, detail=str(error)) from error
-        return {"status": project_activity_status(repository.read_events(meeting_id))}
+                inputs=inputs,
+            ),
+        ):
+            raise HTTPException(status_code=409, detail="Meeting is already running")
+        return {"status": "running"}
 
     def perform_step_retry(
         meeting_id: str,
         step_id: str,
         request: StartMeetingRequest,
     ) -> Any:
+        reject_running_meeting(jobs, meeting_id)
         metadata = metadata_store.get(meeting_id)
         require_meeting_goal(metadata)
         reject_terminal_meeting(repository, meeting_id)
         mode = meeting_mode(mode_catalog, metadata)
-        if mode.id == "courtroom":
-            reject_running_meeting(jobs, meeting_id)
         model_assignments = resolved_meeting_models(
             meeting_assignments,
             metadata,
@@ -1251,6 +1268,37 @@ def create_app(
             )
             for participant in participants
         }
+        if mode.id != "courtroom":
+            retry_events = repository.read_events(meeting_id)
+            retry_matching = [
+                event for event in retry_events if event.get("step_id") == step_id
+            ]
+            retry_failed = retry_matching[-1] if retry_matching else None
+            if retry_failed is None or retry_failed.get("status") != "failed":
+                raise HTTPException(status_code=400, detail=f"Step is not failed: {step_id}")
+            retry_base_step_id = str(
+                retry_failed.get("base_step_id", retry_failed.get("step_id"))
+            )
+            if mode.category == "relay":
+                plan = relay_plan(mode)
+                if (
+                    retry_failed.get("interaction_type") != "directed-role-response"
+                    and retry_base_step_id not in {step.step_id for step in plan.steps}
+                ):
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"Step is not part of this meeting's mode: {retry_base_step_id}",
+                    )
+            else:
+                plan = parallel_plan(mode, project_participants(mode, metadata))
+                if retry_base_step_id not in {member.step_id for member in plan.members}:
+                    raise HTTPException(
+                        status_code=400,
+                        detail=(
+                            "Step is not part of this meeting's parallel fanout: "
+                            f"{retry_base_step_id}"
+                        ),
+                    )
         try:
             if mode.id == "courtroom":
                 events = repository.read_events(meeting_id)
@@ -1370,25 +1418,32 @@ def create_app(
                 if not jobs.start(meeting_id, operation):
                     raise CourtroomWorkflowError("Meeting is already running")
                 return JSONResponse(status_code=202, content={"status": "running"})
+            retry_inputs = meeting_inputs_for_runner(
+                metadata,
+                repository.read_case_files(meeting_id),
+            )
             if mode.category == "relay":
-                runner.retry_failed_step(
+                operation = lambda: runner.retry_failed_step(
                     meeting_id=meeting_id,
                     step_id=step_id,
                     goal=metadata["goal"],
                     model_assignments=model_assignments,
-                    plan=relay_plan(mode),
-                    inputs=meeting_inputs_for_runner(metadata, repository.read_case_files(meeting_id)),
+                    plan=plan,
+                    inputs=retry_inputs,
                     role_display_names=role_display_names,
                 )
             else:
-                runner.retry_failed_parallel_step(
+                operation = lambda: runner.retry_failed_parallel_step(
                     meeting_id=meeting_id,
                     step_id=step_id,
                     goal=metadata["goal"],
                     model_assignments=model_assignments,
-                    plan=parallel_plan(mode, project_participants(mode, metadata)),
-                    inputs=meeting_inputs_for_runner(metadata, repository.read_case_files(meeting_id)),
+                    plan=plan,
+                    inputs=retry_inputs,
                 )
+            if not jobs.start(meeting_id, operation):
+                raise HTTPException(status_code=409, detail="Meeting is already running")
+            return JSONResponse(status_code=202, content={"status": "running"})
         except CourtroomWorkflowError as error:
             raise HTTPException(status_code=error.status_code, detail=error.detail) from error
         except ValueError as error:
@@ -1402,10 +1457,7 @@ def create_app(
         request: StartMeetingRequest,
     ) -> Any:
         with meeting_transitions.guard(meeting_id):
-            metadata = metadata_store.get(meeting_id)
-            if meeting_mode(mode_catalog, metadata).id == "courtroom":
-                return perform_step_retry(meeting_id, step_id, request)
-        return perform_step_retry(meeting_id, step_id, request)
+            return perform_step_retry(meeting_id, step_id, request)
 
     @app.get("/meetings/{meeting_id}/transcript.md")
     def get_transcript(meeting_id: str) -> PlainTextResponse:
