@@ -658,6 +658,7 @@ export function useCouncil() {
       if (selectedMeeting.value?.meeting_id === meetingId) {
         selectedMeeting.value = { ...selectedMeeting.value, activity_status: 'running' }
       }
+      void refreshMeetingUntilSettled(meetingId)
     })
   }
 
@@ -682,6 +683,7 @@ export function useCouncil() {
       if (selectedMeeting.value?.meeting_id === meetingId) {
         selectedMeeting.value = { ...selectedMeeting.value, activity_status: 'running' }
       }
+      void refreshMeetingUntilSettled(meetingId)
     })
   }
 
@@ -754,6 +756,29 @@ export function useCouncil() {
       }
     } catch (caught) {
       error.value = caught instanceof Error ? caught.message : String(caught)
+    }
+  }
+
+  async function refreshMeetingUntilSettled(meetingId: string) {
+    // Completion events can be broadcast while the backend job still owns its running
+    // slot. Poll the read projection until that slot is released so workflow-only
+    // fields (courtroom status/actions/rulings) become visible without a page reload.
+    for (let attempt = 0; attempt < 3600; attempt += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 250))
+      if (selectedMeeting.value?.meeting_id !== meetingId) return
+      try {
+        const refreshed = await getMeeting(meetingId)
+        if (selectedMeeting.value?.meeting_id !== meetingId) return
+        if (refreshed.activity_status === 'running') continue
+        selectedMeeting.value = refreshed
+        transcript.value = await getTranscript(meetingId)
+        meetings.value = await getMeetings()
+        return
+      } catch (caught) {
+        if (selectedMeeting.value?.meeting_id !== meetingId) return
+        error.value = caught instanceof Error ? caught.message : String(caught)
+        return
+      }
     }
   }
 
@@ -959,9 +984,11 @@ export function useCouncil() {
     if (!selectedMeeting.value || !canRun.value || !instruction.trim()) return false
     clearContinueHint()
     pendingRoles.value.push(role)
+    const meetingId = selectedMeeting.value.meeting_id
     return runAction(async () => {
-      await requestRoleResponse(selectedMeeting.value!.meeting_id, role, instruction.trim())
-      await openMeeting(selectedMeeting.value!.meeting_id)
+      await requestRoleResponse(meetingId, role, instruction.trim())
+      await openMeeting(meetingId)
+      void refreshMeetingUntilSettled(meetingId)
     })
   }
 
@@ -979,6 +1006,7 @@ export function useCouncil() {
         selectedSequencePreset.value.roles,
       )
       await openMeeting(selectedMeeting.value!.meeting_id)
+      void refreshMeetingUntilSettled(selectedMeeting.value!.meeting_id)
     })
   }
 
@@ -989,9 +1017,11 @@ export function useCouncil() {
     const cascade = retryCascadeRoles(baseStepId)
     const remainingRoles = cascade.length ? cascade : isCouncilRole(event.role) ? [event.role] : []
     pendingRoles.value.push(...remainingRoles)
+    const meetingId = selectedMeeting.value.meeting_id
     await runAction(async () => {
-      await retryStep(selectedMeeting.value!.meeting_id, event.step_id)
-      await openMeeting(selectedMeeting.value!.meeting_id)
+      await retryStep(meetingId, event.step_id)
+      await openMeeting(meetingId)
+      void refreshMeetingUntilSettled(meetingId)
     })
   }
 
@@ -1103,6 +1133,7 @@ export function useCouncil() {
     createNewMeeting,
     clearMeetingCreationError,
     openMeeting,
+    refreshMeetingUntilSettled,
     updateSelectedMeetingDetails,
     startSelectedMeeting,
     startOrContinueMeeting,

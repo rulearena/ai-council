@@ -2043,6 +2043,12 @@ def project_activity_status_for_mode(
     latest_event = events[-1]
     if latest_event.get("interaction_type") in {"directed-role-response", "role-sequence-response"}:
         return "completed"
+    if mode.id == "courtroom" and latest_event.get("interaction_type") in {
+        "courtroom-issue-draft",
+        "courtroom-issue-phase",
+        "courtroom-final-verdict",
+    }:
+        return projected
     if mode.category == "parallel":
         base_step_id = str(latest_event.get("base_step_id", latest_event.get("step_id", "")))
         return "completed" if base_step_id == "synthesis" else "running"

@@ -647,7 +647,7 @@ test('user can run a mock meeting and add chair feedback', async ({ page }) => {
   await expect(outputRoleBadge).toHaveClass(/role-judge/)
   await closeRoleDrawer(page)
 
-  await expect(page.getByTestId('start-meeting-button')).toContainText('繼續討論')
+  await expect(page.getByTestId('start-meeting-button')).toContainText('開始新回合')
 
   await page.getByTestId('chair-message-input').fill('主席補充：請先限制在一週可以完成的方案。')
   await page.getByTestId('send-chair-message-button').click()
@@ -1996,76 +1996,129 @@ test('New Case blocks an empty model catalog and seat nameplates follow persiste
     .click()
 })
 
-test('courtroom mode runs its full four-step relay and renders the Prosecutor/Defense/Judge roster', async ({
+test('courtroom handles two confirmed issues one at a time before the final verdict', async ({
   page,
 }) => {
   await page.goto('/')
 
-  const topic = `E2E courtroom happy path ${Date.now()}`
-  await createMeetingViaNewCase(page, topic, { modeId: 'courtroom' })
+  const topic = `E2E courtroom issue flow ${Date.now()}`
+  await createMeetingViaNewCase(page, topic, {
+    modeId: 'courtroom',
+    goal: '判斷被告是否應返還土地並賠償損害？',
+  })
 
-  // Selecting courtroom in the mode picker produces a courtroom-shaped roster, not the
-  // red-blue triple - CouncilStage's seat testids are role-derived (role.toLowerCase()).
   await expect(page.getByTestId('role-seat-prosecutor')).toBeVisible()
   await expect(page.getByTestId('role-seat-defense')).toBeVisible()
   await expect(page.getByTestId('role-seat-judge')).toBeVisible()
-  await expect(page.getByTestId('role-seat-blue')).toHaveCount(0)
-  await expect(page.getByTestId('role-seat-prosecutor')).toContainText('檢察官')
-  await expect(page.getByTestId('role-seat-defense')).toContainText('辯護律師')
-  await expect(page.getByTestId('role-seat-judge')).toContainText('法官')
+  await expect(page.getByTestId('courtroom-docket-panel')).toContainText('草稿，尚未開始審理')
+  await expect(page.getByTestId('start-meeting-button')).toHaveCount(0)
+  await expect(page.getByTestId('settings-button')).toHaveText('系統設定')
+  await expect(page.getByTestId('advanced-options-button')).toContainText('流程操作')
+  await page.getByTestId('advanced-options-button').click()
+  await expect(page.getByTestId('role-sequence-controls')).toHaveCount(0)
+  await expect(page.getByText('回合流程：')).toHaveCount(0)
+  await page.getByTestId('advanced-options-button').click()
 
-  await setRoleModelsInSettings(page, { Prosecutor: 'mock-slow', Defense: 'mock-slow', Judge: 'mock-slow' })
-  await closeSettings(page)
+  await page.getByTestId('edit-meeting-details-button').click()
+  await page.getByTestId('meeting-title-input').fill(`${topic}（修訂）`)
+  await page.getByTestId('meeting-goal-input').fill('判斷被告是否應返還土地及孳息？')
+  await page.getByTestId('save-meeting-details-button').click()
+  await expect(page.getByTestId('meeting-title-display')).toHaveText(`${topic}（修訂）`)
 
-  await page.getByTestId('start-meeting-button').click()
+  await page.getByTestId('add-courtroom-issue-button').click()
+  await page.getByTestId('courtroom-issue-title-0').fill('被告是否具有合法占有權源？')
+  await page.getByTestId('add-courtroom-issue-button').click()
+  await page.getByTestId('courtroom-issue-title-1').fill('被告是否應返還土地及孳息？')
+  await page.getByRole('button', { name: '上移爭點 2' }).click()
+  await expect(page.getByTestId('courtroom-issue-title-0')).toHaveValue('被告是否應返還土地及孳息？')
+  await page.getByTestId('save-courtroom-issues-button').click()
+  await expect(page.getByTestId('courtroom-workspace-feedback')).toContainText('爭點草稿已儲存')
 
-  // Same synchronous pendingRoles push as the red-blue flow - Prosecutor (courtroom's
-  // first step) flips to "thinking" immediately.
-  await expect(page.getByTestId('role-seat-prosecutor')).toHaveAttribute('data-status', 'thinking')
+  await page.reload()
+  await page.getByTestId('past-topics-button').click()
+  await page.getByTestId('meeting-list-item').filter({ hasText: `${topic}（修訂）` }).locator('.meeting-item').click()
+  await expect(page.getByTestId('courtroom-issue-title-0')).toHaveValue('被告是否應返還土地及孳息？')
+  await expect(page.getByTestId('courtroom-issue-title-1')).toHaveValue('被告是否具有合法占有權源？')
+  await page.getByTestId('confirm-courtroom-issues-button').click()
+  await expect(page.getByTestId('courtroom-docket-status')).toHaveText('已確認')
 
-  await expect(page.getByTestId('operation-status')).toContainText('狀態：已完成', { timeout: 15000 })
-  await expect(page.getByTestId('operation-status')).toContainText('最後步驟：法官判決')
-  await expect(page.getByTestId('role-seat-prosecutor')).toHaveAttribute('data-status', 'completed')
-  await expect(page.getByTestId('role-seat-defense')).toHaveAttribute('data-status', 'completed')
-  await expect(page.getByTestId('role-seat-judge')).toHaveAttribute('data-status', 'completed')
+  await page.getByTestId('edit-meeting-details-button').click()
+  await expect(page.getByTestId('meeting-goal-input')).toHaveAttribute('readonly', '')
+  await expect(page.getByTestId('meeting-details-editor')).toContainText('目標已設為唯讀')
+  await page.getByRole('button', { name: '取消', exact: true }).click()
 
-  await page.getByTestId('role-seat-defense').click()
-  await expect(page.getByTestId('role-drawer')).toContainText('辯護律師 詳情')
-  await expect(page.getByTestId('role-output-panel')).toContainText('辯護律師答辯')
-  await expect(page.getByTestId('role-output-panel')).toContainText('角色回應')
-  await expect(page.getByTestId('role-output-panel')).toContainText('論點')
-  await expect(page.getByTestId('role-output-panel')).not.toContainText('Defense')
-  await expect(page.getByTestId('role-output-panel')).not.toContainText('courtroom-defense')
-  await page.getByTestId('role-drawer-close-button').click()
+  const primary = page.getByTestId('courtroom-primary-action')
+  await expect(primary).toContainText('開始此爭點')
+  await primary.click()
+  await expect(page.locator('[data-issue-id="issue-1"]')).toContainText('待裁定', { timeout: 15000 })
+  await expect(page.locator('[data-issue-id="issue-2"]')).toContainText('待審')
+  await expect(primary).toContainText('送交爭點裁定')
 
-  // Full step_id sequence in the records drawer confirms the relay actually ran
-  // courtroom's mode-derived plan (courtroom-charge -> courtroom-defense ->
-  // courtroom-rebuttal -> courtroom-verdict), not the red-blue fixed round.
-  await page.getByTestId('records-button').click()
-  const courtroomStepLabels = ['檢察官指控', '辯護律師答辯', '檢察官再質詢', '法官判決']
-  for (const stepLabel of courtroomStepLabels) {
-    await expect(page.getByTestId('step-timeline')).toContainText(stepLabel)
-  }
-  // Presence alone (the loop above) would also pass if the steps ran out of order -
-  // execution order is the relay executor's core guarantee, so read each row's step_id
-  // (RecordsDrawer.vue renders `events` - and therefore these rows - in event order) and
-  // assert courtroom's four steps appear in ascending position, not just somewhere.
-  const renderedStepLabels = await page.getByTestId('step-timeline').locator('.timeline-row strong').allTextContents()
-  const observedPositions = courtroomStepLabels.map((stepLabel) => renderedStepLabels.indexOf(stepLabel))
-  expect(observedPositions.every((position) => position >= 0)).toBe(true)
-  expect(observedPositions).toEqual([...observedPositions].sort((a, b) => a - b))
-  const primaryTimelineText = await page.getByTestId('step-timeline').locator('.timeline-main').allTextContents()
-  expect(primaryTimelineText.join('\n')).not.toContain('courtroom-defense')
-  expect(primaryTimelineText.join('\n')).not.toContain('Defense')
-  await page.getByTestId('records-close-button').click()
+  await page.getByTestId('chairman-action-select').selectOption('role:Defense')
+  await expect(page.getByTestId('send-chair-message-button')).toHaveText('請辯護律師回答')
+  await page.getByTestId('chair-message-input').fill('請說明返還孳息的主要抗辯。')
+  await page.getByTestId('send-chair-message-button').click()
+  await expect(page.getByTestId('operation-status')).not.toContainText('執行中', { timeout: 15000 })
+
+  await primary.click()
+  await expect(page.getByTestId('courtroom-ruling-issue-1')).toContainText('部分成立', { timeout: 15000 })
+  await expect(page.getByTestId('courtroom-ruling-issue-1')).toContainText('理由：Mock issue ruling')
+  await expect(primary).toContainText('進入下一爭點')
+  await expect(page.locator('[data-issue-id="issue-2"]')).toContainText('待審')
+
+  await primary.click()
+  await expect(page.locator('[data-issue-id="issue-2"]')).toContainText('待裁定', { timeout: 15000 })
+  await expect(page.getByTestId('courtroom-final-verdict')).toHaveCount(0)
+  await primary.click()
+  await expect(page.getByTestId('courtroom-ruling-issue-2')).toContainText('部分成立', { timeout: 15000 })
+  await expect(primary).toContainText('最終判決')
+  await primary.click()
+  await expect(page.getByTestId('courtroom-final-verdict')).toContainText('Mock verdict', { timeout: 15000 })
+
+  await page.reload()
+  await page.getByTestId('past-topics-button').click()
+  await page.getByTestId('meeting-list-item').filter({ hasText: `${topic}（修訂）` }).locator('.meeting-item').click()
+  await expect(page.getByTestId('courtroom-docket-status')).toHaveText('已確認')
+  await expect(page.getByTestId('courtroom-ruling-issue-1')).toContainText('部分成立')
+  await expect(page.getByTestId('courtroom-ruling-issue-2')).toContainText('部分成立')
+  await expect(page.getByTestId('courtroom-final-verdict')).toContainText('最終判決')
 
   await page.getByTestId('past-topics-button').click()
   page.once('dialog', (dialog) => dialog.accept())
   await page
     .getByTestId('meeting-list-item')
-    .filter({ hasText: topic })
+    .filter({ hasText: `${topic}（修訂）` })
     .getByTestId('delete-meeting-button')
     .click()
+})
+
+test('courtroom AI draft shows progress and keeps manual editing available after failure', async ({ page }) => {
+  await page.goto('/')
+  const topic = `E2E courtroom draft fallback ${Date.now()}`
+  await createMeetingViaNewCase(page, topic, { modeId: 'courtroom' })
+  await setRoleModelsInSettings(page, { Prosecutor: 'mock-fast', Defense: 'mock-fast', Judge: 'mock-broken' })
+  await closeSettings(page)
+
+  await page.getByTestId('generate-courtroom-draft-button').click()
+  await expect(page.getByTestId('generate-courtroom-draft-button')).toContainText('正在產生爭點草稿')
+  await expect(page.getByTestId('courtroom-draft-error')).toContainText('AI 草稿產生失敗', { timeout: 15000 })
+  await expect(page.getByTestId('retry-courtroom-draft-button')).toBeVisible()
+  await expect(page.getByTestId('add-courtroom-issue-button')).toBeEnabled()
+
+  await page.getByTestId('add-courtroom-issue-button').click()
+  await page.getByTestId('courtroom-issue-title-0').fill('主席手動建立的爭點')
+  await expect(page.getByTestId('save-courtroom-issues-button')).toBeEnabled()
+  await page.getByRole('button', { name: '刪除爭點 1' }).click()
+
+  await setRoleModelsInSettings(page, { Judge: 'mock-fast' })
+  await closeSettings(page)
+  await page.getByTestId('retry-courtroom-draft-button').click()
+  await expect(page.getByTestId('courtroom-issue-title-0')).toHaveValue('Mock generated issue', { timeout: 15000 })
+  await expect(page.getByTestId('courtroom-draft-error')).toHaveCount(0)
+
+  await page.getByTestId('past-topics-button').click()
+  page.once('dialog', (dialog) => dialog.accept())
+  await page.getByTestId('meeting-list-item').filter({ hasText: topic }).getByTestId('delete-meeting-button').click()
 })
 
 test('brainstorm mode creates member instances and runs fanout plus synthesis', async ({ page }) => {

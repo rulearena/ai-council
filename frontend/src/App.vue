@@ -11,6 +11,7 @@ import NewCaseModal from './components/NewCaseModal.vue'
 import RoleDrawer from './components/RoleDrawer.vue'
 import RecordsDrawer from './components/RecordsDrawer.vue'
 import ModeHelpDrawer from './components/ModeHelpDrawer.vue'
+import CourtroomDocketPanel from './components/CourtroomDocketPanel.vue'
 
 const store = useCouncil()
 provide(councilKey, store)
@@ -44,6 +45,8 @@ function onSeatClick(role: CouncilRole | 'Chairman') {
     />
 
     <CouncilStage :scene="currentScene" @seat-click="onSeatClick" />
+
+    <CourtroomDocketPanel />
 
     <ActionBar />
 

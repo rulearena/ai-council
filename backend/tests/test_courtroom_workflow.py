@@ -230,6 +230,13 @@ def test_each_courtroom_issue_stops_for_ruling_and_final_waits_for_all_rulings(
     ]
     assert all("占有權源" in event["prompt_messages"][0]["content"] for event in issue_events)
     assert all("返還及孳息" not in event["prompt_messages"][0]["content"] for event in issue_events)
+    deadline = time.monotonic() + 2
+    while time.monotonic() < deadline:
+        settled_arguments = client.get(f"/meetings/{meeting_id}").json()
+        if settled_arguments["activity_status"] != "running":
+            break
+        time.sleep(0.01)
+    assert settled_arguments["activity_status"] == "completed"
     assert client.post(f"/meetings/{meeting_id}/courtroom/final-verdict").status_code == 409
 
     assert client.post(

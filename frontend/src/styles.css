@@ -1411,6 +1411,152 @@ h2 {
   overflow-wrap: anywhere;
 }
 
+.courtroom-docket {
+  margin: 0 20px 16px;
+  padding: 18px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 14px;
+  background: rgba(12, 18, 31, 0.94);
+  color: #eef3ff;
+}
+
+.courtroom-docket-header,
+.courtroom-draft-actions,
+.courtroom-confirm-actions,
+.courtroom-issue-progress > li > header,
+.courtroom-primary-action {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.courtroom-docket-header h2,
+.issue-ruling h3,
+.courtroom-final-verdict h3 {
+  margin: 0 0 6px;
+}
+
+.courtroom-docket-header p,
+.courtroom-primary-action p {
+  margin: 0;
+  color: var(--color-text-muted);
+}
+
+.docket-state {
+  flex: none;
+  padding: 5px 9px;
+  border-radius: 999px;
+  background: rgba(74, 144, 226, 0.18);
+  color: #b8d8ff;
+  font-size: 12px;
+}
+
+.courtroom-draft-actions,
+.courtroom-confirm-actions {
+  justify-content: flex-start;
+  margin-top: 14px;
+}
+
+.courtroom-issue-editor,
+.courtroom-issue-progress {
+  display: grid;
+  gap: 10px;
+  margin: 14px 0;
+  padding: 0;
+  list-style: none;
+}
+
+.courtroom-issue-editor > li {
+  display: grid;
+  grid-template-columns: 28px minmax(0, 1fr) auto auto auto;
+  align-items: center;
+  gap: 8px;
+}
+
+.courtroom-issue-editor input {
+  width: 100%;
+}
+
+.issue-number {
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.09);
+}
+
+.courtroom-issue-progress > li {
+  padding: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.035);
+}
+
+.courtroom-issue-progress > li.current {
+  border-color: rgba(74, 144, 226, 0.75);
+  box-shadow: inset 3px 0 #4a90e2;
+}
+
+.current-focus {
+  color: #82bdff;
+  font-size: 12px;
+}
+
+.issue-ruling,
+.courtroom-final-verdict {
+  margin-top: 10px;
+  padding: 12px;
+  border-radius: 8px;
+  background: rgba(76, 175, 80, 0.08);
+}
+
+.issue-ruling p,
+.courtroom-final-verdict p {
+  margin: 6px 0 0;
+}
+
+.courtroom-primary-action {
+  margin-top: 14px;
+}
+
+.loading-spinner {
+  display: inline-block;
+  width: 14px;
+  height: 14px;
+  margin-right: 6px;
+  border: 2px solid currentColor;
+  border-right-color: transparent;
+  border-radius: 50%;
+  vertical-align: -2px;
+  animation: courtroom-spin 0.8s linear infinite;
+}
+
+@keyframes courtroom-spin {
+  to { transform: rotate(360deg); }
+}
+
+@media (max-width: 720px) {
+  .courtroom-docket {
+    margin-inline: 10px;
+  }
+
+  .courtroom-docket-header,
+  .courtroom-primary-action {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .courtroom-issue-editor > li {
+    grid-template-columns: 28px minmax(0, 1fr);
+  }
+
+  .courtroom-issue-editor > li .btn {
+    grid-column: auto;
+  }
+}
+
 .chairman-history-meta {
   display: flex;
   gap: 8px;

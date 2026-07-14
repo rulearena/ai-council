@@ -63,7 +63,14 @@ export type CourtroomIssueProjection = {
   title: string
   position: number
   status: 'pending' | 'arguments-in-progress' | 'awaiting-ruling' | 'ruled'
-  ruling?: unknown
+  ruling?: CourtroomRuling
+}
+
+export type CourtroomRuling = {
+  outcome: 'proponent-wins' | 'respondent-wins' | 'partially-upheld' | 'insufficient-evidence'
+  reasoning: string
+  evidence_refs: string[]
+  unresolved_questions: string[]
 }
 
 export type CourtroomProjection = {
@@ -154,6 +161,14 @@ export type MeetingEvent = {
     | 'directed-role-instruction'
     | 'directed-role-response'
     | 'role-sequence-response'
+    | 'courtroom-issue-draft'
+    | 'courtroom-issue-phase'
+    | 'courtroom-final-verdict'
+    | 'courtroom-operation-reservation'
+    | 'goal-change-audit'
+  docket_revision?: number
+  issue_id?: string
+  issue_phase?: 'charge' | 'defense' | 'rebuttal' | 'ruling'
   target_role_id?: string
   in_response_to_event_id?: string
   directed_sequence?: number
@@ -361,6 +376,22 @@ export async function getMeeting(meetingId: string): Promise<Meeting> {
 
 export async function startMeeting(meetingId: string): Promise<void> {
   await postJson(`/meetings/${meetingId}/start`, {})
+}
+
+export async function draftCourtroomIssues(meetingId: string, revision: number): Promise<void> {
+  await postJson(`/meetings/${meetingId}/courtroom/issues/draft`, { revision })
+}
+
+export async function replaceCourtroomIssues(
+  meetingId: string,
+  revision: number,
+  issues: Array<{ id?: string; title: string }>,
+): Promise<Meeting> {
+  return putJson(`/meetings/${meetingId}/courtroom/issues`, { revision, issues })
+}
+
+export async function confirmCourtroomIssues(meetingId: string, revision: number): Promise<Meeting> {
+  return postJson(`/meetings/${meetingId}/courtroom/issues/confirm`, { revision })
 }
 
 export async function runCourtroomIssueArguments(meetingId: string, issueId: string): Promise<void> {

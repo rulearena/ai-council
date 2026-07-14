@@ -168,6 +168,7 @@ const canSubmitChairman = computed(() => {
         {{ chairmanPresentation.submitLabel }}
       </button>
       <button
+        v-if="selectedMeeting?.mode_id !== 'courtroom'"
         type="button"
         class="btn btn-primary action-bar-cta"
         data-testid="start-meeting-button"
@@ -189,7 +190,7 @@ const canSubmitChairman = computed(() => {
         </button>
         <div v-if="advancedOpen" class="advanced-options-panel" data-testid="advanced-options-panel">
           <strong>流程操作</strong>
-          <section v-if="sequencePresets.length" class="sequence-panel" data-testid="role-sequence-controls">
+          <section v-if="sequencePresets.length && selectedMeeting?.mode_id !== 'courtroom'" class="sequence-panel" data-testid="role-sequence-controls">
             <label>
               自動接續
               <select v-model="selectedSequencePresetId" data-testid="sequence-preset-select">
@@ -208,7 +209,7 @@ const canSubmitChairman = computed(() => {
               執行序列
             </button>
           </section>
-          <small v-if="roundStepsSummary">回合流程：{{ roundStepsSummary }}</small>
+          <small v-if="roundStepsSummary && selectedMeeting?.mode_id !== 'courtroom'">回合流程：{{ roundStepsSummary }}</small>
           <div class="advanced-options-actions">
             <button
               type="button"
