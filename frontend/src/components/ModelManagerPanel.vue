@@ -135,6 +135,8 @@ async function handleTest(id: string) {
   try {
     const result = await testModel(id)
     if (!isCurrentModelTest(id, generation)) return
+    await refreshModels()
+    if (!isCurrentModelTest(id, generation)) return
     clearTestSlowTimer(id)
     testFeedback.value = {
       ...testFeedback.value,

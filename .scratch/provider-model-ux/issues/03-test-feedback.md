@@ -25,6 +25,8 @@ Model Manager 的 row-level 測試現在會立即顯示 spinner 與「正在測�
 
 每個 model ID 使用獨立 generation；Settings 關閉造成 panel unmount，進入編輯與確認刪除也會 invalidate generation 並清除 timer。Playwright 已覆蓋關閉後新測試、進入編輯，以及刪除後用相同 ID 重建時，舊回應都不能更新目前 UI。
 
-驗證：新增 5 個 Playwright 流程全綠；Model Manager 相關 7 tests 全綠；frontend unit 10 passed；frontend build 綠；`git diff --check` 綠。
+完成結果會在 generation 仍為 current 時重新讀取 `GET /models`，因此 row feedback 因切換分頁或關閉 modal 而 unmount 後，成功／失敗 health 仍由後端 projection 正確顯示；refresh 完成後會再次檢查 generation，過期請求仍不得提交目前 feedback。
 
-已知後續：後端 health store 的 generation 目前只在 config clear 時遞增；兩個真正併發的 test request 仍可能由較舊請求最後寫入 store。這不會污染本票的當前 row UI，但應由獨立 backend stale-result ticket 修正持久 health projection。
+驗證：test feedback/stale/projection 6 個 Playwright 流程全綠；Model Manager 相關 7 tests 全綠；frontend unit 10 passed；frontend build 綠；`git diff --check` 綠。
+
+後端持久 health projection 的 concurrent result ordering 已由 Ticket 05 補齊；本票 refresh 後取得的是只接受最新 token 的結果。

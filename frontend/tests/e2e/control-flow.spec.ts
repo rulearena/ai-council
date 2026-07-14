@@ -2248,6 +2248,53 @@ test('model manager reports a clear connection-test failure', async ({ page }) =
   await expect(feedback).toHaveAttribute('role', 'status')
 })
 
+test('model health remains projected after connection-test feedback is unmounted', async ({
+  page,
+}) => {
+  const modelId = `e2e-health-projection-${Date.now()}`
+  await page.goto('/')
+  await page.getByTestId('settings-button').click()
+  await page.getByTestId('model-manager-tab').click()
+  await page.getByTestId('add-model-button').click()
+  await page.getByTestId('model-form-id-input').fill(modelId)
+  await page.getByTestId('model-form-save').click()
+  const row = modelManagerRow(page, modelId)
+  await expect(row.locator('.status-dot')).toHaveAttribute('data-status', 'unknown')
+
+  await page.getByTestId(`test-model-button-${modelId}`).click()
+  await expect(row.getByTestId(`model-test-feedback-${modelId}`)).toHaveText('連線成功')
+  await page.getByTestId('general-tab').click()
+  await page.getByTestId('model-manager-tab').click()
+  await expect(modelManagerRow(page, modelId).locator('.status-dot')).toHaveAttribute(
+    'data-status',
+    'available',
+  )
+
+  await page.getByTestId(`edit-model-button-${modelId}`).click()
+  await page.getByTestId('model-form-provider-select').selectOption('custom-openai-compatible')
+  await page.getByTestId('model-form-base-url-input').fill('http://127.0.0.1:9/v1')
+  await page.getByTestId('model-form-model-input').fill('unreachable-model')
+  await page.getByTestId('model-form-timeout-input').fill('1')
+  await page.getByTestId('model-form-save').click()
+  await expect(modelManagerRow(page, modelId).locator('.status-dot')).toHaveAttribute(
+    'data-status',
+    'unknown',
+  )
+  await page.getByTestId(`test-model-button-${modelId}`).click()
+  await expect(
+    modelManagerRow(page, modelId).getByTestId(`model-test-feedback-${modelId}`),
+  ).toContainText('測試失敗：')
+  await page.getByTestId('general-tab').click()
+  await page.getByTestId('model-manager-tab').click()
+  const failedRow = modelManagerRow(page, modelId)
+  await expect(failedRow.locator('.status-dot')).toHaveAttribute('data-status', 'unavailable')
+  await expect(failedRow.locator('.model-manager-test-error')).not.toBeEmpty()
+
+  page.once('dialog', (dialog) => dialog.accept())
+  await page.getByTestId(`delete-model-button-${modelId}`).click()
+  await expect(modelManagerRow(page, modelId)).toHaveCount(0)
+})
+
 test('a late connection-test response cannot replace a newer result after the modal closes', async ({
   page,
 }) => {
