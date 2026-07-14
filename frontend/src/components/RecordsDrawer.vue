@@ -26,6 +26,7 @@ const {
 type RecordsTab = 'timeline' | 'transcript' | 'debug'
 const activeTab = ref<RecordsTab>('timeline')
 const copiedDiagnosticEventId = ref<string | null>(null)
+const copyDiagnosticErrorEventId = ref<string | null>(null)
 
 const diagnosticKeys = [
   'event_id',
@@ -63,8 +64,20 @@ function diagnosticBundle(event: MeetingEvent) {
 }
 
 async function copyAttemptDiagnostics(event: MeetingEvent) {
-  await navigator.clipboard.writeText(JSON.stringify(diagnosticBundle(event), null, 2))
-  copiedDiagnosticEventId.value = event.event_id
+  copiedDiagnosticEventId.value = null
+  copyDiagnosticErrorEventId.value = null
+  try {
+    await navigator.clipboard.writeText(JSON.stringify(diagnosticBundle(event), null, 2))
+    copiedDiagnosticEventId.value = event.event_id
+  } catch {
+    copyDiagnosticErrorEventId.value = event.event_id
+  }
+}
+
+function copyDiagnosticLabel(event: MeetingEvent) {
+  if (copiedDiagnosticEventId.value === event.event_id) return '已複製'
+  if (copyDiagnosticErrorEventId.value === event.event_id) return '複製失敗'
+  return '複製診斷 JSON'
 }
 </script>
 
@@ -189,7 +202,7 @@ async function copyAttemptDiagnostics(event: MeetingEvent) {
             data-testid="copy-attempt-diagnostics"
             @click="copyAttemptDiagnostics(event)"
           >
-            {{ copiedDiagnosticEventId === event.event_id ? '已複製' : '複製診斷 JSON' }}
+            {{ copyDiagnosticLabel(event) }}
           </button>
         </details>
       </div>
