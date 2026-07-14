@@ -45,6 +45,7 @@ class TranscriptProjector:
             "human-message": "主席發言",
             "human-directed-message": "主席追問",
             "human-correction": "主席訂正",
+            "meeting-goal-changed": "主席修改會議目標",
             "meeting-closed": "會議結案",
             "meeting-cancelled": "會議取消",
             "meeting-reopened": "重新開啟會議",

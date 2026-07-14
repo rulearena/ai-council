@@ -1,0 +1,58 @@
+# 主席操作與逐一爭點法院流程
+
+Status: implemented / awaiting acceptance
+
+Canonical backlog: `spec.md` §15 #87
+
+## 產品價值
+
+讓 Human Owner 以「主席」身分從單一入口控制會議，不必猜測一般發言、指定追問與流程推進的差異；法院模式則以可確認的爭點逐一攻防，避免一次把整案塞給模型而失焦。
+
+## 核准契約
+
+1. 主席 composer 以明確 audience/action 下拉統一補充、全體回應與 mode/backend 支援的指定角色回答；parallel 不顯示不支援的單一角色選項。
+2. title/goal 建立後可編輯；一般 mode 的 goal 變更只影響未來 prompt，已有 AI output 時需確認並追加 audit event。courtroom goal 只允許在 docket 確認前修改，確認後唯讀；title 在非執行中仍可修改。
+3. 「系統設定」與「流程操作」分工；移除模糊且依隱藏狀態變動的「繼續討論」。
+4. 法院 meeting 必須先取得、編修並確認爭點清單。
+5. 每個爭點依 Prosecutor → Defense → Prosecutor rebuttal 攻防，之後停下等待主席；Judge 只在主席送交後作成 issue ruling。
+6. 每個 ruling 後停下，主席手動選擇下一爭點；全部 issue ruled 後才可 final verdict。
+7. 舊 courtroom meeting 不改寫歷史，但下一次執行前同樣受 issue setup gate。
+8. 非 courtroom modes 行為不變。
+
+## Source of Truth
+
+- `metadata.courtroom_docket`: 主席可編修、排序與確認的 issue definitions、revision 與 confirmed marker。
+- `events.jsonl`: issue attack/defense/rebuttal、主席指示、issue ruling、final verdict 與 goal change audit。
+- `goal`: 全案最終裁判問題；`current_issue` 只限制當次攻防焦點，不取代 goal。
+- final readiness 必須由 confirmed issue roster 與 append-only completed ruling events 投影，不以 frontend memory 判斷。
+
+## 相容與禁止事項
+
+- 不批次回填或重寫舊 metadata/events。
+- 不讓 issue draft 自動變成 confirmed roster。
+- 不在 chairman note 模式呼叫模型。
+- 不讓「全體回應」或 generic start 在 courtroom 繞過 issue gate。
+- 不在 confirmed courtroom docket 上修改 goal 或隱含建立新版 docket。
+- 不改變非 courtroom mode 的既有 step IDs、runner semantics 或 output schema。
+- 所有 runtime/test data 留在 worktree `.scratch/`，不得使用 `/tmp`。
+
+## TDD seams
+
+- HTTP: meeting details、courtroom issue lifecycle、非法 transition、legacy courtroom gate。
+- Runner: issue-scoped prompts/events、issue ruling、final verdict gating與 retry linkage。
+- Frontend domain: chairman action option/label、courtroom phase/action projection、meeting edit guards。
+- Playwright: unified composer、edit title/goal、settings naming、issue draft edit/confirm、逐點停止/next/final、reload recovery。
+
+## 完成條件
+
+- 每張 ticket 以 TDD 完成並有單一目的 commit。
+- Standards 與 Spec 兩軸獨立 review 均通過。
+- Backend full suite、frontend unit、build、完整 Chromium e2e 與 direct browser smoke 通過。
+- merge main 後標記 `implemented / awaiting acceptance` 並清理 worktree/branch/runtime。
+
+## 實作結果（2026-07-15）
+
+- Standards 與 Spec 雙軸獨立 review 最終均 PASS；前幾輪發現的 transition race、retry false-success、final retry UX 與 stale E2E 均已關閉。
+- 最終 gates：backend 345 passed、frontend unit 35 passed、production build 通過、Chromium 77 passed。
+- 非 test runner 的 direct Chromium smoke 完整走過兩爭點、主席定向追問、title/goal 規則、逐點裁定、final verdict 與 reload recovery。
+- 所有 test/runtime 均使用 worktree `.scratch/` 並已清理；未呼叫外部 provider。

@@ -7,20 +7,24 @@ import { roleDisplayName, statusDisplayLabel, stepDisplayLabel } from '../presen
 const store = inject(councilKey)!
 const {
   chairMessage,
+  chairmanAction,
+  chairmanActionFeedback,
+  chairmanOptions,
+  chairmanPresentation,
+  primaryAction,
   selectedMeeting,
   isTerminalMeeting,
+  isMeetingRunning,
   loading,
   canRun,
   startButtonLabel,
   selectedSequencePresetId,
   error,
   operationStatus,
-  showContinueHint,
   failedRole,
   currentStepProgress,
-  sendChairMessage,
+  submitChairmanAction,
   startOrContinueMeeting,
-  startSelectedMeeting,
   cancelSelectedMeeting,
   closeSelectedMeeting,
   reopenSelectedMeeting,
@@ -77,6 +81,13 @@ const lastStepLabel = computed(() => {
   const event = meeting?.events?.at(-1)
   return event ? stepDisplayLabel(activeMode.value, participants.value, event) : ''
 })
+const canSubmitChairman = computed(() => {
+  if (!selectedMeeting.value || isTerminalMeeting.value || isMeetingRunning.value || loading.value || !chairMessage.value.trim()) return false
+  if (chairmanAction.value === 'note') return true
+  if (failedRole.value) return false
+  if (chairmanAction.value === 'all') return canRun.value && !primaryAction.value.disabled
+  return canRun.value
+})
 </script>
 
 <template>
@@ -129,30 +140,41 @@ const lastStepLabel = computed(() => {
     </p>
 
     <div class="action-bar-row">
+      <label class="chairman-action-select">
+        主席動作
+        <select
+          v-model="chairmanAction"
+          data-testid="chairman-action-select"
+          :disabled="loading || !selectedMeeting || isTerminalMeeting || isMeetingRunning"
+        >
+          <option v-for="option in chairmanOptions" :key="option.value" :value="option.value">
+            {{ option.label }}
+          </option>
+        </select>
+      </label>
       <textarea
         v-model="chairMessage"
         data-testid="chair-message-input"
         aria-label="主席發言"
-        placeholder="向議會提問或補充限制…"
-        :disabled="loading || !selectedMeeting || isTerminalMeeting"
+        :placeholder="chairmanPresentation.placeholder"
+        :disabled="loading || !selectedMeeting || isTerminalMeeting || isMeetingRunning"
       />
       <button
         type="button"
         class="btn btn-primary"
         data-testid="send-chair-message-button"
-        @click="sendChairMessage"
-        :disabled="loading || !selectedMeeting || isTerminalMeeting || !chairMessage.trim()"
+        @click="submitChairmanAction"
+        :disabled="!canSubmitChairman"
       >
-        送出主席發言
+        {{ chairmanPresentation.submitLabel }}
       </button>
-      <span v-if="showContinueHint" class="continue-hint" data-testid="continue-hint">請議會回應 →</span>
       <button
+        v-if="selectedMeeting?.mode_id !== 'courtroom'"
         type="button"
         class="btn btn-primary action-bar-cta"
-        :class="{ 'action-bar-cta-hint': showContinueHint }"
         data-testid="start-meeting-button"
         @click="startOrContinueMeeting"
-        :disabled="loading || !canRun || !!failedRole"
+        :disabled="loading || !canRun || !!failedRole || primaryAction.disabled"
         :title="failedStepTitle"
       >
         {{ startButtonLabel }}
@@ -160,18 +182,16 @@ const lastStepLabel = computed(() => {
       <div class="advanced-options">
         <button
           type="button"
-          class="btn btn-ghost btn-icon"
-          aria-label="進階選項"
+          class="btn btn-secondary"
+          aria-label="流程操作"
           data-testid="advanced-options-button"
           @click="advancedOpen = !advancedOpen"
         >
-          <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-            <circle cx="12" cy="12" r="3" />
-            <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
-          </svg>
+          流程操作 ⋯
         </button>
         <div v-if="advancedOpen" class="advanced-options-panel" data-testid="advanced-options-panel">
-          <section class="sequence-panel" data-testid="role-sequence-controls">
+          <strong>流程操作</strong>
+          <section v-if="sequencePresets.length && selectedMeeting?.mode_id !== 'courtroom'" class="sequence-panel" data-testid="role-sequence-controls">
             <label>
               自動接續
               <select v-model="selectedSequencePresetId" data-testid="sequence-preset-select">
@@ -185,24 +205,13 @@ const lastStepLabel = computed(() => {
               class="btn btn-secondary"
               data-testid="run-sequence-button"
               @click="requestSelectedRoleSequence"
-              :disabled="loading || !canRun"
+              :disabled="loading || !canRun || !!failedRole"
+              :title="failedStepTitle"
             >
               執行序列
             </button>
           </section>
-          <section class="new-round-panel" data-testid="new-round-panel">
-            <button
-              type="button"
-              class="btn btn-secondary"
-              data-testid="start-new-round-button"
-              @click="startSelectedMeeting"
-              :disabled="loading || !canRun || !!failedRole"
-              :title="failedStepTitle"
-            >
-              開始新回合
-            </button>
-            <small>重新跑完整流程：{{ roundStepsSummary }}</small>
-          </section>
+          <small v-if="roundStepsSummary && selectedMeeting?.mode_id !== 'courtroom'">回合流程：{{ roundStepsSummary }}</small>
           <div class="advanced-options-actions">
             <button
               type="button"
@@ -235,5 +244,8 @@ const lastStepLabel = computed(() => {
         </div>
       </div>
     </div>
+    <p v-if="chairmanActionFeedback" class="success" data-testid="chairman-action-feedback">
+      {{ chairmanActionFeedback }}
+    </p>
   </footer>
 </template>

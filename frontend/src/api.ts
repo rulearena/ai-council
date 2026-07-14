@@ -55,6 +55,36 @@ export type Meeting = {
   participants: MeetingParticipant[]
   case_files?: CaseFile[]
   events?: MeetingEvent[]
+  courtroom: CourtroomProjection | null
+}
+
+export type CourtroomIssueProjection = {
+  id: string
+  title: string
+  position: number
+  status: 'pending' | 'arguments-in-progress' | 'awaiting-ruling' | 'ruled' | 'failed'
+  failed_step_id?: string
+  failed_phase?: 'charge' | 'defense' | 'rebuttal' | 'ruling'
+  failure_kind?: 'parse_error' | 'timeout' | 'adapter_error' | 'configuration_error' | 'interrupted'
+  ruling?: CourtroomRuling
+}
+
+export type CourtroomRuling = {
+  outcome: 'proponent-wins' | 'respondent-wins' | 'partially-upheld' | 'insufficient-evidence'
+  reasoning: string
+  evidence_refs: string[]
+  unresolved_questions: string[]
+}
+
+export type CourtroomProjection = {
+  schema_version: number
+  revision: number
+  status: 'not-configured' | 'draft' | 'confirmed'
+  issues: CourtroomIssueProjection[]
+  current_issue_id: string | null
+  final_status: 'not-ready' | 'ready' | 'failed' | 'completed'
+  failed_step_id?: string
+  available_actions: string[]
 }
 
 export type CaseFile = {
@@ -135,6 +165,14 @@ export type MeetingEvent = {
     | 'directed-role-instruction'
     | 'directed-role-response'
     | 'role-sequence-response'
+    | 'meeting-goal-changed'
+    | 'courtroom-issue-draft'
+    | 'courtroom-issue-phase'
+    | 'courtroom-final-verdict'
+    | 'courtroom-operation-reservation'
+  docket_revision?: number
+  issue_id?: string
+  issue_phase?: 'charge' | 'defense' | 'rebuttal' | 'ruling'
   target_role_id?: string
   in_response_to_event_id?: string
   directed_sequence?: number
@@ -342,6 +380,34 @@ export async function getMeeting(meetingId: string): Promise<Meeting> {
 
 export async function startMeeting(meetingId: string): Promise<void> {
   await postJson(`/meetings/${meetingId}/start`, {})
+}
+
+export async function draftCourtroomIssues(meetingId: string, revision: number): Promise<void> {
+  await postJson(`/meetings/${meetingId}/courtroom/issues/draft`, { revision })
+}
+
+export async function replaceCourtroomIssues(
+  meetingId: string,
+  revision: number,
+  issues: Array<{ id?: string; title: string }>,
+): Promise<Meeting> {
+  return putJson(`/meetings/${meetingId}/courtroom/issues`, { revision, issues })
+}
+
+export async function confirmCourtroomIssues(meetingId: string, revision: number): Promise<Meeting> {
+  return postJson(`/meetings/${meetingId}/courtroom/issues/confirm`, { revision })
+}
+
+export async function runCourtroomIssueArguments(meetingId: string, issueId: string): Promise<void> {
+  await postJson(`/meetings/${meetingId}/courtroom/issues/${encodeURIComponent(issueId)}/arguments`, {})
+}
+
+export async function runCourtroomIssueRuling(meetingId: string, issueId: string): Promise<void> {
+  await postJson(`/meetings/${meetingId}/courtroom/issues/${encodeURIComponent(issueId)}/ruling`, {})
+}
+
+export async function runCourtroomFinalVerdict(meetingId: string): Promise<void> {
+  await postJson(`/meetings/${meetingId}/courtroom/final-verdict`, {})
 }
 
 export async function cancelMeeting(meetingId: string): Promise<void> {

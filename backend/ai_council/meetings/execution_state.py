@@ -30,6 +30,10 @@ class ActiveExecutionState(TypedDict):
     in_response_to_event_id: NotRequired[str]
     sequence: NotRequired[int]
     sequence_index: NotRequired[int]
+    docket_revision: NotRequired[int]
+    issue_id: NotRequired[str]
+    issue_phase: NotRequired[str]
+    courtroom_operation: NotRequired[str]
 
 
 class MeetingExecutionStateStore:
@@ -112,6 +116,10 @@ def interrupted_execution_event(state: ActiveExecutionState) -> dict[str, object
         "in_response_to_event_id",
         "sequence",
         "sequence_index",
+        "docket_revision",
+        "issue_id",
+        "issue_phase",
+        "courtroom_operation",
         "adapter",
         "prompt_messages",
         "started_at",

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import os
 import threading
 import urllib.parse
@@ -24,6 +25,12 @@ from ai_council.meetings.execution_state import (
     MeetingExecutionStateStore,
     interrupted_execution_event,
 )
+from ai_council.meetings.courtroom import (
+    CourtroomWorkflowError,
+    CourtroomWorkflowService,
+    project_courtroom,
+)
+from ai_council.meetings.coordination import MeetingTransitionCoordinator
 from ai_council.meetings.assignments import (
     AssignmentValidationError,
     MeetingModelAssignments,
@@ -40,6 +47,7 @@ from ai_council.meetings.repository import MeetingRepository
 from ai_council.meetings.runner import (
     CASE_FILES_BY_ROLE_INPUT,
     CASE_FILES_DEFAULT_ROLE,
+    latest_unresolved_fixed_relay_failure,
     MeetingRunner,
     RunnerAdapters,
     TokenStreamEvent,
@@ -70,6 +78,7 @@ from ai_council.prompting.schemas import (
 
 MODEL_TEST_PROMPT = 'Return {"summary":"OK","arguments":[],"risks":[],"recommendation":"OK"}'
 CHINESE_DIGITS = "零一二三四五六七八九"
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -152,6 +161,20 @@ class UpdateMeetingDetailsRequest(BaseModel):
         if not stripped:
             raise ValueError("must not be blank")
         return stripped
+
+
+class CourtroomIssueRequest(BaseModel):
+    id: str | None = None
+    title: str
+
+
+class ReplaceCourtroomIssuesRequest(BaseModel):
+    revision: int = Field(ge=0)
+    issues: list[CourtroomIssueRequest]
+
+
+class CourtroomRevisionRequest(BaseModel):
+    revision: int = Field(ge=0)
 
 
 class StartMeetingRequest(BaseModel):
@@ -279,6 +302,7 @@ def create_app(
     data_path = Path(data_dir)
     metadata_store = MeetingMetadataStore(data_path)
     repository = MeetingRepository(data_path)
+    courtroom_workflow = CourtroomWorkflowService(metadata_store, repository)
     execution_state_store = MeetingExecutionStateStore(data_path)
     model_repository = ModelConfigRepository(model_config_path)
     meeting_assignments = MeetingModelAssignments(
@@ -312,6 +336,7 @@ def create_app(
     recover_interrupted_executions(repository, execution_state_store)
     projector = TranscriptProjector()
     jobs = MeetingJobManager()
+    meeting_transitions = MeetingTransitionCoordinator()
     model_health = ModelHealthCheckStore()
     model_health_checker = ModelHealthChecker(model_repository, model_adapters, model_health)
     model_write_lock = threading.Lock()
@@ -557,17 +582,229 @@ def create_app(
             "case_files": project_case_files(repository.read_case_files(meeting_id)),
         }
 
+    @app.put("/meetings/{meeting_id}/courtroom/issues")
+    @meeting_transitions.synchronized
+    def replace_courtroom_issues(
+        meeting_id: str,
+        request: ReplaceCourtroomIssuesRequest,
+    ) -> dict[str, Any]:
+        reject_running_meeting(jobs, meeting_id)
+        reject_terminal_meeting(repository, meeting_id)
+        try:
+            metadata = courtroom_workflow.replace_issues(
+                meeting_id,
+                expected_revision=request.revision,
+                requested_issues=[issue.model_dump() for issue in request.issues],
+            )
+        except CourtroomWorkflowError as error:
+            raise HTTPException(status_code=error.status_code, detail=error.detail) from error
+        return project_meeting_summary(
+            metadata,
+            repository.read_events(meeting_id),
+            mode=meeting_mode(mode_catalog, metadata),
+            model_pricing=model_pricing_by_id(model_repository),
+            meeting_assignments=meeting_assignments,
+        )
+
+    @app.post("/meetings/{meeting_id}/courtroom/issues/confirm")
+    @meeting_transitions.synchronized
+    def confirm_courtroom_issues(
+        meeting_id: str,
+        request: CourtroomRevisionRequest,
+    ) -> dict[str, Any]:
+        reject_running_meeting(jobs, meeting_id)
+        reject_terminal_meeting(repository, meeting_id)
+        try:
+            metadata = courtroom_workflow.confirm_issues(
+                meeting_id,
+                expected_revision=request.revision,
+            )
+        except CourtroomWorkflowError as error:
+            raise HTTPException(status_code=error.status_code, detail=error.detail) from error
+        return project_meeting_summary(
+            metadata,
+            repository.read_events(meeting_id),
+            mode=meeting_mode(mode_catalog, metadata),
+            model_pricing=model_pricing_by_id(model_repository),
+            meeting_assignments=meeting_assignments,
+        )
+
+    @app.post("/meetings/{meeting_id}/courtroom/issues/draft", status_code=202)
+    @meeting_transitions.synchronized
+    def draft_courtroom_issues(
+        meeting_id: str,
+        request: CourtroomRevisionRequest,
+    ) -> dict[str, str]:
+        metadata, mode, models, inputs = courtroom_operation_context(
+            meeting_id,
+            metadata_store=metadata_store,
+            repository=repository,
+            mode_catalog=mode_catalog,
+            meeting_assignments=meeting_assignments,
+        )
+        try:
+            courtroom_workflow.validate_draft(metadata, request.revision)
+        except CourtroomWorkflowError as error:
+            raise HTTPException(status_code=error.status_code, detail=error.detail) from error
+        if not jobs.start(
+            meeting_id,
+            lambda: courtroom_workflow.generate_draft(
+                meeting_id,
+                expected_revision=request.revision,
+                goal=str(metadata["goal"]),
+                model_assignments=models,
+                inputs=inputs,
+                runner=runner,
+            ),
+        ):
+            raise HTTPException(status_code=409, detail="Meeting is already running")
+        return {"status": "running"}
+
+    @app.post(
+        "/meetings/{meeting_id}/courtroom/issues/{issue_id}/arguments",
+        status_code=202,
+    )
+    @meeting_transitions.synchronized
+    def run_courtroom_issue_arguments(meeting_id: str, issue_id: str) -> dict[str, str]:
+        metadata, mode, models, inputs = courtroom_operation_context(
+            meeting_id,
+            metadata_store=metadata_store,
+            repository=repository,
+            mode_catalog=mode_catalog,
+            meeting_assignments=meeting_assignments,
+        )
+        try:
+            courtroom_workflow.validate_arguments(
+                metadata, repository.read_events(meeting_id), issue_id
+            )
+        except CourtroomWorkflowError as error:
+            raise HTTPException(status_code=error.status_code, detail=error.detail) from error
+        if not jobs.start(
+            meeting_id,
+            lambda: courtroom_workflow.run_arguments(
+                meeting_id,
+                issue_id=issue_id,
+                goal=str(metadata["goal"]),
+                model_assignments=models,
+                inputs=inputs,
+                runner=runner,
+            ),
+        ):
+            raise HTTPException(status_code=409, detail="Meeting is already running")
+        return {"status": "running"}
+
+    @app.post(
+        "/meetings/{meeting_id}/courtroom/issues/{issue_id}/ruling",
+        status_code=202,
+    )
+    @meeting_transitions.synchronized
+    def run_courtroom_issue_ruling(meeting_id: str, issue_id: str) -> dict[str, str]:
+        metadata, mode, models, inputs = courtroom_operation_context(
+            meeting_id,
+            metadata_store=metadata_store,
+            repository=repository,
+            mode_catalog=mode_catalog,
+            meeting_assignments=meeting_assignments,
+        )
+        try:
+            courtroom_workflow.validate_ruling(
+                metadata, repository.read_events(meeting_id), issue_id
+            )
+        except CourtroomWorkflowError as error:
+            raise HTTPException(status_code=error.status_code, detail=error.detail) from error
+        if not jobs.start(
+            meeting_id,
+            lambda: courtroom_workflow.run_ruling(
+                meeting_id,
+                issue_id=issue_id,
+                goal=str(metadata["goal"]),
+                model_assignments=models,
+                inputs=inputs,
+                runner=runner,
+            ),
+        ):
+            raise HTTPException(status_code=409, detail="Meeting is already running")
+        return {"status": "running"}
+
+    @app.post("/meetings/{meeting_id}/courtroom/final-verdict", status_code=202)
+    @meeting_transitions.synchronized
+    def run_courtroom_final_verdict(meeting_id: str) -> dict[str, str]:
+        metadata, mode, models, inputs = courtroom_operation_context(
+            meeting_id,
+            metadata_store=metadata_store,
+            repository=repository,
+            mode_catalog=mode_catalog,
+            meeting_assignments=meeting_assignments,
+        )
+        try:
+            courtroom_workflow.validate_final(metadata, repository.read_events(meeting_id))
+        except CourtroomWorkflowError as error:
+            raise HTTPException(status_code=error.status_code, detail=error.detail) from error
+        if not jobs.start(
+            meeting_id,
+            lambda: courtroom_workflow.run_final_verdict(
+                meeting_id,
+                goal=str(metadata["goal"]),
+                model_assignments=models,
+                inputs=inputs,
+                runner=runner,
+            ),
+        ):
+            raise HTTPException(status_code=409, detail="Meeting is already running")
+        return {"status": "running"}
+
     @app.put("/meetings/{meeting_id}/details")
+    @meeting_transitions.synchronized
     def update_meeting_details(
         meeting_id: str,
         request: UpdateMeetingDetailsRequest,
     ) -> dict[str, Any]:
+        reject_running_meeting(jobs, meeting_id)
+        current_metadata = metadata_store.get(meeting_id)
+        current_docket = current_metadata.get("courtroom_docket")
+        if (
+            current_metadata.get("mode_id") == "courtroom"
+            and isinstance(current_docket, dict)
+            and current_docket.get("confirmed")
+            and request.goal != current_metadata.get("goal")
+        ):
+            raise HTTPException(
+                status_code=409,
+                detail="Courtroom goal is read-only after issues are confirmed",
+            )
+        prior_events = repository.read_events(meeting_id)
+        previous_goal = current_metadata.get("goal")
+
         def replace_details(current: dict[str, Any]) -> dict[str, Any]:
             updated = {**current, "title": request.title, "goal": request.goal}
             updated.pop("topic", None)
             return updated
 
         metadata = metadata_store.update(meeting_id, replace_details)
+        if request.goal != previous_goal and any(
+            event.get("role") not in {"Human", "System"}
+            and event.get("status") == "completed"
+            for event in prior_events
+        ):
+            repository.append_event(
+                meeting_id,
+                {
+                    "event_id": f"{meeting_id}:goal-changed:{uuid.uuid4().hex}",
+                    "meeting_id": meeting_id,
+                    "step_id": "meeting-goal-changed",
+                    "role": "Human",
+                    "attempt": 1,
+                    "status": "completed",
+                    "interaction_type": "meeting-goal-changed",
+                    "previous_goal": previous_goal,
+                    "goal": request.goal,
+                    "content": (
+                        "主席修改會議目標\n"
+                        f"舊目標：{previous_goal}\n"
+                        f"新目標：{request.goal}"
+                    ),
+                },
+            )
         events = repository.read_events(meeting_id)
         mode = meeting_mode(mode_catalog, metadata)
         return project_meeting_summary(
@@ -580,7 +817,9 @@ def create_app(
         )
 
     @app.put("/meetings/{meeting_id}/tags")
+    @meeting_transitions.synchronized
     def update_meeting_tags(meeting_id: str, request: UpdateMeetingTagsRequest) -> dict[str, Any]:
+        reject_running_meeting(jobs, meeting_id)
         metadata = metadata_store.update(
             meeting_id,
             lambda current: {**current, "tags": request.tags},
@@ -600,10 +839,12 @@ def create_app(
         )
 
     @app.put("/meetings/{meeting_id}/pinned")
+    @meeting_transitions.synchronized
     def update_meeting_pinned(
         meeting_id: str,
         request: UpdateMeetingPinnedRequest,
     ) -> dict[str, Any]:
+        reject_running_meeting(jobs, meeting_id)
         metadata = metadata_store.update(
             meeting_id,
             lambda current: {**current, "pinned": request.pinned},
@@ -623,10 +864,12 @@ def create_app(
         )
 
     @app.put("/meetings/{meeting_id}/participant-models")
+    @meeting_transitions.synchronized
     def update_participant_models(
         meeting_id: str,
         request: UpdateParticipantModelsRequest,
     ) -> dict[str, Any]:
+        reject_running_meeting(jobs, meeting_id)
         metadata = metadata_store.get(meeting_id)
         mode = meeting_mode(mode_catalog, metadata)
         role_ids = [
@@ -649,11 +892,17 @@ def create_app(
         )
 
     @app.post("/meetings/{meeting_id}/start", status_code=202)
+    @meeting_transitions.synchronized
     def start_meeting(meeting_id: str, request: StartMeetingRequest) -> dict[str, str]:
         metadata = metadata_store.get(meeting_id)
         require_meeting_goal(metadata)
         reject_terminal_meeting(repository, meeting_id)
         mode = meeting_mode(mode_catalog, metadata)
+        if mode.id == "courtroom":
+            raise HTTPException(
+                status_code=409,
+                detail="Use the courtroom issue workflow to start arguments",
+            )
         model_assignments = resolved_meeting_models(
             meeting_assignments,
             metadata,
@@ -673,20 +922,28 @@ def create_app(
         return {"status": "running"}
 
     @app.post("/meetings/{meeting_id}/cancel")
+    @meeting_transitions.synchronized
     def cancel_meeting(meeting_id: str) -> dict[str, str]:
         metadata_store.get(meeting_id)
         runner.cancel(meeting_id)
         return {"status": "cancelled"}
 
     @app.post("/meetings/{meeting_id}/close")
+    @meeting_transitions.synchronized
     def close_meeting(meeting_id: str) -> dict[str, str]:
         metadata_store.get(meeting_id)
         runner.close(meeting_id)
         return {"status": "closed"}
 
     @app.post("/meetings/{meeting_id}/reopen")
+    @meeting_transitions.synchronized
     def reopen_meeting(meeting_id: str) -> dict[str, str]:
         metadata_store.get(meeting_id)
+        if jobs.is_running(meeting_id):
+            raise HTTPException(
+                status_code=409,
+                detail="Meeting is still finishing its background job",
+            )
         event = {
             "event_id": f"{meeting_id}:reopened:{uuid.uuid4().hex}",
             "meeting_id": meeting_id,
@@ -699,6 +956,7 @@ def create_app(
         return {"status": "open"}
 
     @app.delete("/meetings/{meeting_id}", status_code=204)
+    @meeting_transitions.synchronized
     def delete_meeting(meeting_id: str) -> Response:
         metadata_store.get(meeting_id)
         if jobs.is_running(meeting_id):
@@ -707,10 +965,12 @@ def create_app(
         return Response(status_code=204)
 
     @app.post("/meetings/{meeting_id}/messages")
+    @meeting_transitions.synchronized
     def add_meeting_message(
         meeting_id: str,
         request: AddMeetingMessageRequest,
     ) -> dict[str, Any]:
+        reject_running_meeting(jobs, meeting_id)
         metadata_store.get(meeting_id)
         reject_terminal_meeting(repository, meeting_id)
         event = {
@@ -726,11 +986,13 @@ def create_app(
         return event
 
     @app.post("/meetings/{meeting_id}/messages/{event_id}/correct")
+    @meeting_transitions.synchronized
     def correct_meeting_message(
         meeting_id: str,
         event_id: str,
         request: CorrectMeetingMessageRequest,
     ) -> dict[str, Any]:
+        reject_running_meeting(jobs, meeting_id)
         metadata_store.get(meeting_id)
         reject_terminal_meeting(repository, meeting_id)
         original_event = next(
@@ -758,82 +1020,243 @@ def create_app(
         repository.append_event(meeting_id, correction)
         return correction
 
-    @app.post("/meetings/{meeting_id}/roles/{role}/respond")
-    def respond_as_role(
+    def directed_response_context(
         meeting_id: str,
         role: str,
-        request: DirectedRoleResponseRequest,
-    ) -> dict[str, str]:
+    ) -> tuple[
+        dict[str, Any],
+        ModeDefinition,
+        list[Any],
+        str,
+        dict[str, ModelConfig],
+        dict[str, Any],
+        dict[str, object],
+    ]:
         metadata = metadata_store.get(meeting_id)
         require_meeting_goal(metadata)
         reject_terminal_meeting(repository, meeting_id)
         mode = meeting_mode(mode_catalog, metadata)
         if mode.category != "relay":
-            raise HTTPException(status_code=400, detail=f"Mode does not support directed responses: {mode.id}")
+            raise HTTPException(
+                status_code=400,
+                detail=f"Mode does not support directed responses: {mode.id}",
+            )
+        plan = relay_plan(mode)
+        events = repository.read_events(meeting_id)
+        directed_context: dict[str, object] = {}
+        if mode.id == "courtroom":
+            courtroom = courtroom_workflow.project(metadata, events)
+            if (
+                courtroom is None
+                or courtroom.get("status") != "confirmed"
+                or "directed-response" not in courtroom.get("available_actions", [])
+                or not courtroom.get("current_issue_id")
+            ):
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        "Directed courtroom responses are only available after the current "
+                        "issue arguments complete and before its ruling"
+                    ),
+                )
+            directed_context = {
+                "docket_revision": int(courtroom["revision"]),
+                "issue_id": str(courtroom["current_issue_id"]),
+            }
+        else:
+            failed = latest_unresolved_fixed_relay_failure(events, plan)
+            if failed is not None:
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        f"Retry failed relay step before requesting a directed response: "
+                        f"{failed.get('step_id')}"
+                    ),
+                )
         participants = project_participants(mode, metadata)
         participant = next(
             (item for item in participants if item["role_id"] == role),
             None,
         )
+        if participant is None:
+            raise HTTPException(status_code=400, detail=f"Unknown role: {role}")
         role_definition = next((item for item in mode.roles if item.id == role), None)
         role_display_name = str(
-            (participant or {}).get("display_name")
-            or (participant or {}).get("name")
+            participant.get("display_name")
+            or participant.get("name")
             or (role_definition.name if role_definition is not None else role)
         )
-        try:
+        return (
+            metadata,
+            mode,
+            plan,
+            role_display_name,
+            resolved_meeting_models(meeting_assignments, metadata, mode),
+            meeting_inputs_for_runner(metadata, repository.read_case_files(meeting_id)),
+            directed_context,
+        )
+
+    def record_stale_courtroom_operation(
+        meeting_id: str,
+        *,
+        operation: str,
+        error: Exception,
+    ) -> None:
+        repository.append_event(
+            meeting_id,
+            {
+                "event_id": f"{meeting_id}:courtroom-operation:{uuid.uuid4().hex}",
+                "meeting_id": meeting_id,
+                "step_id": "courtroom-operation",
+                "role": "System",
+                "attempt": 1,
+                "status": "failed",
+                "interaction_type": "courtroom-operation-failure",
+                "courtroom_operation": operation,
+                "failure_kind": "stale_transition",
+                "error": str(error),
+            },
+        )
+
+    def perform_role_response(
+        meeting_id: str,
+        role: str,
+        request: DirectedRoleResponseRequest,
+    ) -> Any:
+        reject_running_meeting(jobs, meeting_id)
+        metadata, mode, plan, role_display_name, model_assignments, inputs, directed_context = (
+            directed_response_context(meeting_id, role)
+        )
+
+        def run_directed_response() -> None:
+            if mode.id == "courtroom":
+                try:
+                    with meeting_transitions.guard(meeting_id):
+                        (
+                            fresh_metadata,
+                            _fresh_mode,
+                            fresh_plan,
+                            fresh_role_display_name,
+                            fresh_model_assignments,
+                            fresh_inputs,
+                            fresh_directed_context,
+                        ) = directed_response_context(meeting_id, role)
+                except Exception as error:
+                    record_stale_courtroom_operation(
+                        meeting_id,
+                        operation="directed-response",
+                        error=error,
+                    )
+                    return
+                runner.respond_as_role(
+                    meeting_id=meeting_id,
+                    goal=fresh_metadata["goal"],
+                    role=role,
+                    role_display_name=fresh_role_display_name,
+                    instruction=request.instruction,
+                    model_assignments=fresh_model_assignments,
+                    plan=fresh_plan,
+                    inputs=fresh_inputs,
+                    context_fields=fresh_directed_context,
+                )
+                return
             runner.respond_as_role(
                 meeting_id=meeting_id,
                 goal=metadata["goal"],
                 role=role,
                 role_display_name=role_display_name,
                 instruction=request.instruction,
-                model_assignments=resolved_meeting_models(
-                    meeting_assignments,
-                    metadata,
-                    mode,
-                ),
-                plan=relay_plan(mode),
-                inputs=meeting_inputs_for_runner(metadata, repository.read_case_files(meeting_id)),
+                model_assignments=model_assignments,
+                plan=plan,
+                inputs=inputs,
+                context_fields=directed_context,
             )
-        except ValueError as error:
-            raise HTTPException(status_code=400, detail=str(error)) from error
-        return {"status": project_activity_status(repository.read_events(meeting_id))}
 
-    @app.post("/meetings/{meeting_id}/sequences")
+        if not jobs.start(meeting_id, run_directed_response):
+            raise HTTPException(status_code=409, detail="Meeting is already running")
+        return JSONResponse(status_code=202, content={"status": "running"})
+
+    @app.post("/meetings/{meeting_id}/roles/{role}/respond", status_code=202)
+    def respond_as_role(
+        meeting_id: str,
+        role: str,
+        request: DirectedRoleResponseRequest,
+    ) -> Any:
+        with meeting_transitions.guard(meeting_id):
+            return perform_role_response(meeting_id, role, request)
+
+    @app.post("/meetings/{meeting_id}/sequences", status_code=202)
+    @meeting_transitions.synchronized
     def respond_as_sequence(
         meeting_id: str,
         request: RunRoleSequenceRequest,
     ) -> dict[str, str]:
+        reject_running_meeting(jobs, meeting_id)
         metadata = metadata_store.get(meeting_id)
         require_meeting_goal(metadata)
         reject_terminal_meeting(repository, meeting_id)
         mode = meeting_mode(mode_catalog, metadata)
+        if mode.id == "courtroom":
+            raise HTTPException(
+                status_code=409,
+                detail="Role sequences cannot bypass the courtroom issue workflow",
+            )
         if mode.category != "relay":
             raise HTTPException(status_code=400, detail=f"Mode does not support role sequences: {mode.id}")
-        try:
-            runner.respond_as_sequence(
+        plan = relay_plan(mode)
+        failed = latest_unresolved_fixed_relay_failure(
+            repository.read_events(meeting_id),
+            plan,
+        )
+        if failed is not None:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"Retry failed relay step before running a role sequence: "
+                    f"{failed.get('step_id')}"
+                ),
+            )
+        if not request.roles:
+            raise HTTPException(status_code=400, detail="Role sequence cannot be empty")
+        if len(set(request.roles)) != len(request.roles):
+            raise HTTPException(
+                status_code=400,
+                detail="Role sequence cannot contain duplicate roles",
+            )
+        model_assignments = resolved_meeting_models(
+            meeting_assignments,
+            metadata,
+            mode,
+        )
+        for role in request.roles:
+            if role not in plan.directed_steps:
+                raise HTTPException(status_code=400, detail=f"Unknown role: {role}")
+            if role not in model_assignments:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Missing model assignment for role: {role}",
+                )
+        inputs = meeting_inputs_for_runner(metadata, repository.read_case_files(meeting_id))
+        if not jobs.start(
+            meeting_id,
+            lambda: runner.respond_as_sequence(
                 meeting_id=meeting_id,
                 goal=metadata["goal"],
                 roles=request.roles,
-                model_assignments=resolved_meeting_models(
-                    meeting_assignments,
-                    metadata,
-                    mode,
-                ),
-                plan=relay_plan(mode),
-                inputs=meeting_inputs_for_runner(metadata, repository.read_case_files(meeting_id)),
-            )
-        except ValueError as error:
-            raise HTTPException(status_code=400, detail=str(error)) from error
-        return {"status": project_activity_status(repository.read_events(meeting_id))}
+                model_assignments=model_assignments,
+                plan=plan,
+                inputs=inputs,
+            ),
+        ):
+            raise HTTPException(status_code=409, detail="Meeting is already running")
+        return {"status": "running"}
 
-    @app.post("/meetings/{meeting_id}/steps/{step_id}/retry")
-    def retry_step(
+    def perform_step_retry(
         meeting_id: str,
         step_id: str,
         request: StartMeetingRequest,
-    ) -> dict[str, str]:
+    ) -> Any:
+        reject_running_meeting(jobs, meeting_id)
         metadata = metadata_store.get(meeting_id)
         require_meeting_goal(metadata)
         reject_terminal_meeting(repository, meeting_id)
@@ -852,29 +1275,234 @@ def create_app(
             )
             for participant in participants
         }
-        try:
+        if mode.id != "courtroom":
+            retry_events = repository.read_events(meeting_id)
+            retry_matching = [
+                event for event in retry_events if event.get("step_id") == step_id
+            ]
+            retry_failed = retry_matching[-1] if retry_matching else None
+            if retry_failed is None or retry_failed.get("status") != "failed":
+                raise HTTPException(status_code=400, detail=f"Step is not failed: {step_id}")
+            retry_base_step_id = str(
+                retry_failed.get("base_step_id", retry_failed.get("step_id"))
+            )
             if mode.category == "relay":
-                runner.retry_failed_step(
+                plan = relay_plan(mode)
+                if (
+                    retry_failed.get("interaction_type") != "directed-role-response"
+                    and retry_base_step_id not in {step.step_id for step in plan.steps}
+                ):
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"Step is not part of this meeting's mode: {retry_base_step_id}",
+                    )
+            else:
+                plan = parallel_plan(mode, project_participants(mode, metadata))
+                if retry_base_step_id not in {member.step_id for member in plan.members}:
+                    raise HTTPException(
+                        status_code=400,
+                        detail=(
+                            "Step is not part of this meeting's parallel fanout: "
+                            f"{retry_base_step_id}"
+                        ),
+                    )
+        retry_events = repository.read_events(meeting_id)
+        retry_matching = [event for event in retry_events if event.get("step_id") == step_id]
+        retry_failed = retry_matching[-1] if retry_matching else None
+        if (
+            retry_failed is not None
+            and retry_failed.get("interaction_type") == "directed-role-response"
+        ):
+            retry_role = str(retry_failed.get("role", ""))
+            if retry_role not in model_assignments:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Missing model assignment for role: {retry_role}",
+                )
+            instruction_event_id = str(
+                retry_failed.get("in_response_to_event_id", "")
+            )
+            instruction_event = next(
+                (
+                    event
+                    for event in retry_events
+                    if event.get("event_id") == instruction_event_id
+                ),
+                None,
+            )
+            if (
+                not instruction_event_id
+                or instruction_event is None
+                or instruction_event.get("interaction_type")
+                != "directed-role-instruction"
+                or instruction_event.get("role") != "Human"
+                or instruction_event.get("status") != "completed"
+                or instruction_event.get("target_role_id") != retry_role
+                or not str(instruction_event.get("content", "")).strip()
+            ):
+                raise HTTPException(
+                    status_code=400,
+                    detail="Directed response instruction is unavailable for retry",
+                )
+        try:
+            if mode.id == "courtroom":
+                events = repository.read_events(meeting_id)
+                matching = [event for event in events if event.get("step_id") == step_id]
+                failed = matching[-1] if matching else None
+                if failed is None or failed.get("status") != "failed":
+                    raise CourtroomWorkflowError(f"Step is not failed: {step_id}", 400)
+                interaction_type = failed.get("interaction_type")
+                retry_inputs = meeting_inputs_for_runner(
+                    metadata, repository.read_case_files(meeting_id)
+                )
+                if interaction_type in {
+                    "courtroom-issue-draft",
+                    "courtroom-issue-phase",
+                    "courtroom-final-verdict",
+                }:
+                    def operation() -> None:
+                        courtroom_workflow.retry_failed_step(
+                            meeting_id,
+                            step_id=step_id,
+                            goal=metadata["goal"],
+                            model_assignments=model_assignments,
+                            inputs=retry_inputs,
+                            runner=runner,
+                        )
+                elif interaction_type == "directed-role-response":
+                    courtroom = courtroom_workflow.project(metadata, events)
+                    if (
+                        courtroom is None
+                        or courtroom.get("status") != "confirmed"
+                        or "directed-response" not in courtroom.get("available_actions", [])
+                        or failed.get("docket_revision") != courtroom.get("revision")
+                        or failed.get("issue_id") != courtroom.get("current_issue_id")
+                    ):
+                        raise CourtroomWorkflowError(
+                            "Directed response retry does not belong to the current courtroom issue"
+                        )
+                    def operation() -> None:
+                        try:
+                            with meeting_transitions.guard(meeting_id):
+                                fresh_metadata = metadata_store.get(meeting_id)
+                                require_meeting_goal(fresh_metadata)
+                                reject_terminal_meeting(repository, meeting_id)
+                                fresh_mode = meeting_mode(mode_catalog, fresh_metadata)
+                                if fresh_mode.id != "courtroom":
+                                    raise CourtroomWorkflowError(
+                                        "Directed response retry is only available in courtroom mode"
+                                    )
+                                fresh_events = repository.read_events(meeting_id)
+                                fresh_matching = [
+                                    event
+                                    for event in fresh_events
+                                    if event.get("step_id") == step_id
+                                ]
+                                fresh_failed = fresh_matching[-1] if fresh_matching else None
+                                fresh_courtroom = courtroom_workflow.project(
+                                    fresh_metadata,
+                                    fresh_events,
+                                )
+                                if (
+                                    fresh_failed is None
+                                    or fresh_failed.get("status") != "failed"
+                                    or fresh_failed.get("interaction_type")
+                                    != "directed-role-response"
+                                    or fresh_courtroom is None
+                                    or fresh_courtroom.get("status") != "confirmed"
+                                    or "directed-response"
+                                    not in fresh_courtroom.get("available_actions", [])
+                                    or fresh_failed.get("docket_revision")
+                                    != fresh_courtroom.get("revision")
+                                    or fresh_failed.get("issue_id")
+                                    != fresh_courtroom.get("current_issue_id")
+                                ):
+                                    raise CourtroomWorkflowError(
+                                        "Directed response retry does not belong to the current "
+                                        "courtroom issue"
+                                    )
+                                fresh_participants = project_participants(
+                                    fresh_mode,
+                                    fresh_metadata,
+                                )
+                                fresh_role_display_names = {
+                                    str(participant["role_id"]): str(
+                                        participant.get("display_name")
+                                        or participant.get("name")
+                                        or participant["role_id"]
+                                    )
+                                    for participant in fresh_participants
+                                }
+                                fresh_model_assignments = resolved_meeting_models(
+                                    meeting_assignments,
+                                    fresh_metadata,
+                                    fresh_mode,
+                                )
+                                fresh_inputs = meeting_inputs_for_runner(
+                                    fresh_metadata,
+                                    repository.read_case_files(meeting_id),
+                                )
+                        except Exception as error:
+                            record_stale_courtroom_operation(
+                                meeting_id,
+                                operation="directed-response-retry",
+                                error=error,
+                            )
+                            return
+                        runner.retry_failed_step(
+                            meeting_id=meeting_id,
+                            step_id=step_id,
+                            goal=fresh_metadata["goal"],
+                            model_assignments=fresh_model_assignments,
+                            plan=relay_plan(fresh_mode),
+                            inputs=fresh_inputs,
+                            role_display_names=fresh_role_display_names,
+                        )
+                else:
+                    raise CourtroomWorkflowError(f"Step is not failed: {step_id}", 400)
+                if not jobs.start(meeting_id, operation):
+                    raise CourtroomWorkflowError("Meeting is already running")
+                return JSONResponse(status_code=202, content={"status": "running"})
+            retry_inputs = meeting_inputs_for_runner(
+                metadata,
+                repository.read_case_files(meeting_id),
+            )
+            if mode.category == "relay":
+                operation = lambda: runner.retry_failed_step(
                     meeting_id=meeting_id,
                     step_id=step_id,
                     goal=metadata["goal"],
                     model_assignments=model_assignments,
-                    plan=relay_plan(mode),
-                    inputs=meeting_inputs_for_runner(metadata, repository.read_case_files(meeting_id)),
+                    plan=plan,
+                    inputs=retry_inputs,
                     role_display_names=role_display_names,
                 )
             else:
-                runner.retry_failed_parallel_step(
+                operation = lambda: runner.retry_failed_parallel_step(
                     meeting_id=meeting_id,
                     step_id=step_id,
                     goal=metadata["goal"],
                     model_assignments=model_assignments,
-                    plan=parallel_plan(mode, project_participants(mode, metadata)),
-                    inputs=meeting_inputs_for_runner(metadata, repository.read_case_files(meeting_id)),
+                    plan=plan,
+                    inputs=retry_inputs,
                 )
+            if not jobs.start(meeting_id, operation):
+                raise HTTPException(status_code=409, detail="Meeting is already running")
+            return JSONResponse(status_code=202, content={"status": "running"})
+        except CourtroomWorkflowError as error:
+            raise HTTPException(status_code=error.status_code, detail=error.detail) from error
         except ValueError as error:
             raise HTTPException(status_code=400, detail=str(error)) from error
         return {"status": project_activity_status(repository.read_events(meeting_id))}
+
+    @app.post("/meetings/{meeting_id}/steps/{step_id}/retry", status_code=202)
+    def retry_step(
+        meeting_id: str,
+        step_id: str,
+        request: StartMeetingRequest,
+    ) -> Any:
+        with meeting_transitions.guard(meeting_id):
+            return perform_step_retry(meeting_id, step_id, request)
 
     @app.get("/meetings/{meeting_id}/transcript.md")
     def get_transcript(meeting_id: str) -> PlainTextResponse:
@@ -1427,6 +2055,31 @@ def resolved_meeting_models(
         raise HTTPException(status_code=400, detail=str(error)) from error
 
 
+def courtroom_operation_context(
+    meeting_id: str,
+    *,
+    metadata_store: MeetingMetadataStore,
+    repository: MeetingRepository,
+    mode_catalog: ModeCatalogRepository,
+    meeting_assignments: MeetingModelAssignments,
+) -> tuple[dict[str, Any], ModeDefinition, dict[str, ModelConfig], dict[str, Any]]:
+    metadata = metadata_store.get(meeting_id)
+    require_meeting_goal(metadata)
+    reject_terminal_meeting(repository, meeting_id)
+    mode = meeting_mode(mode_catalog, metadata)
+    if mode.id != "courtroom":
+        raise HTTPException(
+            status_code=400,
+            detail="Courtroom workflow is only available for courtroom meetings",
+        )
+    return (
+        metadata,
+        mode,
+        resolved_meeting_models(meeting_assignments, metadata, mode),
+        meeting_inputs_for_runner(metadata, repository.read_case_files(meeting_id)),
+    )
+
+
 def get_model(repository: ModelConfigRepository, model_id: str) -> ModelConfig:
     try:
         models = repository.list_models()
@@ -1561,6 +2214,11 @@ def reject_terminal_meeting(repository: MeetingRepository, meeting_id: str) -> N
         raise HTTPException(status_code=409, detail=f"Meeting is terminal: {status}")
 
 
+def reject_running_meeting(jobs: MeetingJobManager, meeting_id: str) -> None:
+    if jobs.is_running(meeting_id):
+        raise HTTPException(status_code=409, detail="Meeting is already running")
+
+
 def meeting_title(metadata: dict[str, Any]) -> str:
     title = metadata.get("title")
     if isinstance(title, str) and title.strip():
@@ -1597,6 +2255,7 @@ def transcript_presentation_labels(
     human_steps = {
         "human-message": "主席發言",
         "human-correction": "主席訂正",
+        "meeting-goal-changed": "主席修改會議目標",
         "meeting-closed": "會議結案",
         "meeting-cancelled": "會議取消",
         "meeting-reopened": "重新開啟會議",
@@ -1744,6 +2403,12 @@ def project_activity_status_for_mode(
     latest_event = events[-1]
     if latest_event.get("interaction_type") in {"directed-role-response", "role-sequence-response"}:
         return "completed"
+    if mode.id == "courtroom" and latest_event.get("interaction_type") in {
+        "courtroom-issue-draft",
+        "courtroom-issue-phase",
+        "courtroom-final-verdict",
+    }:
+        return projected
     if mode.category == "parallel":
         base_step_id = str(latest_event.get("base_step_id", latest_event.get("step_id", "")))
         return "completed" if base_step_id == "synthesis" else "running"
@@ -1790,6 +2455,7 @@ def project_meeting_summary(
             events=events,
         ),
         "case_files": case_file_manifest(metadata.get("case_files") or []),
+        "courtroom": project_courtroom(metadata, events),
     }
 
 
@@ -2002,6 +2668,11 @@ class MeetingJobManager:
             return future is not None and not future.done()
 
     def _finish(self, meeting_id: str, completed: Future[None]) -> None:
+        if not completed.cancelled() and completed.exception() is not None:
+            logger.error(
+                "Background meeting job failed unexpectedly",
+                extra={"meeting_id": meeting_id},
+            )
         with self._lock:
             if self._running.get(meeting_id) is completed:
                 self._running.pop(meeting_id, None)

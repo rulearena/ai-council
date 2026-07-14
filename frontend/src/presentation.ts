@@ -21,7 +21,13 @@ export type PresentationEvent = {
     | 'directed-role-instruction'
     | 'directed-role-response'
     | 'role-sequence-response'
+    | 'courtroom-issue-draft'
+    | 'courtroom-issue-phase'
+    | 'courtroom-final-verdict'
+    | 'courtroom-operation-reservation'
+    | 'meeting-goal-changed'
   target_role_id?: string
+  issue_phase?: 'charge' | 'defense' | 'rebuttal' | 'ruling'
   status?: string
 }
 
@@ -70,6 +76,17 @@ export function interactionDisplayLabel(
   }
   if (event.interaction_type === 'directed-role-response') return `${roleName}回應主席追問`
   if (event.interaction_type === 'role-sequence-response') return `${roleName}依序回應`
+  if (event.interaction_type === 'meeting-goal-changed') return '主席修改會議目標'
+  if (event.interaction_type === 'courtroom-issue-draft') return '法官提出爭點草稿'
+  if (event.interaction_type === 'courtroom-final-verdict') return '法官作成最終判決'
+  if (event.interaction_type === 'courtroom-issue-phase') {
+    return ({
+      charge: '檢察官提出爭點主張',
+      defense: '辯護律師針對爭點答辯',
+      rebuttal: '檢察官針對爭點反駁',
+      ruling: '法官作成爭點裁定',
+    } as Record<string, string>)[event.issue_phase ?? ''] ?? '爭點審理'
+  }
   return null
 }
 

@@ -59,7 +59,7 @@ watch(
 </script>
 
 <template>
-  <Modal :show="show" title="設定" test-id="settings-modal" close-test-id="settings-close-button" @close="$emit('close')">
+  <Modal :show="show" title="系統設定" test-id="settings-modal" close-test-id="settings-close-button" @close="$emit('close')">
     <div class="settings-tabs">
       <button
         type="button"

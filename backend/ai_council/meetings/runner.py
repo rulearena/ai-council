@@ -65,6 +65,35 @@ class RelayPlan:
     directed_steps: dict[str, StepDefinition]
 
 
+def latest_unresolved_fixed_relay_failure(
+    events: list[dict[str, object]],
+    plan: RelayPlan,
+) -> dict[str, object] | None:
+    step_ids = {step.step_id for step in plan.steps}
+    fixed_events = [
+        event
+        for event in events
+        if not event.get("interaction_type")
+        and str(event.get("base_step_id") or event.get("step_id")) in step_ids
+    ]
+    if not fixed_events:
+        return None
+    latest_round = max(int(event.get("round", 1)) for event in fixed_events)
+    latest_by_step: dict[str, dict[str, object]] = {}
+    for event in fixed_events:
+        if int(event.get("round", 1)) != latest_round:
+            continue
+        step_id = str(event.get("base_step_id") or event.get("step_id"))
+        previous = latest_by_step.get(step_id)
+        if previous is None or int(event.get("attempt", 1)) >= int(previous.get("attempt", 1)):
+            latest_by_step[step_id] = event
+    for step in plan.steps:
+        event = latest_by_step.get(step.step_id)
+        if event is not None and event.get("status") == "failed":
+            return event
+    return None
+
+
 @dataclass(frozen=True)
 class ParallelMemberStep:
     step_id: str
@@ -101,6 +130,36 @@ class MeetingRunner:
         self.execution_state_store = execution_state_store
         self.output_schemas = output_schemas or DEFAULT_OUTPUT_SCHEMA_REGISTRY
         self.transcript_projector = TranscriptProjector()
+
+    def run_workflow_step(
+        self,
+        *,
+        meeting_id: str,
+        goal: str,
+        model_assignments: dict[str, ModelConfig],
+        step: StepDefinition,
+        event_step_id: str,
+        inputs: dict[str, Any] | None = None,
+        extra_event_fields: dict[str, object] | None = None,
+        attempt: int = 1,
+    ) -> bool:
+        """Run one explicitly identified domain-workflow step.
+
+        The caller owns transition legality; the runner owns prompt, attempt,
+        diagnostics, execution reservation, parsing, and append-only output.
+        """
+        return self._run_step(
+            meeting_id=meeting_id,
+            goal=goal,
+            model_assignments=model_assignments,
+            inputs=inputs,
+            step=step,
+            attempt=attempt,
+            round_number=1,
+            event_step_id=event_step_id,
+            extra_event_fields=extra_event_fields,
+            prior_transcript_override=None,
+        )
 
     def start(
         self,
@@ -229,6 +288,11 @@ class MeetingRunner:
                 "interaction_type": "directed-role-response",
                 "directed_sequence": int(failed_event.get("directed_sequence", 1)),
                 "in_response_to_event_id": instruction_event_id,
+                **{
+                    key: failed_event[key]
+                    for key in ("docket_revision", "issue_id")
+                    if key in failed_event
+                },
             },
             prior_transcript_override=None,
         )
@@ -244,6 +308,7 @@ class MeetingRunner:
         model_assignments: dict[str, ModelConfig],
         plan: RelayPlan,
         inputs: dict[str, str] | None = None,
+        context_fields: dict[str, object] | None = None,
     ) -> None:
         if self._is_terminal(meeting_id):
             return
@@ -256,6 +321,7 @@ class MeetingRunner:
         if role not in model_assignments:
             raise ValueError(f"Missing model assignment for role: {role}")
         directed_sequence = self._next_directed_response_number(meeting_id)
+        context_fields = context_fields or {}
         instruction_event_id = f"{meeting_id}:human-directed-message:{uuid.uuid4().hex}"
         self.repository.append_event(
             meeting_id,
@@ -269,6 +335,7 @@ class MeetingRunner:
                 "interaction_type": "directed-role-instruction",
                 "target_role_id": role,
                 "content": instruction,
+                **context_fields,
             },
         )
         directed_step = StepDefinition(
@@ -297,6 +364,7 @@ class MeetingRunner:
                 "interaction_type": "directed-role-response",
                 "directed_sequence": directed_sequence,
                 "in_response_to_event_id": instruction_event_id,
+                **context_fields,
             },
             prior_transcript_override=None,
         )
@@ -987,6 +1055,10 @@ class MeetingRunner:
             "in_response_to_event_id",
             "sequence",
             "sequence_index",
+            "docket_revision",
+            "issue_id",
+            "issue_phase",
+            "courtroom_operation",
         ]:
             value = extra_event_fields.get(key)
             if isinstance(value, (str, int)):

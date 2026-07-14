@@ -14,6 +14,8 @@ from typing import Callable, TypedDict
 
 from ai_council.models.config import ModelConfig
 from ai_council.prompting.schemas import (
+    COURTROOM_ISSUE_DRAFT_V1_ID,
+    COURTROOM_RULING_V1_ID,
     DEFAULT_OUTPUT_SCHEMA_ID,
     STRUCTURED_VERDICT_V1_ID,
 )
@@ -69,7 +71,20 @@ class MockModelAdapter:
         delay_ms = request.model_config.extra_body.get("mock_delay_ms", 0)
         if isinstance(delay_ms, (int, float)) and delay_ms > 0:
             time.sleep(delay_ms / 1000)
-        payload = (
+        mock_error = request.model_config.extra_body.get("mock_error")
+        if isinstance(mock_error, str) and mock_error:
+            raise AdapterError(mock_error)
+        if request.output_schema_id == COURTROOM_ISSUE_DRAFT_V1_ID:
+            payload = {"issues": [{"title": "Mock generated issue"}]}
+        elif request.output_schema_id == COURTROOM_RULING_V1_ID:
+            payload = {
+                "outcome": "partially-upheld",
+                "reasoning": "Mock issue ruling",
+                "evidence_refs": _visible_case_file_anchors(request.prompt)[:1],
+                "unresolved_questions": [],
+            }
+        else:
+            payload = (
             {
                 "summary": "Mock verdict",
                 "decision": "approve-with-conditions",
@@ -97,7 +112,7 @@ class MockModelAdapter:
                 "risks": [],
                 "recommendation": "Use this response for tests.",
             }
-        )
+            )
         return ModelResponse(raw_output=json.dumps(payload, ensure_ascii=False))
 
 

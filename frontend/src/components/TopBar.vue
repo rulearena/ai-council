@@ -1,9 +1,44 @@
 <script setup lang="ts">
-import { inject } from 'vue'
+import { computed, inject, ref, watch } from 'vue'
 import { councilKey } from '../composables/useCouncil'
+import { meetingEditPolicy } from '../chairmanActions'
 
 const store = inject(councilKey)!
-const { selectedMeeting, meetingInfoCopied, copyMeetingInfo } = store
+const {
+  selectedMeeting,
+  meetingInfoCopied,
+  copyMeetingInfo,
+  updateSelectedMeetingDetails,
+  isMeetingRunning,
+  events,
+  loading,
+} = store
+const editingDetails = ref(false)
+const editTitle = ref('')
+const editGoal = ref('')
+const editPolicy = computed(() => meetingEditPolicy({
+  modeId: selectedMeeting.value?.mode_id ?? '',
+  activityStatus: selectedMeeting.value?.activity_status ?? 'idle',
+  courtroomStatus: selectedMeeting.value?.courtroom?.status ?? null,
+  hasAiOutput: events.value.some((event) => !['Human', 'System'].includes(event.role) && event.status === 'completed'),
+}))
+
+watch(() => selectedMeeting.value?.meeting_id, () => {
+  editingDetails.value = false
+})
+
+function openDetailsEditor() {
+  if (!selectedMeeting.value || loading.value || !editPolicy.value.canEdit) return
+  editTitle.value = selectedMeeting.value.title
+  editGoal.value = selectedMeeting.value.goal ?? ''
+  editingDetails.value = true
+}
+
+async function saveDetails() {
+  if (await updateSelectedMeetingDetails(editTitle.value, editGoal.value)) {
+    editingDetails.value = false
+  }
+}
 
 defineEmits<{
   'open-settings': []
@@ -36,6 +71,16 @@ defineEmits<{
           </svg>
           {{ meetingInfoCopied ? '已複製' : '複製' }}
         </button>
+        <button
+          type="button"
+          class="btn btn-secondary btn-sm"
+          data-testid="edit-meeting-details-button"
+          :disabled="loading || !editPolicy.canEdit"
+          :title="isMeetingRunning ? '會議執行中無法修改資訊' : '編輯會議名稱與目標'"
+          @click="openDetailsEditor"
+        >
+          編輯會議資訊
+        </button>
       </template>
     </div>
     <div class="top-bar-right">
@@ -63,7 +108,7 @@ defineEmits<{
         data-testid="settings-button"
         @click="$emit('open-settings')"
       >
-        設定
+        系統設定
       </button>
       <button
         type="button"
@@ -82,5 +127,28 @@ defineEmits<{
         新增會議
       </button>
     </div>
+    <section v-if="editingDetails" class="meeting-details-editor" data-testid="meeting-details-editor">
+      <label>
+        會議名稱
+        <input v-model="editTitle" data-testid="meeting-title-input" :disabled="loading || !editPolicy.canEdit" />
+      </label>
+      <label>
+        AI 最終目標
+        <textarea
+          v-model="editGoal"
+          data-testid="meeting-goal-input"
+          :readonly="editPolicy.goalReadonly"
+          :disabled="loading || !editPolicy.canEdit"
+        />
+        <small v-if="editPolicy.goalReadonly">爭點已確認，為保持裁定基準一致，目標已設為唯讀。</small>
+        <small v-else-if="editPolicy.confirmGoalChange">修改目標只影響後續 AI 回應，儲存前會再次確認。</small>
+      </label>
+      <div class="meeting-details-editor-actions">
+        <button type="button" class="btn btn-primary btn-sm" data-testid="save-meeting-details-button" :disabled="loading || !editPolicy.canEdit || !editTitle.trim() || !editGoal.trim()" @click="saveDetails">
+          儲存會議資訊
+        </button>
+        <button type="button" class="btn btn-secondary btn-sm" :disabled="loading" @click="editingDetails = false">取消</button>
+      </div>
+    </section>
   </header>
 </template>

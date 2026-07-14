@@ -6,6 +6,17 @@ import { DEFAULT_MODE_ID, getModeById, refreshModeCatalog, type ModeDefinition, 
 import { applyModeScene } from '../scenes'
 import { roleDisplayName } from '../presentation'
 import {
+  chairmanActionBlockReason,
+  chairmanActionOptions,
+  chairmanActionPresentation,
+  executeChairmanAction,
+  projectFixedRoundFailedRole,
+  projectPrimaryAction,
+  requestRoleSequenceWithFailureGuard,
+  runWithPendingRoles,
+  type PrimaryAction,
+} from '../chairmanActions'
+import {
   ApiError,
   addMeetingMessage,
   cancelMeeting,
@@ -21,6 +32,9 @@ import {
   requestRoleSequence,
   reopenMeeting,
   retryStep,
+  runCourtroomFinalVerdict,
+  runCourtroomIssueArguments,
+  runCourtroomIssueRuling,
   startMeeting,
   subscribeMeetingEvents,
   testModel,
@@ -240,6 +254,8 @@ export function useCouncil() {
   const selectedModels = ref<Record<CouncilRole, string>>({})
   const modelTestResults = ref<Record<CouncilRole, ModelTestView>>({})
   const chairMessage = ref('')
+  const chairmanAction = ref('note')
+  const chairmanActionFeedback = ref('')
   const selectedSequencePresetId = ref(sequencePresets.value[0]?.id ?? '')
   const meetingSearch = ref('')
   const statusFilter = ref<'all' | Meeting['status']>('all')
@@ -278,11 +294,6 @@ export function useCouncil() {
   // speech bubble even though the backend has no "speaking" concept of its own.
   const chairmanSpeaking = ref(false)
   let chairmanSpeakingTimeout: ReturnType<typeof setTimeout> | null = null
-
-  // True right after a chair message is sent while the meeting is sitting idle, so the
-  // action bar can nudge the user toward "繼續討論" / running a sequence next. Cleared
-  // by any actual role action (see clearContinueHint), not by a timer.
-  const showContinueHint = ref(false)
 
   // Drives activeModeSource (module-level, see top of file) from whichever meeting is
   // currently selected - the whole point of slice B's mode system: the active mode
@@ -354,10 +365,38 @@ export function useCouncil() {
     return lifecycleEvent?.status === 'closed' || lifecycleEvent?.status === 'cancelled'
   })
   const isMeetingRunning = computed(() => selectedMeeting.value?.activity_status === 'running')
-  const startButtonLabel = computed(() => {
-    if (isMeetingRunning.value) return '執行中...'
-    return events.value.length ? '繼續討論' : '開始審議'
-  })
+  // A failed role step must be retried before any new AI batch. The backend cannot
+  // advance that fixed round through generic /start, so every AI composer path shares
+  // this gate while plain chairman notes remain available.
+  const failedRole = computed<CouncilRole | null>(() => projectFixedRoundFailedRole(
+    activeMode.value.steps ?? [],
+    events.value,
+  ))
+  const primaryAction = computed<PrimaryAction>(() => projectPrimaryAction({
+    modeId: selectedMeeting.value?.mode_id ?? activeMode.value.id,
+    steps: activeMode.value.steps ?? [],
+    participants: selectedMeeting.value?.participants ?? [],
+    events: events.value,
+    courtroom: selectedMeeting.value?.courtroom ?? null,
+  }))
+  const chairmanOptions = computed(() => chairmanActionOptions({
+    modeId: selectedMeeting.value?.mode_id ?? activeMode.value.id,
+    modeCategory: activeMode.value.category,
+    participants: selectedMeeting.value?.participants ?? [],
+    courtroom: selectedMeeting.value?.courtroom ?? null,
+    nextActionLabel: primaryAction.value.label,
+    failedRole: failedRole.value,
+  }))
+  watch(chairmanOptions, (options) => {
+    if (!options.some((option) => option.value === chairmanAction.value)) {
+      chairmanAction.value = options[0]?.value ?? 'note'
+    }
+  }, { immediate: true })
+  const chairmanPresentation = computed(() => chairmanActionPresentation(
+    chairmanAction.value,
+    selectedMeeting.value?.participants ?? [],
+  ))
+  const startButtonLabel = computed(() => isMeetingRunning.value ? '執行中…' : primaryAction.value.label)
   const selectedSequencePreset = computed(
     () =>
       sequencePresets.value.find((preset) => preset.id === selectedSequencePresetId.value) ??
@@ -423,17 +462,6 @@ export function useCouncil() {
       !isMeetingRunning.value &&
       councilRoles.value.every((role) => selectedModels.value[role]),
   )
-  // The role whose latest event is a failure, if any. Both /start and /sequences are a
-  // known silent no-op once a step has failed (confirmed against the real backend: it
-  // returns 200 "running" but appends zero events and never clears activity_status -
-  // see runner.py's _first_incomplete_step_index returning None for a non-completed
-  // latest event). Retrying the specific step via retrySelectedStep is the only way
-  // forward, so callers use this to disable the round-level actions and point the user
-  // at the failed seat instead of letting them hit that trap.
-  const failedRole = computed<CouncilRole | null>(
-    () => councilRoles.value.find((role) => roleSeatStatus(role) === 'failed') ?? null,
-  )
-
   // Relay step-progress display (spec.md 16.6: "第 2 步／共 4 步：紅軍質詢中"), derived
   // purely from mode.steps + pendingRoles - display-only, and deliberately does not
   // drive any runtime behavior (the actual queue logic - applyPendingRoleUpdates et al -
@@ -556,7 +584,7 @@ export function useCouncil() {
     if (meetingId !== selectedMeeting.value?.meeting_id) {
       pendingRoles.value = []
       meetingInfoCopied.value = false
-      showContinueHint.value = false
+      chairmanActionFeedback.value = ''
       seenEventIds = new Set()
     }
     selectedMeeting.value = await getMeeting(meetingId)
@@ -574,32 +602,77 @@ export function useCouncil() {
 
   async function updateSelectedMeetingDetails(nextTitle: string, nextGoal: string) {
     if (!selectedMeeting.value || !nextTitle.trim() || !nextGoal.trim()) return false
+    if (isMeetingRunning.value) return false
+    const previousMeeting = selectedMeeting.value
+    const goalChanged = nextGoal.trim() !== previousMeeting.goal
+    if (
+      goalChanged &&
+      previousMeeting.mode_id === 'courtroom' &&
+      previousMeeting.courtroom?.status === 'confirmed'
+    ) return false
+    const hasAiOutput = events.value.some((event) =>
+      !['Human', 'System'].includes(event.role) && event.status === 'completed',
+    )
+    if (
+      goalChanged &&
+      hasAiOutput &&
+      !window.confirm('修改目標只會影響後續 AI 回應，既有發言不會重新產生。確定修改？')
+    ) return false
     const meetingId = selectedMeeting.value.meeting_id
     return runAction(async () => {
-      selectedMeeting.value = await updateMeetingDetails(meetingId, nextTitle, nextGoal)
+      await updateMeetingDetails(meetingId, nextTitle.trim(), nextGoal.trim())
+      selectedMeeting.value = await getMeeting(meetingId)
       meetings.value = await getMeetings()
     })
   }
 
   function clearContinueHint() {
-    showContinueHint.value = false
+    chairmanActionFeedback.value = ''
   }
 
-  // The action bar's single primary CTA. Calling /start again once the latest fixed
-  // round is already fully complete is a known no-op trap on the backend (it only
-  // resumes an in-progress round or auto-advances into a *fresh* one - see runner.py's
-  // start()); running the currently-selected sequence preset instead gives an actual,
-  // lighter-weight way to keep the discussion going without silently doing nothing.
+  // The action bar consumes one explicit projection for both its label and behavior.
+  // A completed ordinary round starts a new fixed round; courtroom actions always use
+  // their dedicated issue endpoint and can never fall through to generic /start.
   async function startOrContinueMeeting() {
-    if (isFixedRoundComplete.value) {
-      await requestSelectedRoleSequence()
-    } else {
-      await startSelectedMeeting()
-    }
+    await executePrimaryAction()
   }
 
-  async function startSelectedMeeting() {
-    if (!selectedMeeting.value || !canRun.value) return
+  async function executePrimaryAction(): Promise<boolean> {
+    if (!selectedMeeting.value || !canRun.value || primaryAction.value.disabled) return false
+    if (primaryAction.value.kind === 'start-round') {
+      return startSelectedMeeting()
+    }
+    const meetingId = selectedMeeting.value.meeting_id
+    const action = primaryAction.value
+    if (action.kind === 'courtroom-retry' && action.stepId) {
+      const failed = [...events.value].reverse().find(
+        (event) => event.step_id === action.stepId && event.status === 'failed',
+      )
+      return failed ? retrySelectedStep(failed) : false
+    }
+    const queuedRoles = action.kind === 'courtroom-arguments'
+      ? ['Prosecutor', 'Defense', 'Prosecutor']
+      : ['Judge']
+    return runWithPendingRoles(pendingRoles.value, queuedRoles, () => {
+      connectMeetingEvents(meetingId)
+      return runAction(async () => {
+        if (action.kind === 'courtroom-arguments' && action.issueId) {
+          await runCourtroomIssueArguments(meetingId, action.issueId)
+        } else if (action.kind === 'courtroom-ruling' && action.issueId) {
+          await runCourtroomIssueRuling(meetingId, action.issueId)
+        } else if (action.kind === 'courtroom-final') {
+          await runCourtroomFinalVerdict(meetingId)
+        }
+        if (selectedMeeting.value?.meeting_id === meetingId) {
+          selectedMeeting.value = { ...selectedMeeting.value, activity_status: 'running' }
+        }
+        void refreshMeetingUntilSettled(meetingId)
+      })
+    })
+  }
+
+  async function startSelectedMeeting(): Promise<boolean> {
+    if (!selectedMeeting.value || !canRun.value) return false
     clearContinueHint()
     const meetingId = selectedMeeting.value.meeting_id
     // The active mode's full step roster, in order (was a literal ['Blue','Red','Blue',
@@ -612,13 +685,15 @@ export function useCouncil() {
             ...activeModeRoles.value.filter((role) => role.kind === 'synthesizer').map((role) => role.id),
           ]
         : (activeModeSource.value.steps ?? []).map((step) => step.role)
-    pendingRoles.value.push(...queuedRoles)
-    connectMeetingEvents(meetingId)
-    await runAction(async () => {
-      await startMeeting(meetingId)
-      if (selectedMeeting.value?.meeting_id === meetingId) {
-        selectedMeeting.value = { ...selectedMeeting.value, activity_status: 'running' }
-      }
+    return runWithPendingRoles(pendingRoles.value, queuedRoles, () => {
+      connectMeetingEvents(meetingId)
+      return runAction(async () => {
+        await startMeeting(meetingId)
+        if (selectedMeeting.value?.meeting_id === meetingId) {
+          selectedMeeting.value = { ...selectedMeeting.value, activity_status: 'running' }
+        }
+        void refreshMeetingUntilSettled(meetingId)
+      })
     })
   }
 
@@ -683,10 +758,37 @@ export function useCouncil() {
     try {
       transcript.value = await getTranscript(meetingId)
       if (activityStatus !== 'running') {
+        const refreshedMeeting = await getMeeting(meetingId)
+        if (selectedMeeting.value?.meeting_id === meetingId) {
+          selectedMeeting.value = refreshedMeeting
+        }
         meetings.value = await getMeetings()
       }
     } catch (caught) {
       error.value = caught instanceof Error ? caught.message : String(caught)
+    }
+  }
+
+  async function refreshMeetingUntilSettled(meetingId: string) {
+    // Completion events can be broadcast while the backend job still owns its running
+    // slot. Poll the read projection until that slot is released so workflow-only
+    // fields (courtroom status/actions/rulings) become visible without a page reload.
+    for (let attempt = 0; attempt < 3600; attempt += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 250))
+      if (selectedMeeting.value?.meeting_id !== meetingId) return
+      try {
+        const refreshed = await getMeeting(meetingId)
+        if (selectedMeeting.value?.meeting_id !== meetingId) return
+        if (refreshed.activity_status === 'running') continue
+        selectedMeeting.value = refreshed
+        transcript.value = await getTranscript(meetingId)
+        meetings.value = await getMeetings()
+        return
+      } catch (caught) {
+        if (selectedMeeting.value?.meeting_id !== meetingId) return
+        error.value = caught instanceof Error ? caught.message : String(caught)
+        return
+      }
     }
   }
 
@@ -847,9 +949,9 @@ export function useCouncil() {
     }
   }
 
-  async function sendChairMessage() {
-    if (!selectedMeeting.value || !chairMessage.value.trim()) return
-    await runAction(async () => {
+  async function sendChairMessage(): Promise<boolean> {
+    if (!selectedMeeting.value || !chairMessage.value.trim()) return false
+    const succeeded = await runAction(async () => {
       await addMeetingMessage(selectedMeeting.value!.meeting_id, chairMessage.value.trim())
       chairMessage.value = ''
       await openMeeting(selectedMeeting.value!.meeting_id)
@@ -858,12 +960,31 @@ export function useCouncil() {
       chairmanSpeakingTimeout = setTimeout(() => {
         chairmanSpeaking.value = false
       }, 2500)
-      // Nudge toward the next step only when the meeting is actually sitting idle
-      // waiting on the user - not while a role is already running.
-      if (!isMeetingRunning.value) {
-        showContinueHint.value = true
-      }
     })
+    return succeeded
+  }
+
+  async function submitChairmanAction(): Promise<boolean> {
+    const content = chairMessage.value.trim()
+    if (!selectedMeeting.value || !content || isMeetingRunning.value || isTerminalMeeting.value) return false
+    chairmanActionFeedback.value = ''
+    const blockedReason = chairmanActionBlockReason(
+      chairmanAction.value,
+      failedRole.value,
+      selectedMeeting.value.participants,
+    )
+    if (blockedReason) {
+      chairmanActionFeedback.value = blockedReason
+      return false
+    }
+    const succeeded = await executeChairmanAction(chairmanAction.value, content, {
+      appendNote: () => sendChairMessage(),
+      requestAll: () => executePrimaryAction(),
+      requestRole: (role, instruction) => requestSelectedRoleResponse(role, instruction),
+    })
+    if (succeeded && chairmanAction.value.startsWith('role:')) chairMessage.value = ''
+    if (succeeded) chairmanActionFeedback.value = chairmanPresentation.value.successMessage
+    return succeeded
   }
 
   async function correctSelectedMessage(event: MeetingEvent) {
@@ -880,42 +1001,67 @@ export function useCouncil() {
 
   async function requestSelectedRoleResponse(role: CouncilRole, instruction: string) {
     if (!selectedMeeting.value || !canRun.value || !instruction.trim()) return false
+    const blockedReason = chairmanActionBlockReason(
+      `role:${role}`,
+      failedRole.value,
+      selectedMeeting.value.participants,
+    )
+    if (blockedReason) {
+      error.value = blockedReason
+      chairmanActionFeedback.value = blockedReason
+      return false
+    }
     clearContinueHint()
-    pendingRoles.value.push(role)
-    return runAction(async () => {
-      await requestRoleResponse(selectedMeeting.value!.meeting_id, role, instruction.trim())
-      await openMeeting(selectedMeeting.value!.meeting_id)
-    })
+    const meetingId = selectedMeeting.value.meeting_id
+    return runWithPendingRoles(pendingRoles.value, [role], () => runAction(async () => {
+      await requestRoleResponse(meetingId, role, instruction.trim())
+      await openMeeting(meetingId)
+      void refreshMeetingUntilSettled(meetingId)
+    }))
   }
 
-  async function requestSelectedRoleSequence() {
+  async function requestSelectedRoleSequence(): Promise<boolean> {
     // selectedSequencePreset can be undefined when the active mode's roster can't build
     // any presets (fewer than 2 members, or no adjudicator - see sequencePresets above,
     // which returns []). Parallel modes deliberately have no sequence presets, so guard
     // against the TypeError up front.
-    if (!selectedMeeting.value || !canRun.value || !selectedSequencePreset.value) return
+    if (!selectedMeeting.value || !canRun.value || !selectedSequencePreset.value) return false
+    const meetingId = selectedMeeting.value.meeting_id
+    const roles = [...selectedSequencePreset.value.roles]
     clearContinueHint()
-    pendingRoles.value.push(...selectedSequencePreset.value.roles)
-    await runAction(async () => {
-      await requestRoleSequence(
-        selectedMeeting.value!.meeting_id,
-        selectedSequencePreset.value.roles,
-      )
-      await openMeeting(selectedMeeting.value!.meeting_id)
+    return requestRoleSequenceWithFailureGuard({
+      failedRole: failedRole.value,
+      participants: selectedMeeting.value.participants,
+      pendingRoles: pendingRoles.value,
+      queuedRoles: roles,
+      onBlocked: (reason) => {
+        error.value = reason
+        chairmanActionFeedback.value = reason
+      },
+      request: () => runAction(async () => {
+        await requestRoleSequence(meetingId, roles)
+        await openMeeting(meetingId)
+        void refreshMeetingUntilSettled(meetingId)
+      }),
     })
   }
 
-  async function retrySelectedStep(event: MeetingEvent) {
-    if (!selectedMeeting.value || !canRun.value || event.status !== 'failed') return
+  async function retrySelectedStep(event: MeetingEvent): Promise<boolean> {
+    if (!selectedMeeting.value || !canRun.value || event.status !== 'failed') return false
     clearContinueHint()
     const baseStepId = event.base_step_id ?? event.step_id
     const cascade = retryCascadeRoles(baseStepId)
     const remainingRoles = cascade.length ? cascade : isCouncilRole(event.role) ? [event.role] : []
-    pendingRoles.value.push(...remainingRoles)
-    await runAction(async () => {
-      await retryStep(selectedMeeting.value!.meeting_id, event.step_id)
-      await openMeeting(selectedMeeting.value!.meeting_id)
-    })
+    const meetingId = selectedMeeting.value.meeting_id
+    return runWithPendingRoles(
+      pendingRoles.value,
+      remainingRoles,
+      () => runAction(async () => {
+        await retryStep(meetingId, event.step_id)
+        await openMeeting(meetingId)
+        void refreshMeetingUntilSettled(meetingId)
+      }),
+    )
   }
 
   async function copyMeetingInfo(meeting: Meeting) {
@@ -1000,12 +1146,16 @@ export function useCouncil() {
     pendingRoles,
     meetingInfoCopied,
     chairmanSpeaking,
-    showContinueHint,
+    chairmanAction,
+    chairmanActionFeedback,
     // computed
     events,
     isTerminalMeeting,
     isMeetingRunning,
     startButtonLabel,
+    chairmanOptions,
+    chairmanPresentation,
+    primaryAction,
     selectedSequencePreset,
     operationStatus,
     filteredMeetings,
@@ -1022,6 +1172,7 @@ export function useCouncil() {
     createNewMeeting,
     clearMeetingCreationError,
     openMeeting,
+    refreshMeetingUntilSettled,
     updateSelectedMeetingDetails,
     startSelectedMeeting,
     startOrContinueMeeting,
@@ -1035,6 +1186,7 @@ export function useCouncil() {
     testSelectedModel,
     updateSelectedModel,
     sendChairMessage,
+    submitChairmanAction,
     correctSelectedMessage,
     requestSelectedRoleResponse,
     requestSelectedRoleSequence,

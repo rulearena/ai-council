@@ -106,6 +106,66 @@ class StructuredVerdictParser:
             raise OutputParseError(str(error), raw_output=raw_output) from error
 
 
+class CourtroomIssueDraftParser:
+    def parse(self, raw_output: str) -> dict[str, Any]:
+        try:
+            payload = json.loads(extract_first_json_object(raw_output))
+            if not isinstance(payload, dict):
+                raise TypeError("courtroom issue draft must be an object")
+            require_exact_keys(payload, {"issues"}, "courtroom issue draft")
+            issues = payload["issues"]
+            if not isinstance(issues, list) or not issues:
+                raise TypeError("issues must be a non-empty list")
+            normalized = []
+            for issue in issues:
+                if not isinstance(issue, dict):
+                    raise TypeError("courtroom issue must be an object")
+                require_exact_keys(issue, {"title"}, "courtroom issue")
+                title = require_string(issue, "title").strip()
+                if not title:
+                    raise ValueError("courtroom issue title must not be blank")
+                normalized.append({"title": title})
+            return {"issues": normalized}
+        except (json.JSONDecodeError, TypeError, KeyError, ValueError) as error:
+            raise OutputParseError(str(error), raw_output=raw_output) from error
+
+
+COURTROOM_RULING_OUTCOMES = {
+    "proponent-wins",
+    "respondent-wins",
+    "partially-upheld",
+    "insufficient-evidence",
+}
+
+
+class CourtroomRulingParser:
+    def parse(self, raw_output: str) -> dict[str, Any]:
+        try:
+            payload = json.loads(extract_first_json_object(raw_output))
+            if not isinstance(payload, dict):
+                raise TypeError("courtroom ruling must be an object")
+            require_exact_keys(
+                payload,
+                {"outcome", "reasoning", "evidence_refs", "unresolved_questions"},
+                "courtroom ruling",
+            )
+            outcome = require_string(payload, "outcome")
+            if outcome not in COURTROOM_RULING_OUTCOMES:
+                raise ValueError(f"Unknown courtroom ruling outcome: {outcome}")
+            evidence_refs = parse_strings(payload, "evidence_refs")
+            for evidence_ref in evidence_refs:
+                if EVIDENCE_REF_PATTERN.fullmatch(evidence_ref) is None:
+                    raise ValueError(f"Invalid evidence ref: {evidence_ref}")
+            return {
+                "outcome": outcome,
+                "reasoning": require_string(payload, "reasoning"),
+                "evidence_refs": evidence_refs,
+                "unresolved_questions": parse_strings(payload, "unresolved_questions"),
+            }
+        except (json.JSONDecodeError, TypeError, KeyError, ValueError) as error:
+            raise OutputParseError(str(error), raw_output=raw_output) from error
+
+
 def extract_first_json_object(raw_output: str) -> str:
     start = raw_output.find("{")
     if start == -1:
