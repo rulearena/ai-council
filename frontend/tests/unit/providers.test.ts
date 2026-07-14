@@ -304,6 +304,28 @@ test('model labels use provider and exact model id without exposing adapters', (
     'Subscription CLI · 由 command 決定（claude-subscription）',
   )
   assert.equal(
+    modelDisplayLabel({
+      id: 'claude-exact',
+      adapter: 'subscription-cli',
+      base_url: null,
+      model: null,
+      command: ['claude', '-p', '--model', 'claude-opus-4-1', '{prompt}'],
+      extra_body: { cli_provider: 'claude' },
+    }),
+    'Subscription CLI · Claude CLI · claude-opus-4-1',
+  )
+  assert.equal(
+    modelDisplayLabel({
+      id: 'legacy-subscription',
+      adapter: 'subscription-cli',
+      base_url: null,
+      model: null,
+      command: ['company-wrapper', '--stdin', '{prompt}'],
+      extra_body: {},
+    }),
+    'Subscription CLI · 由 command 決定（legacy-subscription）',
+  )
+  assert.equal(
     modelDisplayLabel({ id: 'mock-fast', adapter: 'mock', base_url: null, model: null }),
     'Mock · mock-fast',
   )

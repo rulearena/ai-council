@@ -2626,6 +2626,7 @@ test('model manager discovers and saves exact Anthropic and Gemini model IDs', a
 test('model discovery search filters a large list and preserves exact model selection', async ({
   page,
 }) => {
+  let createRequests = 0
   await page.route('**/models/available-models', async (route) => {
     if (route.request().method() !== 'POST') return route.continue()
     await route.fulfill({
@@ -2639,6 +2640,10 @@ test('model discovery search filters a large list and preserves exact model sele
       },
     })
   })
+  await page.route('**/models', async (route) => {
+    if (route.request().method() === 'POST') createRequests += 1
+    await route.continue()
+  })
   await page.goto('/')
   await page.getByTestId('settings-button').click()
   await page.getByTestId('model-manager-tab').click()
@@ -2651,19 +2656,27 @@ test('model discovery search filters a large list and preserves exact model sele
   await expect(modelSelect.locator('option')).toHaveCount(4)
   await search.fill('2.5')
   await expect(modelSelect.locator('option')).toHaveCount(2)
+  await expect(modelSelect).toHaveValue('gemini-2.5-flash')
   await search.fill('not-a-provider-model')
   const noMatch = page.getByTestId('model-form-discovery-no-match')
   await expect(noMatch).toHaveText('找不到符合的模型。')
   await expect(noMatch).toHaveAttribute('role', 'status')
+  await expect(page.getByTestId('model-form-save')).toBeDisabled()
+  await search.press('Enter')
+  expect(createRequests).toBe(0)
+  await expect(page.getByTestId('model-form')).toBeVisible()
   await search.clear()
   await expect(modelSelect.locator('option')).toHaveCount(4)
+  await expect(modelSelect).toHaveValue('gemini-2.0-flash')
+  await expect(page.getByTestId('model-form-save')).toBeEnabled()
   await search.fill('2.5-pro')
   await expect(modelSelect.locator('option')).toHaveCount(1)
-  await modelSelect.selectOption('gemini-2.5-pro')
+  await expect(modelSelect).toHaveValue('gemini-2.5-pro')
 
   const modelId = `e2e-gemini-search-${Date.now()}`
   await page.getByTestId('model-form-id-input').fill(modelId)
   await page.getByTestId('model-form-save').click()
+  expect(createRequests).toBe(1)
   await expect(modelManagerRow(page, modelId)).toContainText('Gemini · gemini-2.5-pro')
 
   page.once('dialog', (dialog) => dialog.accept())
@@ -2742,6 +2755,14 @@ test('guided CLI preset validates and saves an advanced exact model ID', async (
     command: ['codex', 'exec', '--model', 'gpt-exact-x', '{prompt}'],
     extra_body: { cli_provider: 'codex' },
   })
+  await expect(modelManagerRow(page, modelId)).toContainText(
+    'Subscription CLI · Codex CLI · gpt-exact-x',
+  )
+  await page.getByTestId('general-tab').click()
+  await expect(page.getByTestId('blue-model-select').locator(`option[value="${modelId}"]`)).toHaveText(
+    'Subscription CLI · Codex CLI · gpt-exact-x',
+  )
+  await page.getByTestId('model-manager-tab').click()
   page.once('dialog', (dialog) => dialog.accept())
   await page.getByTestId(`delete-model-button-${modelId}`).click()
   await closeSettings(page)

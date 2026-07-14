@@ -75,6 +75,8 @@ export type ProviderModelProjection = {
   adapter: string
   base_url: string | null
   model?: string | null
+  command?: readonly string[] | null
+  extra_body?: Record<string, unknown> | null
 }
 
 export type ProviderModelDraft = {
@@ -222,6 +224,11 @@ export function modelConfigPayloadForProvider(
 export function modelDisplayLabel(model: ProviderModelProjection & { id: string }): string {
   const providerId = providerIdForModel(model)
   if (providerId === 'subscription-cli' && trimNullable(model.model) === null) {
+    const cliProjection = projectCliConfig(model)
+    if (cliProjection.modelMode === 'exact' && cliProjection.presetId !== 'custom') {
+      const preset = CLI_PRESET_BY_ID.get(cliProjection.presetId)!
+      return `Subscription CLI · ${preset.name} · ${cliProjection.exactModelId}`
+    }
     return `Subscription CLI · 由 command 決定（${model.id}）`
   }
   const exactModelId = trimNullable(model.model) ?? model.id

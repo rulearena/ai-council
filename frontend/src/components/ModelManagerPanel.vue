@@ -6,7 +6,7 @@
 // SettingsModal's 一般 tab (and the sanitize watch in useCouncil.ts that fallback-clears a
 // deleted model's role selections) pick up the change through the exact same path a fresh
 // page load would.
-import { computed, inject, onBeforeUnmount, ref } from 'vue'
+import { computed, inject, onBeforeUnmount, ref, watch } from 'vue'
 import { councilKey } from '../composables/useCouncil'
 import {
   ApiError,
@@ -221,6 +221,15 @@ const filteredDiscoveryModels = computed(() => {
   const query = discoveryQuery.value.trim().toLocaleLowerCase()
   if (!query) return discoveryModels.value
   return discoveryModels.value.filter((modelId) => modelId.toLocaleLowerCase().includes(query))
+})
+const discoveryHasNoMatches = computed(() => discoveryModels.value.length > 0
+  && !manualModelEntry.value
+  && discoveryQuery.value.trim().length > 0
+  && filteredDiscoveryModels.value.length === 0)
+
+watch(discoveryQuery, () => {
+  if (manualModelEntry.value || !filteredDiscoveryModels.value.length) return
+  formModel.value = filteredDiscoveryModels.value[0]
 })
 
 const saving = ref(false)
@@ -446,6 +455,7 @@ function applySaveError(caught: unknown) {
 
 async function saveForm() {
   resetFormErrors()
+  if (discoveryHasNoMatches.value) return
   if (isCliAdapter(formAdapter.value)
     && formCliPreset.value !== 'custom'
     && formCliModelMode.value === 'exact'
@@ -693,7 +703,7 @@ async function saveForm() {
       </template>
 
       <div class="model-form-actions">
-        <button type="submit" class="btn btn-primary" data-testid="model-form-save" :disabled="saving">
+        <button type="submit" class="btn btn-primary" data-testid="model-form-save" :disabled="saving || discoveryHasNoMatches">
           {{ saving ? '儲存中…' : '儲存' }}
         </button>
         <button type="button" class="btn btn-ghost" data-testid="model-form-cancel" @click="closeForm">
