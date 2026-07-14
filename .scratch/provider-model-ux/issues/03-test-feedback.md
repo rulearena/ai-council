@@ -2,7 +2,7 @@
 
 Type: task
 Status: open
-Blocked by: 02
+Blocked by: 02, 04
 
 ## 目標
 
