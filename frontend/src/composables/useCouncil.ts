@@ -362,11 +362,19 @@ export function useCouncil() {
     return lifecycleEvent?.status === 'closed' || lifecycleEvent?.status === 'cancelled'
   })
   const isMeetingRunning = computed(() => selectedMeeting.value?.activity_status === 'running')
+  const primaryAction = computed<PrimaryAction>(() => projectPrimaryAction({
+    modeId: selectedMeeting.value?.mode_id ?? activeMode.value.id,
+    steps: activeMode.value.steps ?? [],
+    participants: selectedMeeting.value?.participants ?? [],
+    events: events.value,
+    courtroom: selectedMeeting.value?.courtroom ?? null,
+  }))
   const chairmanOptions = computed(() => chairmanActionOptions({
     modeId: selectedMeeting.value?.mode_id ?? activeMode.value.id,
     modeCategory: activeMode.value.category,
     participants: selectedMeeting.value?.participants ?? [],
     courtroom: selectedMeeting.value?.courtroom ?? null,
+    nextActionLabel: primaryAction.value.label,
   }))
   watch(chairmanOptions, (options) => {
     if (!options.some((option) => option.value === chairmanAction.value)) {
@@ -377,13 +385,6 @@ export function useCouncil() {
     chairmanAction.value,
     selectedMeeting.value?.participants ?? [],
   ))
-  const primaryAction = computed<PrimaryAction>(() => projectPrimaryAction({
-    modeId: selectedMeeting.value?.mode_id ?? activeMode.value.id,
-    steps: activeMode.value.steps ?? [],
-    participants: selectedMeeting.value?.participants ?? [],
-    events: events.value,
-    courtroom: selectedMeeting.value?.courtroom ?? null,
-  }))
   const startButtonLabel = computed(() => isMeetingRunning.value ? '執行中…' : primaryAction.value.label)
   const selectedSequencePreset = computed(
     () =>

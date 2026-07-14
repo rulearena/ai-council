@@ -88,6 +88,7 @@ export function chairmanActionOptions(input: {
   modeCategory: string
   participants: ChairmanParticipant[]
   courtroom: CourtroomProjection | null
+  nextActionLabel?: string
 }): ChairmanActionOption[] {
   const options: ChairmanActionOption[] = [
     { value: 'note', label: '記錄補充（不會呼叫 AI）' },
@@ -104,7 +105,7 @@ export function chairmanActionOptions(input: {
     const courtroomIssue = input.courtroom ? pendingCourtroomIssue(input.courtroom) : null
     const nextLabel = courtroomPrimary?.kind === 'courtroom-arguments' && courtroomIssue
       ? `開始爭點「${courtroomIssue.title}」`
-      : courtroomPrimary?.label.replace(/（下一位.*$/, '')
+      : (courtroomPrimary?.label ?? input.nextActionLabel)?.replace(/（下一位.*$/, '')
     const suffix = nextLabel ? `（下一步：${nextLabel}）` : ''
     options.push({ value: 'all', label: `請全體回應${suffix}` })
   }

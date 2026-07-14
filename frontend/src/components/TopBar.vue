@@ -28,7 +28,7 @@ watch(() => selectedMeeting.value?.meeting_id, () => {
 })
 
 function openDetailsEditor() {
-  if (!selectedMeeting.value || !editPolicy.value.canEdit) return
+  if (!selectedMeeting.value || loading.value || !editPolicy.value.canEdit) return
   editTitle.value = selectedMeeting.value.title
   editGoal.value = selectedMeeting.value.goal ?? ''
   editingDetails.value = true
@@ -75,7 +75,7 @@ defineEmits<{
           type="button"
           class="btn btn-secondary btn-sm"
           data-testid="edit-meeting-details-button"
-          :disabled="!editPolicy.canEdit"
+          :disabled="loading || !editPolicy.canEdit"
           :title="isMeetingRunning ? '會議執行中無法修改資訊' : '編輯會議名稱與目標'"
           @click="openDetailsEditor"
         >

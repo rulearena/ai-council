@@ -172,6 +172,154 @@ test('legacy meeting requires explicit title and goal migration without rewritin
   expect(readFileSync(eventsPath, 'utf8')).toBe(originalEvents)
 })
 
+test('chairman asks everyone from the unified composer exactly once and reload preserves the request', async ({ page }) => {
+  const dataDir = process.env.E2E_DATA_DIR
+  expect(dataDir).toBeTruthy()
+  await page.goto('/')
+  const title = `E2E unified chairman ${Date.now()}`
+  const message = '主席請全體：請針對成本與風險提出下一步。'
+  const meetingId = await createMeetingViaNewCase(page, title, { goal: '提出可執行的交付建議' })
+
+  await page.getByTestId('chairman-action-select').selectOption('all')
+  await expect(page.getByTestId('send-chair-message-button')).toHaveText('請全體回應')
+  await expect(page.getByTestId('chairman-action-select')).toContainText('下一步：開始審議')
+  await page.getByTestId('chair-message-input').fill(message)
+  await page.getByTestId('send-chair-message-button').click()
+  await expect(page.getByTestId('operation-status')).toContainText('狀態：已完成', { timeout: 15000 })
+
+  const eventsPath = join(dataDir!, 'meetings', meetingId, 'events.jsonl')
+  const events = readFileSync(eventsPath, 'utf8').trim().split('\n').map((line) => JSON.parse(line))
+  expect(events.filter((event) => event.role === 'Human' && event.content === message)).toHaveLength(1)
+  expect(events.filter((event) => !['Human', 'System'].includes(event.role) && event.status === 'completed')).toHaveLength(4)
+
+  await page.reload()
+  await page.getByTestId('past-topics-button').click()
+  await page.getByTestId('meeting-list-item').filter({ hasText: title }).locator('.meeting-item').click()
+  await page.getByTestId('records-button').click()
+  await expect(page.getByTestId('step-timeline')).toContainText(message)
+  await expect(page.getByTestId('step-timeline').locator('.timeline-content', { hasText: message })).toHaveCount(1)
+  await page.getByTestId('records-close-button').click()
+
+  await page.getByTestId('past-topics-button').click()
+  page.once('dialog', (dialog) => dialog.accept())
+  await page.getByTestId('meeting-list-item').filter({ hasText: title }).getByTestId('delete-meeting-button').click()
+})
+
+test('legacy courtroom is gated by issue setup and rejected generic paths preserve old events', async ({ page }) => {
+  const dataDir = process.env.E2E_DATA_DIR
+  expect(dataDir).toBeTruthy()
+  const meetingId = `meeting-legacy-courtroom-${Date.now()}`
+  const title = `舊法院案件 ${meetingId}`
+  const meetingDir = join(dataDir!, 'meetings', meetingId)
+  mkdirSync(meetingDir, { recursive: true })
+  writeFileSync(join(meetingDir, 'metadata.json'), JSON.stringify({
+    meeting_id: meetingId,
+    title,
+    goal: '判斷舊案件責任歸屬',
+    created_at: '2026-07-14T00:00:00+00:00',
+    tags: [],
+    pinned: false,
+    mode_id: 'courtroom',
+    participants: ['Prosecutor', 'Defense', 'Judge'].map((role_id) => ({ role_id, model_config_id: 'mock-fast' })),
+    inputs: {},
+    case_files: [],
+  }))
+  const oldSteps = [
+    ['courtroom-charge', 'Prosecutor'],
+    ['courtroom-defense', 'Defense'],
+    ['courtroom-rebuttal', 'Prosecutor'],
+    ['courtroom-verdict', 'Judge'],
+  ]
+  const originalEvents = `${oldSteps.map(([step_id, role], index) => JSON.stringify({
+    event_id: `${meetingId}:${step_id}:attempt-1:completed`,
+    meeting_id: meetingId,
+    step_id,
+    base_step_id: step_id,
+    round: 1,
+    role,
+    attempt: 1,
+    status: 'completed',
+    content: `舊法院歷史發言 ${index + 1}`,
+    created_at: `2026-07-14T00:0${index + 1}:00+00:00`,
+  })).join('\n')}\n`
+  const eventsPath = join(meetingDir, 'events.jsonl')
+  writeFileSync(eventsPath, originalEvents)
+
+  await page.goto('/')
+  await page.getByTestId('past-topics-button').click()
+  const meetingResponse = page.waitForResponse((response) => response.url().endsWith(`/meetings/${meetingId}`))
+  await page.getByTestId('meeting-list-item').filter({ hasText: title }).locator('.meeting-item').click()
+  const apiOrigin = new URL((await meetingResponse).url()).origin
+  await expect(page.getByTestId('courtroom-docket-panel')).toContainText('尚無爭點')
+  await expect(page.getByTestId('courtroom-docket-panel')).toContainText('確認前不會開始審理')
+  await expect(page.getByTestId('start-meeting-button')).toHaveCount(0)
+  await page.getByTestId('advanced-options-button').click()
+  await expect(page.getByTestId('role-sequence-controls')).toHaveCount(0)
+
+  expect((await page.request.post(`${apiOrigin}/meetings/${meetingId}/start`, { data: {} })).status()).toBe(409)
+  expect((await page.request.post(`${apiOrigin}/meetings/${meetingId}/sequences`, { data: { roles: ['Prosecutor', 'Defense', 'Judge'] } })).status()).toBe(409)
+  expect(readFileSync(eventsPath, 'utf8')).toBe(originalEvents)
+  await page.getByTestId('advanced-options-button').click()
+  await page.getByTestId('records-button').click()
+  await expect(page.getByTestId('step-timeline').locator('.timeline-row')).toHaveCount(4)
+  await expect(page.getByTestId('step-timeline')).toContainText('法官判決')
+  await page.getByTestId('records-close-button').click()
+
+  await page.getByTestId('past-topics-button').click()
+  page.once('dialog', (dialog) => dialog.accept())
+  await page.getByTestId('meeting-list-item').filter({ hasText: title }).getByTestId('delete-meeting-button').click()
+})
+
+test('editing an established goal confirms and audits old/new values while title-only edits stay quiet', async ({ page }) => {
+  const dataDir = process.env.E2E_DATA_DIR
+  expect(dataDir).toBeTruthy()
+  await page.goto('/')
+  const title = `E2E goal audit ${Date.now()}`
+  const originalGoal = '提出原始交付建議'
+  const revisedGoal = '提出包含風險緩解的交付建議'
+  const meetingId = await createMeetingViaNewCase(page, title, { goal: originalGoal })
+  await page.getByTestId('start-meeting-button').click()
+  await expect(page.getByTestId('operation-status')).toContainText('狀態：已完成', { timeout: 15000 })
+
+  await page.getByTestId('edit-meeting-details-button').click()
+  await page.getByTestId('meeting-goal-input').fill(revisedGoal)
+  page.once('dialog', async (dialog) => {
+    expect(dialog.type()).toBe('confirm')
+    expect(dialog.message()).toContain('既有發言不會重新產生')
+    await dialog.accept()
+  })
+  await page.getByTestId('save-meeting-details-button').click()
+  await page.getByTestId('records-button').click()
+  await expect(page.getByTestId('step-timeline')).toContainText('主席修改會議目標')
+  await expect(page.getByTestId('step-timeline')).toContainText(`舊目標：${originalGoal}`)
+  await expect(page.getByTestId('step-timeline')).toContainText(`新目標：${revisedGoal}`)
+  await page.getByTestId('records-tab-transcript').click()
+  await expect(page.getByTestId('transcript-preview')).toContainText('主席修改會議目標')
+  await expect(page.getByTestId('transcript-preview')).toContainText(`舊目標：${originalGoal}`)
+  await expect(page.getByTestId('transcript-preview')).toContainText(`新目標：${revisedGoal}`)
+  await page.getByTestId('records-close-button').click()
+
+  const eventsPath = join(dataDir!, 'meetings', meetingId, 'events.jsonl')
+  const beforeTitleOnly = readFileSync(eventsPath, 'utf8').trim().split('\n').length
+  await expect(page.getByTestId('edit-meeting-details-button')).toBeEnabled()
+  await page.getByTestId('edit-meeting-details-button').click()
+  await expect(page.getByTestId('meeting-title-input')).toBeEnabled()
+  await page.getByTestId('meeting-title-input').fill(`${title}（改名）`)
+  await page.getByTestId('save-meeting-details-button').click()
+  expect(readFileSync(eventsPath, 'utf8').trim().split('\n')).toHaveLength(beforeTitleOnly)
+
+  await page.reload()
+  await page.getByTestId('past-topics-button').click()
+  await page.getByTestId('meeting-list-item').filter({ hasText: `${title}（改名）` }).locator('.meeting-item').click()
+  await page.getByTestId('edit-meeting-details-button').click()
+  await expect(page.getByTestId('meeting-goal-input')).toHaveValue(revisedGoal)
+  await page.getByRole('button', { name: '取消', exact: true }).click()
+
+  await page.getByTestId('past-topics-button').click()
+  page.once('dialog', (dialog) => dialog.accept())
+  await page.getByTestId('meeting-list-item').filter({ hasText: `${title}（改名）` }).getByTestId('delete-meeting-button').click()
+})
+
 test('New Case persists the complete relay model roster and reload hydrates that meeting', async ({
   page,
 }) => {

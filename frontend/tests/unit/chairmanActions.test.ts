@@ -18,10 +18,10 @@ const roles = [
 
 test('chairman composer exposes note, council, and every active role from one action list', () => {
   assert.deepEqual(
-    chairmanActionOptions({ modeId: 'red-blue', modeCategory: 'relay', participants: roles, courtroom: null }),
+    chairmanActionOptions({ modeId: 'red-blue', modeCategory: 'relay', participants: roles, courtroom: null, nextActionLabel: '開始審議：下一位是檢察官' }),
     [
       { value: 'note', label: '記錄補充（不會呼叫 AI）' },
-      { value: 'all', label: '請全體回應' },
+      { value: 'all', label: '請全體回應（下一步：開始審議：下一位是檢察官）' },
       { value: 'role:Prosecutor', label: '請檢察官回答' },
       { value: 'role:Defense', label: '請辯護律師回答' },
       { value: 'role:Judge', label: '請法官回答' },
