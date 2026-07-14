@@ -26,6 +26,8 @@ Evidence to Verdict 批次已實作並等待 Human Owner acceptance。
 
 Backlog 81「案卷容量限制設定化與建立前提示」已實作並通過雙軸 review 與完整驗收，等待 Human Owner acceptance。預設單份/總量為 50,000/120,000 字元，環境變數可覆寫；前端僅在取得後端實際限制後允許建立，並顯示 token/context 風險、inline 錯誤與後端 413 detail。執行計畫：`docs/plans/2026-07-13-configurable-case-file-limits.md`；ticket：`.scratch/configurable-case-file-limits/`。
 
+Human Owner 於 2026-07-14 核准 backlog 82「每場會議的 LLM attempt 診斷紀錄與檢視器」：補齊失敗 attempt 的 raw output、模型、prompt、時間、錯誤分類與安全的 adapter output excerpt，並在 Records Drawer 提供預設摺疊的查看／複製功能；不改 retry 或 timeout 政策。執行計畫：`docs/plans/2026-07-14-llm-attempt-diagnostics.md`；ticket：`.scratch/llm-attempt-diagnostics/`。
+
 已完成的 Evidence to Verdict 範圍：
 
 1. backlog 80：證據編號與引用錨點。——已完成（2026-07-13，`96cd1d9` / `837b6d8`）

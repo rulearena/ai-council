@@ -559,6 +559,7 @@ config/models.yaml.example
 79. **案卷 Phase 2：可追溯檢索與 RAG**。當多份判決、書狀與證據達數十萬字時，不再把全文無差別塞入每次 prompt；同時支援使用者查案與模型按需取證。原始案卷仍是 Source of Truth，檢索結果必須保留證物錨點、文件、原文位置與實際注入紀錄，且在檢索前套用角色可見性，避免把未授權卷宗送入 prompt。分階段交付：**79A** 本地切片索引與全文搜尋 UI（優先採 embedded SQLite FTS/trigram，不新增外部服務）；**79B** 在 runner 前以小型 `retrieve(meeting_id, role_id, query, token_budget)` interface 選取片段，依 token budget 注入並可回到原文；**79C** 僅在真實案件評測證明關鍵字召回不足時加入 embedding 與本地向量索引，採 lexical/vector hybrid ranking，不預設需要獨立向量資料庫。必須測試關鍵證據漏取、引用可追溯性、角色隔離、索引重建與無索引/小案卷相容路徑（2026-07-13 使用者要求提前納入 backlog；尚未核准實作批次）
 80. 證據編號引用：案卷文件賦予「證物一/證物二」式編號，prompt 要求角色引用時帶錨點——與 backlog 65（豐富裁決結構）銜接，依賴 78（已完成 2026-07-13）
 81. **案卷容量限制設定化與建立前提示**：單份/總量 hard limit 改由環境變數設定，預設提高為 50,000/120,000 字元；後端公開實際限制，New Case 顯示每份與總量、粗估 token/context 風險，超限時 inline 阻擋並保留後端 detail。仍採全文注入，不包含 RAG（已完成 2026-07-13）
+82. **每場會議的 LLM attempt 診斷紀錄與檢視器**：補齊 §9 已定義但失敗路徑尚未完整保存的診斷資料。每次模型 attempt 於該 meeting 的 `events.jsonl` 記錄 `model_config_id`、adapter、完整 prompt、可取得的 raw/parsed output、token usage、開始/結束/耗時、結構化 `failure_kind`、error 與是否排定自動 retry；parse/schema failure 必須保存完整失敗 raw output。CLI timeout/exit 可保存最多 8,192 字元且經敏感值遮罩的 stdout/stderr excerpt，不保存 API key、環境變數內容或完整 command。Records Drawer 提供預設摺疊的診斷檢視與複製；舊 events 必須相容。本項不改 retry 次數、timeout 政策、模型選擇或 RAG（2026-07-14 已核准）
 
 ## 16. 會議模式系統（Mode System）設計
 
