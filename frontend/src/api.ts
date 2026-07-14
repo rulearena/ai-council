@@ -55,6 +55,25 @@ export type Meeting = {
   participants: MeetingParticipant[]
   case_files?: CaseFile[]
   events?: MeetingEvent[]
+  courtroom: CourtroomProjection | null
+}
+
+export type CourtroomIssueProjection = {
+  id: string
+  title: string
+  position: number
+  status: 'pending' | 'arguments-in-progress' | 'awaiting-ruling' | 'ruled'
+  ruling?: unknown
+}
+
+export type CourtroomProjection = {
+  schema_version: number
+  revision: number
+  status: 'not-configured' | 'draft' | 'confirmed'
+  issues: CourtroomIssueProjection[]
+  current_issue_id: string | null
+  final_status: 'not-ready' | 'ready' | 'failed' | 'completed'
+  available_actions: string[]
 }
 
 export type CaseFile = {
@@ -342,6 +361,18 @@ export async function getMeeting(meetingId: string): Promise<Meeting> {
 
 export async function startMeeting(meetingId: string): Promise<void> {
   await postJson(`/meetings/${meetingId}/start`, {})
+}
+
+export async function runCourtroomIssueArguments(meetingId: string, issueId: string): Promise<void> {
+  await postJson(`/meetings/${meetingId}/courtroom/issues/${encodeURIComponent(issueId)}/arguments`, {})
+}
+
+export async function runCourtroomIssueRuling(meetingId: string, issueId: string): Promise<void> {
+  await postJson(`/meetings/${meetingId}/courtroom/issues/${encodeURIComponent(issueId)}/ruling`, {})
+}
+
+export async function runCourtroomFinalVerdict(meetingId: string): Promise<void> {
+  await postJson(`/meetings/${meetingId}/courtroom/final-verdict`, {})
 }
 
 export async function cancelMeeting(meetingId: string): Promise<void> {

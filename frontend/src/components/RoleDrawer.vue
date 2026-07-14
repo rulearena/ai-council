@@ -77,6 +77,17 @@ const linkedInstruction = computed(() => {
 })
 const displayStep = (event: Parameters<typeof stepDisplayLabel>[2]) =>
   stepDisplayLabel(activeMode.value, participants.value, event)
+const canRequestDirectedResponse = computed(() =>
+  activeMode.value.category === 'relay' && (
+    selectedMeeting.value?.mode_id !== 'courtroom' ||
+    selectedMeeting.value.courtroom?.available_actions.includes('directed-response') === true
+  ),
+)
+const directedResponseUnavailableReason = computed(() =>
+  activeMode.value.category === 'parallel'
+    ? '此模式不支援指定角色追問，請使用主席輸入區的「請全體回應」。'
+    : '法院會議需先完成目前爭點的必要步驟，主席才能追問指定角色。',
+)
 
 watch(() => props.role, () => {
   instruction.value = ''
@@ -213,6 +224,9 @@ async function submitDirectedInstruction() {
       </div>
 
       <div class="role-directed-composer">
+        <p v-if="!canRequestDirectedResponse" class="empty-state">
+          {{ directedResponseUnavailableReason }}
+        </p>
         <label :for="`role-instruction-${councilRole}`">要請 {{ displayRole }} 回答的問題或指示</label>
         <textarea
           :id="`role-instruction-${councilRole}`"
@@ -220,14 +234,14 @@ async function submitDirectedInstruction() {
           data-testid="role-instruction-input"
           rows="3"
           :placeholder="`例如：請針對待釐清事項補充說明`"
-          :disabled="loading || !canRun"
+          :disabled="loading || !canRun || !canRequestDirectedResponse"
         />
         <button
           type="button"
           class="btn btn-primary role-drawer-respond-button"
           :data-testid="`request-${councilRole.toLowerCase()}-response-button`"
           @click="submitDirectedInstruction"
-          :disabled="loading || !canRun || !instruction.trim()"
+          :disabled="loading || !canRun || !canRequestDirectedResponse || !instruction.trim()"
         >
           請 {{ displayRole }} 回答
         </button>

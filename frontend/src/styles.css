@@ -311,6 +311,40 @@ h2 {
   flex-wrap: wrap;
 }
 
+.meeting-details-editor {
+  flex-basis: 100%;
+  display: grid;
+  grid-template-columns: minmax(180px, 0.7fr) minmax(280px, 1.5fr) auto;
+  align-items: end;
+  gap: 12px;
+  padding: 12px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface-muted);
+}
+
+.meeting-details-editor label,
+.chairman-action-select {
+  display: grid;
+  gap: 4px;
+  color: var(--color-text-secondary);
+  font-size: 12px;
+}
+
+.meeting-details-editor textarea {
+  min-height: 64px;
+  resize: vertical;
+}
+
+.meeting-details-editor small {
+  color: var(--color-text-muted);
+}
+
+.meeting-details-editor-actions {
+  display: flex;
+  gap: 8px;
+}
+
 /* ---------- Council stage: the scene + seats ---------- */
 
 .council-stage {
@@ -770,20 +804,19 @@ h2 {
   resize: vertical;
 }
 
+.chairman-action-select {
+  min-width: 220px;
+}
+
+.success {
+  margin: 0;
+  color: var(--color-completed);
+  font-size: 13px;
+  font-weight: 600;
+}
+
 .action-bar-cta {
   white-space: nowrap;
-}
-
-.continue-hint {
-  align-self: center;
-  font-size: 12px;
-  font-weight: 600;
-  color: var(--color-completed);
-  white-space: nowrap;
-}
-
-.action-bar-cta-hint {
-  animation: cta-hint-pulse 1.8s ease-in-out infinite;
 }
 
 .advanced-options {
@@ -1624,18 +1657,6 @@ pre {
   }
 }
 
-/* Gentle nudge on the primary CTA after a chair message lands on an idle meeting -
-   see .action-bar-cta-hint / showContinueHint. */
-@keyframes cta-hint-pulse {
-  0%,
-  100% {
-    box-shadow: 0 0 0 0 transparent;
-  }
-  50% {
-    box-shadow: 0 0 0 4px var(--color-completed-tint);
-  }
-}
-
 /* Secondary accent on a thinking portrait - the primary signal is the ground-glow
    ellipse below (see ground-glow-breathe), which reads better on a bright photo. */
 @keyframes portrait-glow-breathe {
@@ -1770,7 +1791,6 @@ pre {
   .seat-status-thinking .seat-portrait,
   .seat-status-thinking .seat-ground-glow,
   .thinking-dot,
-  .action-bar-cta-hint,
   .drawer {
     animation: none;
   }
@@ -1804,6 +1824,10 @@ pre {
 }
 
 @media (max-width: 640px) {
+  .meeting-details-editor {
+    grid-template-columns: 1fr;
+  }
+
   .council-stage {
     padding: 12px;
   }
@@ -1876,7 +1900,7 @@ pre {
     flex-basis: 100%;
   }
 
-  /* Once the textarea forces a wrap, no sibling is left growing to push the gear
+  /* Once the textarea forces a wrap, no sibling is left growing to push the workflow
      button against the row's right edge (that's normally the textarea's flex:1 job) -
      without this, the panel's `right: 0` anchor (see .advanced-options-panel) can end
      up bleeding off the left edge of the viewport instead of sitting under the button. */
