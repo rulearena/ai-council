@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import sys
 import time
+import urllib.error
 from email.message import Message
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from threading import Thread
@@ -38,6 +39,38 @@ def test_mock_adapter_returns_deterministic_valid_json() -> None:
         "risks": [],
         "recommendation": "Use this response for tests.",
     }
+
+
+@pytest.mark.parametrize(
+    "network_error",
+    [
+        TimeoutError("direct timeout"),
+        urllib.error.URLError(TimeoutError("wrapped timeout")),
+    ],
+)
+def test_openai_compatible_adapter_classifies_network_timeouts(
+    monkeypatch: pytest.MonkeyPatch,
+    network_error: Exception,
+) -> None:
+    def raise_timeout(*args: object, **kwargs: object) -> object:
+        raise network_error
+
+    monkeypatch.setattr("urllib.request.urlopen", raise_timeout)
+
+    with pytest.raises(AdapterError) as raised:
+        OpenAICompatibleHTTPAdapter().complete(
+            ModelRequest(
+                prompt="timeout",
+                model_config=ModelConfig(
+                    id="timed-out",
+                    adapter="openai-compatible-http",
+                    base_url="http://127.0.0.1:1/v1",
+                    model="test-model",
+                ),
+            )
+        )
+
+    assert raised.value.failure_kind == "timeout"
 
 
 def test_model_request_keeps_legacy_positional_meeting_id_compatible() -> None:

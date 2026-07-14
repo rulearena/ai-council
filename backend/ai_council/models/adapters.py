@@ -268,7 +268,13 @@ def _request_json(
         with urllib.request.urlopen(http_request, timeout=120) as response:
             return json.loads(response.read().decode("utf-8"))
     except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as error:
-        raise AdapterError(str(error)) from error
+        is_timeout = isinstance(error, TimeoutError) or (
+            isinstance(error, urllib.error.URLError)
+            and isinstance(error.reason, TimeoutError)
+        )
+        raise AdapterError(
+            str(error), failure_kind="timeout" if is_timeout else "adapter_error"
+        ) from error
 
 
 def _post_json(url: str, payload: dict[str, object], headers: dict[str, str]) -> dict[str, object]:
