@@ -1,7 +1,7 @@
 # Subscription CLI guided presets
 
 Type: task
-Status: open
+Status: resolved
 Blocked by: 01
 
 ## 目標
@@ -22,3 +22,10 @@ Blocked by: 01
 ## 驗收
 
 - Frontend unit、targeted backend/e2e 與 build 綠；單一目的 commit。
+
+## Resolution
+
+- Claude CLI、Codex CLI、AGY preset 由 pure domain module 產生固定 argv，預設交由 CLI 自動選擇模型。
+- Model Manager 一般路徑只顯示 CLI Provider 下拉；Custom CLI 才顯示逐參數 command 編輯。
+- 可辨識的既有 preset 投影回導引式選項；未知 legacy command 投影為 Custom 並原樣 round-trip，不 migration。
+- 進階 exact model ID 因 AGY 等 CLI 旗標缺乏 repo 內可靠契約，保留在 Custom CLI escape hatch，避免產生可能錯誤的 argv。

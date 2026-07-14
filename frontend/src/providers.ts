@@ -88,8 +88,61 @@ export type ProviderModelDraft = {
   timeout_seconds?: number
 }
 
+export type CliPresetId = 'claude' | 'codex' | 'agy' | 'custom'
+
+export type CliPresetDefinition = {
+  id: CliPresetId
+  name: string
+  command: readonly string[] | null
+}
+
+export type CliConfigProjection = {
+  presetId: CliPresetId
+  command: string[]
+  extraBody: Record<string, unknown>
+}
+
+export const CLI_PRESETS: readonly CliPresetDefinition[] = [
+  { id: 'claude', name: 'Claude CLI', command: ['claude', '-p', '{prompt}'] },
+  { id: 'codex', name: 'Codex CLI', command: ['codex', 'exec', '{prompt}'] },
+  { id: 'agy', name: 'AGY', command: ['agy', '-p', '{prompt}'] },
+  { id: 'custom', name: 'Custom CLI', command: null },
+]
+
 const PROVIDER_BY_ID = new Map(PROVIDERS.map((provider) => [provider.id, provider]))
+const CLI_PRESET_BY_ID = new Map(CLI_PRESETS.map((preset) => [preset.id, preset]))
 const OPENAI_BASE_URL = 'https://api.openai.com/v1'
+
+export function cliConfigPayload(
+  presetId: CliPresetId,
+  customCommand: readonly string[] = [],
+  extraBody: Record<string, unknown> = {},
+): Pick<ModelConfigPayload, 'command' | 'extra_body'> {
+  const preset = CLI_PRESET_BY_ID.get(presetId)!
+  if (preset.id === 'custom') {
+    return { command: [...customCommand], extra_body: { ...extraBody } }
+  }
+  return {
+    command: [...preset.command!],
+    extra_body: { ...extraBody, cli_provider: preset.id },
+  }
+}
+
+export function projectCliConfig(model: {
+  command?: readonly string[] | null
+  extra_body?: Record<string, unknown> | null
+}): CliConfigProjection {
+  const command = [...(model.command ?? [])]
+  const extraBody = { ...(model.extra_body ?? {}) }
+  const preset = CLI_PRESETS.find((candidate) =>
+    candidate.id !== 'custom' && arraysEqual(candidate.command!, command),
+  )
+  return {
+    presetId: preset?.id ?? 'custom',
+    command,
+    extraBody,
+  }
+}
 
 export function getProvider(providerId: ProviderId): ProviderDefinition {
   return PROVIDER_BY_ID.get(providerId)!
@@ -164,4 +217,8 @@ function normalizeBaseUrl(value: string | null | undefined): string | null {
 function trimNullable(value: string | null | undefined): string | null {
   if (value == null) return null
   return value.trim() || null
+}
+
+function arraysEqual(left: readonly string[], right: readonly string[]): boolean {
+  return left.length === right.length && left.every((value, index) => value === right[index])
 }

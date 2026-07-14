@@ -20,11 +20,15 @@ import {
   type ModelConfigPayload,
 } from '../api'
 import {
+  CLI_PRESETS,
   PROVIDERS,
+  cliConfigPayload,
   getProvider,
   modelConfigPayloadForProvider,
   modelDisplayLabel,
   providerIdForModel,
+  projectCliConfig,
+  type CliPresetId,
   type ProviderId,
 } from '../providers'
 import { LatestDiscoveryRequest, type DiscoveryEvent } from '../modelDiscovery'
@@ -100,6 +104,7 @@ const formModel = ref('')
 const formApiKeyEnv = ref('')
 const formSupportsJsonMode = ref(false)
 const formTimeoutSeconds = ref(120)
+const formCliPreset = ref<CliPresetId>('claude')
 const formCommandText = ref('')
 // Not rendered as inputs (round-trip only, per the fidelity requirement below) -
 // carried through from the model being edited and sent back unchanged on save so a PUT
@@ -159,6 +164,7 @@ function handleProviderChange() {
   formBaseUrl.value = provider.defaultBaseUrl ?? ''
   formApiKeyEnv.value = provider.defaultApiKeyEnv ?? ''
   formModel.value = ''
+  formCliPreset.value = 'claude'
   formCommandText.value = ''
   resetDiscovery()
 }
@@ -172,6 +178,7 @@ function openCreateForm() {
   formApiKeyEnv.value = ''
   formSupportsJsonMode.value = false
   formTimeoutSeconds.value = 120
+  formCliPreset.value = 'claude'
   formCommandText.value = ''
   formExtraBody.value = {}
   formPricing.value = null
@@ -189,8 +196,10 @@ function openEditForm(model: ModelConfig) {
   formApiKeyEnv.value = model.api_key_env ?? ''
   formSupportsJsonMode.value = model.supports_json_mode
   formTimeoutSeconds.value = model.timeout_seconds
-  formCommandText.value = (model.command ?? []).join('\n')
   formExtraBody.value = model.extra_body ?? {}
+  const cliProjection = projectCliConfig(model)
+  formCliPreset.value = cliProjection.presetId
+  formCommandText.value = cliProjection.command.join('\n')
   formPricing.value = model.pricing ?? null
   resetDiscovery()
   resetFormErrors()
@@ -203,17 +212,19 @@ function closeForm() {
 }
 
 function buildPayload(): ModelConfigPayload {
+  const customCommand = formCommandText.value
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean)
+  const cliConfig = cliConfigPayload(formCliPreset.value, customCommand, formExtraBody.value)
   return modelConfigPayloadForProvider(formProvider.value, {
     base_url: formBaseUrl.value,
     model: formModel.value,
     api_key_env: formApiKeyEnv.value,
     supports_json_mode: formSupportsJsonMode.value,
-    command: formCommandText.value
-      .split('\n')
-      .map((line) => line.trim())
-      .filter(Boolean),
+    command: cliConfig.command,
     timeout_seconds: formTimeoutSeconds.value,
-    extra_body: formExtraBody.value,
+    extra_body: isCliAdapter(formAdapter.value) ? cliConfig.extra_body : formExtraBody.value,
     pricing: formPricing.value,
   })
 }
@@ -457,10 +468,19 @@ async function saveForm() {
       </template>
 
       <template v-else-if="isCliAdapter(formAdapter)">
-        <p class="model-form-hint" data-testid="model-form-cli-discovery-unsupported">
-          Subscription CLI 不支援自動載入模型；執行型號由 command 決定，請在下方確認命令。
-        </p>
         <label class="topic-input-row">
+          CLI Provider
+          <select v-model="formCliPreset" data-testid="model-form-cli-preset-select">
+            <option v-for="preset in CLI_PRESETS" :key="preset.id" :value="preset.id">{{ preset.name }}</option>
+          </select>
+        </label>
+        <p v-if="formCliPreset !== 'custom'" class="model-form-hint" data-testid="model-form-cli-model-default">
+          使用 CLI 自動選擇模型（推薦）。命令與 prompt 參數會由 preset 安全產生，不需手動輸入。
+        </p>
+        <p v-else class="model-form-hint" data-testid="model-form-cli-custom-hint">
+          若需指定 exact model ID，請依該 CLI 版本的參數使用 Custom CLI；未知的既有命令會保持原樣，不會自動改寫。
+        </p>
+        <label v-if="formCliPreset === 'custom'" class="topic-input-row">
           command（一行一個參數，需含 {prompt} 佔位符）
           <textarea
             v-model="formCommandText"

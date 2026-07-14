@@ -2,11 +2,70 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 
 import {
+  CLI_PRESETS,
   PROVIDERS,
+  cliConfigPayload,
+  projectCliConfig,
   modelConfigPayloadForProvider,
   modelDisplayLabel,
   providerIdForModel,
 } from '../../src/providers.ts'
+
+test('subscription CLI presets generate safe default argv without user-authored command parts', () => {
+  assert.deepEqual(
+    CLI_PRESETS.map(({ id, name }) => ({ id, name })),
+    [
+      { id: 'claude', name: 'Claude CLI' },
+      { id: 'codex', name: 'Codex CLI' },
+      { id: 'agy', name: 'AGY' },
+      { id: 'custom', name: 'Custom CLI' },
+    ],
+  )
+  assert.deepEqual(cliConfigPayload('claude'), {
+    command: ['claude', '-p', '{prompt}'],
+    extra_body: { cli_provider: 'claude' },
+  })
+  assert.deepEqual(cliConfigPayload('codex'), {
+    command: ['codex', 'exec', '{prompt}'],
+    extra_body: { cli_provider: 'codex' },
+  })
+  assert.deepEqual(cliConfigPayload('agy'), {
+    command: ['agy', '-p', '{prompt}'],
+    extra_body: { cli_provider: 'agy' },
+  })
+})
+
+test('subscription CLI projection recognizes presets and preserves unknown legacy commands as custom', () => {
+  assert.deepEqual(
+    projectCliConfig({
+      command: ['codex', 'exec', '{prompt}'],
+      extra_body: { cli_provider: 'codex', profile: 'work' },
+    }),
+    {
+      presetId: 'codex',
+      command: ['codex', 'exec', '{prompt}'],
+      extraBody: { cli_provider: 'codex', profile: 'work' },
+    },
+  )
+
+  const legacy = {
+    command: ['company-wrapper', '--stdin', '{prompt}'],
+    extra_body: { cli_provider: 'company-internal', keep: true },
+  }
+  const projected = projectCliConfig(legacy)
+  assert.deepEqual(projected, {
+    presetId: 'custom',
+    command: ['company-wrapper', '--stdin', '{prompt}'],
+    extraBody: { cli_provider: 'company-internal', keep: true },
+  })
+  assert.deepEqual(
+    cliConfigPayload(projected.presetId, projected.command, projected.extraBody),
+    {
+      command: ['company-wrapper', '--stdin', '{prompt}'],
+      extra_body: { cli_provider: 'company-internal', keep: true },
+    },
+  )
+})
 
 test('provider catalog exposes product concepts and transport presets', () => {
   assert.deepEqual(

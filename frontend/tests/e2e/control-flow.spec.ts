@@ -2227,6 +2227,42 @@ test('model manager creates an OpenAI config through provider-guided preview dis
   await closeSettings(page)
 })
 
+test('model manager creates a subscription config from a guided CLI preset', async ({ page }) => {
+  let createPayload: Record<string, unknown> | null = null
+  await page.route('**/models', async (route) => {
+    if (route.request().method() === 'POST') {
+      createPayload = route.request().postDataJSON() as Record<string, unknown>
+    }
+    await route.continue()
+  })
+  await page.goto('/')
+  await page.getByTestId('settings-button').click()
+  await page.getByTestId('model-manager-tab').click()
+  await page.getByTestId('add-model-button').click()
+  await page.getByTestId('model-form-provider-select').selectOption('subscription-cli')
+
+  await expect(page.getByTestId('model-form-cli-preset-select')).toHaveValue('claude')
+  await expect(page.getByTestId('model-form-cli-model-default')).toContainText(
+    '使用 CLI 自動選擇模型',
+  )
+  await expect(page.getByTestId('model-form-command-textarea')).toHaveCount(0)
+
+  const modelId = `e2e-cli-preset-${Date.now()}`
+  await page.getByTestId('model-form-id-input').fill(modelId)
+  await page.getByTestId('model-form-cli-preset-select').selectOption('agy')
+  await page.getByTestId('model-form-save').click()
+  await expect(modelManagerRow(page, modelId)).toContainText('Subscription CLI')
+  expect(createPayload).toMatchObject({
+    adapter: 'subscription-cli',
+    command: ['agy', '-p', '{prompt}'],
+    extra_body: { cli_provider: 'agy' },
+  })
+
+  page.once('dialog', (dialog) => dialog.accept())
+  await page.getByTestId(`delete-model-button-${modelId}`).click()
+  await closeSettings(page)
+})
+
 test('model labels show Provider and exact model across model list and role selectors', async ({
   page,
 }) => {
@@ -2283,9 +2319,8 @@ test('model discovery failure, empty results, and unsupported providers retain m
   await expect(page.getByTestId('model-form-model-input')).toBeVisible()
 
   await page.getByTestId('model-form-provider-select').selectOption('subscription-cli')
-  await expect(page.getByTestId('model-form-cli-discovery-unsupported')).toContainText(
-    '不支援自動載入模型；執行型號由 command 決定',
-  )
+  await expect(page.getByTestId('model-form-cli-preset-select')).toHaveValue('claude')
+  await expect(page.getByTestId('model-form-cli-model-default')).toContainText('CLI 自動選擇模型')
 
   await page.getByTestId('model-form-provider-select').selectOption('custom-openai-compatible')
   await page.getByTestId('model-form-base-url-input').fill('http://provider.example.test/v1')
@@ -2372,10 +2407,56 @@ test('provider-guided edits preserve legacy extra body, pricing, and CLI command
   })
   await page.getByTestId('edit-model-button-codex-subscription').click()
   await expect(page.getByTestId('model-form-provider-select')).toHaveValue('subscription-cli')
+  await expect(page.getByTestId('model-form-cli-preset-select')).toHaveValue('codex')
+  await expect(page.getByTestId('model-form-command-textarea')).toHaveCount(0)
   await page.getByTestId('model-form-save').click()
   expect(cliUpdate).toMatchObject({
     command: ['codex', 'exec', '{prompt}'],
     extra_body: { cli_provider: 'codex' },
+  })
+
+  page.once('dialog', (dialog) => dialog.accept())
+  await page.getByTestId(`delete-model-button-${modelId}`).click()
+  await closeSettings(page)
+})
+
+test('unknown legacy subscription commands stay custom and round-trip unchanged', async ({ page }) => {
+  const modelsResponsePromise = page.waitForResponse(
+    (response) => response.request().method() === 'GET' && response.url().endsWith('/models'),
+  )
+  await page.goto('/')
+  const apiOrigin = new URL((await modelsResponsePromise).url()).origin
+  const modelId = `e2e-custom-cli-${Date.now()}`
+  const command = ['company-wrapper', '--profile', 'work', '{prompt}']
+  const extraBody = { cli_provider: 'company-internal', preserve: { mode: 'safe' } }
+  expect((await page.request.post(`${apiOrigin}/models`, {
+    data: {
+      id: modelId,
+      adapter: 'subscription-cli',
+      command,
+      extra_body: extraBody,
+      timeout_seconds: 77,
+    },
+  })).ok()).toBeTruthy()
+  await page.reload()
+  await page.getByTestId('settings-button').click()
+  await page.getByTestId('model-manager-tab').click()
+
+  let updatePayload: Record<string, unknown> | null = null
+  await page.route(`**/models/${modelId}`, async (route) => {
+    if (route.request().method() === 'PUT') {
+      updatePayload = route.request().postDataJSON() as Record<string, unknown>
+    }
+    await route.continue()
+  })
+  await page.getByTestId(`edit-model-button-${modelId}`).click()
+  await expect(page.getByTestId('model-form-cli-preset-select')).toHaveValue('custom')
+  await expect(page.getByTestId('model-form-command-textarea')).toHaveValue(command.join('\n'))
+  await page.getByTestId('model-form-save').click()
+  expect(updatePayload).toMatchObject({
+    command,
+    extra_body: extraBody,
+    timeout_seconds: 77,
   })
 
   page.once('dialog', (dialog) => dialog.accept())
