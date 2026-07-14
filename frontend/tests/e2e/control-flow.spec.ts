@@ -1,4 +1,6 @@
 import { expect, test, type Page, type Route } from '@playwright/test'
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { join } from 'node:path'
 
 // The whole UI is now a stage with modals/drawers layered on top of it, so most flows
 // need a small amount of "open this surface, do the thing, close it" choreography.
@@ -63,6 +65,112 @@ async function createMeetingViaNewCase(
     (meeting) => meeting.meeting_id,
   )
 }
+
+test('New Case requires separate title and goal fields before creation', async ({
+  page,
+}) => {
+  await page.goto('/')
+  await page.getByTestId('new-case-button').click()
+  await page
+    .getByTestId('mode-select-card-red-blue')
+    .getByRole('button', { name: '選擇此模式' })
+    .click()
+
+  const createButton = page.getByTestId('create-meeting-button')
+  await expect(createButton).toBeDisabled()
+  await page.getByLabel('會議名稱', { exact: true }).fill('土地糾紛案')
+  await expect(createButton).toBeDisabled()
+  await page.getByLabel('目標', { exact: true }).fill('判斷被告是否構成無權占有？')
+  await expect(createButton).toBeEnabled()
+})
+
+test('legacy meeting requires explicit title and goal migration without rewriting events', async ({
+  page,
+}) => {
+  const dataDir = process.env.AI_COUNCIL_DATA_DIR
+  expect(dataDir, 'AI_COUNCIL_DATA_DIR must point at the isolated e2e runtime').toBeTruthy()
+  const meetingId = `meeting-legacy-ui-${Date.now()}`
+  const legacyTitle = `舊土地案 ${meetingId}`
+  const migratedTitle = `土地返還案 ${meetingId}`
+  const meetingDir = join(dataDir!, 'meetings', meetingId)
+  mkdirSync(meetingDir, { recursive: true })
+  writeFileSync(
+    join(meetingDir, 'metadata.json'),
+    JSON.stringify({
+      meeting_id: meetingId,
+      topic: legacyTitle,
+      created_at: '2026-07-14T00:00:00+00:00',
+      tags: [],
+      pinned: false,
+      mode_id: 'red-blue',
+      participants: ['Blue', 'Red', 'Judge'].map((role_id) => ({
+        role_id,
+        model_config_id: 'mock-fast',
+      })),
+      inputs: {},
+      case_files: [],
+    }),
+  )
+  const eventsPath = join(meetingDir, 'events.jsonl')
+  const originalEvents = `${JSON.stringify({
+    event_id: `${meetingId}:human-message:historical`,
+    meeting_id: meetingId,
+    step_id: 'human-message',
+    role: 'Human',
+    attempt: 1,
+    status: 'completed',
+    content: '既有紀錄不得改寫',
+    created_at: '2026-07-14T00:01:00+00:00',
+  })}\n`
+  writeFileSync(eventsPath, originalEvents)
+
+  await page.goto('/')
+  await page.getByTestId('past-topics-button').click()
+  await page
+    .getByTestId('meeting-list-item')
+    .filter({ hasText: legacyTitle })
+    .locator('.meeting-item')
+    .click()
+
+  await expect(page.getByTestId('meeting-goal-migration')).toBeVisible()
+  await expect(page.getByLabel('舊會議名稱')).toHaveValue(legacyTitle)
+  await expect(page.getByLabel('舊會議目標')).toHaveValue('')
+  await expect(page.getByTestId('start-meeting-button')).toBeDisabled()
+  await page.getByTestId('advanced-options-button').click()
+  await expect(page.getByTestId('run-sequence-button')).toBeDisabled()
+  await expect(page.getByTestId('start-new-round-button')).toBeDisabled()
+
+  await page.getByLabel('舊會議名稱').fill(migratedTitle)
+  await page.getByLabel('舊會議目標').fill('判斷被告是否應返還土地')
+  const updated = page.waitForResponse(
+    (response) =>
+      response.request().method() === 'PUT' &&
+      response.url().endsWith(`/meetings/${meetingId}/details`),
+  )
+  await page.getByTestId('save-meeting-goal-button').click()
+  expect((await updated).status()).toBe(200)
+  await expect(page.getByTestId('meeting-goal-migration')).not.toBeVisible()
+
+  const storedMetadata = JSON.parse(readFileSync(join(meetingDir, 'metadata.json'), 'utf8')) as Record<
+    string,
+    unknown
+  >
+  expect(storedMetadata.title).toBe(migratedTitle)
+  expect(storedMetadata.goal).toBe('判斷被告是否應返還土地')
+  expect(storedMetadata).not.toHaveProperty('topic')
+  expect(readFileSync(eventsPath, 'utf8')).toBe(originalEvents)
+
+  await page.reload()
+  await page.getByTestId('past-topics-button').click()
+  await page
+    .getByTestId('meeting-list-item')
+    .filter({ hasText: migratedTitle })
+    .locator('.meeting-item')
+    .click()
+  await expect(page.getByTestId('meeting-goal-migration')).not.toBeVisible()
+  await expect(page.getByTestId('start-meeting-button')).toBeEnabled()
+  expect(readFileSync(eventsPath, 'utf8')).toBe(originalEvents)
+})
 
 test('New Case persists the complete relay model roster and reload hydrates that meeting', async ({
   page,

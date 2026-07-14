@@ -287,6 +287,39 @@ def test_adjudicator_prompts_require_grounded_evidence_refs(
     assert "insufficient-evidence" in rendered
 
 
+@pytest.mark.parametrize(
+    ("template_name", "role"),
+    [
+        ("courtroom_charge", "Prosecutor"),
+        ("courtroom_defense", "Defense"),
+        ("courtroom_rebuttal", "Prosecutor"),
+        ("courtroom_verdict", "Judge"),
+    ],
+)
+def test_courtroom_prompts_treat_goal_as_adjudication_question_not_defendant(
+    template_name: str,
+    role: str,
+) -> None:
+    rendered = PromptRenderer(Path(__file__).parents[2] / "prompts").render(
+        template_name=template_name,
+        role=role,
+        goal="判斷被告是否構成無權占有？",
+        prior_transcript="雙方尚未發言。",
+        required_json_schema='{"summary":"string"}',
+        inputs={
+            "title": "土地糾紛案",
+            "case_files": "[證物一] 被告持續占用原告土地。",
+        },
+    )
+
+    assert "Adjudication objective/question:" in rendered
+    assert "判斷被告是否構成無權占有？" in rendered
+    assert "Treat it as the defendant" not in rendered
+    assert "the goal below is the incident" not in rendered.lower()
+    assert "土地糾紛案" not in rendered
+    assert "[證物一] 被告持續占用原告土地。" in rendered
+
+
 def test_prompt_renderer_loads_template_and_injects_context(tmp_path: Path) -> None:
     prompt_dir = tmp_path / "prompts"
     prompt_dir.mkdir()
