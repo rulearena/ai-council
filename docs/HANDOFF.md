@@ -19,8 +19,9 @@
 | Configurable Case File Limits | `2c3f069`–`b51052a` | 案卷單份/總量限制環境變數化（預設 50,000/120,000）、公開實際限制、建立前字元/token/context 提示、超限阻擋與 413 detail 保留（實作計畫：`docs/plans/2026-07-13-configurable-case-file-limits.md`） |
 | LLM Attempt Diagnostics | `9d5adae`–`b5ff417` | 每場 meeting 保存成功、parse、timeout、adapter、interrupted attempts 的完整可取得診斷；Records Drawer 可安全查看／複製（實作計畫：`docs/plans/2026-07-14-llm-attempt-diagnostics.md`） |
 | Model Selection Reliability | `6c2b033`–`50becfa` | 每場 meeting assignment 持久化與 deterministic legacy fallback；Provider-first 模型管理、preview/existing discovery、manual exact ID 與跨 meeting/request race guards（實作計畫：`docs/plans/2026-07-14-model-selection-reliability.md`） |
+| Provider & Model UX | `dad0410`–`9dd4162` | Anthropic/Gemini discovery、可搜尋 exact model、Claude/Codex/AGY CLI presets、測試 loading/slow/stale-safe feedback 與 health result ordering（實作計畫：`docs/plans/2026-07-14-provider-model-ux.md`） |
 
-**驗收基線（任何改動後不得低於此）**：後端 `pytest` **280 passed**；frontend unit **8 passed**；前端 `npm run build` 綠；e2e **53 passed**。
+**驗收基線（任何改動後不得低於此）**：後端 `pytest` **291 passed**；frontend unit **12 passed**；前端 `npm run build` 綠；e2e **69 passed**。
 
 ## 2. Agent 開發佇列與目前核准批次
 
@@ -31,6 +32,8 @@ Backlog 81「案卷容量限制設定化與建立前提示」已實作並通過�
 Backlog 82「每場會議的 LLM attempt 診斷紀錄與檢視器」已實作並通過雙軸 review 與完整驗收，等待 Human Owner acceptance。失敗 attempt 現在保留 raw/parsed output、模型、prompt、時間、token、錯誤分類與安全的 adapter excerpts；Records Drawer 可查看／複製。取消中的 in-flight attempt 會留下 `interrupted/result_discarded` 診斷，但不進 transcript，且不會在 terminal 後啟動 retry 或 synthesis。執行計畫：`docs/plans/2026-07-14-llm-attempt-diagnostics.md`；ticket：`.scratch/llm-attempt-diagnostics/`。
 
 Backlog 83–84「模型選擇可靠性」已實作並通過雙軸 review 與完整驗收，等待 Human Owner acceptance。Meeting participant metadata 是 assignment Source of Truth；舊 meeting 僅 read-time 從最新 event/default 恢復，不改寫歷史。Model Manager 以 Provider-first 顯示 exact model ID，支援 preview/existing discovery 與 manual fallback。執行計畫：`docs/plans/2026-07-14-model-selection-reliability.md`；ticket：`.scratch/model-selection-reliability/`。
+
+Backlog 85「Provider 與模型設定 UX 強化」已實作並通過 Standards/Spec 雙軸 review、完整驗收與 direct Chromium smoke，等待 Human Owner acceptance。Anthropic/Gemini 支援 provider-specific discovery 與搜尋；Claude/Codex/AGY 使用 per-preset canonical argv；Model Manager 的連線測試提供 loading/slow/success/error 並阻止 frontend/backend stale result。執行計畫：`docs/plans/2026-07-14-provider-model-ux.md`；ticket：`.scratch/provider-model-ux/`。
 
 已完成的 Evidence to Verdict 範圍：
 
@@ -51,6 +54,8 @@ Backlog 83–84「模型選擇可靠性」已實作並通過雙軸 review 與完
 - **422 契約**：/models 寫入路徑的驗證錯誤（含 pydantic 層）統一 `[{"field", "message"}]`，前端 `ApiError.detail` 依 field 對應表單欄位。
 - **Meeting model assignment**：participant metadata 是新 meeting 的唯一 assignment SoT；`PUT /meetings/{id}/participant-models` 完整替換 roster。Runner 的 start/respond/sequence/retry 只讀後端 resolved snapshot；legacy request `models` 不具權威。舊 meeting 的 event/default recovery 與 deleted-model fallback 只在 read time 投影，不寫 metadata/events。
 - **Provider 與 adapter 分離**：Provider 是前端產品概念，舊 `models.yaml` 仍保存 adapter schema，不需 migration。新 config discovery 走 `POST /models/available-models` preview，既有 config 沿用 `GET /models/{id}/available-models`；兩路都只接受 credential 環境變數名稱。
+- **Provider discovery / CLI preset**：OpenAI-compatible、Anthropic、Gemini 皆經同一 discovery route interface，adapter 內處理 headers、pagination、normalization 與 credential-safe errors。CLI exact argv 固定為 Claude `claude --model <id> -p {prompt}`、Codex `codex exec --model <id> {prompt}`、AGY `agy --model <id> -p {prompt}`；每個 preset 自有 builder/parser，未知 legacy command 走 Custom 且不 migration。
+- **Model health ordering**：每次 check 先以 `ModelHealthCheckStore.begin(model_id)` 取得新 token；只有最新 token 可 `record`。前端 `refreshModels(shouldCommit)` 也必須以 request generation guard shared store commit，避免 late HTTP result 恢復舊狀態。
 - **前端 active mode**：`useCouncil.ts` 的 `activeModeSource`（module ref）跟著 `selectedMeeting.mode_id` 走（watchEffect，catalog splice 會重解析）；場景 override 是 keyed watch（`meeting_id::defaultScene` 字串）——**不要 watch 整顆 meeting 物件**（串流事件會整物件替換）。catalog 來源 = `GET /modes`，`modes.ts` 本地常數只是後端不可達時的 fallback。
 - **前端測試**：Provider/discovery pure modules 使用 Node 內建 test runner（`npm run test:unit`）；使用者流程使用 Playwright e2e（`frontend/tests/e2e/control-flow.spec.ts`）。
 
@@ -64,9 +69,12 @@ Backlog 83–84「模型選擇可靠性」已實作並通過雙軸 review 與完
   DATA="$PWD/.scratch/e2e-runtime"
   mkdir -p "$DATA"
   cp config/models.yaml.example "$DATA/models.yaml"
+  cd backend
   AI_COUNCIL_DATA_DIR="$DATA/data" AI_COUNCIL_MODEL_CONFIG_PATH="$DATA/models.yaml" \
-    <主repo>/backend/.venv/bin/python -m uvicorn ai_council.main:app --port 8123 &
-  cd frontend && npx vite --port 3123 &
+    AI_COUNCIL_MODES_CONFIG_PATH="$PWD/../config/modes.yaml" AI_COUNCIL_PROMPT_DIR="$PWD/../prompts" \
+    <主repo>/backend/.venv/bin/python -c 'import os; from pathlib import Path; import uvicorn; from ai_council.api import create_app; app=create_app(data_dir=Path(os.environ["AI_COUNCIL_DATA_DIR"]), model_config_path=Path(os.environ["AI_COUNCIL_MODEL_CONFIG_PATH"]), modes_config_path=Path(os.environ["AI_COUNCIL_MODES_CONFIG_PATH"]), prompt_dir=Path(os.environ["AI_COUNCIL_PROMPT_DIR"]), start_model_health_checks=False); uvicorn.run(app, host="127.0.0.1", port=8123)' &
+  cd ../frontend
+  VITE_API_BASE_URL=http://127.0.0.1:8123 npx vite --port 3123 &
   E2E_BASE_URL=http://127.0.0.1:3123 \
     PLAYWRIGHT_BROWSERS_PATH=<主repo>/frontend/.cache/ms-playwright npx playwright test
   # 停止自起服務後，回到 repo root 清理：rm -rf .scratch/e2e-runtime
@@ -90,4 +98,5 @@ Backlog 83–84「模型選擇可靠性」已實作並通過雙軸 review 與完
 - Backlog 81 已實作、雙軸 review 與完整驗收通過，等待 Human Owner acceptance。
 - Backlog 82 已實作、雙軸 review 與完整驗收通過，等待 Human Owner acceptance。
 - Backlog 83–84 已實作、雙軸 review 與完整驗收通過，等待 Human Owner acceptance。
+- Backlog 85 已實作、雙軸 review、291 backend／12 unit／build／69 Chromium 與 direct browser smoke 通過，等待 Human Owner acceptance。
 - 使用者已裁定：個人版不做多人/帳號（backlog 有註記）；案卷 Phase 2/RAG 仍延後到 backlog 79。

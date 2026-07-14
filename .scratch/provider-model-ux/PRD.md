@@ -1,6 +1,6 @@
 # Provider 與模型設定 UX 強化
 
-Status: approved
+Status: implemented / awaiting acceptance
 
 ## 產品價值
 
