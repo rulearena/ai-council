@@ -3869,8 +3869,15 @@ def test_respond_as_role_accepts_mode_roles(tmp_path: Path) -> None:
         f"/meetings/{meeting_id}/roles/Prosecutor/respond",
         json={"instruction": "請整理目前控方主張"},
     )
-    assert response.status_code == 200
-    events = client.get(f"/meetings/{meeting_id}").json()["events"]
+    assert response.status_code == 202
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline:
+        events = client.get(f"/meetings/{meeting_id}").json()["events"]
+        if events and events[-1].get("interaction_type") == "directed-role-response":
+            break
+        time.sleep(0.01)
+    else:
+        raise AssertionError("Directed response did not complete")
     assert events[-1]["step_id"] == "directed-1-prosecutor-response"
 
     rejected = client.post(

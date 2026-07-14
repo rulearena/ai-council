@@ -796,8 +796,20 @@ def test_directed_courtroom_response_is_only_available_during_ruling_pause(
         f"/meetings/{meeting_id}/roles/Defense/respond",
         json={"instruction": "哪些證據支持辯方？"},
     )
-    assert directed.status_code == 200
-    after_directed = client.get(f"/meetings/{meeting_id}").json()
+    assert directed.status_code == 202
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline:
+        after_directed = client.get(f"/meetings/{meeting_id}").json()
+        directed_events = [
+            event
+            for event in after_directed["events"]
+            if event.get("interaction_type") == "directed-role-response"
+        ]
+        if directed_events and directed_events[-1]["status"] == "completed":
+            break
+        time.sleep(0.01)
+    else:
+        raise AssertionError("Directed response did not complete")
     linked = after_directed["events"][-2:]
     assert [event["interaction_type"] for event in linked] == [
         "directed-role-instruction",
@@ -842,3 +854,168 @@ def test_directed_courtroom_response_is_only_available_during_ruling_pause(
     )
     assert after_final.status_code == 409
     assert client.get(f"/meetings/{meeting_id}").json()["events"] == completed_events
+
+
+def test_slow_directed_response_reserves_the_meeting_against_conflicting_writes(
+    tmp_path: Path,
+) -> None:
+    client = create_client(tmp_path)
+    meeting_id = create_courtroom(client)
+    client.put(
+        f"/meetings/{meeting_id}/courtroom/issues",
+        json={"revision": 0, "issues": [{"title": "占有權源"}]},
+    )
+    client.post(
+        f"/meetings/{meeting_id}/courtroom/issues/confirm",
+        json={"revision": 1},
+    )
+    client.post(f"/meetings/{meeting_id}/courtroom/issues/issue-1/arguments")
+    wait_for_courtroom(
+        client,
+        meeting_id,
+        lambda courtroom: courtroom["issues"][0]["status"] == "awaiting-ruling",
+    )
+    client.put(
+        "/models/mock-fast",
+        json={"adapter": "mock", "extra_body": {"mock_delay_ms": 200}},
+    )
+
+    first = client.post(
+        f"/meetings/{meeting_id}/roles/Defense/respond",
+        json={"instruction": "請說明辯方證據"},
+    )
+    second = client.post(
+        f"/meetings/{meeting_id}/roles/Prosecutor/respond",
+        json={"instruction": "請補充控方主張"},
+    )
+    ruling = client.post(f"/meetings/{meeting_id}/courtroom/issues/issue-1/ruling")
+    details = client.put(
+        f"/meetings/{meeting_id}/details",
+        json={"title": "途中改名", "goal": "被告是否應返還土地？"},
+    )
+    assignments = client.put(
+        f"/meetings/{meeting_id}/participant-models",
+        json={
+            "models": {
+                "Prosecutor": "mock-fast",
+                "Defense": "mock-fast",
+                "Judge": "mock-fast",
+            }
+        },
+    )
+    message = client.post(
+        f"/meetings/{meeting_id}/messages",
+        json={"content": "途中補充"},
+    )
+
+    assert first.status_code == 202
+    assert (second.status_code, ruling.status_code) == (409, 409)
+    assert (details.status_code, assignments.status_code, message.status_code) == (409, 409, 409)
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline:
+        events = client.get(f"/meetings/{meeting_id}").json()["events"]
+        directed = [
+            event
+            for event in events
+            if event.get("interaction_type")
+            in {"directed-role-instruction", "directed-role-response"}
+        ]
+        if len(directed) == 2 and directed[-1]["status"] == "completed":
+            break
+        time.sleep(0.01)
+    else:
+        raise AssertionError("Directed response did not complete")
+    assert [event["interaction_type"] for event in directed] == [
+        "directed-role-instruction",
+        "directed-role-response",
+    ]
+    assert [event["role"] for event in directed] == ["Human", "Defense"]
+    assert client.post(
+        f"/meetings/{meeting_id}/courtroom/issues/issue-1/ruling"
+    ).status_code == 202
+
+
+def test_failed_courtroom_directed_response_retry_reuses_instruction_and_issue_context(
+    tmp_path: Path,
+) -> None:
+    client = create_client(tmp_path)
+    meeting_id = create_courtroom(client)
+    client.put(
+        f"/meetings/{meeting_id}/courtroom/issues",
+        json={"revision": 0, "issues": [{"title": "占有權源"}]},
+    )
+    client.post(
+        f"/meetings/{meeting_id}/courtroom/issues/confirm",
+        json={"revision": 1},
+    )
+    client.post(f"/meetings/{meeting_id}/courtroom/issues/issue-1/arguments")
+    wait_for_courtroom(
+        client,
+        meeting_id,
+        lambda courtroom: courtroom["issues"][0]["status"] == "awaiting-ruling",
+    )
+    client.put(
+        "/models/mock-fast",
+        json={"adapter": "mock", "extra_body": {"mock_error": "directed timeout"}},
+    )
+    assert client.post(
+        f"/meetings/{meeting_id}/roles/Defense/respond",
+        json={"instruction": "請指出關鍵反證"},
+    ).status_code in {200, 202}
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline:
+        failed_meeting = client.get(f"/meetings/{meeting_id}").json()
+        failed_responses = [
+            event
+            for event in failed_meeting["events"]
+            if event.get("interaction_type") == "directed-role-response"
+            and event["status"] == "failed"
+        ]
+        if failed_responses:
+            break
+        time.sleep(0.01)
+    else:
+        raise AssertionError("Directed response did not fail")
+    failed = failed_responses[-1]
+    instruction_events = [
+        event
+        for event in failed_meeting["events"]
+        if event.get("interaction_type") == "directed-role-instruction"
+    ]
+    assert len(instruction_events) == 1
+    instruction_id = instruction_events[0]["event_id"]
+    client.put("/models/mock-fast", json={"adapter": "mock", "extra_body": {}})
+    time.sleep(0.02)
+
+    retry = client.post(
+        f"/meetings/{meeting_id}/steps/{failed['step_id']}/retry",
+        json={},
+    )
+    assert retry.status_code == 202
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline:
+        completed_meeting = client.get(f"/meetings/{meeting_id}").json()
+        responses = [
+            event
+            for event in completed_meeting["events"]
+            if event.get("interaction_type") == "directed-role-response"
+        ]
+        if responses and responses[-1]["status"] == "completed":
+            break
+        time.sleep(0.01)
+    else:
+        raise AssertionError("Directed response retry did not complete")
+    assert len(
+        [
+            event
+            for event in completed_meeting["events"]
+            if event.get("interaction_type") == "directed-role-instruction"
+        ]
+    ) == 1
+    assert [(event["attempt"], event["status"]) for event in responses] == [
+        (1, "failed"),
+        (2, "completed"),
+    ]
+    assert {event["in_response_to_event_id"] for event in responses} == {instruction_id}
+    assert {event["issue_id"] for event in responses} == {"issue-1"}
+    assert {event["docket_revision"] for event in responses} == {2}
