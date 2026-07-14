@@ -19,6 +19,8 @@ from ai_council.prompting.schemas import (
 )
 
 ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
+BEARER_TOKEN_RE = re.compile(r"(?i)\bBearer\s+\S+")
+DIAGNOSTIC_EXCERPT_LIMIT = 8192
 
 
 class AdapterError(RuntimeError):
@@ -142,9 +144,13 @@ class SubscriptionCLIAdapter:
                 stdout, stderr = process.communicate(timeout=config.timeout_seconds)
             except subprocess.TimeoutExpired as error:
                 process.kill()
-                process.communicate()
+                stdout, stderr = process.communicate()
+                stdout_excerpt, stderr_excerpt = _safe_cli_excerpts(stdout, stderr, config)
                 raise AdapterError(
-                    f"Subscription CLI timed out after {config.timeout_seconds:g} seconds"
+                    f"Subscription CLI timed out after {config.timeout_seconds:g} seconds",
+                    failure_kind="timeout",
+                    stdout_excerpt=stdout_excerpt,
+                    stderr_excerpt=stderr_excerpt,
                 ) from error
         finally:
             if request.meeting_id is not None:
@@ -153,11 +159,20 @@ class SubscriptionCLIAdapter:
                         del self._active_processes[request.meeting_id]
 
         if process.returncode is not None and process.returncode < 0:
-            raise AdapterError("Subscription CLI was cancelled")
-        if process.returncode != 0:
-            detail = stderr.strip() or stdout.strip() or "no output"
+            stdout_excerpt, stderr_excerpt = _safe_cli_excerpts(stdout, stderr, config)
             raise AdapterError(
-                f"Subscription CLI exited with code {process.returncode}: {detail}"
+                "Subscription CLI was cancelled",
+                failure_kind="interrupted",
+                stdout_excerpt=stdout_excerpt,
+                stderr_excerpt=stderr_excerpt,
+            )
+        if process.returncode != 0:
+            stdout_excerpt, stderr_excerpt = _safe_cli_excerpts(stdout, stderr, config)
+            detail = stderr_excerpt or stdout_excerpt or "no output"
+            raise AdapterError(
+                f"Subscription CLI exited with code {process.returncode}: {detail}",
+                stdout_excerpt=stdout_excerpt,
+                stderr_excerpt=stderr_excerpt,
             )
         normalized_stdout = normalize_cli_output(stdout, config)
         if not normalized_stdout:
@@ -177,6 +192,29 @@ def normalize_cli_output(stdout: str, config: ModelConfig | None = None) -> str:
     if provider == "codex":
         return _normalize_codex_cli_output(output)
     return output
+
+
+def _safe_cli_excerpts(
+    stdout: str | None,
+    stderr: str | None,
+    config: ModelConfig,
+) -> tuple[str | None, str | None]:
+    return (
+        _safe_cli_excerpt(stdout, config),
+        _safe_cli_excerpt(stderr, config),
+    )
+
+
+def _safe_cli_excerpt(output: str | None, config: ModelConfig) -> str | None:
+    if not output:
+        return None
+    redacted = output
+    if config.api_key_env:
+        api_key = os.environ.get(config.api_key_env)
+        if api_key:
+            redacted = redacted.replace(api_key, "[REDACTED]")
+    redacted = BEARER_TOKEN_RE.sub("Bearer [REDACTED]", redacted)
+    return redacted[-DIAGNOSTIC_EXCERPT_LIMIT:].strip()
 
 
 def _cli_provider(config: ModelConfig | None) -> str:

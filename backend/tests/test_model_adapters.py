@@ -252,6 +252,83 @@ def test_subscription_cli_adapter_reports_timeout(tmp_path) -> None:
         )
 
 
+def test_subscription_cli_timeout_preserves_bounded_redacted_output_excerpts(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    api_key = "configured-super-secret"
+    monkeypatch.setenv("DIAGNOSTIC_API_KEY", api_key)
+    hanging_cli = tmp_path / "verbose_hanging_cli.py"
+    hanging_cli.write_text(
+        "import sys, time\n"
+        f"print({'x' * 9000 + api_key!r}, flush=True)\n"
+        "print('Bearer bearer-secret-token', file=sys.stderr, flush=True)\n"
+        "time.sleep(5)\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(AdapterError) as raised:
+        SubscriptionCLIAdapter().complete(
+            ModelRequest(
+                prompt="test",
+                model_config=ModelConfig(
+                    id="slow",
+                    adapter="subscription-cli",
+                    command=[sys.executable, str(hanging_cli), "{prompt}"],
+                    timeout_seconds=0.1,
+                    api_key_env="DIAGNOSTIC_API_KEY",
+                ),
+            )
+        )
+
+    error = raised.value
+    assert error.failure_kind == "timeout"
+    assert error.stdout_excerpt is not None
+    assert error.stderr_excerpt is not None
+    assert len(error.stdout_excerpt) <= 8192
+    assert len(error.stderr_excerpt) <= 8192
+    assert api_key not in error.stdout_excerpt
+    assert "bearer-secret-token" not in error.stderr_excerpt
+    assert "[REDACTED]" in error.stdout_excerpt
+    assert "Bearer [REDACTED]" in error.stderr_excerpt
+
+
+def test_subscription_cli_nonzero_exit_preserves_bounded_redacted_output_excerpts(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    api_key = "configured-exit-secret"
+    monkeypatch.setenv("DIAGNOSTIC_API_KEY", api_key)
+    failing_cli = tmp_path / "verbose_failing_cli.py"
+    failing_cli.write_text(
+        "import sys\n"
+        f"print({'y' * 9000 + api_key!r})\n"
+        "print('Bearer exit-bearer-token', file=sys.stderr)\n"
+        "raise SystemExit(9)\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(AdapterError) as raised:
+        SubscriptionCLIAdapter().complete(
+            ModelRequest(
+                prompt="test",
+                model_config=ModelConfig(
+                    id="failing",
+                    adapter="subscription-cli",
+                    command=[sys.executable, str(failing_cli), "{prompt}"],
+                    api_key_env="DIAGNOSTIC_API_KEY",
+                ),
+            )
+        )
+
+    error = raised.value
+    assert error.failure_kind == "adapter_error"
+    assert error.stdout_excerpt is not None
+    assert error.stderr_excerpt is not None
+    assert len(error.stdout_excerpt) <= 8192
+    assert len(error.stderr_excerpt) <= 8192
+    assert api_key not in error.stdout_excerpt
+    assert "exit-bearer-token" not in error.stderr_excerpt
+
+
 def test_subscription_cli_adapter_cancel_kills_running_process(tmp_path) -> None:
     started_marker = tmp_path / "started"
     completed_marker = tmp_path / "completed"
