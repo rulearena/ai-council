@@ -6,10 +6,12 @@ import {
   draftCourtroomIssues,
   replaceCourtroomIssues,
   type CourtroomIssueProjection,
+  type MeetingEvent,
   type StructuredVerdict,
 } from '../api'
 import { councilKey } from '../composables/useCouncil'
 import {
+  courtroomFailedPhaseLabel,
   courtroomIssueStatusLabel,
   courtroomOutcomeLabel,
   nextCourtroomDraft,
@@ -57,6 +59,9 @@ const finalVerdict = computed(() => [...events.value].reverse().find(
 const currentIssue = computed(() => courtroom.value?.issues.find(
   (issue) => issue.id === courtroom.value?.current_issue_id,
 ) ?? courtroom.value?.issues.find((issue) => issue.status === 'pending') ?? null)
+const failedIssue = computed(() => courtroom.value?.issues.find(
+  (issue) => issue.status === 'failed',
+) ?? null)
 const primaryLabel = computed(() => {
   const projection = courtroom.value
   const issue = currentIssue.value
@@ -170,6 +175,22 @@ async function retryDraft() {
   void refreshMeetingUntilSettled(meetingId.value)
 }
 
+function failedEvent(issue: CourtroomIssueProjection): MeetingEvent | null {
+  if (issue.status !== 'failed' || !issue.failed_step_id) return null
+  return [...events.value].reverse().find(
+    (event) => event.step_id === issue.failed_step_id && event.status === 'failed',
+  ) ?? null
+}
+
+async function retryIssue(issue: CourtroomIssueProjection) {
+  const event = failedEvent(issue)
+  if (!event) return
+  await runWorkspaceAction(async () => {
+    await retrySelectedStep(event)
+    feedback.value = `${courtroomFailedPhaseLabel(issue.failed_phase)}已重新執行。`
+  })
+}
+
 function ruling(issue: CourtroomIssueProjection) {
   return issue.ruling
 }
@@ -223,6 +244,19 @@ function ruling(issue: CourtroomIssueProjection) {
           <span>{{ courtroomIssueStatusLabel(issue.status) }}</span>
         </header>
         <p v-if="issue.id === courtroom.current_issue_id" class="current-focus">目前焦點</p>
+        <section v-if="issue.status === 'failed'" class="issue-failure" :data-testid="`courtroom-issue-failure-${issue.id}`">
+          <p><strong>{{ courtroomFailedPhaseLabel(issue.failed_phase) }}執行失敗，請重試。</strong></p>
+          <button
+            type="button"
+            class="btn btn-primary btn-sm"
+            :data-testid="`retry-courtroom-issue-${issue.id}`"
+            :disabled="busy || isMeetingRunning || !failedEvent(issue)"
+            @click="retryIssue(issue)"
+          >
+            {{ busy || isMeetingRunning ? '重新執行中…' : `重試${courtroomFailedPhaseLabel(issue.failed_phase)}` }}
+          </button>
+          <p v-if="!failedEvent(issue)" class="error">找不到可重試的失敗紀錄，請到「會議紀錄」查看診斷。</p>
+        </section>
         <section v-if="ruling(issue)" class="issue-ruling" :data-testid="`courtroom-ruling-${issue.id}`">
           <h3>爭點裁定：{{ courtroomOutcomeLabel(ruling(issue)!.outcome) }}</h3>
           <p><strong>理由：</strong>{{ ruling(issue)!.reasoning }}</p>
@@ -232,7 +266,7 @@ function ruling(issue: CourtroomIssueProjection) {
       </li>
     </ol>
 
-    <div v-if="courtroom.status === 'confirmed' && courtroom.final_status !== 'completed'" class="courtroom-primary-action">
+    <div v-if="courtroom.status === 'confirmed' && courtroom.final_status !== 'completed' && !failedIssue" class="courtroom-primary-action">
       <p v-if="currentIssue">目前焦點：{{ currentIssue.title }}</p>
       <button type="button" class="btn btn-primary" data-testid="courtroom-primary-action" :disabled="busy || isMeetingRunning || primaryAction.disabled" @click="startOrContinueMeeting">
         {{ isMeetingRunning ? '執行中…' : primaryLabel }}

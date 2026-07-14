@@ -20,6 +20,14 @@ const ISSUE_STATUS_LABELS: Record<string, string> = {
   'arguments-in-progress': '攻防中',
   'awaiting-ruling': '待裁定',
   ruled: '已裁定',
+  failed: '執行失敗，請重試',
+}
+
+const FAILED_PHASE_LABELS: Record<string, string> = {
+  charge: '檢察官主張',
+  defense: '辯護律師答辯',
+  rebuttal: '檢察官反駁',
+  ruling: '法官爭點裁定',
 }
 
 const OUTCOME_LABELS: Record<string, string> = {
@@ -31,6 +39,10 @@ const OUTCOME_LABELS: Record<string, string> = {
 
 export function courtroomIssueStatusLabel(status: string): string {
   return ISSUE_STATUS_LABELS[status] ?? status
+}
+
+export function courtroomFailedPhaseLabel(phase: string | undefined): string {
+  return phase ? (FAILED_PHASE_LABELS[phase] ?? phase) : '爭點步驟'
 }
 
 export function courtroomOutcomeLabel(outcome: string): string {

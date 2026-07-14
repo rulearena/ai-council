@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 
 import {
+  courtroomFailedPhaseLabel,
   courtroomIssueStatusLabel,
   courtroomOutcomeLabel,
   nextCourtroomDraft,
@@ -26,6 +27,8 @@ test('courtroom editor preserves unsaved work for same meeting and isolates meet
 
 test('courtroom presentation uses understandable Chinese status and outcome labels', () => {
   assert.equal(courtroomIssueStatusLabel('awaiting-ruling'), '待裁定')
+  assert.equal(courtroomIssueStatusLabel('failed'), '執行失敗，請重試')
+  assert.equal(courtroomFailedPhaseLabel('defense'), '辯護律師答辯')
   assert.equal(courtroomOutcomeLabel('proponent-wins'), '主張方勝')
   assert.equal(courtroomOutcomeLabel('respondent-wins'), '答辯方勝')
   assert.equal(courtroomOutcomeLabel('partially-upheld'), '部分成立')

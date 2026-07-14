@@ -62,7 +62,10 @@ export type CourtroomIssueProjection = {
   id: string
   title: string
   position: number
-  status: 'pending' | 'arguments-in-progress' | 'awaiting-ruling' | 'ruled'
+  status: 'pending' | 'arguments-in-progress' | 'awaiting-ruling' | 'ruled' | 'failed'
+  failed_step_id?: string
+  failed_phase?: 'charge' | 'defense' | 'rebuttal' | 'ruling'
+  failure_kind?: 'parse_error' | 'timeout' | 'adapter_error' | 'configuration_error' | 'interrupted'
   ruling?: CourtroomRuling
 }
 
