@@ -1310,6 +1310,36 @@ h2 {
   margin-top: 12px;
 }
 
+.role-directed-composer {
+  display: grid;
+  gap: 6px;
+  margin-top: 12px;
+}
+
+.role-directed-composer label,
+.directed-instruction strong {
+  color: var(--color-text-secondary);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.role-directed-composer textarea {
+  min-height: 84px;
+  resize: vertical;
+}
+
+.directed-instruction {
+  margin-bottom: 12px;
+  border-left: 3px solid var(--color-primary);
+  padding: 8px 10px;
+  background: var(--color-surface-muted);
+}
+
+.directed-instruction p {
+  margin: 4px 0 0;
+  white-space: pre-wrap;
+}
+
 .role-history {
   margin-top: 16px;
   border-top: 1px solid var(--color-border);

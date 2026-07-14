@@ -131,7 +131,12 @@ export type MeetingEvent = {
   round?: number
   content?: string
   created_at?: string
-  interaction_type?: 'directed-role-response' | 'role-sequence-response'
+  interaction_type?:
+    | 'directed-role-instruction'
+    | 'directed-role-response'
+    | 'role-sequence-response'
+  target_role_id?: string
+  in_response_to_event_id?: string
   directed_sequence?: number
   sequence?: number
   sequence_index?: number
@@ -389,8 +394,9 @@ export async function correctMeetingMessage(
 export async function requestRoleResponse(
   meetingId: string,
   role: string,
+  instruction: string,
 ): Promise<void> {
-  await postJson(`/meetings/${meetingId}/roles/${role}/respond`, {})
+  await postJson(`/meetings/${meetingId}/roles/${role}/respond`, { instruction })
 }
 
 export async function requestRoleSequence(

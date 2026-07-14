@@ -43,6 +43,7 @@ class TranscriptProjector:
         role_label = role_labels.get(str(role), "主席" if role == "Human" else str(role))
         built_in_step_labels = {
             "human-message": "主席發言",
+            "human-directed-message": "主席追問",
             "human-correction": "主席訂正",
             "meeting-closed": "會議結案",
             "meeting-cancelled": "會議取消",

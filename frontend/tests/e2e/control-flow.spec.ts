@@ -285,6 +285,7 @@ test('run actions omit frontend model maps and rely on the meeting assignment', 
   await page.getByTestId('start-meeting-button').click()
   await expect(page.getByTestId('operation-status')).toContainText('狀態：已完成')
   await openRoleDrawer(page, 'blue')
+  await page.getByTestId('role-instruction-input').fill('請說明目前最小可行方案')
   await page.getByTestId('request-blue-response-button').click()
   await expect(page.getByTestId('operation-status')).toContainText('狀態：已完成')
   await closeRoleDrawer(page)
@@ -294,7 +295,10 @@ test('run actions omit frontend model maps and rely on the meeting assignment', 
 
   expect(runBodies.map(({ url, body }) => ({ path: new URL(url as string).pathname, body }))).toEqual([
     { path: expect.stringMatching(/\/start$/), body: {} },
-    { path: expect.stringMatching(/\/roles\/Blue\/respond$/), body: {} },
+    {
+      path: expect.stringMatching(/\/roles\/Blue\/respond$/),
+      body: { instruction: '請說明目前最小可行方案' },
+    },
     { path: expect.stringMatching(/\/sequences$/), body: { roles: ['Red', 'Blue', 'Judge'] } },
   ])
 })
@@ -563,6 +567,10 @@ test('user can run a mock meeting and add chair feedback', async ({ page }) => {
   await closeRoleDrawer(page)
 
   await openRoleDrawer(page, 'blue')
+  await expect(page.getByTestId('request-blue-response-button')).toBeDisabled()
+  await page
+    .getByTestId('role-instruction-input')
+    .fill('請針對一週內可完成的最小可行方案補充說明')
   await page.getByTestId('request-blue-response-button').click()
   await expect(page.getByTestId('role-seat-blue')).toHaveAttribute('data-status', 'thinking')
   await expect(page.getByTestId('operation-status')).toContainText('狀態：已完成')
@@ -571,6 +579,10 @@ test('user can run a mock meeting and add chair feedback', async ({ page }) => {
   await expect(page.getByTestId('role-output-panel')).toContainText('Mock argument')
   await expect(page.getByTestId('rich-verdict-decision')).toHaveCount(0)
   await closeRoleDrawer(page)
+
+  await page.reload()
+  await page.getByTestId('past-topics-button').click()
+  await page.getByTestId('meeting-list-item').filter({ hasText: topic }).locator('.meeting-item').click()
 
   await openAdvancedOptions(page)
   await expect(page.getByTestId('role-sequence-controls')).toBeVisible()
@@ -602,6 +614,10 @@ test('user can run a mock meeting and add chair feedback', async ({ page }) => {
   await expect(page.getByTestId('step-timeline')).toContainText('藍軍提案')
   await expect(page.getByTestId('step-timeline')).toContainText('紅軍質詢')
   await expect(page.getByTestId('step-timeline')).toContainText('裁判裁決')
+  await expect(page.getByTestId('step-timeline')).toContainText('主席追問藍軍')
+  await expect(page.getByTestId('step-timeline')).toContainText(
+    '請針對一週內可完成的最小可行方案補充說明',
+  )
   await expect(page.getByTestId('step-timeline')).toContainText('藍軍回應主席追問')
   await expect(page.getByTestId('step-timeline')).toContainText('紅軍依序回應')
   const timelinePresentation = (
@@ -642,6 +658,7 @@ test('user can run a mock meeting and add chair feedback', async ({ page }) => {
     .click()
   await page.getByTestId('records-tab-debug').click()
   await expect(page.getByTestId('debug-panel')).toContainText('"interaction_type": "directed-role-response"')
+  await expect(page.getByTestId('debug-panel')).toContainText('"in_response_to_event_id"')
   await expect(page.getByTestId('debug-panel')).toContainText('"status": "completed"')
 
   await page.getByTestId('records-tab-timeline').click()

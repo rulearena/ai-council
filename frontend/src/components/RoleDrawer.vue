@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, inject } from 'vue'
+import { computed, inject, ref, watch } from 'vue'
 import {
   councilKey,
   activeMode,
@@ -30,6 +30,7 @@ const store = inject(councilKey)!
 const {
   latestRoleEvent,
   chairmanEvents,
+  events,
   loading,
   canRun,
   isTerminalMeeting,
@@ -68,8 +69,25 @@ const displayRole = computed(() =>
     : roleDisplayName(activeMode.value, participants.value, props.role),
 )
 const title = computed(() => displayRole.value)
+const instruction = ref('')
+const linkedInstruction = computed(() => {
+  const eventId = latestEvent.value?.in_response_to_event_id
+  if (!eventId) return null
+  return events.value.find((event) => event.event_id === eventId) ?? null
+})
 const displayStep = (event: Parameters<typeof stepDisplayLabel>[2]) =>
   stepDisplayLabel(activeMode.value, participants.value, event)
+
+watch(() => props.role, () => {
+  instruction.value = ''
+})
+
+async function submitDirectedInstruction() {
+  if (!councilRole.value || !instruction.value.trim()) return
+  if (await requestSelectedRoleResponse(councilRole.value, instruction.value)) {
+    instruction.value = ''
+  }
+}
 </script>
 
 <template>
@@ -101,6 +119,10 @@ const displayStep = (event: Parameters<typeof stepDisplayLabel>[2]) =>
 
     <template v-else-if="councilRole">
       <div class="role-output-panel" data-testid="role-output-panel">
+        <section v-if="linkedInstruction" class="directed-instruction" data-testid="linked-role-instruction">
+          <strong>主席追問</strong>
+          <p>{{ linkedInstruction.content }}</p>
+        </section>
         <template v-if="status === 'completed' && latestEvent">
           <article class="role-output-card" :class="roleClass(councilRole)" :style="roleColorVars(councilRole)">
             <header>
@@ -190,15 +212,26 @@ const displayStep = (event: Parameters<typeof stepDisplayLabel>[2]) =>
         </div>
       </div>
 
-      <button
-        type="button"
-        class="btn btn-primary role-drawer-respond-button"
-        :data-testid="`request-${councilRole.toLowerCase()}-response-button`"
-        @click="requestSelectedRoleResponse(councilRole)"
-        :disabled="loading || !canRun"
-      >
-        請 {{ displayRole }} 回應
-      </button>
+      <div class="role-directed-composer">
+        <label :for="`role-instruction-${councilRole}`">要請 {{ displayRole }} 回答的問題或指示</label>
+        <textarea
+          :id="`role-instruction-${councilRole}`"
+          v-model="instruction"
+          data-testid="role-instruction-input"
+          rows="3"
+          :placeholder="`例如：請針對待釐清事項補充說明`"
+          :disabled="loading || !canRun"
+        />
+        <button
+          type="button"
+          class="btn btn-primary role-drawer-respond-button"
+          :data-testid="`request-${councilRole.toLowerCase()}-response-button`"
+          @click="submitDirectedInstruction"
+          :disabled="loading || !canRun || !instruction.trim()"
+        >
+          請 {{ displayRole }} 回答
+        </button>
+      </div>
 
       <details v-if="pastHistory.length" class="role-history" data-testid="role-history-list">
         <summary data-testid="role-history-toggle">歷史回應（{{ pastHistory.length }}）</summary>

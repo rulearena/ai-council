@@ -150,6 +150,7 @@ function copyDiagnosticStatus(event: MeetingEvent) {
           <strong>{{ displayStep(event) }}</strong>
           <em class="status-badge" :data-status="event.status">{{ statusDisplayLabel(event.status) }}</em>
           <small>{{ formatDateTime(event.created_at) }}</small>
+          <p v-if="event.role === 'Human' && event.content" class="timeline-content">{{ event.content }}</p>
         </button>
         <button
           v-if="event.status === 'failed'"

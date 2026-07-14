@@ -1262,7 +1262,11 @@ def test_meeting_title_goal_contract_and_explicit_legacy_migration(tmp_path: Pat
 
     for method, path, body in [
         ("post", f"/meetings/{legacy_id}/start", {}),
-        ("post", f"/meetings/{legacy_id}/roles/Blue/respond", {}),
+        (
+            "post",
+            f"/meetings/{legacy_id}/roles/Blue/respond",
+            {"instruction": "請回答目前爭點"},
+        ),
         ("post", f"/meetings/{legacy_id}/sequences", {"roles": ["Blue"]}),
         ("post", f"/meetings/{legacy_id}/steps/blue-propose/retry", {}),
     ]:
@@ -1990,13 +1994,7 @@ def test_terminal_meeting_rejects_event_creating_api_calls(tmp_path: Path) -> No
     )
     role_response = client.post(
         f"/meetings/{meeting_id}/roles/Blue/respond",
-        json={
-            "models": {
-                "Blue": "mock-fast",
-                "Red": "mock-fast",
-                "Judge": "mock-fast",
-            }
-        },
+        json={"instruction": "請回答"},
     )
     sequence_response = client.post(
         f"/meetings/{meeting_id}/sequences",
@@ -2139,29 +2137,44 @@ def test_chair_can_request_single_role_response(tmp_path: Path) -> None:
     app = create_test_app(tmp_path)
     client = TestClient(app)
     meeting_id = client.post("/meetings", json={"title": "互動會議", "goal": "互動會議"}).json()["meeting_id"]
-    client.post(
-        f"/meetings/{meeting_id}/messages",
-        json={"content": "請 Blue 先回答最小可行方案。"},
-    )
-
     response = client.post(
         f"/meetings/{meeting_id}/roles/Blue/respond",
-        json={
-            "models": {
-                "Blue": "mock-fast",
-                "Red": "mock-fast",
-                "Judge": "mock-fast",
-            }
-        },
+        json={"instruction": "請先回答最小可行方案。"},
     )
 
     assert response.status_code == 200
     events = client.get(f"/meetings/{meeting_id}").json()["events"]
+    assert events[-2]["step_id"] == "human-directed-message"
+    assert events[-2]["interaction_type"] == "directed-role-instruction"
+    assert events[-2]["target_role_id"] == "Blue"
+    assert events[-2]["content"] == "請先回答最小可行方案。"
     assert events[-1]["step_id"] == "directed-1-blue-response"
     assert events[-1]["role"] == "Blue"
     assert events[-1]["interaction_type"] == "directed-role-response"
+    assert events[-1]["in_response_to_event_id"] == events[-2]["event_id"]
     transcript = client.get(f"/meetings/{meeting_id}/transcript.md").text
     assert "## 藍軍 - 藍軍回應主席追問" in transcript
+
+
+def test_directed_role_response_rejects_blank_instruction(tmp_path: Path) -> None:
+    client = TestClient(create_test_app(tmp_path))
+    meeting_id = client.post(
+        "/meetings",
+        json={"title": "互動會議", "goal": "找出可行方案"},
+    ).json()["meeting_id"]
+
+    response = client.post(
+        f"/meetings/{meeting_id}/roles/Blue/respond",
+        json={"instruction": "   "},
+    )
+
+    assert response.status_code == 422
+    missing = client.post(
+        f"/meetings/{meeting_id}/roles/Blue/respond",
+        json={"models": {"Blue": "mock-fast"}},
+    )
+    assert missing.status_code == 422
+    assert client.get(f"/meetings/{meeting_id}").json()["events"] == []
 
 
 def test_chair_can_request_role_sequence_response(tmp_path: Path) -> None:
@@ -2232,7 +2245,7 @@ models:
     directed_id = create_meeting("Directed assignment")
     directed = client.post(
         f"/meetings/{directed_id}/roles/Blue/respond",
-        json={"models": {"Blue": "request-model"}},
+        json={"instruction": "請回答目前方案"},
     )
     sequence_id = create_meeting("Sequence assignment")
     sequence = client.post(
@@ -2297,7 +2310,7 @@ def test_chair_role_response_ignores_incomplete_legacy_request_models(tmp_path: 
 
     response = client.post(
         f"/meetings/{meeting_id}/roles/Blue/respond",
-        json={"models": {"Red": "mock-fast", "Judge": "mock-fast"}},
+        json={"instruction": "請回答目前方案"},
     )
 
     assert response.status_code == 200
@@ -3728,13 +3741,7 @@ def test_respond_as_role_accepts_mode_roles(tmp_path: Path) -> None:
 
     response = client.post(
         f"/meetings/{meeting_id}/roles/Prosecutor/respond",
-        json={
-            "models": {
-                "Prosecutor": "mock-fast",
-                "Defense": "mock-fast",
-                "Judge": "mock-fast",
-            }
-        },
+        json={"instruction": "請整理目前控方主張"},
     )
     assert response.status_code == 200
     events = client.get(f"/meetings/{meeting_id}").json()["events"]
@@ -3742,7 +3749,7 @@ def test_respond_as_role_accepts_mode_roles(tmp_path: Path) -> None:
 
     rejected = client.post(
         f"/meetings/{meeting_id}/roles/Blue/respond",
-        json={"models": {"Blue": "mock-fast"}},
+        json={"instruction": "請回答"},
     )
     assert rejected.status_code == 400
 
@@ -3805,6 +3812,7 @@ RELAY_PROMPT_TEMPLATES = [
     "hat_blue_synthesis",
     "persona_member",
     "persona_synthesis",
+    "directed_role_response",
 ]
 
 DEBATE_PROMPT_TEMPLATES = {
@@ -3843,6 +3851,8 @@ models:
             content += " {{ instance_prompt }}"
         if template in {"brainstorm_synthesis", "hat_blue_synthesis", "persona_synthesis"}:
             content += " {{ fanout_outputs }}"
+        if template == "directed_role_response":
+            content += " {{ role_display_name }} {{ instruction }}"
         (prompt_dir / f"{template}.md").write_text(content, encoding="utf-8")
     return create_app(
         data_dir=tmp_path / "data",

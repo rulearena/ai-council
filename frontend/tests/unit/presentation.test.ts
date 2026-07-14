@@ -45,6 +45,15 @@ test('directed and sequence events describe the user interaction instead of raw 
 
   assert.equal(
     interactionDisplayLabel(courtroom, participants, {
+      role: 'Human',
+      step_id: 'human-directed-message',
+      interaction_type: 'directed-role-instruction',
+      target_role_id: 'Defense',
+    }),
+    '主席追問辯護律師',
+  )
+  assert.equal(
+    interactionDisplayLabel(courtroom, participants, {
       role: 'Defense',
       step_id: 'directed-1-defense-response',
       interaction_type: 'directed-role-response',

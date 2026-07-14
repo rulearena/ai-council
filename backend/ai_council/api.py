@@ -158,6 +158,18 @@ class StartMeetingRequest(BaseModel):
     models: dict[str, str] = Field(default_factory=dict)
 
 
+class DirectedRoleResponseRequest(BaseModel):
+    instruction: str
+
+    @field_validator("instruction")
+    @classmethod
+    def require_non_blank(cls, value: str) -> str:
+        stripped = value.strip()
+        if not stripped:
+            raise ValueError("must not be blank")
+        return stripped
+
+
 class RunRoleSequenceRequest(BaseModel):
     roles: list[str]
     models: dict[str, str] = Field(default_factory=dict)
@@ -750,7 +762,7 @@ def create_app(
     def respond_as_role(
         meeting_id: str,
         role: str,
-        request: StartMeetingRequest,
+        request: DirectedRoleResponseRequest,
     ) -> dict[str, str]:
         metadata = metadata_store.get(meeting_id)
         require_meeting_goal(metadata)
@@ -758,11 +770,24 @@ def create_app(
         mode = meeting_mode(mode_catalog, metadata)
         if mode.category != "relay":
             raise HTTPException(status_code=400, detail=f"Mode does not support directed responses: {mode.id}")
+        participants = project_participants(mode, metadata)
+        participant = next(
+            (item for item in participants if item["role_id"] == role),
+            None,
+        )
+        role_definition = next((item for item in mode.roles if item.id == role), None)
+        role_display_name = str(
+            (participant or {}).get("display_name")
+            or (participant or {}).get("name")
+            or (role_definition.name if role_definition is not None else role)
+        )
         try:
             runner.respond_as_role(
                 meeting_id=meeting_id,
                 goal=metadata["goal"],
                 role=role,
+                role_display_name=role_display_name,
+                instruction=request.instruction,
                 model_assignments=resolved_meeting_models(
                     meeting_assignments,
                     metadata,
@@ -1572,7 +1597,10 @@ def transcript_presentation_labels(
         base_step_id = str(event.get("base_step_id") or step_id)
         role_label = role_labels.get(str(event.get("role")), str(event.get("role", "")))
         interaction_type = event.get("interaction_type")
-        if interaction_type == "directed-role-response":
+        if interaction_type == "directed-role-instruction":
+            target_role = str(event.get("target_role_id", ""))
+            step_labels[base_step_id] = f"主席追問{role_labels.get(target_role, target_role)}"
+        elif interaction_type == "directed-role-response":
             step_labels[base_step_id] = f"{role_label}回應主席追問"
         elif interaction_type == "role-sequence-response":
             step_labels[base_step_id] = f"{role_label}依序回應"

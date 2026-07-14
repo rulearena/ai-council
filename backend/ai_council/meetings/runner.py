@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 import time
+import uuid
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -164,30 +165,64 @@ class MeetingRunner:
         meeting_id: str,
         goal: str,
         role: str,
+        role_display_name: str,
+        instruction: str,
         model_assignments: dict[str, ModelConfig],
         plan: RelayPlan,
         inputs: dict[str, str] | None = None,
     ) -> None:
         if self._is_terminal(meeting_id):
             return
+        instruction = instruction.strip()
+        if not instruction:
+            raise ValueError("Directed role instruction cannot be blank")
         step = plan.directed_steps.get(role)
         if step is None:
             raise ValueError(f"Unknown role: {role}")
         if role not in model_assignments:
             raise ValueError(f"Missing model assignment for role: {role}")
         directed_sequence = self._next_directed_response_number(meeting_id)
+        instruction_event_id = f"{meeting_id}:human-directed-message:{uuid.uuid4().hex}"
+        self.repository.append_event(
+            meeting_id,
+            {
+                "event_id": instruction_event_id,
+                "meeting_id": meeting_id,
+                "step_id": "human-directed-message",
+                "role": "Human",
+                "attempt": 1,
+                "status": "completed",
+                "interaction_type": "directed-role-instruction",
+                "target_role_id": role,
+                "content": instruction,
+            },
+        )
+        directed_step = StepDefinition(
+            step_id=step.step_id,
+            role=step.role,
+            template_name="directed_role_response",
+            output_schema_id=step.output_schema_id,
+        )
         self._run_step(
             meeting_id=meeting_id,
             goal=goal,
             model_assignments=model_assignments,
-            inputs=inputs,
-            step=step,
+            inputs=self._inputs_for_role(
+                inputs,
+                role,
+                extra={
+                    "instruction": instruction,
+                    "role_display_name": role_display_name,
+                },
+            ),
+            step=directed_step,
             attempt=1,
             round_number=self._next_round_number(meeting_id, plan),
             event_step_id=f"directed-{directed_sequence}-{role.lower()}-response",
             extra_event_fields={
                 "interaction_type": "directed-role-response",
                 "directed_sequence": directed_sequence,
+                "in_response_to_event_id": instruction_event_id,
             },
             prior_transcript_override=None,
         )
@@ -872,7 +907,13 @@ class MeetingRunner:
             "status": "running",
             **prompt_metadata,
         }
-        for key in ["interaction_type", "directed_sequence", "sequence", "sequence_index"]:
+        for key in [
+            "interaction_type",
+            "directed_sequence",
+            "in_response_to_event_id",
+            "sequence",
+            "sequence_index",
+        ]:
             value = extra_event_fields.get(key)
             if isinstance(value, (str, int)):
                 state[key] = value

@@ -878,12 +878,12 @@ export function useCouncil() {
     })
   }
 
-  async function requestSelectedRoleResponse(role: CouncilRole) {
-    if (!selectedMeeting.value || !canRun.value) return
+  async function requestSelectedRoleResponse(role: CouncilRole, instruction: string) {
+    if (!selectedMeeting.value || !canRun.value || !instruction.trim()) return false
     clearContinueHint()
     pendingRoles.value.push(role)
-    await runAction(async () => {
-      await requestRoleResponse(selectedMeeting.value!.meeting_id, role)
+    return runAction(async () => {
+      await requestRoleResponse(selectedMeeting.value!.meeting_id, role, instruction.trim())
       await openMeeting(selectedMeeting.value!.meeting_id)
     })
   }

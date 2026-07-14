@@ -16,7 +16,11 @@ export type PresentationEvent = {
   role: string
   step_id: string
   base_step_id?: string
-  interaction_type?: 'directed-role-response' | 'role-sequence-response'
+  interaction_type?:
+    | 'directed-role-instruction'
+    | 'directed-role-response'
+    | 'role-sequence-response'
+  target_role_id?: string
   status?: string
 }
 
@@ -58,6 +62,9 @@ export function interactionDisplayLabel(
   event: PresentationEvent,
 ): string | null {
   const roleName = roleDisplayName(mode, participants, event.role)
+  if (event.interaction_type === 'directed-role-instruction' && event.target_role_id) {
+    return `主席追問${roleDisplayName(mode, participants, event.target_role_id)}`
+  }
   if (event.interaction_type === 'directed-role-response') return `${roleName}回應主席追問`
   if (event.interaction_type === 'role-sequence-response') return `${roleName}依序回應`
   return null
