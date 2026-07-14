@@ -7,6 +7,7 @@
 ## 固定契約
 
 - 新 meeting participant metadata 保存 relay/parallel 完整 roster 的 model id。
+- Legacy client 相容：request 明確送 participants 時必須完整有效；省略或空 participants 時，以 models.yaml 第一筆 materialize 完整 roster 到 metadata。
 - `PUT /meetings/{meeting_id}/participant-models` 是唯一明確 assignment 更新 interface，body 為完整 role→model map。
 - Effective assignment 的 deterministic 次序為：有效 metadata；metadata 無值時最新 event；models.yaml 第一筆；unavailable。
 - Metadata 指向已刪除 model 時走 default，不回掃更舊 event。
