@@ -1006,6 +1006,29 @@ def create_app(
         mode = meeting_mode(mode_catalog, metadata)
         if mode.category != "relay":
             raise HTTPException(status_code=400, detail=f"Mode does not support directed responses: {mode.id}")
+        directed_context: dict[str, object] = {}
+        if mode.id == "courtroom":
+            courtroom = courtroom_workflow.project(
+                metadata,
+                repository.read_events(meeting_id),
+            )
+            if (
+                courtroom is None
+                or courtroom.get("status") != "confirmed"
+                or "directed-response" not in courtroom.get("available_actions", [])
+                or not courtroom.get("current_issue_id")
+            ):
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        "Directed courtroom responses are only available after the current "
+                        "issue arguments complete and before its ruling"
+                    ),
+                )
+            directed_context = {
+                "docket_revision": int(courtroom["revision"]),
+                "issue_id": str(courtroom["current_issue_id"]),
+            }
         participants = project_participants(mode, metadata)
         participant = next(
             (item for item in participants if item["role_id"] == role),
@@ -1031,6 +1054,7 @@ def create_app(
                 ),
                 plan=relay_plan(mode),
                 inputs=meeting_inputs_for_runner(metadata, repository.read_case_files(meeting_id)),
+                context_fields=directed_context,
             )
         except ValueError as error:
             raise HTTPException(status_code=400, detail=str(error)) from error

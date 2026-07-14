@@ -481,8 +481,13 @@ def test_unconfirmed_courtroom_goal_change_after_ai_output_appends_audit_event(
     client = create_client(tmp_path)
     meeting_id = create_courtroom(client)
     client.post(
-        f"/meetings/{meeting_id}/roles/Prosecutor/respond",
-        json={"instruction": "先整理卷宗"},
+        f"/meetings/{meeting_id}/courtroom/issues/draft",
+        json={"revision": 0},
+    )
+    wait_for_courtroom(
+        client,
+        meeting_id,
+        lambda courtroom: courtroom["status"] == "draft",
     )
     before = client.get(f"/meetings/{meeting_id}").json()["events"]
 
@@ -742,3 +747,98 @@ def test_failed_ruling_requires_retry_and_reuses_the_original_step(tmp_path: Pat
         (failed_ruling["step_id"], 1, "failed"),
         (failed_ruling["step_id"], 2, "completed"),
     ]
+
+
+def test_directed_courtroom_response_is_only_available_during_ruling_pause(
+    tmp_path: Path,
+) -> None:
+    client = create_client(tmp_path)
+    meeting_id = create_courtroom(client)
+
+    before = client.get(f"/meetings/{meeting_id}").json()["events"]
+    unconfigured = client.post(
+        f"/meetings/{meeting_id}/roles/Prosecutor/respond",
+        json={"instruction": "請釐清占有權源"},
+    )
+    assert unconfigured.status_code == 409
+    assert client.get(f"/meetings/{meeting_id}").json()["events"] == before
+
+    client.put(
+        f"/meetings/{meeting_id}/courtroom/issues",
+        json={"revision": 0, "issues": [{"title": "占有權源"}]},
+    )
+    client.post(
+        f"/meetings/{meeting_id}/courtroom/issues/confirm",
+        json={"revision": 1},
+    )
+    pending_meeting = client.get(f"/meetings/{meeting_id}").json()
+    assert pending_meeting["courtroom"]["available_actions"] == ["start-issue", "add-note"]
+    pending_events = pending_meeting["events"]
+    pending = client.post(
+        f"/meetings/{meeting_id}/roles/Defense/respond",
+        json={"instruction": "請先答辯"},
+    )
+    assert pending.status_code == 409
+    assert client.get(f"/meetings/{meeting_id}").json()["events"] == pending_events
+
+    client.post(f"/meetings/{meeting_id}/courtroom/issues/issue-1/arguments")
+    paused = wait_for_courtroom(
+        client,
+        meeting_id,
+        lambda courtroom: courtroom["issues"][0]["status"] == "awaiting-ruling",
+    )
+    assert paused["courtroom"]["available_actions"] == [
+        "submit-ruling",
+        "add-note",
+        "directed-response",
+    ]
+    directed = client.post(
+        f"/meetings/{meeting_id}/roles/Defense/respond",
+        json={"instruction": "哪些證據支持辯方？"},
+    )
+    assert directed.status_code == 200
+    after_directed = client.get(f"/meetings/{meeting_id}").json()
+    linked = after_directed["events"][-2:]
+    assert [event["interaction_type"] for event in linked] == [
+        "directed-role-instruction",
+        "directed-role-response",
+    ]
+    assert {event["docket_revision"] for event in linked} == {2}
+    assert {event["issue_id"] for event in linked} == {"issue-1"}
+    assert after_directed["courtroom"]["issues"][0]["status"] == "awaiting-ruling"
+
+    client.post(f"/meetings/{meeting_id}/courtroom/issues/issue-1/ruling")
+    ruled = wait_for_courtroom(
+        client,
+        meeting_id,
+        lambda courtroom: courtroom["issues"][0]["status"] == "ruled",
+    )
+    assert ruled["courtroom"]["available_actions"] == ["final-verdict"]
+    ruled_events = ruled["events"]
+    between = client.post(
+        f"/meetings/{meeting_id}/roles/Judge/respond",
+        json={"instruction": "請再說明"},
+    )
+    assert between.status_code == 409
+    assert client.get(f"/meetings/{meeting_id}").json()["events"] == ruled_events
+
+    client.post(f"/meetings/{meeting_id}/courtroom/final-verdict")
+    completed = wait_for_courtroom(
+        client,
+        meeting_id,
+        lambda courtroom: courtroom["final_status"] == "completed",
+    )
+    final_event = next(
+        event
+        for event in completed["events"]
+        if event.get("interaction_type") == "courtroom-final-verdict"
+        and event["status"] == "completed"
+    )
+    assert "哪些證據支持辯方？" in final_event["prompt_messages"][0]["content"]
+    completed_events = completed["events"]
+    after_final = client.post(
+        f"/meetings/{meeting_id}/roles/Prosecutor/respond",
+        json={"instruction": "最終追問"},
+    )
+    assert after_final.status_code == 409
+    assert client.get(f"/meetings/{meeting_id}").json()["events"] == completed_events

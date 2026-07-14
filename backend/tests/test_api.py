@@ -3845,6 +3845,25 @@ def test_respond_as_role_accepts_mode_roles(tmp_path: Path) -> None:
         "/meetings",
         json={"title": "法庭審理", "goal": "法庭審理", "mode_id": "courtroom"},
     ).json()["meeting_id"]
+    assert client.put(
+        f"/meetings/{meeting_id}/courtroom/issues",
+        json={"revision": 0, "issues": [{"title": "控方主張是否成立"}]},
+    ).status_code == 200
+    assert client.post(
+        f"/meetings/{meeting_id}/courtroom/issues/confirm",
+        json={"revision": 1},
+    ).status_code == 200
+    assert client.post(
+        f"/meetings/{meeting_id}/courtroom/issues/issue-1/arguments"
+    ).status_code == 202
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline:
+        meeting = client.get(f"/meetings/{meeting_id}").json()
+        if meeting["courtroom"]["issues"][0]["status"] == "awaiting-ruling":
+            break
+        time.sleep(0.01)
+    else:
+        raise AssertionError("Courtroom issue arguments did not complete")
 
     response = client.post(
         f"/meetings/{meeting_id}/roles/Prosecutor/respond",

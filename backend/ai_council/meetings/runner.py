@@ -259,6 +259,11 @@ class MeetingRunner:
                 "interaction_type": "directed-role-response",
                 "directed_sequence": int(failed_event.get("directed_sequence", 1)),
                 "in_response_to_event_id": instruction_event_id,
+                **{
+                    key: failed_event[key]
+                    for key in ("docket_revision", "issue_id")
+                    if key in failed_event
+                },
             },
             prior_transcript_override=None,
         )
@@ -274,6 +279,7 @@ class MeetingRunner:
         model_assignments: dict[str, ModelConfig],
         plan: RelayPlan,
         inputs: dict[str, str] | None = None,
+        context_fields: dict[str, object] | None = None,
     ) -> None:
         if self._is_terminal(meeting_id):
             return
@@ -286,6 +292,7 @@ class MeetingRunner:
         if role not in model_assignments:
             raise ValueError(f"Missing model assignment for role: {role}")
         directed_sequence = self._next_directed_response_number(meeting_id)
+        context_fields = context_fields or {}
         instruction_event_id = f"{meeting_id}:human-directed-message:{uuid.uuid4().hex}"
         self.repository.append_event(
             meeting_id,
@@ -299,6 +306,7 @@ class MeetingRunner:
                 "interaction_type": "directed-role-instruction",
                 "target_role_id": role,
                 "content": instruction,
+                **context_fields,
             },
         )
         directed_step = StepDefinition(
@@ -327,6 +335,7 @@ class MeetingRunner:
                 "interaction_type": "directed-role-response",
                 "directed_sequence": directed_sequence,
                 "in_response_to_event_id": instruction_event_id,
+                **context_fields,
             },
             prior_transcript_override=None,
         )

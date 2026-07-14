@@ -109,7 +109,7 @@ def project_courtroom(
             else ["retry-failed-step"]
         )
     elif any(issue["status"] == "pending" for issue in issues):
-        available_actions = ["start-issue", "add-note", "directed-response"]
+        available_actions = ["start-issue", "add-note"]
     else:
         available_actions = []
     return {
