@@ -10,7 +10,7 @@ Canonical backlog: `spec.md` §15 #87
 
 ## 核准契約
 
-1. 主席 composer 以明確 audience/action 下拉統一補充、全體回應與指定角色回答。
+1. 主席 composer 以明確 audience/action 下拉統一補充、全體回應與 mode/backend 支援的指定角色回答；parallel 不顯示不支援的單一角色選項。
 2. title/goal 建立後可編輯；一般 mode 的 goal 變更只影響未來 prompt，已有 AI output 時需確認並追加 audit event。courtroom goal 只允許在 docket 確認前修改，確認後唯讀；title 在非執行中仍可修改。
 3. 「系統設定」與「流程操作」分工；移除模糊且依隱藏狀態變動的「繼續討論」。
 4. 法院 meeting 必須先取得、編修並確認爭點清單。

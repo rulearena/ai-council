@@ -10,7 +10,7 @@ Blocked by: 01（需使用後端 projected action/state）
 
 ## 行為契約
 
-- composer 下拉至少包含：記錄補充、請全體回應、每個 active role 的指定回答。
+- composer 下拉至少包含：記錄補充、請全體回應、每個 mode/backend 支援定向回應之 active role 的指定回答；parallel 不顯示不支援的角色選項。
 - label、placeholder、submit text 與 success feedback 必須明示是否呼叫 AI 及 audience。
 - 記錄補充只 append Human message；指定角色沿用 linked directed instruction；請全體回應保存 Human message後執行公開顯示的下一動作，courtroom 必須遵守 issue phase。
 - Role Drawer 仍可看歷史/輸出，但不再作為唯一可發現的指定追問入口。
