@@ -337,7 +337,7 @@ function buildParticipants() {
 </script>
 
 <template>
-  <Modal :show="show" title="New Case" test-id="new-case-modal" close-test-id="new-case-close-button" @close="$emit('close')">
+  <Modal :show="show" title="新增會議" test-id="new-case-modal" close-test-id="new-case-close-button" @close="$emit('close')">
     <p
       v-if="caseFileLimitsLoading"
       class="case-file-cost-note"
@@ -389,8 +389,8 @@ function buildParticipants() {
       <p class="participant-setup-tagline">{{ selectedMode.tagline }}</p>
 
       <label class="topic-input-row">
-        名稱
-        <input v-model="title" aria-label="名稱" />
+        會議名稱
+        <input v-model="title" aria-label="會議名稱" />
       </label>
 
       <label class="topic-input-row">
@@ -614,7 +614,7 @@ function buildParticipants() {
         </label>
       </section>
       <p v-if="models.length === 0" class="error" data-testid="new-case-model-error" role="alert">
-        沒有可用模型，請先在 Settings 建立模型設定。
+        沒有可用模型，請先到「設定」建立模型設定。
       </p>
 
       <p

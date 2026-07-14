@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, inject, ref, watch } from 'vue'
 import { activeMode, councilKey, formatDateTime, sequencePresets } from '../composables/useCouncil'
+import { roleDisplayName, statusDisplayLabel, stepDisplayLabel } from '../presentation'
 
 const store = inject(councilKey)!
 const {
@@ -43,14 +44,22 @@ function onKeydown(event: KeyboardEvent) {
   if (event.key === 'Escape') advancedOpen.value = false
 }
 
-const failedStepTitle = computed(() =>
-  failedRole.value ? `${failedRole.value} 的回應失敗了，請點擊席位重試該步驟` : undefined,
-)
-
 // "開始新回合" runs the active mode's full step list from the top - describe it with
 // that mode's own step labels (spec.md 16.2) instead of a hardcoded red-blue sequence, so
 // this stays accurate for courtroom/debate/any future mode.
 const roundStepsSummary = computed(() => (activeMode.value.steps ?? []).map((step) => step.label).join(' → '))
+const participants = computed(() => selectedMeeting.value?.participants ?? [])
+const failedRoleName = computed(() =>
+  failedRole.value ? roleDisplayName(activeMode.value, participants.value, failedRole.value) : '',
+)
+const failedStepTitle = computed(() =>
+  failedRole.value ? `${failedRoleName.value}的回應失敗了，請點擊席位重試該步驟` : undefined,
+)
+const lastStepLabel = computed(() => {
+  const meeting = selectedMeeting.value
+  const event = meeting?.events?.at(-1)
+  return event ? stepDisplayLabel(activeMode.value, participants.value, event) : ''
+})
 </script>
 
 <template>
@@ -65,7 +74,7 @@ const roundStepsSummary = computed(() => (activeMode.value.steps ?? []).map((ste
       <strong>請先設定會議名稱與目標</strong>
       <p>舊會議不會把原主題自動當成 AI 目標；保存後才能繼續執行。</p>
       <label>
-        名稱
+        會議名稱
         <input v-model="migrationTitle" aria-label="舊會議名稱" />
       </label>
       <label>
@@ -84,8 +93,8 @@ const roundStepsSummary = computed(() => (activeMode.value.steps ?? []).map((ste
     </section>
 
     <div class="action-bar-status" data-testid="operation-status">
-      <span><i class="status-dot" :data-status="operationStatus" aria-hidden="true"></i>狀態：{{ operationStatus }}</span>
-      <span v-if="selectedMeeting?.last_step_id">最後步驟：{{ selectedMeeting.last_step_id }}</span>
+      <span><i class="status-dot" :data-status="operationStatus" aria-hidden="true"></i>狀態：{{ statusDisplayLabel(operationStatus) }}</span>
+      <span v-if="lastStepLabel">最後步驟：{{ lastStepLabel }}</span>
       <span v-if="selectedMeeting">更新：{{ formatDateTime(selectedMeeting.updated_at) }}</span>
     </div>
 
@@ -99,7 +108,7 @@ const roundStepsSummary = computed(() => (activeMode.value.steps ?? []).map((ste
         <line x1="12" y1="9" x2="12" y2="13" />
         <line x1="12" y1="17" x2="12.01" y2="17" />
       </svg>
-      {{ failedRole }} 的回應失敗了，點擊席位可重試
+      {{ failedRoleName }}的回應失敗了，點擊席位可重試
     </p>
 
     <div class="action-bar-row">

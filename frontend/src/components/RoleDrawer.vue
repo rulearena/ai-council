@@ -2,6 +2,7 @@
 import { computed, inject } from 'vue'
 import {
   councilKey,
+  activeMode,
   formatDateTime,
   isCouncilRole,
   roleClass,
@@ -13,6 +14,12 @@ import {
 import Drawer from './Drawer.vue'
 import RoleSilhouette from './RoleSilhouette.vue'
 import type { LegacyRoleOutput, StructuredVerdict } from '../api'
+import {
+  decisionDisplayLabel,
+  OUTPUT_LABELS,
+  roleDisplayName,
+  stepDisplayLabel,
+} from '../presentation'
 
 const props = defineProps<{
   role: CouncilRole | 'Chairman' | null
@@ -30,6 +37,7 @@ const {
   retrySelectedStep,
   correctSelectedMessage,
   roleHistory,
+  selectedMeeting,
 } = store
 
 const isChairman = computed(() => props.role === 'Chairman')
@@ -53,7 +61,15 @@ const status = computed(() => {
 const history = computed(() => (councilRole.value ? roleHistory(councilRole.value) : []))
 const pastHistory = computed(() => history.value.slice(0, -1).reverse())
 
-const title = computed(() => (isChairman.value ? '主席' : props.role ?? ''))
+const participants = computed(() => selectedMeeting.value?.participants ?? [])
+const displayRole = computed(() =>
+  isChairman.value || !props.role
+    ? isChairman.value ? '主席' : ''
+    : roleDisplayName(activeMode.value, participants.value, props.role),
+)
+const title = computed(() => displayRole.value)
+const displayStep = (event: Parameters<typeof stepDisplayLabel>[2]) =>
+  stepDisplayLabel(activeMode.value, participants.value, event)
 </script>
 
 <template>
@@ -89,21 +105,21 @@ const title = computed(() => (isChairman.value ? '主席' : props.role ?? ''))
           <article class="role-output-card" :class="roleClass(councilRole)" :style="roleColorVars(councilRole)">
             <header>
               <strong class="role-badge" :class="roleClass(councilRole)" :style="roleColorVars(councilRole)" data-testid="role-badge">
-                <img v-if="roleIcon(councilRole)" :src="roleIcon(councilRole)" class="role-icon" :alt="councilRole" />
+                <img v-if="roleIcon(councilRole)" :src="roleIcon(councilRole)" class="role-icon" :alt="displayRole" />
                 <RoleSilhouette v-else :color="roleColor(councilRole)" :size="16" />
-                {{ councilRole }}
+                {{ displayRole }}
               </strong>
-              <span>{{ latestEvent.step_id }}</span>
+              <span>{{ displayStep(latestEvent) }}</span>
             </header>
-            <h3>Role Outputs</h3>
+            <h3>{{ OUTPUT_LABELS.roleOutputs }}</h3>
             <p>{{ latestEvent.parsed_output?.summary }}</p>
             <template v-if="richVerdict">
               <section data-testid="rich-verdict-decision">
-                <h3>Decision</h3>
-                <p>{{ richVerdict.decision }}</p>
+                <h3>{{ OUTPUT_LABELS.decision }}</h3>
+                <p>{{ decisionDisplayLabel(richVerdict.decision) }}</p>
               </section>
               <section data-testid="rich-verdict-findings">
-                <h3>Findings</h3>
+                <h3>{{ OUTPUT_LABELS.findings }}</h3>
                 <ul>
                   <li v-for="finding in richVerdict.findings" :key="finding.title">
                     <strong>{{ finding.title }}</strong>
@@ -113,7 +129,7 @@ const title = computed(() => (isChairman.value ? '主席' : props.role ?? ''))
                 </ul>
               </section>
               <section data-testid="rich-verdict-risks">
-                <h3>Risks</h3>
+                <h3>{{ OUTPUT_LABELS.risks }}</h3>
                 <ul>
                   <li v-for="risk in richVerdict.risks" :key="risk.title">
                     <strong>{{ risk.title }}</strong>
@@ -124,14 +140,14 @@ const title = computed(() => (isChairman.value ? '主席' : props.role ?? ''))
               </section>
             </template>
             <template v-else-if="legacyOutput">
-              <h3>Arguments</h3>
+              <h3>{{ OUTPUT_LABELS.arguments }}</h3>
               <ul>
                 <li v-for="argument in legacyOutput.arguments" :key="argument.title">
                   <strong>{{ argument.title }}</strong>
                   <span>{{ argument.detail }}</span>
                 </li>
               </ul>
-              <h3>Risks</h3>
+              <h3>{{ OUTPUT_LABELS.risks }}</h3>
               <ul>
                 <li v-for="risk in legacyOutput.risks" :key="risk.title">
                   <strong>{{ risk.title }}</strong>
@@ -139,17 +155,17 @@ const title = computed(() => (isChairman.value ? '主席' : props.role ?? ''))
                 </li>
               </ul>
             </template>
-            <h3>Recommendation</h3>
+            <h3>{{ OUTPUT_LABELS.recommendation }}</h3>
             <p>{{ latestEvent.parsed_output?.recommendation }}</p>
             <template v-if="richVerdict">
               <section data-testid="rich-verdict-conditions">
-                <h3>Conditions</h3>
+                <h3>{{ OUTPUT_LABELS.conditions }}</h3>
                 <ul>
                   <li v-for="condition in richVerdict.conditions" :key="condition">{{ condition }}</li>
                 </ul>
               </section>
               <section data-testid="rich-verdict-unresolved">
-                <h3>Unresolved Questions</h3>
+                <h3>{{ OUTPUT_LABELS.unresolvedQuestions }}</h3>
                 <ul>
                   <li v-for="question in richVerdict.unresolved_questions" :key="question">{{ question }}</li>
                 </ul>
@@ -170,7 +186,7 @@ const title = computed(() => (isChairman.value ? '主席' : props.role ?? ''))
           </button>
         </template>
         <div v-else class="empty-state">
-          <p>No role output yet</p>
+          <p>尚無角色回應</p>
         </div>
       </div>
 
@@ -181,7 +197,7 @@ const title = computed(() => (isChairman.value ? '主席' : props.role ?? ''))
         @click="requestSelectedRoleResponse(councilRole)"
         :disabled="loading || !canRun"
       >
-        請 {{ councilRole }} 回應
+        請 {{ displayRole }} 回應
       </button>
 
       <details v-if="pastHistory.length" class="role-history" data-testid="role-history-list">
@@ -194,7 +210,7 @@ const title = computed(() => (isChairman.value ? '主席' : props.role ?? ''))
           :style="roleColorVars(councilRole)"
         >
           <header>
-            <span>{{ event.step_id }}</span>
+            <span>{{ displayStep(event) }}</span>
             <small>{{ formatDateTime(event.created_at) }}</small>
           </header>
           <p v-if="event.status === 'failed'" class="role-status-error">{{ event.error }}</p>

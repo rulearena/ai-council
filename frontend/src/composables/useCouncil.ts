@@ -4,6 +4,7 @@ import roleRedIcon from '../assets/roles/red.png'
 import roleJudgeIcon from '../assets/roles/judge.png'
 import { DEFAULT_MODE_ID, getModeById, refreshModeCatalog, type ModeDefinition, type ModeRoleDefinition } from '../modes'
 import { applyModeScene } from '../scenes'
+import { roleDisplayName } from '../presentation'
 import {
   ApiError,
   addMeetingMessage,
@@ -94,12 +95,18 @@ export const sequencePresets = computed<SequencePreset[]>(() => {
   const adjudicator = mode.roles.find((role) => role.kind !== 'member')?.id
   if (!adjudicator || members.length < 2) return []
   const reversed = [...members].reverse()
-  const label = (roles: string[]) => roles.join(' -> ')
+  const presentationParticipants = activeRoleSource.value.map((role) => ({
+    role_id: role.id,
+    display_name: role.name,
+  }))
+  const label = (roles: string[]) =>
+    roles.map((role) => roleDisplayName(mode, presentationParticipants, role)).join(' → ')
+  const adjudicatorName = roleDisplayName(mode, presentationParticipants, adjudicator)
   return [
     { id: 'members-reversed-adj', label: label([...reversed, adjudicator]), roles: [...reversed, adjudicator] },
     { id: 'members-adj', label: label([...members, adjudicator]), roles: [...members, adjudicator] },
     { id: 'members-reversed', label: label(reversed), roles: reversed },
-    { id: 'adj-only', label: `${adjudicator} only`, roles: [adjudicator] },
+    { id: 'adj-only', label: `只請${adjudicatorName}`, roles: [adjudicator] },
   ]
 })
 
@@ -911,9 +918,9 @@ export function useCouncil() {
     })
   }
 
-  async function copyMeetingId(meetingId: string) {
+  async function copyMeetingInfo(meeting: Meeting) {
     try {
-      await navigator.clipboard.writeText(meetingId)
+      await navigator.clipboard.writeText(`${meeting.title}\n會議 ID：${meeting.meeting_id}`)
       meetingIdCopied.value = true
       if (meetingIdCopiedTimeout) clearTimeout(meetingIdCopiedTimeout)
       meetingIdCopiedTimeout = setTimeout(() => {
@@ -1032,7 +1039,7 @@ export function useCouncil() {
     requestSelectedRoleResponse,
     requestSelectedRoleSequence,
     retrySelectedStep,
-    copyMeetingId,
+    copyMeetingInfo,
     roleSeatStatus,
     roleSeatLabel,
     roleHistory,

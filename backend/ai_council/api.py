@@ -844,9 +844,18 @@ def create_app(
     @app.get("/meetings/{meeting_id}/transcript.md")
     def get_transcript(meeting_id: str) -> PlainTextResponse:
         metadata = metadata_store.get(meeting_id)
+        mode = meeting_mode(mode_catalog, metadata)
+        events = repository.read_events(meeting_id)
+        role_labels, step_labels = transcript_presentation_labels(
+            mode,
+            project_participants(mode, metadata),
+            events,
+        )
         transcript = projector.project(
-            repository.read_events(meeting_id),
+            events,
             title=meeting_title(metadata),
+            role_labels=role_labels,
+            step_labels=step_labels,
         )
         return PlainTextResponse(transcript, media_type="text/markdown")
 
@@ -1523,6 +1532,53 @@ def meeting_title(metadata: dict[str, Any]) -> str:
         return title
     legacy_topic = metadata.get("topic")
     return legacy_topic if isinstance(legacy_topic, str) else ""
+
+
+def transcript_presentation_labels(
+    mode: ModeDefinition,
+    participants: list[dict[str, Any]],
+    events: list[dict[str, Any]],
+) -> tuple[dict[str, str], dict[str, str]]:
+    role_labels = {role.id: role.name for role in mode.roles}
+    role_labels.update(
+        {
+            str(participant["role_id"]): str(
+                participant.get("display_name") or role_labels.get(str(participant["role_id"]))
+                or participant["role_id"]
+            )
+            for participant in participants
+        }
+    )
+    role_labels["Human"] = "主席"
+    role_labels["System"] = "系統"
+
+    step_labels = {
+        step.template.replace("_", "-"): step.label
+        for step in mode.steps
+    }
+    if mode.synthesis is not None:
+        step_labels["synthesis"] = mode.synthesis.label
+
+    human_steps = {
+        "human-message": "主席發言",
+        "human-correction": "主席訂正",
+        "meeting-closed": "會議結案",
+        "meeting-cancelled": "會議取消",
+        "meeting-reopened": "重新開啟會議",
+    }
+    step_labels.update(human_steps)
+    for event in events:
+        step_id = str(event.get("step_id", ""))
+        base_step_id = str(event.get("base_step_id") or step_id)
+        role_label = role_labels.get(str(event.get("role")), str(event.get("role", "")))
+        interaction_type = event.get("interaction_type")
+        if interaction_type == "directed-role-response":
+            step_labels[base_step_id] = f"{role_label}回應主席追問"
+        elif interaction_type == "role-sequence-response":
+            step_labels[base_step_id] = f"{role_label}依序回應"
+        elif base_step_id.startswith("member-"):
+            step_labels[base_step_id] = f"{role_label}發想"
+    return role_labels, step_labels
 
 
 def require_meeting_goal(metadata: dict[str, Any]) -> str:

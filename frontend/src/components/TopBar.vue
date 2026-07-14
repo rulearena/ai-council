@@ -3,7 +3,7 @@ import { inject } from 'vue'
 import { councilKey } from '../composables/useCouncil'
 
 const store = inject(councilKey)!
-const { selectedMeeting, meetingIdCopied, copyMeetingId } = store
+const { selectedMeeting, meetingIdCopied, copyMeetingInfo } = store
 
 defineEmits<{
   'open-settings': []
@@ -19,13 +19,13 @@ defineEmits<{
     <div class="top-bar-left">
       <h1>AI 眾議院</h1>
       <template v-if="selectedMeeting">
-        <span class="meeting-id-pill" data-testid="meeting-id-display">{{ selectedMeeting.meeting_id }}</span>
+        <span class="meeting-id-pill" data-testid="meeting-title-display">{{ selectedMeeting.title }}</span>
         <button
           type="button"
           class="btn btn-secondary btn-sm copy-meeting-id-button"
           data-testid="copy-meeting-id-button"
-          :aria-label="meetingIdCopied ? '已複製會議 ID' : '複製會議 ID'"
-          @click="copyMeetingId(selectedMeeting.meeting_id)"
+          :aria-label="meetingIdCopied ? '已複製會議資訊' : '複製會議資訊（包含會議 ID）'"
+          @click="copyMeetingInfo(selectedMeeting)"
         >
           <svg v-if="!meetingIdCopied" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
             <rect x="9" y="9" width="11" height="11" rx="2" />
@@ -63,7 +63,7 @@ defineEmits<{
         data-testid="settings-button"
         @click="$emit('open-settings')"
       >
-        Settings
+        設定
       </button>
       <button
         type="button"
@@ -71,7 +71,7 @@ defineEmits<{
         data-testid="past-topics-button"
         @click="$emit('open-past-topics')"
       >
-        Past Topics
+        歷史會議
       </button>
       <button
         type="button"
@@ -79,7 +79,7 @@ defineEmits<{
         data-testid="new-case-button"
         @click="$emit('open-new-case')"
       >
-        New Case
+        新增會議
       </button>
     </div>
   </header>

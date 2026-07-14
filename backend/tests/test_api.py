@@ -1353,7 +1353,7 @@ def test_meeting_create_list_get_start_and_transcript(tmp_path: Path) -> None:
     transcript = client.get(f"/meetings/{meeting_id}/transcript.md")
     assert transcript.status_code == 200
     assert transcript.text.startswith("# 先做後端？\n")
-    assert "## Blue - blue-propose" in transcript.text
+    assert "## 藍軍 - 藍軍提案" in transcript.text
 
 
 def test_legacy_event_without_schema_id_projects_as_role_output_v1_without_rewrite(
@@ -1839,8 +1839,8 @@ def test_meeting_close_endpoint_records_closure_and_projects_transcript(
     assert client.get(f"/meetings/{meeting_id}").json()["status"] == "closed"
     assert client.get("/meetings").json()[0]["status"] == "closed"
     transcript = client.get(f"/meetings/{meeting_id}/transcript.md").text
-    assert "## System - meeting" in transcript
-    assert "**Status:** closed" in transcript
+    assert "## 系統 - 會議結案" in transcript
+    assert "**狀態：** 已結案" in transcript
 
 
 def test_reopen_endpoint_restores_terminal_meeting_to_open_state(tmp_path: Path) -> None:
@@ -2041,7 +2041,7 @@ def test_human_chair_message_is_persisted_and_projected(tmp_path: Path) -> None:
     events = client.get(f"/meetings/{meeting_id}").json()["events"]
     assert events[-1]["event_id"] == event["event_id"]
     transcript = client.get(f"/meetings/{meeting_id}/transcript.md").text
-    assert "## Human - human-message" in transcript
+    assert "## 主席 - 主席發言" in transcript
     assert "我先補充限制：只能花一週做 MVP。" in transcript
 
 
@@ -2161,7 +2161,7 @@ def test_chair_can_request_single_role_response(tmp_path: Path) -> None:
     assert events[-1]["role"] == "Blue"
     assert events[-1]["interaction_type"] == "directed-role-response"
     transcript = client.get(f"/meetings/{meeting_id}/transcript.md").text
-    assert "## Blue - directed-1-blue-response" in transcript
+    assert "## 藍軍 - 藍軍回應主席追問" in transcript
 
 
 def test_chair_can_request_role_sequence_response(tmp_path: Path) -> None:
@@ -2196,8 +2196,8 @@ def test_chair_can_request_role_sequence_response(tmp_path: Path) -> None:
     assert {event["interaction_type"] for event in ai_events} == {"role-sequence-response"}
     assert [event["sequence_index"] for event in ai_events] == [1, 2, 3]
     transcript = client.get(f"/meetings/{meeting_id}/transcript.md").text
-    assert "## Red - sequence-1-red-response" in transcript
-    assert "## Judge - sequence-1-judge-response" in transcript
+    assert "## 紅軍 - 紅軍依序回應" in transcript
+    assert "## 裁判 - 裁判依序回應" in transcript
 
 
 def test_directed_and_sequence_responses_use_persisted_assignments(

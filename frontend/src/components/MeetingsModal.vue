@@ -3,6 +3,7 @@ import { inject } from 'vue'
 import { councilKey } from '../composables/useCouncil'
 import { formatDateTime } from '../composables/useCouncil'
 import Modal from './Modal.vue'
+import { statusDisplayLabel } from '../presentation'
 
 defineProps<{ show: boolean }>()
 const emit = defineEmits<{ close: [] }>()
@@ -30,7 +31,7 @@ async function selectMeeting(meetingId: string) {
 </script>
 
 <template>
-  <Modal :show="show" title="Past Topics" test-id="meetings-modal" close-test-id="meetings-close-button" @close="$emit('close')">
+  <Modal :show="show" title="歷史會議" test-id="meetings-modal" close-test-id="meetings-close-button" @close="$emit('close')">
     <div class="meeting-filters" data-testid="meeting-filters">
       <input
         v-model="meetingSearch"
@@ -40,9 +41,9 @@ async function selectMeeting(meetingId: string) {
       />
       <select v-model="statusFilter" data-testid="meeting-status-filter">
         <option value="all">全部</option>
-        <option value="open">open</option>
-        <option value="closed">closed</option>
-        <option value="cancelled">cancelled</option>
+        <option value="open">進行中</option>
+        <option value="closed">已結案</option>
+        <option value="cancelled">已取消</option>
       </select>
     </div>
 
@@ -66,10 +67,9 @@ async function selectMeeting(meetingId: string) {
             </svg>
             {{ meeting.title }}
           </span>
-          <em class="status-badge" :data-status="meeting.status">{{ meeting.status }}</em>
-          <strong>{{ meeting.activity_status }}</strong>
+          <em class="status-badge" :data-status="meeting.status">{{ statusDisplayLabel(meeting.status) }}</em>
+          <strong>{{ statusDisplayLabel(meeting.activity_status) }}</strong>
           <small>更新 {{ formatDateTime(meeting.updated_at) }}</small>
-          <small class="meeting-id-text">{{ meeting.meeting_id }}</small>
           <span class="meeting-tags" data-testid="meeting-tags">
             <em v-for="tag in meeting.tags" :key="tag" class="tag-badge">{{ tag }}</em>
           </span>
@@ -135,7 +135,7 @@ async function selectMeeting(meetingId: string) {
         <li v-if="transcriptSearchResults.length === 0">沒有符合的會議</li>
         <li v-for="meeting in transcriptSearchResults" :key="meeting.meeting_id">
           <button type="button" class="btn btn-ghost" @click="selectMeeting(meeting.meeting_id)">
-            {{ meeting.title }} <small>{{ meeting.meeting_id }}</small>
+            {{ meeting.title }}
           </button>
         </li>
       </ul>
