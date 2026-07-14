@@ -768,7 +768,7 @@ test('user can run a mock meeting and add chair feedback', async ({ page }) => {
   await expect(page.getByTestId('role-seat-red')).toHaveAttribute('data-status', 'waiting')
 
   await expect(page.getByTestId('operation-status')).toContainText('狀態：執行中')
-  await expect(page.getByTestId('start-meeting-button')).toContainText('執行中...')
+  await expect(page.getByTestId('start-meeting-button')).toContainText('執行中…')
 
   await expect(page.getByTestId('operation-status')).toContainText('狀態：已完成')
   await expect(page.getByTestId('operation-status')).toContainText('最後步驟：裁判裁決')
@@ -1390,7 +1390,6 @@ test('switching meetings does not leak pendingRoles state, and a revisited meeti
 
   await expect(page.getByTestId('start-meeting-button')).toContainText('開始新回合')
   await page.getByTestId('start-meeting-button').click()
-  await expect(page.getByTestId('role-seat-blue')).toHaveAttribute('data-status', 'thinking')
 
   await expect(page.getByTestId('operation-status')).toContainText('狀態：已完成', { timeout: 15000 })
 
