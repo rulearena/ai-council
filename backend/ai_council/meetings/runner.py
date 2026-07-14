@@ -444,6 +444,8 @@ class MeetingRunner:
             attempt=attempt,
             round_number=round_number,
             model_config_id=config.id,
+            adapter=config.adapter,
+            prompt=prompt,
             prompt_metadata=prompt_metadata,
             extra_event_fields=extra_event_fields,
         )
@@ -817,6 +819,8 @@ class MeetingRunner:
         attempt: int,
         round_number: int,
         model_config_id: str,
+        adapter: str,
+        prompt: str,
         prompt_metadata: dict[str, object],
         extra_event_fields: dict[str, object],
     ) -> None:
@@ -830,6 +834,8 @@ class MeetingRunner:
             "role": step.role,
             "attempt": attempt,
             "model_config_id": model_config_id,
+            "adapter": adapter,
+            "prompt_messages": [{"role": "user", "content": prompt}],
             "status": "running",
             **prompt_metadata,
         }

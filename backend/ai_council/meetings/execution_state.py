@@ -17,6 +17,8 @@ class ActiveExecutionState(TypedDict):
     role: str
     attempt: int
     model_config_id: str
+    adapter: NotRequired[str]
+    prompt_messages: NotRequired[list[dict[str, str]]]
     status: Literal["running"]
     started_at: NotRequired[str]
     prompt_template_name: NotRequired[str]
@@ -69,6 +71,17 @@ class MeetingExecutionStateStore:
 
 
 def interrupted_execution_event(state: ActiveExecutionState) -> dict[str, object]:
+    completed_at = datetime.now(UTC)
+    started_at = state.get("started_at")
+    duration_ms = 0
+    if started_at:
+        try:
+            duration_ms = max(
+                0,
+                round((completed_at - datetime.fromisoformat(started_at)).total_seconds() * 1000),
+            )
+        except ValueError:
+            duration_ms = 0
     event: dict[str, object] = {
         "event_id": (
             f"{state['meeting_id']}:{state['step_id']}:"
@@ -82,7 +95,11 @@ def interrupted_execution_event(state: ActiveExecutionState) -> dict[str, object
         "attempt": state["attempt"],
         "model_config_id": state["model_config_id"],
         "status": "failed",
+        "failure_kind": "interrupted",
         "error": "Model execution was interrupted before completion. Retry this failed step manually.",
+        "retry_scheduled": False,
+        "completed_at": completed_at.isoformat(),
+        "duration_ms": duration_ms,
     }
     for key in [
         "prompt_template_name",
@@ -93,6 +110,9 @@ def interrupted_execution_event(state: ActiveExecutionState) -> dict[str, object
         "directed_sequence",
         "sequence",
         "sequence_index",
+        "adapter",
+        "prompt_messages",
+        "started_at",
     ]:
         if key in state:
             event[key] = state[key]

@@ -451,6 +451,67 @@ def test_parse_failure_attempt_persists_complete_diagnostics_before_retry(
     assert failed["duration_ms"] >= 0
 
 
+def test_parallel_parse_failure_diagnostics_preserve_attempt_semantics(
+    tmp_path: Path,
+) -> None:
+    runner = build_runner(
+        tmp_path,
+        adapter=FakeAdapter(
+            ["not json", '{"value":"member 1 recovered"}', '{"value":"synthesized"}'],
+            token_usage={"prompt_tokens": 5, "completion_tokens": 2, "total_tokens": 7},
+        ),
+        output_schemas=OutputSchemaRegistry(
+            [OutputSchemaCodec("test-output/v1", TEST_ONLY_SCHEMA, DictOutputParser())]
+        ),
+        templates=("brainstorm_member", "brainstorm_synthesis"),
+    )
+    member = ParallelMemberStep(
+        step_id="member-1",
+        role="Member-1",
+        template_name="brainstorm_member",
+        display_name="委員 1",
+        instance_prompt="診斷",
+        index=1,
+        output_schema_id="test-output/v1",
+    )
+
+    runner.start_parallel(
+        meeting_id="meeting-1",
+        topic="平行診斷",
+        model_assignments={
+            "Member-1": ModelConfig(id="mock-member", adapter="mock"),
+            "Moderator": ModelConfig(id="mock-moderator", adapter="mock"),
+        },
+        plan=ParallelPlan(
+            members=[member],
+            synthesis=StepDefinition(
+                "synthesis",
+                "Moderator",
+                "brainstorm_synthesis",
+                output_schema_id="test-output/v1",
+            ),
+        ),
+        inputs=None,
+    )
+
+    failed, completed, _synthesis = runner.repository.read_events("meeting-1")
+    assert (failed["step_id"], failed["attempt"], failed["retry_scheduled"]) == (
+        "fanout-1-member-1",
+        1,
+        True,
+    )
+    assert (completed["step_id"], completed["attempt"], completed["status"]) == (
+        "fanout-1-member-1",
+        2,
+        "completed",
+    )
+    assert failed["failure_kind"] == "parse_error"
+    assert failed["raw_output"] == "not json"
+    assert failed["model_config_id"] == "mock-member"
+    assert failed["adapter"] == "mock"
+    assert failed["token_usage"]["total_tokens"] == 7
+
+
 def test_injected_registry_is_shared_from_catalog_through_plan_and_runner(
     tmp_path: Path,
 ) -> None:

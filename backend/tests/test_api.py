@@ -1018,7 +1018,10 @@ def test_app_startup_marks_leftover_execution_state_failed(tmp_path: Path) -> No
                 "role": "Blue",
                 "attempt": 1,
                 "model_config_id": "mock-fast",
+                "adapter": "mock",
                 "status": "running",
+                "started_at": "2020-07-14T01:02:03+00:00",
+                "prompt_messages": [{"role": "user", "content": "diagnostic prompt"}],
                 "prompt_template_name": "blue_propose",
                 "prompt_template_hash": TEST_BLUE_PROPOSE_TEMPLATE_HASH,
                 "output_schema_hash": TEST_OUTPUT_SCHEMA_HASH,
@@ -1038,6 +1041,15 @@ def test_app_startup_marks_leftover_execution_state_failed(tmp_path: Path) -> No
     assert meeting["events"][-1]["prompt_template_name"] == "blue_propose"
     assert meeting["events"][-1]["prompt_template_hash"] == TEST_BLUE_PROPOSE_TEMPLATE_HASH
     assert meeting["events"][-1]["output_schema_hash"] == TEST_OUTPUT_SCHEMA_HASH
+    assert meeting["events"][-1]["failure_kind"] == "interrupted"
+    assert meeting["events"][-1]["adapter"] == "mock"
+    assert meeting["events"][-1]["prompt_messages"] == [
+        {"role": "user", "content": "diagnostic prompt"}
+    ]
+    assert meeting["events"][-1]["started_at"] == "2020-07-14T01:02:03+00:00"
+    assert meeting["events"][-1]["completed_at"] >= meeting["events"][-1]["started_at"]
+    assert meeting["events"][-1]["duration_ms"] >= 0
+    assert meeting["events"][-1]["retry_scheduled"] is False
     assert "interrupted" in meeting["events"][-1]["error"].lower()
     assert not execution_state_path.exists()
 
