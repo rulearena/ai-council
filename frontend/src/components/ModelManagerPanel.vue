@@ -107,6 +107,12 @@ function invalidateModelTest(id: string) {
   testFeedback.value = next
 }
 
+function invalidatePendingModelTests() {
+  for (const [id, feedback] of Object.entries(testFeedback.value)) {
+    if (feedback.phase === 'testing' || feedback.phase === 'slow') invalidateModelTest(id)
+  }
+}
+
 function testIsRunning(id: string): boolean {
   const phase = testFeedback.value[id]?.phase
   return phase === 'testing' || phase === 'slow'
@@ -136,7 +142,7 @@ async function handleTest(id: string) {
   try {
     const result = await testModel(id)
     if (!isCurrentModelTest(id, generation)) return
-    await refreshModels()
+    await refreshModels(() => isCurrentModelTest(id, generation))
     if (!isCurrentModelTest(id, generation)) return
     clearTestSlowTimer(id)
     testFeedback.value = {
@@ -293,6 +299,7 @@ function openCreateForm() {
 }
 
 function openEditForm(model: ModelConfig) {
+  invalidatePendingModelTests()
   invalidateModelTest(model.id)
   formMode.value = 'edit'
   formId.value = model.id

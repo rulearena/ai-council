@@ -2359,6 +2359,126 @@ test('editing a model invalidates its pending connection-test feedback', async (
   ).toHaveCount(0)
 })
 
+test('editing another model invalidates every pending connection test', async ({ page }) => {
+  let pendingTestRoute: Route | undefined
+  let modelRefreshCount = 0
+  await page.goto('/')
+  await page.getByTestId('settings-button').click()
+  await page.getByTestId('model-manager-tab').click()
+  const testedRow = modelManagerRow(page, 'mock-fast')
+  const initialStatus = await testedRow.locator('.status-dot').getAttribute('data-status')
+
+  await page.route('**/models', async (route) => {
+    if (route.request().method() !== 'GET') return route.continue()
+    modelRefreshCount += 1
+    const response = await route.fetch()
+    const models = (await response.json()) as Array<Record<string, unknown>>
+    const staleStatus = initialStatus === 'unavailable' ? 'available' : 'unavailable'
+    await route.fulfill({
+      response,
+      json: models.map((model) =>
+        model.id === 'mock-fast'
+          ? { ...model, status: staleStatus, health_error: 'stale test result' }
+          : model,
+      ),
+    })
+  })
+  await page.route('**/models/mock-fast/test', async (route) => {
+    pendingTestRoute = route
+  })
+
+  await page.getByTestId('test-model-button-mock-fast').click()
+  await expect.poll(() => Boolean(pendingTestRoute)).toBe(true)
+  await page.getByTestId('edit-model-button-mock-slow').click()
+  await expect(page.getByTestId('model-form-id-input')).toHaveValue('mock-slow')
+  await pendingTestRoute!.fulfill({
+    contentType: 'application/json',
+    body: JSON.stringify({ status: 'available', tested_at: '2026-07-14T12:04:00Z' }),
+  })
+
+  await expect(testedRow.getByTestId('model-test-feedback-mock-fast')).toHaveCount(0)
+  await page.evaluate(
+    () =>
+      new Promise<void>((resolve) =>
+        requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
+      ),
+  )
+  expect(modelRefreshCount).toBe(0)
+  await expect(testedRow.locator('.status-dot')).toHaveAttribute('data-status', initialStatus!)
+})
+
+test('an invalidated model refresh cannot overwrite a newer shared health projection', async ({
+  page,
+}) => {
+  let modelGetCount = 0
+  let oldGetRoute: Route | undefined
+  let oldGetResponse: Awaited<ReturnType<Route['fetch']>> | undefined
+  let oldModels: Array<Record<string, unknown>> = []
+  let markOldGetStarted!: () => void
+  const oldGetStarted = new Promise<void>((resolve) => {
+    markOldGetStarted = resolve
+  })
+
+  await page.goto('/')
+  await page.getByTestId('settings-button').click()
+  await page.getByTestId('model-manager-tab').click()
+  await page.route('**/models/mock-fast/test', async (route) => {
+    await route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify({ status: 'available', tested_at: '2026-07-14T12:05:00Z' }),
+    })
+  })
+  await page.route('**/models', async (route) => {
+    if (route.request().method() !== 'GET') return route.continue()
+    modelGetCount += 1
+    const response = await route.fetch()
+    const models = (await response.json()) as Array<Record<string, unknown>>
+    if (modelGetCount === 1) {
+      oldGetRoute = route
+      oldGetResponse = response
+      oldModels = models.map((model) =>
+        model.id === 'mock-fast'
+          ? { ...model, status: 'unavailable', health_error: 'stale health projection' }
+          : model,
+      )
+      markOldGetStarted()
+      return
+    }
+    await route.fulfill({
+      response,
+      json: models.map((model) =>
+        model.id === 'mock-fast'
+          ? { ...model, status: 'available', health_error: null }
+          : model,
+      ),
+    })
+  })
+
+  await page.getByTestId('test-model-button-mock-fast').click()
+  await oldGetStarted
+  await closeSettings(page)
+  await page.getByTestId('settings-button').click()
+  await page.getByTestId('model-manager-tab').click()
+  await page.getByTestId('test-model-button-mock-fast').click()
+  await expect.poll(() => modelGetCount).toBe(2)
+  await expect(
+    modelManagerRow(page, 'mock-fast').getByTestId('model-test-feedback-mock-fast'),
+  ).toHaveText('連線成功')
+
+  await oldGetRoute!.fulfill({ response: oldGetResponse!, json: oldModels })
+  await page.evaluate(
+    () =>
+      new Promise<void>((resolve) =>
+        requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
+      ),
+  )
+  await page.getByTestId('general-tab').click()
+  await page.getByTestId('model-manager-tab').click()
+  const row = modelManagerRow(page, 'mock-fast')
+  await expect(row.locator('.status-dot')).toHaveAttribute('data-status', 'available')
+  await expect(row).not.toContainText('stale health projection')
+})
+
 test('deleting and recreating a model cannot inherit its pending connection-test result', async ({
   page,
 }) => {
