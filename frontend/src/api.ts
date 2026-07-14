@@ -136,6 +136,7 @@ export type MeetingEvent = {
   duration_ms?: number
   failure_kind?: 'parse_error' | 'timeout' | 'adapter_error' | 'configuration_error' | 'interrupted'
   retry_scheduled?: boolean
+  result_discarded?: boolean
   adapter_stdout_excerpt?: string
   adapter_stderr_excerpt?: string
   error?: string

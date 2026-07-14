@@ -48,6 +48,7 @@ const diagnosticKeys = [
   'completed_at',
   'duration_ms',
   'retry_scheduled',
+  'result_discarded',
   'error',
   'adapter_stdout_excerpt',
   'adapter_stderr_excerpt',
@@ -78,6 +79,12 @@ function copyDiagnosticLabel(event: MeetingEvent) {
   if (copiedDiagnosticEventId.value === event.event_id) return '已複製'
   if (copyDiagnosticErrorEventId.value === event.event_id) return '複製失敗'
   return '複製診斷 JSON'
+}
+
+function copyDiagnosticStatus(event: MeetingEvent) {
+  if (copiedDiagnosticEventId.value === event.event_id) return '已複製'
+  if (copyDiagnosticErrorEventId.value === event.event_id) return '複製失敗'
+  return ''
 }
 </script>
 
@@ -204,6 +211,13 @@ function copyDiagnosticLabel(event: MeetingEvent) {
           >
             {{ copyDiagnosticLabel(event) }}
           </button>
+          <span
+            class="visually-hidden"
+            role="status"
+            aria-live="polite"
+            aria-atomic="true"
+            data-testid="copy-attempt-diagnostics-status"
+          >{{ copyDiagnosticStatus(event) }}</span>
         </details>
       </div>
     </section>
