@@ -10,9 +10,10 @@
 2. Ticket 02：CLI preset domain red→green，再接 Model Manager 與 legacy compatibility。
 3. Ticket 04：把 Anthropic/Gemini discovery 接入 Provider UI 與 manual fallback。
 4. Ticket 03：test feedback/race red→green，最後統一視覺與可存取狀態。
-5. Orchestrator 執行 full backend/unit/build/e2e 與真瀏覽器 smoke。
-6. Standards/Spec 兩位獨立 Reviewer 平行審查；Blocking/Major 回原 Executor 修復後複驗。
-7. 通過後更新 spec/HANDOFF/tickets，merge main，清理 worktree/branch/runtime。
+5. Ticket 05：backend health result ordering，阻止舊檢查 late-write 覆蓋新結果。
+6. Orchestrator 執行 full backend/unit/build/e2e 與真瀏覽器 smoke。
+7. Standards/Spec 兩位獨立 Reviewer 平行審查；Blocking/Major 回原 Executor 修復後複驗。
+8. 通過後更新 spec/HANDOFF/tickets，merge main，清理 worktree/branch/runtime。
 
 ## TDD seams
 
