@@ -13,6 +13,10 @@ export class LatestDiscoveryRequest {
     this.generation += 1
   }
 
+  manualModelEdited(): void {
+    this.invalidate()
+  }
+
   async run(
     identity: string,
     load: () => Promise<DiscoveryResponse>,

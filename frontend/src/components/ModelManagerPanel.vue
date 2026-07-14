@@ -140,6 +140,20 @@ function resetDiscovery() {
   manualModelEntry.value = true
 }
 
+function handleManualModelInput() {
+  discoveryRequest.manualModelEdited()
+  discoveryModels.value = []
+  discoveryLoading.value = false
+  discoveryMessage.value = ''
+  manualModelEntry.value = true
+}
+
+function handleDiscoveredModelChange() {
+  discoveryRequest.invalidate()
+  discoveryLoading.value = false
+  discoveryMessage.value = ''
+}
+
 function handleProviderChange() {
   const provider = providerDefinition.value
   formBaseUrl.value = provider.defaultBaseUrl ?? ''
@@ -409,7 +423,7 @@ async function saveForm() {
         <p v-if="discoveryMessage" class="error" data-testid="model-form-discovery-message" role="alert">{{ discoveryMessage }}</p>
         <label v-if="discoveryModels.length && !manualModelEntry" class="topic-input-row">
           Exact model ID
-          <select v-model="formModel" data-testid="model-form-discovered-model-select">
+          <select v-model="formModel" data-testid="model-form-discovered-model-select" @change="handleDiscoveredModelChange">
             <option v-for="modelId in discoveryModels" :key="modelId" :value="modelId">{{ modelId }}</option>
           </select>
         </label>
@@ -422,7 +436,7 @@ async function saveForm() {
         >{{ manualModelEntry ? '改用已載入模型' : '手動輸入新 model ID' }}</button>
         <label v-if="manualModelEntry" class="topic-input-row">
           Exact model ID
-          <input v-model="formModel" data-testid="model-form-model-input" aria-label="model" />
+          <input v-model="formModel" data-testid="model-form-model-input" aria-label="model" @input="handleManualModelInput" />
           <em v-if="fieldError('model')" class="model-form-field-error" data-testid="model-form-error-model">{{ fieldError('model') }}</em>
         </label>
         <label class="dev-mode-toggle">

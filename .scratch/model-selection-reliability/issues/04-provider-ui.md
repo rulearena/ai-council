@@ -33,3 +33,4 @@ Blocked by: 02, 03
 - 2026-07-14：工具沒有 gpt-5.6-luna selector，Executor 使用 assigned runtime。
 - 2026-07-14 review fix：Discovery 改由公開的 latest-request coordinator 管理 generation 與 captured form/provider identity。Provider／connection 切換、close/reopen、新 request 都會淘汰舊 generation；stale success、empty、error 不再能更新 model options、form model 或 discovery 狀態。可控 Promise unit tests 覆蓋 invalidation 與 overlapping requests。
 - 2026-07-14：Standards Minor「transport kind 重複判斷」不阻擋本次安全修復；ProviderDefinition kind schema 調整延後，避免在 race fix 中擴大 catalog public contract。
+- 2026-07-14 review round 2：Manual exact model input 與 refresh 中的 discovered select 改選都會淘汰 in-flight discovery；輸入保持可用，不以 disabled 規避 race。Late success、empty、error 的可控 Promise regression test 證明使用者的新 model ID 不會被舊 response 覆寫或隱藏。

@@ -64,3 +64,28 @@ test('a newer request is the only request allowed to publish completion events',
     { type: 'settled', identity: 'create|custom' },
   ])
 })
+
+test('manual exact model edits invalidate late discovery success, empty result, and error', async () => {
+  for (const completion of ['success', 'empty', 'error'] as const) {
+    const coordinator = new LatestDiscoveryRequest()
+    const pending = deferred<{ models: string[] }>()
+    const events: DiscoveryEvent[] = []
+    const run = coordinator.run(
+      'create|openai|before-manual-edit',
+      () => pending.promise,
+      (event) => events.push(event),
+    )
+
+    // This is the public seam used when the user types an exact model ID while
+    // discovery is still in flight. Their explicit choice supersedes the request.
+    coordinator.manualModelEdited()
+    if (completion === 'success') pending.resolve({ models: ['late-discovered-model'] })
+    if (completion === 'empty') pending.resolve({ models: [] })
+    if (completion === 'error') pending.reject(new Error('late provider error'))
+    await run
+
+    assert.deepEqual(events, [
+      { type: 'started', identity: 'create|openai|before-manual-edit' },
+    ])
+  }
+})
