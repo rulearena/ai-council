@@ -3921,6 +3921,14 @@ def test_directed_response_cannot_bypass_unresolved_fixed_relay_failure(
     assert "retry" in response.json()["detail"].lower()
     assert client.get(f"/meetings/{meeting_id}").json()["events"] == before
 
+    sequence = client.post(
+        f"/meetings/{meeting_id}/sequences",
+        json={"roles": ["Blue", "Red"]},
+    )
+    assert sequence.status_code == 409
+    assert "retry" in sequence.json()["detail"].lower()
+    assert client.get(f"/meetings/{meeting_id}").json()["events"] == before
+
 
 def test_local_frontend_origin_can_call_api(tmp_path: Path) -> None:
     app = create_test_app(tmp_path)

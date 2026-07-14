@@ -2,26 +2,29 @@ from __future__ import annotations
 
 import json
 import shutil
+import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
 
-from ai_council.api import create_app
+from ai_council.api import MeetingMetadataStore, create_app
 from ai_council.meetings.courtroom import project_courtroom
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 
-def create_client(tmp_path: Path) -> TestClient:
+def create_client(
+    tmp_path: Path,
+    *,
+    models_yaml: str = "models:\n  - id: mock-fast\n    adapter: mock\n",
+) -> TestClient:
     config_dir = tmp_path / "config"
     config_dir.mkdir()
-    (config_dir / "models.yaml").write_text(
-        "models:\n  - id: mock-fast\n    adapter: mock\n",
-        encoding="utf-8",
-    )
+    (config_dir / "models.yaml").write_text(models_yaml, encoding="utf-8")
     shutil.copy(PROJECT_ROOT / "config" / "modes.yaml", config_dir / "modes.yaml")
     return TestClient(
         create_app(
@@ -1019,3 +1022,91 @@ def test_failed_courtroom_directed_response_retry_reuses_instruction_and_issue_c
     assert {event["in_response_to_event_id"] for event in responses} == {instruction_id}
     assert {event["issue_id"] for event in responses} == {"issue-1"}
     assert {event["docket_revision"] for event in responses} == {2}
+
+
+def test_participant_assignment_wins_race_before_directed_reservation_and_prompt_snapshot(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    client = create_client(
+        tmp_path,
+        models_yaml="""
+models:
+  - id: mock-fast
+    adapter: mock
+  - id: mock-new
+    adapter: mock
+""".strip(),
+    )
+    meeting_id = create_courtroom(client)
+    client.put(
+        f"/meetings/{meeting_id}/courtroom/issues",
+        json={"revision": 0, "issues": [{"title": "占有權源"}]},
+    )
+    client.post(
+        f"/meetings/{meeting_id}/courtroom/issues/confirm",
+        json={"revision": 1},
+    )
+    client.post(f"/meetings/{meeting_id}/courtroom/issues/issue-1/arguments")
+    wait_for_courtroom(
+        client,
+        meeting_id,
+        lambda courtroom: courtroom["issues"][0]["status"] == "awaiting-ruling",
+    )
+
+    mutation_entered = threading.Event()
+    release_mutation = threading.Event()
+    directed_read = threading.Event()
+    original_update = MeetingMetadataStore.update
+    original_get = MeetingMetadataStore.get
+
+    def blocking_update(self, target_meeting_id, transform):
+        mutation_entered.set()
+        assert release_mutation.wait(timeout=5)
+        return original_update(self, target_meeting_id, transform)
+
+    def observed_get(self, target_meeting_id):
+        if mutation_entered.is_set():
+            directed_read.set()
+        return original_get(self, target_meeting_id)
+
+    monkeypatch.setattr(MeetingMetadataStore, "update", blocking_update)
+    monkeypatch.setattr(MeetingMetadataStore, "get", observed_get)
+
+    with ThreadPoolExecutor(max_workers=1, thread_name_prefix="assignment") as assignments:
+        assignment_future = assignments.submit(
+            client.put,
+            f"/meetings/{meeting_id}/participant-models",
+            json={
+                "models": {
+                    "Prosecutor": "mock-fast",
+                    "Defense": "mock-new",
+                    "Judge": "mock-fast",
+                }
+            },
+        )
+        assert mutation_entered.wait(timeout=5)
+        with ThreadPoolExecutor(max_workers=1, thread_name_prefix="directed") as directed:
+            directed_future = directed.submit(
+                client.post,
+                f"/meetings/{meeting_id}/roles/Defense/respond",
+                json={"instruction": "請使用最新模型回答"},
+            )
+            assert not directed_read.wait(timeout=0.2)
+            release_mutation.set()
+            assert assignment_future.result(timeout=5).status_code == 200
+            assert directed_future.result(timeout=5).status_code == 202
+
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline:
+        responses = [
+            event
+            for event in client.get(f"/meetings/{meeting_id}").json()["events"]
+            if event.get("interaction_type") == "directed-role-response"
+        ]
+        if responses and responses[-1]["status"] == "completed":
+            break
+        time.sleep(0.01)
+    else:
+        raise AssertionError("Directed response did not complete")
+    assert responses[-1]["model_config_id"] == "mock-new"
