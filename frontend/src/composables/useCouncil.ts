@@ -1031,19 +1031,22 @@ export function useCouncil() {
     })
   }
 
-  async function retrySelectedStep(event: MeetingEvent) {
-    if (!selectedMeeting.value || !canRun.value || event.status !== 'failed') return
+  async function retrySelectedStep(event: MeetingEvent): Promise<boolean> {
+    if (!selectedMeeting.value || !canRun.value || event.status !== 'failed') return false
     clearContinueHint()
     const baseStepId = event.base_step_id ?? event.step_id
     const cascade = retryCascadeRoles(baseStepId)
     const remainingRoles = cascade.length ? cascade : isCouncilRole(event.role) ? [event.role] : []
-    pendingRoles.value.push(...remainingRoles)
     const meetingId = selectedMeeting.value.meeting_id
-    await runAction(async () => {
-      await retryStep(meetingId, event.step_id)
-      await openMeeting(meetingId)
-      void refreshMeetingUntilSettled(meetingId)
-    })
+    return runWithPendingRoles(
+      pendingRoles.value,
+      remainingRoles,
+      () => runAction(async () => {
+        await retryStep(meetingId, event.step_id)
+        await openMeeting(meetingId)
+        void refreshMeetingUntilSettled(meetingId)
+      }),
+    )
   }
 
   async function copyMeetingInfo(meeting: Meeting) {

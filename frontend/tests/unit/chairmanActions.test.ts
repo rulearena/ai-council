@@ -183,6 +183,19 @@ test('failed chairman AI action rolls back its optimistic role queue', async () 
   assert.deepEqual(pendingRoles, ['Existing'])
 })
 
+test('accepted chairman AI action keeps its optimistic role queue', async () => {
+  const pendingRoles = ['Existing']
+
+  const succeeded = await runWithPendingRoles(
+    pendingRoles,
+    ['Prosecutor', 'Defense'],
+    async () => true,
+  )
+
+  assert.equal(succeeded, true)
+  assert.deepEqual(pendingRoles, ['Existing', 'Prosecutor', 'Defense'])
+})
+
 test('primary action ignores Human notes and names the exact next relay action', () => {
   const steps = [
     { role: 'Blue', label: '藍軍提案', template: 'blue_propose' },

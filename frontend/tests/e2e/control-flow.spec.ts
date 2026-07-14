@@ -2269,6 +2269,42 @@ test('courtroom AI draft shows progress and keeps manual editing available after
   await page.getByTestId('meeting-list-item').filter({ hasText: topic }).getByTestId('delete-meeting-button').click()
 })
 
+test('courtroom retry rejection rolls back pending roles and never reports false success', async ({ page }) => {
+  await page.goto('/')
+  const topic = `E2E courtroom retry rejection ${Date.now()}`
+  await createMeetingViaNewCase(page, topic, { modeId: 'courtroom' })
+  await setRoleModelsInSettings(page, { Prosecutor: 'mock-broken', Defense: 'mock-fast', Judge: 'mock-fast' })
+  await closeSettings(page)
+
+  await page.getByTestId('add-courtroom-issue-button').click()
+  await page.getByTestId('courtroom-issue-title-0').fill('檢察官主張是否成立？')
+  await page.getByTestId('save-courtroom-issues-button').click()
+  await page.getByTestId('confirm-courtroom-issues-button').click()
+  await page.getByTestId('courtroom-primary-action').click()
+
+  const failure = page.getByTestId('courtroom-issue-failure-issue-1')
+  await expect(failure).toContainText('檢察官主張執行失敗，請重試', { timeout: 15000 })
+  await page.route('**/meetings/**/steps/**/retry', async (route) => {
+    await route.fulfill({
+      status: 409,
+      contentType: 'application/json',
+      body: JSON.stringify({ detail: '重試狀態已改變，請重新操作。' }),
+    })
+  })
+
+  await page.getByTestId('retry-courtroom-issue-issue-1').click()
+
+  await expect(page.getByTestId('app-error')).toContainText('failed: 409')
+  await expect(failure).toContainText('檢察官主張執行失敗，請重試')
+  await expect(page.getByTestId('retry-courtroom-issue-issue-1')).toBeEnabled()
+  await expect(page.getByTestId('courtroom-workspace-feedback')).toHaveCount(0)
+
+  await page.unroute('**/meetings/**/steps/**/retry')
+  await page.getByTestId('past-topics-button').click()
+  page.once('dialog', (dialog) => dialog.accept())
+  await page.getByTestId('meeting-list-item').filter({ hasText: topic }).getByTestId('delete-meeting-button').click()
+})
+
 test('brainstorm mode creates member instances and runs fanout plus synthesis', async ({ page }) => {
   await page.goto('/')
 

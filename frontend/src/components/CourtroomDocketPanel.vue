@@ -172,7 +172,6 @@ async function confirmIssues() {
 async function retryDraft() {
   if (!failedDraft.value) return
   await retrySelectedStep(failedDraft.value)
-  void refreshMeetingUntilSettled(meetingId.value)
 }
 
 function failedEvent(issue: CourtroomIssueProjection): MeetingEvent | null {
@@ -186,8 +185,8 @@ async function retryIssue(issue: CourtroomIssueProjection) {
   const event = failedEvent(issue)
   if (!event) return
   await runWorkspaceAction(async () => {
-    await retrySelectedStep(event)
-    feedback.value = `${courtroomFailedPhaseLabel(issue.failed_phase)}已重新執行。`
+    const accepted = await retrySelectedStep(event)
+    if (accepted) feedback.value = `${courtroomFailedPhaseLabel(issue.failed_phase)}已重新執行。`
   })
 }
 
