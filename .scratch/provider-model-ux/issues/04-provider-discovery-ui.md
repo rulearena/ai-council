@@ -1,7 +1,7 @@
 # Provider discovery UI
 
 Type: task
-Status: open
+Status: resolved
 Blocked by: 01, 02
 
 ## 目標
@@ -17,3 +17,9 @@ Blocked by: 01, 02
 ## 驗收
 
 - Frontend unit、targeted e2e 與 build 綠；單一目的 commit。
+
+## 完成
+
+- Anthropic 與 Gemini 已標示為 provider-specific discovery，Model Manager 可載入及重新整理 exact model ID。
+- 成功可由下拉儲存；空清單或錯誤保留 manual exact ID；credential payload 僅包含環境變數名稱。
+- Provider 切換或 manual model edit 會淘汰進行中的 discovery 回應。

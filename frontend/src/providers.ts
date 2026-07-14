@@ -8,7 +8,7 @@ export type ProviderId =
   | 'subscription-cli'
   | 'mock'
 
-export type ProviderDiscovery = 'openai-compatible' | 'manual-only'
+export type ProviderDiscovery = 'openai-compatible' | 'provider-specific' | 'manual-only'
 
 export type ProviderDefinition = {
   id: ProviderId
@@ -34,7 +34,7 @@ export const PROVIDERS: readonly ProviderDefinition[] = [
     adapter: 'anthropic-http',
     defaultBaseUrl: 'https://api.anthropic.com/v1',
     defaultApiKeyEnv: 'ANTHROPIC_API_KEY',
-    discovery: 'manual-only',
+    discovery: 'provider-specific',
   },
   {
     id: 'gemini',
@@ -42,7 +42,7 @@ export const PROVIDERS: readonly ProviderDefinition[] = [
     adapter: 'gemini-http',
     defaultBaseUrl: 'https://generativelanguage.googleapis.com/v1beta',
     defaultApiKeyEnv: 'GEMINI_API_KEY',
-    discovery: 'manual-only',
+    discovery: 'provider-specific',
   },
   {
     id: 'custom-openai-compatible',

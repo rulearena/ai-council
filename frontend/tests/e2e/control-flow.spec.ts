@@ -1,4 +1,4 @@
-import { expect, test, type Page } from '@playwright/test'
+import { expect, test, type Page, type Route } from '@playwright/test'
 
 // The whole UI is now a stage with modals/drawers layered on top of it, so most flows
 // need a small amount of "open this surface, do the thing, close it" choreography.
@@ -2227,6 +2227,69 @@ test('model manager creates an OpenAI config through provider-guided preview dis
   await closeSettings(page)
 })
 
+test('model manager discovers and saves exact Anthropic and Gemini model IDs', async ({ page }) => {
+  const previewPayloads: Record<string, unknown>[] = []
+  await page.route('**/models/available-models', async (route) => {
+    if (route.request().method() !== 'POST') return route.continue()
+    const payload = route.request().postDataJSON() as Record<string, unknown>
+    previewPayloads.push(payload)
+    const models = payload.adapter === 'anthropic-http'
+      ? ['claude-opus-4-1', 'claude-sonnet-4-5']
+      : ['gemini-2.5-flash', 'gemini-2.5-pro']
+    await route.fulfill({ json: { models } })
+  })
+  await page.goto('/')
+  await page.getByTestId('settings-button').click()
+  await page.getByTestId('model-manager-tab').click()
+
+  const cases = [
+    {
+      provider: 'anthropic',
+      adapter: 'anthropic-http',
+      baseUrl: 'https://api.anthropic.com/v1',
+      apiKeyEnv: 'ANTHROPIC_API_KEY',
+      model: 'claude-sonnet-4-5',
+      label: 'Anthropic · claude-sonnet-4-5',
+    },
+    {
+      provider: 'gemini',
+      adapter: 'gemini-http',
+      baseUrl: 'https://generativelanguage.googleapis.com/v1beta',
+      apiKeyEnv: 'GEMINI_API_KEY',
+      model: 'gemini-2.5-pro',
+      label: 'Gemini · gemini-2.5-pro',
+    },
+  ] as const
+
+  for (const providerCase of cases) {
+    await page.getByTestId('add-model-button').click()
+    await page.getByTestId('model-form-provider-select').selectOption(providerCase.provider)
+    await page.getByTestId('model-form-discover-button').click()
+    await expect(page.getByTestId('model-form-discovered-model-select')).toBeVisible()
+    await expect(page.getByTestId('model-form-discover-button')).toHaveText('重新整理可用模型')
+    await page.getByTestId('model-form-discover-button').click()
+    await page.getByTestId('model-form-discovered-model-select').selectOption(providerCase.model)
+
+    const modelId = `e2e-${providerCase.provider}-discovery-${Date.now()}`
+    await page.getByTestId('model-form-id-input').fill(modelId)
+    await page.getByTestId('model-form-save').click()
+    await expect(modelManagerRow(page, modelId)).toContainText(providerCase.label)
+
+    page.once('dialog', (dialog) => dialog.accept())
+    await page.getByTestId(`delete-model-button-${modelId}`).click()
+  }
+
+  expect(previewPayloads).toEqual(cases.flatMap((providerCase) => {
+    const payload = {
+      adapter: providerCase.adapter,
+      base_url: providerCase.baseUrl,
+      api_key_env: providerCase.apiKeyEnv,
+    }
+    return [payload, payload]
+  }))
+  await closeSettings(page)
+})
+
 test('model manager creates a subscription config from a guided CLI preset', async ({ page }) => {
   let createPayload: Record<string, unknown> | null = null
   await page.route('**/models', async (route) => {
@@ -2291,7 +2354,7 @@ test('model labels show Provider and exact model across model list and role sele
   await page.getByTestId('new-case-close-button').click()
 })
 
-test('model discovery failure, empty results, and unsupported providers retain manual entry', async ({
+test('Anthropic failure and Gemini empty discovery retain manual exact model entry', async ({
   page,
 }) => {
   let discoveryAttempt = 0
@@ -2313,25 +2376,48 @@ test('model discovery failure, empty results, and unsupported providers retain m
   await page.getByTestId('add-model-button').click()
 
   await page.getByTestId('model-form-provider-select').selectOption('anthropic')
-  await expect(page.getByTestId('model-form-discovery-unsupported')).toContainText(
-    'Anthropic 暫不支援自動載入模型',
-  )
+  await page.getByTestId('model-form-discover-button').click()
+  await expect(page.getByTestId('model-form-discovery-message')).toContainText('Provider unavailable')
+  await expect(page.getByTestId('model-form-model-input')).toBeVisible()
+
+  await page.getByTestId('model-form-provider-select').selectOption('gemini')
+  await page.getByTestId('model-form-discover-button').click()
+  await expect(page.getByTestId('model-form-discovery-message')).toContainText('沒有回傳可用模型')
   await expect(page.getByTestId('model-form-model-input')).toBeVisible()
 
   await page.getByTestId('model-form-provider-select').selectOption('subscription-cli')
   await expect(page.getByTestId('model-form-cli-preset-select')).toHaveValue('claude')
   await expect(page.getByTestId('model-form-cli-model-default')).toContainText('CLI 自動選擇模型')
+  await page.getByTestId('model-form-cancel').click()
+  await closeSettings(page)
+})
 
-  await page.getByTestId('model-form-provider-select').selectOption('custom-openai-compatible')
-  await page.getByTestId('model-form-base-url-input').fill('http://provider.example.test/v1')
-  await page.getByTestId('model-form-discover-button').click()
-  await expect(page.getByTestId('model-form-discovery-message')).toContainText('Provider unavailable')
-  await expect(page.getByTestId('model-form-model-input')).toBeVisible()
+test('provider change and manual model edit discard late discovery responses', async ({ page }) => {
+  const pendingRoutes: Route[] = []
+  await page.route('**/models/available-models', async (route) => {
+    if (route.request().method() !== 'POST') return route.continue()
+    pendingRoutes.push(route)
+  })
+  await page.goto('/')
+  await page.getByTestId('settings-button').click()
+  await page.getByTestId('model-manager-tab').click()
+  await page.getByTestId('add-model-button').click()
 
-  await page.getByTestId('model-form-provider-select').selectOption('openai')
+  await page.getByTestId('model-form-provider-select').selectOption('anthropic')
   await page.getByTestId('model-form-discover-button').click()
-  await expect(page.getByTestId('model-form-discovery-message')).toContainText('沒有回傳可用模型')
-  await expect(page.getByTestId('model-form-model-input')).toBeVisible()
+  await expect.poll(() => pendingRoutes.length).toBe(1)
+  await page.getByTestId('model-form-provider-select').selectOption('gemini')
+  await pendingRoutes[0].fulfill({ json: { models: ['claude-late-result'] } })
+  await expect(page.getByTestId('model-form-discovered-model-select')).toHaveCount(0)
+  await expect(page.getByTestId('model-form-model-input')).toHaveValue('')
+
+  await page.getByTestId('model-form-discover-button').click()
+  await expect.poll(() => pendingRoutes.length).toBe(2)
+  await page.getByTestId('model-form-model-input').fill('gemini-manual-exact')
+  await pendingRoutes[1].fulfill({ json: { models: ['gemini-late-result'] } })
+  await expect(page.getByTestId('model-form-discovered-model-select')).toHaveCount(0)
+  await expect(page.getByTestId('model-form-model-input')).toHaveValue('gemini-manual-exact')
+
   await page.getByTestId('model-form-cancel').click()
   await closeSettings(page)
 })

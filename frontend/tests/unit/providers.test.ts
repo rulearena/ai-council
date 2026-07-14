@@ -92,7 +92,7 @@ test('provider catalog exposes product concepts and transport presets', () => {
         adapter: 'anthropic-http',
         defaultBaseUrl: 'https://api.anthropic.com/v1',
         defaultApiKeyEnv: 'ANTHROPIC_API_KEY',
-        discovery: 'manual-only',
+        discovery: 'provider-specific',
       },
       {
         id: 'gemini',
@@ -100,7 +100,7 @@ test('provider catalog exposes product concepts and transport presets', () => {
         adapter: 'gemini-http',
         defaultBaseUrl: 'https://generativelanguage.googleapis.com/v1beta',
         defaultApiKeyEnv: 'GEMINI_API_KEY',
-        discovery: 'manual-only',
+        discovery: 'provider-specific',
       },
       {
         id: 'custom-openai-compatible',

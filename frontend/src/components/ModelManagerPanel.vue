@@ -120,7 +120,7 @@ const discoveryRequest = new LatestDiscoveryRequest()
 
 const providerDefinition = computed(() => getProvider(formProvider.value))
 const formAdapter = computed(() => providerDefinition.value.adapter)
-const supportsDiscovery = computed(() => providerDefinition.value.discovery === 'openai-compatible')
+const supportsDiscovery = computed(() => providerDefinition.value.discovery !== 'manual-only')
 
 const saving = ref(false)
 const fieldErrors = ref<Record<string, string>>({})
