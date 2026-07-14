@@ -26,6 +26,6 @@ Blocked by: 01
 ## Resolution
 
 - Claude CLI、Codex CLI、AGY preset 由 pure domain module 產生固定 argv，預設交由 CLI 自動選擇模型。
-- Model Manager 一般路徑只顯示 CLI Provider 下拉；Custom CLI 才顯示逐參數 command 編輯。
-- 可辨識的既有 preset 投影回導引式選項；未知 legacy command 投影為 Custom 並原樣 round-trip，不 migration。
-- 進階 exact model ID 因 AGY 等 CLI 旗標缺乏 repo 內可靠契約，保留在 Custom CLI escape hatch，避免產生可能錯誤的 argv。
+- Model Manager 一般路徑顯示 CLI Provider 與「使用 CLI 預設模型／指定 exact model ID」；exact 模式由 preset 產生 `--model <id>` argv，Custom CLI 才顯示逐參數 command 編輯。
+- 可辨識的 default/exact preset 投影回導引式選項；未知 legacy command 投影為 Custom 並原樣 round-trip，不 migration。
+- 未帶 `extra_body.cli_provider` 的既有 preset 若未變更即原樣保存；新建或切換 preset 才產生 provider marker。
