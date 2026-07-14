@@ -736,7 +736,14 @@ test('reloading mid-round still shows the real final state after reopening the m
   await setModelsInSettings(page, { blue: 'mock-slow', red: 'mock-slow', judge: 'mock-slow' })
   await closeSettings(page)
 
+  const startAccepted = page.waitForResponse(
+    (response) =>
+      response.request().method() === 'POST' &&
+      response.url().endsWith('/start') &&
+      response.status() === 202,
+  )
   await page.getByTestId('start-meeting-button').click()
+  await startAccepted
   await expect(page.getByTestId('operation-status')).toContainText('狀態：running')
 
   // The backend keeps running the synchronous /start call regardless of the client, so
