@@ -161,11 +161,11 @@ export type MeetingEvent = {
     | 'directed-role-instruction'
     | 'directed-role-response'
     | 'role-sequence-response'
+    | 'meeting-goal-changed'
     | 'courtroom-issue-draft'
     | 'courtroom-issue-phase'
     | 'courtroom-final-verdict'
     | 'courtroom-operation-reservation'
-    | 'goal-change-audit'
   docket_revision?: number
   issue_id?: string
   issue_phase?: 'charge' | 'defense' | 'rebuttal' | 'ruling'

@@ -5,6 +5,7 @@ import {
   chairmanActionOptions,
   chairmanActionPresentation,
   executeChairmanAction,
+  runWithPendingRoles,
   meetingEditPolicy,
   projectPrimaryAction,
 } from '../../src/chairmanActions.ts'
@@ -111,6 +112,19 @@ test('chairman action execution never duplicates the Human message for a targete
   calls.length = 0
   await executeChairmanAction('all', '請全體回應', boundary)
   assert.deepEqual(calls, ['note', 'all'])
+})
+
+test('failed chairman AI action rolls back its optimistic role queue', async () => {
+  const pendingRoles = ['Existing']
+
+  const succeeded = await runWithPendingRoles(
+    pendingRoles,
+    ['Prosecutor', 'Defense'],
+    async () => false,
+  )
+
+  assert.equal(succeeded, false)
+  assert.deepEqual(pendingRoles, ['Existing'])
 })
 
 test('primary action ignores Human notes and names the exact next relay action', () => {

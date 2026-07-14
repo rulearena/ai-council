@@ -10,6 +10,7 @@ import {
   chairmanActionPresentation,
   executeChairmanAction,
   projectPrimaryAction,
+  runWithPendingRoles,
   type PrimaryAction,
 } from '../chairmanActions'
 import {
@@ -645,20 +646,21 @@ export function useCouncil() {
     const queuedRoles = action.kind === 'courtroom-arguments'
       ? ['Prosecutor', 'Defense', 'Prosecutor']
       : ['Judge']
-    pendingRoles.value.push(...queuedRoles)
-    connectMeetingEvents(meetingId)
-    return runAction(async () => {
-      if (action.kind === 'courtroom-arguments' && action.issueId) {
-        await runCourtroomIssueArguments(meetingId, action.issueId)
-      } else if (action.kind === 'courtroom-ruling' && action.issueId) {
-        await runCourtroomIssueRuling(meetingId, action.issueId)
-      } else if (action.kind === 'courtroom-final') {
-        await runCourtroomFinalVerdict(meetingId)
-      }
-      if (selectedMeeting.value?.meeting_id === meetingId) {
-        selectedMeeting.value = { ...selectedMeeting.value, activity_status: 'running' }
-      }
-      void refreshMeetingUntilSettled(meetingId)
+    return runWithPendingRoles(pendingRoles.value, queuedRoles, () => {
+      connectMeetingEvents(meetingId)
+      return runAction(async () => {
+        if (action.kind === 'courtroom-arguments' && action.issueId) {
+          await runCourtroomIssueArguments(meetingId, action.issueId)
+        } else if (action.kind === 'courtroom-ruling' && action.issueId) {
+          await runCourtroomIssueRuling(meetingId, action.issueId)
+        } else if (action.kind === 'courtroom-final') {
+          await runCourtroomFinalVerdict(meetingId)
+        }
+        if (selectedMeeting.value?.meeting_id === meetingId) {
+          selectedMeeting.value = { ...selectedMeeting.value, activity_status: 'running' }
+        }
+        void refreshMeetingUntilSettled(meetingId)
+      })
     })
   }
 
@@ -676,14 +678,15 @@ export function useCouncil() {
             ...activeModeRoles.value.filter((role) => role.kind === 'synthesizer').map((role) => role.id),
           ]
         : (activeModeSource.value.steps ?? []).map((step) => step.role)
-    pendingRoles.value.push(...queuedRoles)
-    connectMeetingEvents(meetingId)
-    return runAction(async () => {
-      await startMeeting(meetingId)
-      if (selectedMeeting.value?.meeting_id === meetingId) {
-        selectedMeeting.value = { ...selectedMeeting.value, activity_status: 'running' }
-      }
-      void refreshMeetingUntilSettled(meetingId)
+    return runWithPendingRoles(pendingRoles.value, queuedRoles, () => {
+      connectMeetingEvents(meetingId)
+      return runAction(async () => {
+        await startMeeting(meetingId)
+        if (selectedMeeting.value?.meeting_id === meetingId) {
+          selectedMeeting.value = { ...selectedMeeting.value, activity_status: 'running' }
+        }
+        void refreshMeetingUntilSettled(meetingId)
+      })
     })
   }
 
@@ -983,13 +986,12 @@ export function useCouncil() {
   async function requestSelectedRoleResponse(role: CouncilRole, instruction: string) {
     if (!selectedMeeting.value || !canRun.value || !instruction.trim()) return false
     clearContinueHint()
-    pendingRoles.value.push(role)
     const meetingId = selectedMeeting.value.meeting_id
-    return runAction(async () => {
+    return runWithPendingRoles(pendingRoles.value, [role], () => runAction(async () => {
       await requestRoleResponse(meetingId, role, instruction.trim())
       await openMeeting(meetingId)
       void refreshMeetingUntilSettled(meetingId)
-    })
+    }))
   }
 
   async function requestSelectedRoleSequence() {

@@ -25,7 +25,7 @@ export type PresentationEvent = {
     | 'courtroom-issue-phase'
     | 'courtroom-final-verdict'
     | 'courtroom-operation-reservation'
-    | 'goal-change-audit'
+    | 'meeting-goal-changed'
   target_role_id?: string
   issue_phase?: 'charge' | 'defense' | 'rebuttal' | 'ruling'
   status?: string
@@ -76,6 +76,7 @@ export function interactionDisplayLabel(
   }
   if (event.interaction_type === 'directed-role-response') return `${roleName}回應主席追問`
   if (event.interaction_type === 'role-sequence-response') return `${roleName}依序回應`
+  if (event.interaction_type === 'meeting-goal-changed') return '主席修改會議目標'
   if (event.interaction_type === 'courtroom-issue-draft') return '法官提出爭點草稿'
   if (event.interaction_type === 'courtroom-final-verdict') return '法官作成最終判決'
   if (event.interaction_type === 'courtroom-issue-phase') {

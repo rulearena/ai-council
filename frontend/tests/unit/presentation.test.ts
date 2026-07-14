@@ -113,3 +113,22 @@ test('meeting lifecycle events have user-facing system and action labels', () =>
     '會議結案',
   )
 })
+
+test('meeting goal audit is presented as an explicit chairman action', () => {
+  assert.equal(
+    interactionDisplayLabel(courtroom, [], {
+      role: 'Human',
+      step_id: 'meeting-goal-changed',
+      interaction_type: 'meeting-goal-changed',
+    }),
+    '主席修改會議目標',
+  )
+  assert.equal(
+    stepDisplayLabel(courtroom, [], {
+      role: 'Human',
+      step_id: 'meeting-goal-changed',
+      interaction_type: 'meeting-goal-changed',
+    }),
+    '主席修改會議目標',
+  )
+})

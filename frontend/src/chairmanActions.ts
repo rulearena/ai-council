@@ -166,6 +166,23 @@ export async function executeChairmanAction(
   return false
 }
 
+export async function runWithPendingRoles(
+  pendingRoles: string[],
+  queuedRoles: string[],
+  action: () => Promise<boolean>,
+): Promise<boolean> {
+  const previous = [...pendingRoles]
+  pendingRoles.push(...queuedRoles)
+  try {
+    const succeeded = await action()
+    if (!succeeded) pendingRoles.splice(0, pendingRoles.length, ...previous)
+    return succeeded
+  } catch (error) {
+    pendingRoles.splice(0, pendingRoles.length, ...previous)
+    throw error
+  }
+}
+
 export function projectPrimaryAction(input: {
   modeId: string
   steps: WorkflowStep[]

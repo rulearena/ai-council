@@ -497,6 +497,16 @@ def test_unconfirmed_courtroom_goal_change_after_ai_output_appends_audit_event(
     assert after[-1]["interaction_type"] == "meeting-goal-changed"
     assert after[-1]["previous_goal"] == "被告是否應返還土地？"
     assert after[-1]["goal"] == "被告是否應返還土地及孳息？"
+    assert after[-1]["content"] == (
+        "主席修改會議目標\n"
+        "舊目標：被告是否應返還土地？\n"
+        "新目標：被告是否應返還土地及孳息？"
+    )
+    transcript = client.get(f"/meetings/{meeting_id}/transcript.md")
+    assert transcript.status_code == 200
+    assert "## 主席 - 主席修改會議目標" in transcript.text
+    assert "舊目標：被告是否應返還土地？" in transcript.text
+    assert "新目標：被告是否應返還土地及孳息？" in transcript.text
 
 
 def test_restart_preserves_issue_linkage_for_an_interrupted_courtroom_attempt(

@@ -786,7 +786,11 @@ def create_app(
                     "interaction_type": "meeting-goal-changed",
                     "previous_goal": previous_goal,
                     "goal": request.goal,
-                    "content": "Meeting goal changed for future model responses.",
+                    "content": (
+                        "主席修改會議目標\n"
+                        f"舊目標：{previous_goal}\n"
+                        f"新目標：{request.goal}"
+                    ),
                 },
             )
         events = repository.read_events(meeting_id)
@@ -1896,6 +1900,7 @@ def transcript_presentation_labels(
     human_steps = {
         "human-message": "主席發言",
         "human-correction": "主席訂正",
+        "meeting-goal-changed": "主席修改會議目標",
         "meeting-closed": "會議結案",
         "meeting-cancelled": "會議取消",
         "meeting-reopened": "重新開啟會議",
