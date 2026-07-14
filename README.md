@@ -16,7 +16,7 @@ a different roster and prompt templates; see `spec.md` section 16 for the mode s
 The chair can also add human feedback during a meeting, ask a single role to respond,
 or run a preset role sequence such as `Red -> Blue -> Judge` for automatic follow-up.
 
-The backend stores meeting events as JSONL under `data/meetings/<meeting_id>/events.jsonl`. Markdown transcripts are derived read models, not the source of truth.
+The backend stores meeting events as JSONL under `data/meetings/<meeting_id>/events.jsonl`. Markdown transcripts are derived read models, not the source of truth. Model attempt diagnostics are additive event fields; open **Records → Timeline → LLM attempt 診斷** to inspect or copy a safe JSON bundle. CLI failure excerpts are limited to their last 8,192 characters and redact the configured API key and common Bearer tokens.
 
 ## Project Layout
 

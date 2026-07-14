@@ -468,25 +468,25 @@ class MeetingRunner:
             if self._is_terminal(meeting_id):
                 return False
             failed_event: dict[str, object] = {
-                    "event_id": f"{meeting_id}:{event_step_id}:attempt-{attempt}:failed",
-                    "meeting_id": meeting_id,
-                    "step_id": event_step_id,
-                    "base_step_id": step.step_id,
-                    "round": round_number,
-                    "role": step.role,
-                    "attempt": attempt,
-                    "model_config_id": config.id,
-                    "adapter": config.adapter,
-                    "prompt_messages": [{"role": "user", "content": prompt}],
-                    "raw_output": error.raw_output,
-                    "status": "failed",
-                    "failure_kind": "parse_error",
-                    "error": str(error),
-                    "retry_scheduled": bool(parse_retries_remaining),
-                    **self._timing_fields(started_at, started_clock),
-                    **prompt_metadata,
-                    **extra_event_fields,
-                }
+                "event_id": f"{meeting_id}:{event_step_id}:attempt-{attempt}:failed",
+                "meeting_id": meeting_id,
+                "step_id": event_step_id,
+                "base_step_id": step.step_id,
+                "round": round_number,
+                "role": step.role,
+                "attempt": attempt,
+                "model_config_id": config.id,
+                "adapter": config.adapter,
+                "prompt_messages": [{"role": "user", "content": prompt}],
+                "raw_output": error.raw_output,
+                "status": "failed",
+                "failure_kind": "parse_error",
+                "error": str(error),
+                "retry_scheduled": bool(parse_retries_remaining),
+                **self._timing_fields(started_at, started_clock),
+                **prompt_metadata,
+                **extra_event_fields,
+            }
             if response is not None and response.token_usage is not None:
                 failed_event["token_usage"] = response.token_usage
             self.repository.append_event(meeting_id, failed_event)
@@ -510,24 +510,24 @@ class MeetingRunner:
             if self._is_terminal(meeting_id):
                 return False
             failed_event = {
-                    "event_id": f"{meeting_id}:{event_step_id}:attempt-{attempt}:failed",
-                    "meeting_id": meeting_id,
-                    "step_id": event_step_id,
-                    "base_step_id": step.step_id,
-                    "round": round_number,
-                    "role": step.role,
-                    "attempt": attempt,
-                    "model_config_id": config.id,
-                    "adapter": config.adapter,
-                    "prompt_messages": [{"role": "user", "content": prompt}],
-                    "status": "failed",
-                    "failure_kind": self._failure_kind(error),
-                    "error": str(error),
-                    "retry_scheduled": False,
-                    **self._timing_fields(started_at, started_clock),
-                    **prompt_metadata,
-                    **extra_event_fields,
-                }
+                "event_id": f"{meeting_id}:{event_step_id}:attempt-{attempt}:failed",
+                "meeting_id": meeting_id,
+                "step_id": event_step_id,
+                "base_step_id": step.step_id,
+                "round": round_number,
+                "role": step.role,
+                "attempt": attempt,
+                "model_config_id": config.id,
+                "adapter": config.adapter,
+                "prompt_messages": [{"role": "user", "content": prompt}],
+                "status": "failed",
+                "failure_kind": self._failure_kind(error),
+                "error": str(error),
+                "retry_scheduled": False,
+                **self._timing_fields(started_at, started_clock),
+                **prompt_metadata,
+                **extra_event_fields,
+            }
             self._add_adapter_excerpts(failed_event, error)
             self.repository.append_event(meeting_id, failed_event)
             return False

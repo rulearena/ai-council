@@ -194,6 +194,13 @@ def test_runner_persists_model_token_usage_on_completed_events(tmp_path: Path) -
         "completion_tokens": 8,
         "total_tokens": 20,
     }
+    assert event["model_config_id"] == "mock-blue"
+    assert event["adapter"] == "mock"
+    assert event["prompt_messages"][0]["role"] == "user"
+    assert event["raw_output"] == VALID_OUTPUT
+    assert event["parsed_output"]["summary"] == "OK"
+    assert event["started_at"] <= event["completed_at"]
+    assert event["duration_ms"] >= 0
 
 
 def test_runner_persists_prompt_metadata_on_completed_events(tmp_path: Path) -> None:
