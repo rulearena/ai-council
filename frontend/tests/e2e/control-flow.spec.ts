@@ -1306,7 +1306,7 @@ test('shows a failed-step hint and disables round-level actions until the step i
 
   await expect(page.getByTestId('failed-step-hint')).toBeVisible()
   await expect(page.getByTestId('failed-step-hint')).toContainText(
-    'Blue 的回應失敗了，點擊席位可重試',
+    '藍軍的回應失敗了，點擊席位可重試',
   )
 
   // Confirmed against the real backend: calling /start (or /sequences) again once a step
@@ -1316,7 +1316,7 @@ test('shows a failed-step hint and disables round-level actions until the step i
   await expect(page.getByTestId('start-meeting-button')).toBeDisabled()
   await expect(page.getByTestId('start-meeting-button')).toHaveAttribute(
     'title',
-    'Blue 的回應失敗了，請點擊席位重試該步驟',
+    '藍軍的回應失敗了，請點擊席位重試該步驟',
   )
 
   await openAdvancedOptions(page)
@@ -1894,6 +1894,11 @@ test('New Case creates a meeting with numbered role-scoped case files', async ({
     ],
   })
   const createResponse = await createResponsePromise
+  const createdMeeting = (await createResponse.json()) as {
+    meeting_id: string
+    case_files: Array<{ evidence_index: number; citation_anchor: string }>
+  }
+  const meetingId = createdMeeting.meeting_id
 
   expect(createPayload).toMatchObject({
     title: topic,
@@ -1912,6 +1917,10 @@ test('New Case creates a meeting with numbered role-scoped case files', async ({
       },
     ],
   })
+  expect(createdMeeting.case_files).toMatchObject([
+    { evidence_index: 1, citation_anchor: '[證物一]' },
+    { evidence_index: 2, citation_anchor: '[證物二]' },
+  ])
   const meeting = await page.request.get(`${new URL(createResponse.url()).origin}/meetings/${meetingId}`)
   expect(meeting.ok()).toBeTruthy()
   expect((await meeting.json()).case_files).toMatchObject([
