@@ -1017,6 +1017,10 @@ class MeetingRunner:
             "in_response_to_event_id",
             "sequence",
             "sequence_index",
+            "docket_revision",
+            "issue_id",
+            "issue_phase",
+            "courtroom_operation",
         ]:
             value = extra_event_fields.get(key)
             if isinstance(value, (str, int)):

@@ -465,8 +465,39 @@ class CourtroomWorkflowService:
                 raise CourtroomWorkflowError("Failed step belongs to an inactive docket revision")
             attempt = int(failed.get("attempt", 1)) + 1
             interaction = failed.get("interaction_type")
-            if interaction == "courtroom-final-verdict":
+            if interaction == "courtroom-issue-draft":
+                self.validate_draft(metadata, revision)
                 completed = runner.run_workflow_step(
+                    meeting_id=meeting_id,
+                    goal=goal,
+                    model_assignments=model_assignments,
+                    step=StepDefinition(
+                        "courtroom-issue-draft",
+                        "Judge",
+                        "courtroom_issue_draft",
+                        COURTROOM_ISSUE_DRAFT_V1_ID,
+                    ),
+                    event_step_id=step_id,
+                    inputs=inputs,
+                    extra_event_fields={
+                        "interaction_type": "courtroom-issue-draft",
+                        "docket_revision": revision,
+                    },
+                    attempt=attempt,
+                )
+                if completed:
+                    completed_event = self.repository.read_events(meeting_id)[-1]
+                    parsed = completed_event.get("parsed_output")
+                    issues = parsed.get("issues") if isinstance(parsed, dict) else None
+                    if isinstance(issues, list):
+                        self.replace_issues(
+                            meeting_id,
+                            expected_revision=revision,
+                            requested_issues=issues,
+                        )
+                return
+            if interaction == "courtroom-final-verdict":
+                runner.run_workflow_step(
                     meeting_id=meeting_id,
                     goal=goal,
                     model_assignments=model_assignments,

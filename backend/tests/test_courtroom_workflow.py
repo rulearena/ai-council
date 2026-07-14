@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import shutil
 import time
 from pathlib import Path
@@ -486,3 +487,124 @@ def test_unconfirmed_courtroom_goal_change_after_ai_output_appends_audit_event(
     assert after[-1]["interaction_type"] == "meeting-goal-changed"
     assert after[-1]["previous_goal"] == "被告是否應返還土地？"
     assert after[-1]["goal"] == "被告是否應返還土地及孳息？"
+
+
+def test_restart_preserves_issue_linkage_for_an_interrupted_courtroom_attempt(
+    tmp_path: Path,
+) -> None:
+    client = create_client(tmp_path)
+    meeting_id = create_courtroom(client)
+    client.put(
+        f"/meetings/{meeting_id}/courtroom/issues",
+        json={"revision": 0, "issues": [{"title": "占有權源"}]},
+    )
+    client.post(
+        f"/meetings/{meeting_id}/courtroom/issues/confirm",
+        json={"revision": 1},
+    )
+    execution_path = tmp_path / "data" / "meetings" / meeting_id / "execution.json"
+    execution_path.write_text(
+        json.dumps(
+            {
+                "meeting_id": meeting_id,
+                "step_id": "courtroom-r2-issue-1-charge",
+                "base_step_id": "courtroom-issue-charge",
+                "round": 1,
+                "role": "Prosecutor",
+                "attempt": 1,
+                "model_config_id": "mock-fast",
+                "status": "running",
+                "interaction_type": "courtroom-issue-phase",
+                "docket_revision": 2,
+                "issue_id": "issue-1",
+                "issue_phase": "charge",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    restarted = TestClient(
+        create_app(
+            data_dir=tmp_path / "data",
+            model_config_path=tmp_path / "config" / "models.yaml",
+            modes_config_path=tmp_path / "config" / "modes.yaml",
+            prompt_dir=PROJECT_ROOT / "prompts",
+            start_model_health_checks=False,
+        )
+    )
+
+    event = restarted.get(f"/meetings/{meeting_id}").json()["events"][-1]
+    assert event["failure_kind"] == "interrupted"
+    assert event["docket_revision"] == 2
+    assert event["issue_id"] == "issue-1"
+    assert event["issue_phase"] == "charge"
+
+
+def test_failed_final_verdict_can_only_retry_the_linked_final_flow(tmp_path: Path) -> None:
+    client = create_client(tmp_path)
+    meeting_id = create_courtroom(client)
+    client.put(
+        f"/meetings/{meeting_id}/courtroom/issues",
+        json={"revision": 0, "issues": [{"title": "占有權源"}]},
+    )
+    client.post(
+        f"/meetings/{meeting_id}/courtroom/issues/confirm",
+        json={"revision": 1},
+    )
+    client.post(f"/meetings/{meeting_id}/courtroom/issues/issue-1/arguments")
+    wait_for_courtroom(
+        client,
+        meeting_id,
+        lambda courtroom: courtroom["issues"][0]["status"] == "awaiting-ruling",
+    )
+    client.post(f"/meetings/{meeting_id}/courtroom/issues/issue-1/ruling")
+    wait_for_courtroom(
+        client,
+        meeting_id,
+        lambda courtroom: courtroom["final_status"] == "ready",
+    )
+    client.put(
+        "/models/mock-fast",
+        json={"adapter": "mock", "extra_body": {"mock_error": "final failed"}},
+    )
+    assert client.post(f"/meetings/{meeting_id}/courtroom/final-verdict").status_code == 202
+    failed = wait_for_courtroom(
+        client,
+        meeting_id,
+        lambda courtroom: courtroom["final_status"] == "failed",
+    )
+    failed_final = next(
+        event
+        for event in failed["events"]
+        if event.get("interaction_type") == "courtroom-final-verdict"
+        and event["status"] == "failed"
+    )
+    assert client.post(f"/meetings/{meeting_id}/courtroom/final-verdict").status_code == 409
+    client.put("/models/mock-fast", json={"adapter": "mock", "extra_body": {}})
+    time.sleep(0.02)
+
+    retry = client.post(
+        f"/meetings/{meeting_id}/steps/{failed_final['step_id']}/retry",
+        json={},
+    )
+    assert retry.status_code == 202
+    completed = wait_for_courtroom(
+        client,
+        meeting_id,
+        lambda courtroom: courtroom["final_status"] == "completed",
+    )
+    final_attempts = [
+        event
+        for event in completed["events"]
+        if event.get("interaction_type") == "courtroom-final-verdict"
+    ]
+    assert [(event["attempt"], event["status"]) for event in final_attempts] == [
+        (1, "failed"),
+        (2, "completed"),
+    ]
+    reservations = [
+        event
+        for event in completed["events"]
+        if event.get("courtroom_operation") == "final-verdict"
+    ]
+    assert len(reservations) == 1

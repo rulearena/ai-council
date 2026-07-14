@@ -1070,7 +1070,7 @@ def create_app(
         meeting_id: str,
         step_id: str,
         request: StartMeetingRequest,
-    ) -> dict[str, str]:
+    ) -> Any:
         metadata = metadata_store.get(meeting_id)
         require_meeting_goal(metadata)
         reject_terminal_meeting(repository, meeting_id)
@@ -1091,17 +1091,35 @@ def create_app(
         }
         try:
             if mode.id == "courtroom":
-                courtroom_workflow.retry_failed_step(
+                events = repository.read_events(meeting_id)
+                matching = [event for event in events if event.get("step_id") == step_id]
+                failed = matching[-1] if matching else None
+                if (
+                    failed is None
+                    or failed.get("status") != "failed"
+                    or failed.get("interaction_type")
+                    not in {
+                        "courtroom-issue-draft",
+                        "courtroom-issue-phase",
+                        "courtroom-final-verdict",
+                    }
+                ):
+                    raise CourtroomWorkflowError(f"Step is not failed: {step_id}", 400)
+                if not jobs.start(
                     meeting_id,
-                    step_id=step_id,
-                    goal=metadata["goal"],
-                    model_assignments=model_assignments,
-                    inputs=meeting_inputs_for_runner(
-                        metadata, repository.read_case_files(meeting_id)
+                    lambda: courtroom_workflow.retry_failed_step(
+                        meeting_id,
+                        step_id=step_id,
+                        goal=metadata["goal"],
+                        model_assignments=model_assignments,
+                        inputs=meeting_inputs_for_runner(
+                            metadata, repository.read_case_files(meeting_id)
+                        ),
+                        runner=runner,
                     ),
-                    runner=runner,
-                )
-                return {"status": project_activity_status(repository.read_events(meeting_id))}
+                ):
+                    raise CourtroomWorkflowError("Meeting is already running")
+                return JSONResponse(status_code=202, content={"status": "running"})
             if mode.category == "relay":
                 runner.retry_failed_step(
                     meeting_id=meeting_id,
