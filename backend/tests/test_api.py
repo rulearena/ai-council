@@ -13,7 +13,12 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-from ai_council.api import ModelHealthCheckResult, ModelHealthCheckStore, create_app
+from ai_council.api import (
+    MeetingJobManager,
+    ModelHealthCheckResult,
+    ModelHealthCheckStore,
+    create_app,
+)
 from ai_council.models.adapters import AdapterError, MockModelAdapter, ModelRequest, ModelResponse
 from ai_council.models.config import ModelConfigRepository
 from ai_council.meetings.repository import MeetingRepository
@@ -1999,6 +2004,80 @@ def test_reopen_endpoint_restores_terminal_meeting_to_open_state(tmp_path: Path)
     assert client.get(f"/meetings/{meeting_id}").json()["status"] == "open"
 
 
+@pytest.mark.parametrize("terminal_action", ["close", "cancel"])
+def test_reopen_waits_for_the_terminal_job_to_return_before_restoring_meeting(
+    tmp_path: Path,
+    monkeypatch,
+    terminal_action: str,
+) -> None:
+    model_entered = threading.Event()
+    release_model = threading.Event()
+    original_complete = MockModelAdapter.complete
+
+    def blocked_complete(self, request):
+        model_entered.set()
+        assert release_model.wait(timeout=5)
+        return original_complete(self, request)
+
+    monkeypatch.setattr(MockModelAdapter, "complete", blocked_complete)
+    client = TestClient(create_test_app(tmp_path))
+    meeting_id = client.post(
+        "/meetings", json={"title": "終止中的會議", "goal": "避免舊工作污染重開狀態"}
+    ).json()["meeting_id"]
+
+    try:
+        assert client.post(f"/meetings/{meeting_id}/start", json={}).status_code == 202
+        assert model_entered.wait(timeout=2)
+        assert client.post(f"/meetings/{meeting_id}/{terminal_action}").status_code == 200
+
+        blocked = client.post(f"/meetings/{meeting_id}/reopen")
+
+        assert blocked.status_code == 409
+        assert blocked.json()["detail"] == "Meeting is still finishing its background job"
+    finally:
+        release_model.set()
+
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline:
+        reopened = client.post(f"/meetings/{meeting_id}/reopen")
+        if reopened.status_code == 200:
+            break
+        assert reopened.status_code == 409
+        time.sleep(0.01)
+    else:
+        raise AssertionError("Background job did not release")
+
+    events = client.get(f"/meetings/{meeting_id}").json()["events"]
+    terminal_status = {"close": "closed", "cancel": "cancelled"}[terminal_action]
+    terminal_index = next(
+        index for index, event in enumerate(events) if event["status"] == terminal_status
+    )
+    assert events[-1]["status"] == "reopened"
+    assert not any(
+        event.get("status") == "completed" and event.get("role") not in {"Human", "System"}
+        for event in events[terminal_index + 1 :]
+    )
+
+
+def test_background_job_manager_observes_unexpected_future_exceptions(caplog) -> None:
+    manager = MeetingJobManager()
+
+    def fail() -> None:
+        raise RuntimeError("sensitive provider output")
+
+    with caplog.at_level("ERROR", logger="ai_council.api"):
+        assert manager.start("meeting-failure", fail)
+        deadline = time.monotonic() + 2
+        while (
+            "Background meeting job failed unexpectedly" not in caplog.text
+            and time.monotonic() < deadline
+        ):
+            time.sleep(0.01)
+
+    assert "Background meeting job failed unexpectedly" in caplog.text
+    assert "sensitive provider output" not in caplog.text
+
+
 def test_update_meeting_tags_replaces_tag_list(tmp_path: Path) -> None:
     app = create_test_app(tmp_path)
     client = TestClient(app)
@@ -2322,6 +2401,82 @@ def test_directed_role_response_rejects_unknown_role_before_job_reservation(
     assert response.status_code == 400
     assert response.json()["detail"] == "Unknown role: Chair"
     assert client.get(f"/meetings/{meeting_id}").json()["events"] == []
+
+
+def test_async_directed_and_retry_routes_publish_202_in_openapi(tmp_path: Path) -> None:
+    schema = TestClient(create_test_app(tmp_path)).get("/openapi.json").json()
+
+    directed = schema["paths"]["/meetings/{meeting_id}/roles/{role}/respond"]["post"]
+    retry = schema["paths"]["/meetings/{meeting_id}/steps/{step_id}/retry"]["post"]
+
+    assert "202" in directed["responses"]
+    assert "200" not in directed["responses"]
+    assert "202" in retry["responses"]
+    assert "200" not in retry["responses"]
+
+
+@pytest.mark.parametrize(
+    "instruction_event",
+    [
+        None,
+        {
+            "event_id": "legacy-instruction",
+            "step_id": "human-directed-message",
+            "role": "Human",
+            "attempt": 1,
+            "status": "completed",
+            "interaction_type": "directed-role-instruction",
+            "target_role_id": "Red",
+            "content": "回答錯誤角色",
+        },
+        {
+            "event_id": "legacy-instruction",
+            "step_id": "human-directed-message",
+            "role": "Human",
+            "attempt": 1,
+            "status": "completed",
+            "interaction_type": "directed-role-instruction",
+            "target_role_id": "Blue",
+            "content": "   ",
+        },
+    ],
+)
+def test_legacy_directed_retry_rejects_incomplete_instruction_before_job_start(
+    tmp_path: Path,
+    instruction_event: dict[str, object] | None,
+) -> None:
+    client = TestClient(create_test_app(tmp_path))
+    meeting_id = client.post(
+        "/meetings", json={"title": "舊定向失敗", "goal": "同步拒絕不可重試紀錄"}
+    ).json()["meeting_id"]
+    repository = MeetingRepository(tmp_path / "data")
+    if instruction_event is not None:
+        repository.append_event(meeting_id, {**instruction_event, "meeting_id": meeting_id})
+    repository.append_event(
+        meeting_id,
+        {
+            "event_id": "legacy-failed-response",
+            "meeting_id": meeting_id,
+            "step_id": "directed-1-blue-response",
+            "base_step_id": "blue-response",
+            "round": 1,
+            "role": "Blue",
+            "attempt": 1,
+            "status": "failed",
+            "interaction_type": "directed-role-response",
+            "in_response_to_event_id": "legacy-instruction",
+        },
+    )
+    before = client.get(f"/meetings/{meeting_id}").json()["events"]
+
+    response = client.post(
+        f"/meetings/{meeting_id}/steps/directed-1-blue-response/retry",
+        json={},
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "Directed response instruction is unavailable for retry"
+    assert client.get(f"/meetings/{meeting_id}").json()["events"] == before
 
 
 def test_retry_failed_directed_response_keeps_the_original_instruction_and_linkage(

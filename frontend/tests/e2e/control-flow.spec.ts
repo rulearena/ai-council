@@ -138,7 +138,6 @@ test('legacy meeting requires explicit title and goal migration without rewritin
   await expect(page.getByTestId('start-meeting-button')).toBeDisabled()
   await page.getByTestId('advanced-options-button').click()
   await expect(page.getByTestId('run-sequence-button')).toBeDisabled()
-  await expect(page.getByTestId('start-new-round-button')).toBeDisabled()
 
   await page.getByLabel('舊會議名稱').fill(migratedTitle)
   await page.getByLabel('舊會議目標').fill('判斷被告是否應返還土地')
@@ -1148,7 +1147,7 @@ test('records drawer announces clipboard rejection without an unhandled promise'
     .click()
 })
 
-test('continuing a fully completed round runs the sequence preset instead of a no-op start', async ({
+test('a completed fixed round stays on the explicit new-round action after a Human note', async ({
   page,
 }) => {
   await page.goto('/')
@@ -1162,36 +1161,26 @@ test('continuing a fully completed round runs the sequence preset instead of a n
   await page.getByTestId('start-meeting-button').click()
   await expect(page.getByTestId('operation-status')).toContainText('狀態：已完成')
 
-  // Sending a chair message on an idle (non-running) meeting should surface the hint.
-  await expect(page.getByTestId('continue-hint')).not.toBeVisible()
+  await expect(page.getByTestId('start-meeting-button')).toContainText('開始新回合')
   await page.getByTestId('chair-message-input').fill('主席補充：請議會針對成本做更仔細的討論。')
   await page.getByTestId('send-chair-message-button').click()
   await expect(page.getByTestId('operation-status')).toContainText('狀態：等待中')
-  await expect(page.getByTestId('continue-hint')).toBeVisible()
+  await expect(page.getByTestId('start-meeting-button')).toContainText('開始新回合')
 
-  // The fixed round (blue-propose/red-critique/blue-revise/judge-decide) is already
-  // fully completed at this point, so clicking "continue" must run the currently
-  // selected sequence preset (default: Red -> Blue -> Judge) rather than calling
-  // /start again, which would silently no-op (see runner.py's start()) and leave the
-  // seat stuck on "thinking" forever with no event ever resolving it.
   await page.getByTestId('start-meeting-button').click()
-
-  // The hint clears the instant a real role action is triggered, not on a timer.
-  await expect(page.getByTestId('continue-hint')).not.toBeVisible()
-
-  // Sequence roles are pushed synchronously before the network call resolves.
-  await expect(page.getByTestId('role-seat-red')).toHaveAttribute('data-status', 'thinking')
+  await expect(page.getByTestId('role-seat-blue')).toHaveAttribute('data-status', 'thinking')
   await expect(page.getByTestId('operation-status')).toContainText('狀態：已完成', { timeout: 15000 })
 
   await page.getByTestId('records-button').click()
-  await expect(page.getByTestId('step-timeline')).toContainText('紅軍依序回應')
-  await expect(page.getByTestId('step-timeline')).toContainText('藍軍依序回應')
-  await expect(page.getByTestId('step-timeline')).toContainText('裁判依序回應')
-  // A no-op start() would never have produced a fresh fixed-round step for round 2.
   await expect(
     page.getByTestId('step-timeline').locator('.timeline-row strong', { hasText: '藍軍提案' }),
-  ).toHaveCount(1)
+  ).toHaveCount(2)
   await page.getByTestId('records-close-button').click()
+
+  await openAdvancedOptions(page)
+  await expect(page.getByTestId('role-sequence-controls')).toBeVisible()
+  await expect(page.getByTestId('run-sequence-button')).toBeVisible()
+  await closeAdvancedOptions(page)
 
   await page.getByTestId('past-topics-button').click()
   page.once('dialog', (dialog) => dialog.accept())
@@ -1278,7 +1267,7 @@ test('falls back to the default scene when localStorage holds an unknown scene i
   await expect(page.getByTestId('scene-select')).toHaveValue('meeting-room')
 })
 
-test('the explicit "開始新回合" button always starts a fresh fixed round', async ({ page }) => {
+test('the main "開始新回合" action always starts a fresh fixed round', async ({ page }) => {
   await page.goto('/')
 
   const topic = `E2E explicit new round ${Date.now()}`
@@ -1289,20 +1278,12 @@ test('the explicit "開始新回合" button always starts a fresh fixed round', 
   await page.getByTestId('start-meeting-button').click()
   await expect(page.getByTestId('operation-status')).toContainText('狀態：已完成')
 
-  await openAdvancedOptions(page)
-  // Mode-system slice B (feat: drive active mode from the selected meeting) replaced the
-  // hardcoded English role summary with the active mode's own catalog step labels
-  // (ActionBar.vue's roundStepsSummary) - red-blue's are Chinese.
-  await expect(page.getByTestId('new-round-panel')).toContainText(
-    '藍軍提案 → 紅軍質詢 → 藍軍修訂 → 裁判裁決',
-  )
-  await page.getByTestId('start-new-round-button').click()
+  await expect(page.getByTestId('start-meeting-button')).toContainText('開始新回合')
+  await page.getByTestId('start-meeting-button').click()
 
   // startSelectedMeeting pushes the fixed-round queue synchronously before the network
   // call, same as the main CTA - Blue flips to "thinking" immediately.
   await expect(page.getByTestId('role-seat-blue')).toHaveAttribute('data-status', 'thinking')
-  await closeAdvancedOptions(page)
-
   await expect(page.getByTestId('operation-status')).toContainText('狀態：已完成', {
     timeout: 15000,
   })
@@ -1407,10 +1388,9 @@ test('switching meetings does not leak pendingRoles state, and a revisited meeti
   await page.getByTestId('meeting-list-item').filter({ hasText: topicA }).locator('.meeting-item').click()
   await expect(page.getByTestId('council-stage')).toContainText(topicA)
 
-  await openAdvancedOptions(page)
-  await page.getByTestId('start-new-round-button').click()
+  await expect(page.getByTestId('start-meeting-button')).toContainText('開始新回合')
+  await page.getByTestId('start-meeting-button').click()
   await expect(page.getByTestId('role-seat-blue')).toHaveAttribute('data-status', 'thinking')
-  await closeAdvancedOptions(page)
 
   await expect(page.getByTestId('operation-status')).toContainText('狀態：已完成', { timeout: 15000 })
 
@@ -1514,7 +1494,8 @@ test('keeps the advanced options panel within a 375px viewport without horizonta
   await closeSettings(page)
 
   await openAdvancedOptions(page)
-  await expect(page.getByTestId('new-round-panel')).toBeVisible()
+  await expect(page.getByTestId('advanced-options-panel')).toBeVisible()
+  await expect(page.getByTestId('role-sequence-controls')).toBeVisible()
 
   await expect
     .poll(() => page.evaluate(() => document.documentElement.scrollWidth))
@@ -1587,7 +1568,7 @@ test('reopening a closed meeting restores discussion actions', async ({ page }) 
   page.once('dialog', (dialog) => dialog.accept())
   await page.getByTestId('close-meeting-button').click()
   await expect(page.getByTestId('operation-status')).toContainText('狀態：已結案')
-  await expect(page.getByTestId('start-new-round-button')).toBeDisabled()
+  await expect(page.getByTestId('start-meeting-button')).toBeDisabled()
 
   page.once('dialog', async (dialog) => {
     expect(dialog.message()).toContain('重新開啟')
@@ -1596,7 +1577,7 @@ test('reopening a closed meeting restores discussion actions', async ({ page }) 
   await page.getByTestId('reopen-meeting-button').click()
 
   await expect(page.getByTestId('operation-status')).toContainText('狀態：等待中')
-  await expect(page.getByTestId('start-new-round-button')).toBeEnabled()
+  await expect(page.getByTestId('start-meeting-button')).toBeEnabled()
   await closeAdvancedOptions(page)
 })
 
@@ -2245,6 +2226,50 @@ test('courtroom handles two confirmed issues one at a time before the final verd
     .filter({ hasText: `${topic}（修訂）` })
     .getByTestId('delete-meeting-button')
     .click()
+})
+
+test('courtroom exposes a failed final verdict retry and restores completion after reload', async ({
+  page,
+}) => {
+  await page.goto('/')
+  const topic = `E2E courtroom final retry ${Date.now()}`
+  await createMeetingViaNewCase(page, topic, { modeId: 'courtroom' })
+
+  await page.getByTestId('add-courtroom-issue-button').click()
+  await page.getByTestId('courtroom-issue-title-0').fill('被告是否負返還責任？')
+  await page.getByTestId('save-courtroom-issues-button').click()
+  await page.getByTestId('confirm-courtroom-issues-button').click()
+
+  const primary = page.getByTestId('courtroom-primary-action')
+  await primary.click()
+  await expect(page.locator('[data-issue-id="issue-1"]')).toContainText('待裁定', {
+    timeout: 15000,
+  })
+  await primary.click()
+  await expect(primary).toContainText('最終判決', { timeout: 15000 })
+
+  await setRoleModelsInSettings(page, { Judge: 'mock-broken' })
+  await closeSettings(page)
+  await primary.click()
+  await expect(primary).toContainText('重試最終判決', { timeout: 15000 })
+  await expect(page.getByTestId('courtroom-final-verdict')).toHaveCount(0)
+
+  await setRoleModelsInSettings(page, { Judge: 'mock-fast' })
+  await closeSettings(page)
+  await primary.click()
+  await expect(page.getByTestId('courtroom-final-verdict')).toContainText('Mock verdict', {
+    timeout: 15000,
+  })
+
+  await page.reload()
+  await page.getByTestId('past-topics-button').click()
+  await page.getByTestId('meeting-list-item').filter({ hasText: topic }).locator('.meeting-item').click()
+  await expect(page.getByTestId('courtroom-final-verdict')).toContainText('最終判決')
+  await expect(page.getByTestId('courtroom-primary-action')).toHaveCount(0)
+
+  await page.getByTestId('past-topics-button').click()
+  page.once('dialog', (dialog) => dialog.accept())
+  await page.getByTestId('meeting-list-item').filter({ hasText: topic }).getByTestId('delete-meeting-button').click()
 })
 
 test('courtroom AI draft shows progress and keeps manual editing available after failure', async ({ page }) => {

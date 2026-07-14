@@ -280,6 +280,25 @@ test('courtroom primary action is derived from its projected available action', 
     label: '送交爭點裁定：是否應返還土地（下一位是法官）',
     disabled: false,
   })
+
+  const failedFinal = projectPrimaryAction({
+    modeId: 'courtroom',
+    steps: [],
+    participants: roles,
+    events: [],
+    courtroom: {
+      available_actions: ['retry-failed-step'],
+      current_issue_id: null,
+      issues: [{ id: 'issue-2', title: '是否應返還土地', status: 'ruled' }],
+      failed_step_id: 'courtroom-r3-final-verdict',
+    },
+  })
+  assert.deepEqual(failedFinal, {
+    kind: 'courtroom-retry',
+    stepId: 'courtroom-r3-final-verdict',
+    label: '重試最終判決',
+    disabled: false,
+  })
 })
 
 test('meeting edit policy locks running meetings and confirmed courtroom goals', () => {

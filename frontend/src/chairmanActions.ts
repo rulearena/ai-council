@@ -17,6 +17,7 @@ export type CourtroomProjection = {
   available_actions: string[]
   current_issue_id: string | null
   issues: CourtroomIssueProjection[]
+  failed_step_id?: string
 }
 
 export type WorkflowEvent = {
@@ -65,8 +66,9 @@ export function projectFixedRoundFailedRole(
 }
 
 export type PrimaryAction = {
-  kind: 'start-round' | 'courtroom-arguments' | 'courtroom-ruling' | 'courtroom-final' | 'unavailable'
+  kind: 'start-round' | 'courtroom-arguments' | 'courtroom-ruling' | 'courtroom-final' | 'courtroom-retry' | 'unavailable'
   issueId?: string
+  stepId?: string
   label: string
   disabled: boolean
 }
@@ -108,6 +110,14 @@ export function projectCourtroomPrimaryAction(
     return {
       kind: 'courtroom-final',
       label: '請法官作成最終判決',
+      disabled: false,
+    }
+  }
+  if (actions.has('retry-failed-step') && courtroom.failed_step_id) {
+    return {
+      kind: 'courtroom-retry',
+      stepId: courtroom.failed_step_id,
+      label: '重試最終判決',
       disabled: false,
     }
   }

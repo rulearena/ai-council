@@ -112,7 +112,7 @@ def project_courtroom(
         available_actions = ["start-issue", "add-note"]
     else:
         available_actions = []
-    return {
+    projection = {
         "schema_version": DOCKET_SCHEMA_VERSION,
         "revision": revision,
         "status": "confirmed" if confirmed else "draft",
@@ -121,6 +121,9 @@ def project_courtroom(
         "final_status": final_status,
         "available_actions": available_actions,
     }
+    if final_status == "failed" and final_event is not None:
+        projection["failed_step_id"] = str(final_event.get("step_id", ""))
+    return projection
 
 
 def _latest_phase_event(

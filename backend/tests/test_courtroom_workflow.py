@@ -607,6 +607,7 @@ def test_failed_final_verdict_can_only_retry_the_linked_final_flow(tmp_path: Pat
         if event.get("interaction_type") == "courtroom-final-verdict"
         and event["status"] == "failed"
     )
+    assert failed["courtroom"]["failed_step_id"] == failed_final["step_id"]
     assert client.post(f"/meetings/{meeting_id}/courtroom/final-verdict").status_code == 409
     client.put("/models/mock-fast", json={"adapter": "mock", "extra_body": {}})
     time.sleep(0.02)
@@ -630,12 +631,49 @@ def test_failed_final_verdict_can_only_retry_the_linked_final_flow(tmp_path: Pat
         (1, "failed"),
         (2, "completed"),
     ]
+    assert "failed_step_id" not in completed["courtroom"]
     reservations = [
         event
         for event in completed["events"]
         if event.get("courtroom_operation") == "final-verdict"
     ]
     assert len(reservations) == 1
+
+
+def test_inactive_docket_final_failure_is_not_projected_as_the_retry_target() -> None:
+    metadata = {
+        "mode_id": "courtroom",
+        "courtroom_docket": {
+            "schema_version": 1,
+            "revision": 2,
+            "confirmed": True,
+            "issues": [{"id": "issue-1", "title": "占有權源"}],
+        },
+    }
+    events = [
+        {
+            "step_id": "courtroom-r2-issue-1-ruling",
+            "interaction_type": "courtroom-issue-phase",
+            "docket_revision": 2,
+            "issue_id": "issue-1",
+            "issue_phase": "ruling",
+            "status": "completed",
+            "parsed_output": {"outcome": "proponent-wins"},
+        },
+        {
+            "step_id": "courtroom-r1-final-verdict",
+            "interaction_type": "courtroom-final-verdict",
+            "docket_revision": 1,
+            "status": "failed",
+        },
+    ]
+
+    projected = project_courtroom(metadata, events)
+
+    assert projected is not None
+    assert projected["final_status"] == "ready"
+    assert projected["available_actions"] == ["final-verdict"]
+    assert "failed_step_id" not in projected
 
 
 @pytest.mark.parametrize("failed_phase", ["charge", "defense", "rebuttal", "ruling"])

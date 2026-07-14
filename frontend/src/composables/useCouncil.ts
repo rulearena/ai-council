@@ -644,6 +644,12 @@ export function useCouncil() {
     }
     const meetingId = selectedMeeting.value.meeting_id
     const action = primaryAction.value
+    if (action.kind === 'courtroom-retry' && action.stepId) {
+      const failed = [...events.value].reverse().find(
+        (event) => event.step_id === action.stepId && event.status === 'failed',
+      )
+      return failed ? retrySelectedStep(failed) : false
+    }
     const queuedRoles = action.kind === 'courtroom-arguments'
       ? ['Prosecutor', 'Defense', 'Prosecutor']
       : ['Judge']

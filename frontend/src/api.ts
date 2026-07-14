@@ -83,6 +83,7 @@ export type CourtroomProjection = {
   issues: CourtroomIssueProjection[]
   current_issue_id: string | null
   final_status: 'not-ready' | 'ready' | 'failed' | 'completed'
+  failed_step_id?: string
   available_actions: string[]
 }
 

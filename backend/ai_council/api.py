@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import os
 import threading
 import urllib.parse
@@ -77,6 +78,7 @@ from ai_council.prompting.schemas import (
 
 MODEL_TEST_PROMPT = 'Return {"summary":"OK","arguments":[],"risks":[],"recommendation":"OK"}'
 CHINESE_DIGITS = "零一二三四五六七八九"
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -937,6 +939,11 @@ def create_app(
     @meeting_transitions.synchronized
     def reopen_meeting(meeting_id: str) -> dict[str, str]:
         metadata_store.get(meeting_id)
+        if jobs.is_running(meeting_id):
+            raise HTTPException(
+                status_code=409,
+                detail="Meeting is still finishing its background job",
+            )
         event = {
             "event_id": f"{meeting_id}:reopened:{uuid.uuid4().hex}",
             "meeting_id": meeting_id,
@@ -1169,7 +1176,7 @@ def create_app(
             raise HTTPException(status_code=409, detail="Meeting is already running")
         return JSONResponse(status_code=202, content={"status": "running"})
 
-    @app.post("/meetings/{meeting_id}/roles/{role}/respond")
+    @app.post("/meetings/{meeting_id}/roles/{role}/respond", status_code=202)
     def respond_as_role(
         meeting_id: str,
         role: str,
@@ -1299,6 +1306,44 @@ def create_app(
                             f"{retry_base_step_id}"
                         ),
                     )
+        retry_events = repository.read_events(meeting_id)
+        retry_matching = [event for event in retry_events if event.get("step_id") == step_id]
+        retry_failed = retry_matching[-1] if retry_matching else None
+        if (
+            retry_failed is not None
+            and retry_failed.get("interaction_type") == "directed-role-response"
+        ):
+            retry_role = str(retry_failed.get("role", ""))
+            if retry_role not in model_assignments:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Missing model assignment for role: {retry_role}",
+                )
+            instruction_event_id = str(
+                retry_failed.get("in_response_to_event_id", "")
+            )
+            instruction_event = next(
+                (
+                    event
+                    for event in retry_events
+                    if event.get("event_id") == instruction_event_id
+                ),
+                None,
+            )
+            if (
+                not instruction_event_id
+                or instruction_event is None
+                or instruction_event.get("interaction_type")
+                != "directed-role-instruction"
+                or instruction_event.get("role") != "Human"
+                or instruction_event.get("status") != "completed"
+                or instruction_event.get("target_role_id") != retry_role
+                or not str(instruction_event.get("content", "")).strip()
+            ):
+                raise HTTPException(
+                    status_code=400,
+                    detail="Directed response instruction is unavailable for retry",
+                )
         try:
             if mode.id == "courtroom":
                 events = repository.read_events(meeting_id)
@@ -1450,7 +1495,7 @@ def create_app(
             raise HTTPException(status_code=400, detail=str(error)) from error
         return {"status": project_activity_status(repository.read_events(meeting_id))}
 
-    @app.post("/meetings/{meeting_id}/steps/{step_id}/retry")
+    @app.post("/meetings/{meeting_id}/steps/{step_id}/retry", status_code=202)
     def retry_step(
         meeting_id: str,
         step_id: str,
@@ -2623,6 +2668,11 @@ class MeetingJobManager:
             return future is not None and not future.done()
 
     def _finish(self, meeting_id: str, completed: Future[None]) -> None:
+        if not completed.cancelled() and completed.exception() is not None:
+            logger.error(
+                "Background meeting job failed unexpectedly",
+                extra={"meeting_id": meeting_id},
+            )
         with self._lock:
             if self._running.get(meeting_id) is completed:
                 self._running.pop(meeting_id, None)

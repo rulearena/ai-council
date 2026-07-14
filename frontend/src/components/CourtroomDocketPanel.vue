@@ -54,7 +54,9 @@ const failedDraft = computed(() => [...events.value].reverse().find(
     event.docket_revision === courtroom.value?.revision,
 ) ?? null)
 const finalVerdict = computed(() => [...events.value].reverse().find(
-  (event) => event.interaction_type === 'courtroom-final-verdict' && event.status === 'completed',
+  (event) => event.interaction_type === 'courtroom-final-verdict' &&
+    event.status === 'completed' &&
+    event.docket_revision === courtroom.value?.revision,
 )?.parsed_output as StructuredVerdict | undefined)
 const currentIssue = computed(() => courtroom.value?.issues.find(
   (issue) => issue.id === courtroom.value?.current_issue_id,
