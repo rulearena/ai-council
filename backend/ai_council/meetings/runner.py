@@ -399,6 +399,8 @@ class MeetingRunner:
         prior_transcript_override: str | None,
         parse_retries_remaining: int = 1,
     ) -> bool:
+        if self._is_terminal(meeting_id):
+            return False
         config = model_assignments[step.role]
         event_step_id = event_step_id or self._event_step_id(step.step_id, round_number)
         extra_event_fields = extra_event_fields or {}
@@ -806,7 +808,6 @@ class MeetingRunner:
         )
         if original_error:
             discarded["error"] = f"{discarded['error']} Original error: {original_error}"
-        discarded.pop("parsed_output", None)
         return discarded
 
     def _run_parallel_synthesis_if_ready(

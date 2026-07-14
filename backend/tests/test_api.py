@@ -1201,6 +1201,7 @@ def test_cancelling_background_run_stays_cancelled_when_model_returns(
     assert events[1]["failure_kind"] == "interrupted"
     assert events[1]["result_discarded"] is True
     assert events[1]["retry_scheduled"] is False
+    assert events[1]["parsed_output"]["summary"] == "OK"
     transcript = client.get(f"/meetings/{meeting_id}/transcript.md").text
     assert events[1]["step_id"] not in transcript
     assert "OK" not in transcript

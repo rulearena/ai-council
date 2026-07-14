@@ -1295,10 +1295,126 @@ def test_sequential_terminal_result_is_recorded_as_discarded_without_parse_retry
     assert diagnostic["retry_scheduled"] is False
     assert diagnostic["raw_output"] == raw_output
     assert diagnostic["token_usage"]["total_tokens"] == 5
-    assert "parsed_output" not in diagnostic
+    if raw_output == VALID_OUTPUT:
+        assert diagnostic["parsed_output"]["summary"] == "OK"
+    else:
+        assert "parsed_output" not in diagnostic
     assert diagnostic["step_id"] not in runner.transcript_projector.project(
         [lifecycle, diagnostic], title="terminal response"
     )
+
+
+def test_relay_cancel_after_parse_failure_does_not_start_scheduled_retry(
+    tmp_path: Path,
+) -> None:
+    class CancellingParseRepository(MeetingRepository):
+        cancelled = False
+
+        def append_event(self, meeting_id: str, event: dict[str, object]) -> None:
+            super().append_event(meeting_id, event)
+            if event.get("failure_kind") == "parse_error" and not self.cancelled:
+                self.cancelled = True
+                super().append_event(
+                    meeting_id,
+                    {
+                        "event_id": f"{meeting_id}:cancelled",
+                        "meeting_id": meeting_id,
+                        "step_id": "meeting",
+                        "role": "System",
+                        "attempt": 1,
+                        "status": "cancelled",
+                    },
+                )
+
+    repository = CancellingParseRepository(tmp_path / "data")
+    adapter = FakeAdapter(["not json", VALID_OUTPUT])
+    prompt_dir = tmp_path / "prompts"
+    prompt_dir.mkdir()
+    (prompt_dir / "blue_revise.md").write_text(
+        "{{ role }} {{ topic }} {{ prior_transcript }} {{ required_json_schema }}",
+        encoding="utf-8",
+    )
+    runner = MeetingRunner(
+        repository=repository,
+        prompt_renderer=PromptRenderer(prompt_dir),
+        adapters=RunnerAdapters(by_name={"mock": adapter}),
+    )
+
+    runner.respond_as_role(
+        plan=RED_BLUE_PLAN,
+        meeting_id="meeting-1",
+        topic="retry dispatch 前取消",
+        role="Blue",
+        model_assignments={"Blue": ModelConfig(id="mock-blue", adapter="mock")},
+    )
+
+    events = repository.read_events("meeting-1")
+    assert len(adapter.requests) == 1
+    assert [(event["status"], event.get("failure_kind")) for event in events] == [
+        ("failed", "parse_error"),
+        ("cancelled", None),
+    ]
+    assert events[0]["retry_scheduled"] is True
+
+
+def test_parallel_cancel_after_members_complete_does_not_start_synthesis(
+    tmp_path: Path,
+) -> None:
+    class CancellingAfterFanoutRepository(MeetingRepository):
+        completed_members = 0
+
+        def append_event(self, meeting_id: str, event: dict[str, object]) -> None:
+            super().append_event(meeting_id, event)
+            if event.get("status") != "completed" or not str(event.get("step_id", "")).startswith(
+                "fanout-"
+            ):
+                return
+            self.completed_members += 1
+            if self.completed_members == 3:
+                super().append_event(
+                    meeting_id,
+                    {
+                        "event_id": f"{meeting_id}:cancelled",
+                        "meeting_id": meeting_id,
+                        "step_id": "meeting",
+                        "role": "System",
+                        "attempt": 1,
+                        "status": "cancelled",
+                    },
+                )
+
+    repository = CancellingAfterFanoutRepository(tmp_path / "data")
+    adapter = FakeAdapter([VALID_OUTPUT] * 4)
+    prompt_dir = tmp_path / "prompts"
+    prompt_dir.mkdir()
+    for template in ("brainstorm_member", "brainstorm_synthesis"):
+        (prompt_dir / f"{template}.md").write_text(
+            "{{ role }} {{ topic }} {{ prior_transcript }} "
+            "{{ required_json_schema }} {{ fanout_outputs }}",
+            encoding="utf-8",
+        )
+    runner = MeetingRunner(
+        repository=repository,
+        prompt_renderer=PromptRenderer(prompt_dir),
+        adapters=RunnerAdapters(by_name={"mock": adapter}),
+    )
+
+    runner.start_parallel(
+        plan=PARALLEL_PLAN,
+        meeting_id="meeting-1",
+        topic="synthesis dispatch 前取消",
+        model_assignments=parallel_model_assignments(),
+    )
+
+    events = repository.read_events("meeting-1")
+    assert len(adapter.requests) == 3
+    assert [event["step_id"] for event in events] == [
+        "fanout-1-member-1",
+        "fanout-1-member-2",
+        "fanout-1-member-3",
+        "meeting",
+    ]
+    assert all(event["step_id"] != "synthesis-1" for event in events)
 
 
 def test_parallel_cancel_records_each_started_member_in_deterministic_order(
