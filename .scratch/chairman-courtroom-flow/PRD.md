@@ -11,7 +11,7 @@ Canonical backlog: `spec.md` §15 #87
 ## 核准契約
 
 1. 主席 composer 以明確 audience/action 下拉統一補充、全體回應與指定角色回答。
-2. title/goal 建立後可編輯；goal 變更只影響未來 prompt，已有 AI output 時需確認並追加 audit event。
+2. title/goal 建立後可編輯；一般 mode 的 goal 變更只影響未來 prompt，已有 AI output 時需確認並追加 audit event。courtroom goal 只允許在 docket 確認前修改，確認後唯讀；title 在非執行中仍可修改。
 3. 「系統設定」與「流程操作」分工；移除模糊且依隱藏狀態變動的「繼續討論」。
 4. 法院 meeting 必須先取得、編修並確認爭點清單。
 5. 每個爭點依 Prosecutor → Defense → Prosecutor rebuttal 攻防，之後停下等待主席；Judge 只在主席送交後作成 issue ruling。
@@ -32,6 +32,7 @@ Canonical backlog: `spec.md` §15 #87
 - 不讓 issue draft 自動變成 confirmed roster。
 - 不在 chairman note 模式呼叫模型。
 - 不讓「全體回應」或 generic start 在 courtroom 繞過 issue gate。
+- 不在 confirmed courtroom docket 上修改 goal 或隱含建立新版 docket。
 - 不改變非 courtroom mode 的既有 step IDs、runner semantics 或 output schema。
 - 所有 runtime/test data 留在 worktree `.scratch/`，不得使用 `/tmp`。
 

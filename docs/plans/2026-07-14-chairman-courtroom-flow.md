@@ -17,7 +17,7 @@ PRD: `.scratch/chairman-courtroom-flow/PRD.md`
 
 ### CourtroomWorkflow module
 
-外部 interface 是 meeting HTTP lifecycle；它隱藏 metadata draft/confirmed roster、event-derived progress、合法 transition與 prompt orchestration。Frontend 只消費 projection並送 action，不重作 state machine。
+外部 interface 是 meeting HTTP lifecycle；它隱藏 metadata draft/confirmed roster、event-derived progress、合法 transition與 prompt orchestration。Frontend 只消費 projection並送 action，不重作 state machine。Workflow service 是 app-scoped singleton，使用 per-meeting lock 在每個 transition 內重讀 metadata/events 後再驗證與 reserve；generic `/start`、`/sequences`、round counter 與 retry 不得承擔 courtroom issue semantics。
 
 ### ChairmanAction module
 
@@ -28,6 +28,7 @@ PRD: `.scratch/chairman-courtroom-flow/PRD.md`
 - metadata：可編修 issue definitions、confirmed marker。
 - append-only events：goal change audit、issue phases/rulings/final。
 - derived projection：current issue、per-issue status、available actions、final readiness。
+- courtroom docket 使用 optimistic revision；確認後 roster 與 goal 均唯讀，title 仍可在 idle 修改。
 
 ## 執行順序
 
