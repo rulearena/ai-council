@@ -65,6 +65,35 @@ class RelayPlan:
     directed_steps: dict[str, StepDefinition]
 
 
+def latest_unresolved_fixed_relay_failure(
+    events: list[dict[str, object]],
+    plan: RelayPlan,
+) -> dict[str, object] | None:
+    step_ids = {step.step_id for step in plan.steps}
+    fixed_events = [
+        event
+        for event in events
+        if not event.get("interaction_type")
+        and str(event.get("base_step_id") or event.get("step_id")) in step_ids
+    ]
+    if not fixed_events:
+        return None
+    latest_round = max(int(event.get("round", 1)) for event in fixed_events)
+    latest_by_step: dict[str, dict[str, object]] = {}
+    for event in fixed_events:
+        if int(event.get("round", 1)) != latest_round:
+            continue
+        step_id = str(event.get("base_step_id") or event.get("step_id"))
+        previous = latest_by_step.get(step_id)
+        if previous is None or int(event.get("attempt", 1)) >= int(previous.get("attempt", 1)):
+            latest_by_step[step_id] = event
+    for step in plan.steps:
+        event = latest_by_step.get(step.step_id)
+        if event is not None and event.get("status") == "failed":
+            return event
+    return None
+
+
 @dataclass(frozen=True)
 class ParallelMemberStep:
     step_id: str

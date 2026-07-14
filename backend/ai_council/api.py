@@ -45,6 +45,7 @@ from ai_council.meetings.repository import MeetingRepository
 from ai_council.meetings.runner import (
     CASE_FILES_BY_ROLE_INPUT,
     CASE_FILES_DEFAULT_ROLE,
+    latest_unresolved_fixed_relay_failure,
     MeetingRunner,
     RunnerAdapters,
     TokenStreamEvent,
@@ -1006,6 +1007,7 @@ def create_app(
         mode = meeting_mode(mode_catalog, metadata)
         if mode.category != "relay":
             raise HTTPException(status_code=400, detail=f"Mode does not support directed responses: {mode.id}")
+        plan = relay_plan(mode)
         directed_context: dict[str, object] = {}
         if mode.id == "courtroom":
             courtroom = courtroom_workflow.project(
@@ -1029,6 +1031,19 @@ def create_app(
                 "docket_revision": int(courtroom["revision"]),
                 "issue_id": str(courtroom["current_issue_id"]),
             }
+        else:
+            failed = latest_unresolved_fixed_relay_failure(
+                repository.read_events(meeting_id),
+                plan,
+            )
+            if failed is not None:
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        f"Retry failed relay step before requesting a directed response: "
+                        f"{failed.get('step_id')}"
+                    ),
+                )
         participants = project_participants(mode, metadata)
         participant = next(
             (item for item in participants if item["role_id"] == role),
@@ -1060,7 +1075,7 @@ def create_app(
                 role_display_name=role_display_name,
                 instruction=request.instruction,
                 model_assignments=model_assignments,
-                plan=relay_plan(mode),
+                plan=plan,
                 inputs=inputs,
                 context_fields=directed_context,
             )

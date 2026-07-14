@@ -10,6 +10,7 @@ import {
   chairmanActionOptions,
   chairmanActionPresentation,
   executeChairmanAction,
+  projectFixedRoundFailedRole,
   projectPrimaryAction,
   runWithPendingRoles,
   type PrimaryAction,
@@ -366,15 +367,10 @@ export function useCouncil() {
   // A failed role step must be retried before any new AI batch. The backend cannot
   // advance that fixed round through generic /start, so every AI composer path shares
   // this gate while plain chairman notes remain available.
-  const failedRole = computed<CouncilRole | null>(() => {
-    for (const role of councilRoles.value) {
-      const latest = [...events.value]
-        .reverse()
-        .find((event) => event.role === role && ['completed', 'failed'].includes(event.status))
-      if (latest?.status === 'failed') return role
-    }
-    return null
-  })
+  const failedRole = computed<CouncilRole | null>(() => projectFixedRoundFailedRole(
+    activeMode.value.steps ?? [],
+    events.value,
+  ))
   const primaryAction = computed<PrimaryAction>(() => projectPrimaryAction({
     modeId: selectedMeeting.value?.mode_id ?? activeMode.value.id,
     steps: activeMode.value.steps ?? [],
@@ -998,6 +994,16 @@ export function useCouncil() {
 
   async function requestSelectedRoleResponse(role: CouncilRole, instruction: string) {
     if (!selectedMeeting.value || !canRun.value || !instruction.trim()) return false
+    const blockedReason = chairmanActionBlockReason(
+      `role:${role}`,
+      failedRole.value,
+      selectedMeeting.value.participants,
+    )
+    if (blockedReason) {
+      error.value = blockedReason
+      chairmanActionFeedback.value = blockedReason
+      return false
+    }
     clearContinueHint()
     const meetingId = selectedMeeting.value.meeting_id
     return runWithPendingRoles(pendingRoles.value, [role], () => runAction(async () => {

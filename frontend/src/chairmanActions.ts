@@ -19,15 +19,50 @@ export type CourtroomProjection = {
   issues: CourtroomIssueProjection[]
 }
 
-type WorkflowEvent = {
+export type WorkflowEvent = {
   role: string
   step_id: string
   base_step_id?: string
   round?: number
+  attempt?: number
   status: string
+  interaction_type?: string
 }
 
 type WorkflowStep = { role: string; label: string; template: string }
+
+export function projectFixedRoundFailure<T extends WorkflowEvent>(
+  steps: WorkflowStep[],
+  events: T[],
+): T | null {
+  const stepIds = new Set(steps.map((step) => step.template.replaceAll('_', '-')))
+  const fixedEvents = events.filter((event) =>
+    !event.interaction_type && stepIds.has(event.base_step_id ?? event.step_id),
+  )
+  if (!fixedEvents.length) return null
+  const latestRound = Math.max(...fixedEvents.map((event) => event.round ?? 1))
+  const latestByStep = new Map<string, T>()
+  for (const event of fixedEvents) {
+    if ((event.round ?? 1) !== latestRound) continue
+    const stepId = event.base_step_id ?? event.step_id
+    const previous = latestByStep.get(stepId)
+    if (!previous || (event.attempt ?? 1) >= (previous.attempt ?? 1)) {
+      latestByStep.set(stepId, event)
+    }
+  }
+  for (const step of steps) {
+    const event = latestByStep.get(step.template.replaceAll('_', '-'))
+    if (event?.status === 'failed') return event
+  }
+  return null
+}
+
+export function projectFixedRoundFailedRole(
+  steps: WorkflowStep[],
+  events: WorkflowEvent[],
+): string | null {
+  return projectFixedRoundFailure(steps, events)?.role ?? null
+}
 
 export type PrimaryAction = {
   kind: 'start-round' | 'courtroom-arguments' | 'courtroom-ruling' | 'courtroom-final' | 'unavailable'

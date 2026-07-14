@@ -8,6 +8,7 @@ import {
   executeChairmanAction,
   runWithPendingRoles,
   meetingEditPolicy,
+  projectFixedRoundFailedRole,
   projectPrimaryAction,
 } from '../../src/chairmanActions.ts'
 
@@ -107,6 +108,28 @@ test('failed relay step leaves only notes until the failed role is cleared', () 
     chairmanActionOptions({ ...input, failedRole: null }).some((option) => option.value === 'role:Defense'),
     true,
   )
+})
+
+test('fixed round failure survives later directed events and clears only after fixed retry', () => {
+  const steps = [
+    { role: 'Blue', label: '藍軍提案', template: 'blue_propose' },
+    { role: 'Red', label: '紅軍質疑', template: 'red_critique' },
+  ]
+  const failedThenDirected = [
+    { role: 'Blue', step_id: 'blue-propose', base_step_id: 'blue-propose', round: 1, attempt: 1, status: 'completed' },
+    { role: 'Red', step_id: 'red-critique', base_step_id: 'red-critique', round: 1, attempt: 1, status: 'failed' },
+    { role: 'Red', step_id: 'directed-1-red-response', base_step_id: 'red-response', round: 2, attempt: 1, status: 'completed', interaction_type: 'directed-role-response' },
+    { role: 'Red', step_id: 'sequence-1-red-response', base_step_id: 'red-response', round: 3, attempt: 1, status: 'completed', interaction_type: 'role-sequence-response' },
+  ]
+
+  assert.equal(projectFixedRoundFailedRole(steps, failedThenDirected), 'Red')
+  assert.equal(projectFixedRoundFailedRole(steps, [
+    ...failedThenDirected,
+    { role: 'Red', step_id: 'red-critique', base_step_id: 'red-critique', round: 1, attempt: 2, status: 'completed' },
+  ]), null)
+  assert.equal(projectFixedRoundFailedRole(steps, [
+    { role: 'Red', step_id: 'directed-1-red-response', base_step_id: 'red-response', round: 1, attempt: 1, status: 'failed', interaction_type: 'directed-role-response' },
+  ]), null)
 })
 
 test('each chairman action states its audience and whether it invokes AI', () => {

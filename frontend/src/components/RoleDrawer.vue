@@ -14,6 +14,7 @@ import {
 import Drawer from './Drawer.vue'
 import RoleSilhouette from './RoleSilhouette.vue'
 import type { LegacyRoleOutput, StructuredVerdict } from '../api'
+import { projectFixedRoundFailure } from '../chairmanActions'
 import {
   decisionDisplayLabel,
   OUTPUT_LABELS,
@@ -33,6 +34,7 @@ const {
   events,
   loading,
   canRun,
+  failedRole,
   isTerminalMeeting,
   requestSelectedRoleResponse,
   retrySelectedStep,
@@ -44,7 +46,15 @@ const {
 const isChairman = computed(() => props.role === 'Chairman')
 const councilRole = computed<CouncilRole | null>(() => (props.role && isCouncilRole(props.role) ? props.role : null))
 
-const latestEvent = computed(() => (councilRole.value ? latestRoleEvent.value[councilRole.value] : null))
+const unresolvedFixedFailure = computed(() => projectFixedRoundFailure(
+  activeMode.value.steps ?? [],
+  events.value,
+))
+const latestEvent = computed(() => {
+  if (!councilRole.value) return null
+  const failure = unresolvedFixedFailure.value
+  return failure?.role === councilRole.value ? failure : latestRoleEvent.value[councilRole.value]
+})
 const richVerdict = computed<StructuredVerdict | null>(() => {
   const event = latestEvent.value
   if (event?.output_schema_id !== 'structured-verdict/v1') return null
@@ -78,13 +88,15 @@ const linkedInstruction = computed(() => {
 const displayStep = (event: Parameters<typeof stepDisplayLabel>[2]) =>
   stepDisplayLabel(activeMode.value, participants.value, event)
 const canRequestDirectedResponse = computed(() =>
-  activeMode.value.category === 'relay' && (
+  !failedRole.value && activeMode.value.category === 'relay' && (
     selectedMeeting.value?.mode_id !== 'courtroom' ||
     selectedMeeting.value.courtroom?.available_actions.includes('directed-response') === true
   ),
 )
 const directedResponseUnavailableReason = computed(() =>
-  activeMode.value.category === 'parallel'
+  failedRole.value
+    ? `${roleDisplayName(activeMode.value, participants.value, failedRole.value)}的回應失敗，請先重試失敗步驟。`
+    : activeMode.value.category === 'parallel'
     ? '此模式不支援指定角色追問，請使用主席輸入區的「請全體回應」。'
     : '法院會議需先完成目前爭點的必要步驟，主席才能追問指定角色。',
 )

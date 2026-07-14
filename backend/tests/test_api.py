@@ -3887,6 +3887,41 @@ def test_respond_as_role_accepts_mode_roles(tmp_path: Path) -> None:
     assert rejected.status_code == 400
 
 
+def test_directed_response_cannot_bypass_unresolved_fixed_relay_failure(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    original_complete = MockModelAdapter.complete
+    call_count = 0
+
+    def fail_second_fixed_step(self: MockModelAdapter, request: ModelRequest) -> ModelResponse:
+        nonlocal call_count
+        call_count += 1
+        if call_count == 2:
+            raise AdapterError("fixed relay failure")
+        return original_complete(self, request)
+
+    monkeypatch.setattr(MockModelAdapter, "complete", fail_second_fixed_step)
+    client = TestClient(create_test_app(tmp_path))
+    meeting_id = client.post(
+        "/meetings",
+        json={"title": "失敗回合", "goal": "驗證失敗 guard"},
+    ).json()["meeting_id"]
+    assert client.post(f"/meetings/{meeting_id}/start", json={}).status_code == 202
+    meeting = wait_for_activity(client, meeting_id, "failed")
+    assert meeting["events"][-1]["base_step_id"] == "red-critique"
+    before = meeting["events"]
+
+    response = client.post(
+        f"/meetings/{meeting_id}/roles/Blue/respond",
+        json={"instruction": "不得繞過失敗步驟"},
+    )
+
+    assert response.status_code == 409
+    assert "retry" in response.json()["detail"].lower()
+    assert client.get(f"/meetings/{meeting_id}").json()["events"] == before
+
+
 def test_local_frontend_origin_can_call_api(tmp_path: Path) -> None:
     app = create_test_app(tmp_path)
     client = TestClient(app)
