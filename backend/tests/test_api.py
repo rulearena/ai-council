@@ -1052,26 +1052,88 @@ models:
     assert listed["status"] == "unavailable"
 
 
-def test_model_health_store_drops_stale_generation_record() -> None:
+def test_model_health_store_only_records_latest_started_check() -> None:
     store = ModelHealthCheckStore()
 
-    # Simulate a health check that started before a save cleared the record.
-    generation = store.generation("m")
-    store.clear("m")  # e.g. a concurrent PUT resets status to "unknown"
+    older_check = store.begin("m")
+    newer_check = store.begin("m")
+
+    newer_result = ModelHealthCheckResult(status="unavailable", checked_at="t2")
+    store.record("m", newer_result, newer_check)
+
+    older_result = ModelHealthCheckResult(status="available", checked_at="t1")
+    store.record("m", older_result, older_check)
+
+    assert store.get("m") == newer_result
+
+
+def test_model_health_store_clear_invalidates_in_flight_check() -> None:
+    store = ModelHealthCheckStore()
+
+    in_flight_check = store.begin("m")
+    store.clear("m")
 
     stale_result = ModelHealthCheckResult(status="available", checked_at="t1")
-    store.record("m", stale_result, generation)
+    store.record("m", stale_result, in_flight_check)
 
-    assert store.get("m") is None  # stale result must be dropped, not applied
+    assert store.get("m") is None
 
-    fresh_generation = store.generation("m")
+    fresh_check = store.begin("m")
     fresh_result = ModelHealthCheckResult(status="unavailable", checked_at="t2")
-    store.record("m", fresh_result, fresh_generation)
+    store.record("m", fresh_result, fresh_check)
 
     assert store.get("m") == fresh_result
 
 
-def test_test_model_endpoint_drops_stale_check_when_save_races_between_read_and_generation(
+def test_concurrent_test_requests_keep_newer_health_result(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    app = create_test_app(tmp_path)
+    older_check_started = threading.Event()
+    release_older_check = threading.Event()
+    call_lock = threading.Lock()
+    call_count = 0
+
+    def complete_in_reverse_order(self, request):
+        nonlocal call_count
+        with call_lock:
+            call_count += 1
+            call_number = call_count
+        if call_number == 1:
+            older_check_started.set()
+            assert release_older_check.wait(timeout=2)
+            return ModelResponse(
+                raw_output='{"summary":"old","arguments":[],"risks":[],"recommendation":"old"}'
+            )
+        raise AdapterError("newer check failed")
+
+    monkeypatch.setattr(MockModelAdapter, "complete", complete_in_reverse_order)
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        older_response = executor.submit(
+            lambda: TestClient(app).post("/models/mock-fast/test")
+        )
+        assert older_check_started.wait(timeout=2)
+        newer_response = TestClient(app).post("/models/mock-fast/test")
+        release_older_check.set()
+        older_payload = older_response.result(timeout=2)
+
+    assert older_payload.json()["status"] == "available"
+    newer_payload = newer_response.json()
+    assert newer_payload["status"] == "unavailable"
+    assert newer_payload["tested_at"]
+    assert newer_payload["error"] == "newer check failed"
+    listed = next(
+        model
+        for model in TestClient(app).get("/models").json()
+        if model["id"] == "mock-fast"
+    )
+    assert listed["status"] == "unavailable"
+    assert listed["health_error"] == "newer check failed"
+
+
+def test_test_model_endpoint_drops_stale_check_when_save_races_after_begin(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
@@ -1084,10 +1146,8 @@ def test_test_model_endpoint_drops_stale_check_when_save_races_between_read_and_
 
     def get_model_then_race(repository, model_id):
         # Return the model as it was read, but land a concurrent PUT (which
-        # saves + clears the health record) before the caller can capture a
-        # generation for its own in-flight check. A correct implementation
-        # must capture its generation *before* reading the model config, so
-        # this race can never land inside that window.
+        # saves + clears the health record) while this check is in flight.
+        # The token acquired before the config read must then be stale.
         model = original_get_model(repository, model_id)
         response = client.put(f"/models/{model_id}", json={"adapter": "mock"})
         assert response.status_code == 200

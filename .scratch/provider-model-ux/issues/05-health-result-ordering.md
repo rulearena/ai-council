@@ -1,7 +1,7 @@
 # Model health result ordering
 
 Type: task
-Status: open
+Status: resolved
 Blocked by: 03
 
 ## 問題
@@ -21,3 +21,9 @@ Frontend 已只接受最新 test request，但 backend `ModelHealthCheckStore` g
 ## 驗收
 
 - Targeted backend tests 與 API regression 綠；不改 response schema；單一目的 commit。
+
+## Resolution Notes
+
+- `ModelHealthCheckStore.begin(model_id)` 為每次檢查配置遞增 token；`record()` 只接受該模型最新 token，避免舊檢查 late-write。
+- Manual HTTP test 與 startup checker 都在讀取 model config 前 begin；save/delete 的 `clear()` 繼續推進 token，使所有 in-flight 結果失效。
+- 新增 store ordering、反向完成的 concurrent HTTP tests，以及 save-during-check regression；API regression 123 passed，完整 backend 290 passed。

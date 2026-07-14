@@ -346,10 +346,10 @@ def create_app(
 
     @app.post("/models/{model_config_id}/test")
     def test_model(model_config_id: str) -> dict[str, str]:
-        generation = model_health.generation(model_config_id)
+        check_token = model_health.begin(model_config_id)
         model = get_model(model_repository, model_config_id)
         result = check_model_health(model, model_adapters.get(model.adapter))
-        model_health.record(model_config_id, result, generation)
+        model_health.record(model_config_id, result, check_token)
         response = {"status": result.status, "tested_at": result.checked_at}
         if result.error is not None:
             response["error"] = result.error
@@ -1714,11 +1714,10 @@ def check_model_health(model: ModelConfig, adapter: Any | None) -> ModelHealthCh
 class ModelHealthCheckStore:
     """Tracks health-check results per model id.
 
-    Each id has a generation counter that `clear()` bumps whenever the model
-    is (re)saved. `record()` only writes if the generation it was given still
-    matches, so a health check that was already in flight when a save
-    happened can't clobber the freshly-reset "unknown" status with a stale
-    result once it finishes.
+    Each check begins with a new token. Only the latest token may record, so
+    checks that finish out of order cannot overwrite a newer result. Clearing
+    a model also advances its token, invalidating every in-flight check after
+    a save or delete.
     """
 
     def __init__(self) -> None:
@@ -1726,19 +1725,21 @@ class ModelHealthCheckStore:
         self._generations: dict[str, int] = {}
         self._lock = threading.Lock()
 
-    def record(self, model_id: str, result: ModelHealthCheckResult, generation: int) -> None:
+    def begin(self, model_id: str) -> int:
         with self._lock:
-            if generation != self._generations.get(model_id, 0):
+            token = self._generations.get(model_id, 0) + 1
+            self._generations[model_id] = token
+            return token
+
+    def record(self, model_id: str, result: ModelHealthCheckResult, token: int) -> None:
+        with self._lock:
+            if token != self._generations.get(model_id, 0):
                 return
             self._checks[model_id] = result
 
     def get(self, model_id: str) -> ModelHealthCheckResult | None:
         with self._lock:
             return self._checks.get(model_id)
-
-    def generation(self, model_id: str) -> int:
-        with self._lock:
-            return self._generations.get(model_id, 0)
 
     def clear(self, model_id: str) -> None:
         with self._lock:
@@ -1770,17 +1771,17 @@ class ModelHealthChecker:
             self._check_model(model.id)
 
     def _check_model(self, model_id: str) -> None:
-        # Capture the generation before re-reading the config, so a save
+        # Begin before re-reading the config, so a save
         # that races in between is guaranteed to be caught: either it lands
         # before this read (we'd then check the fresh config, but that's
-        # fine) or after (its clear() bumps the generation past what we
+        # fine) or after (its clear() bumps the token past what we
         # captured, so our record() below is correctly dropped as stale).
-        generation = self.store.generation(model_id)
+        check_token = self.store.begin(model_id)
         model = self._find_model(model_id)
         if model is None:
             return
         result = check_model_health(model, self.adapters.get(model.adapter))
-        self.store.record(model_id, result, generation)
+        self.store.record(model_id, result, check_token)
 
     def _find_model(self, model_id: str) -> ModelConfig | None:
         try:
