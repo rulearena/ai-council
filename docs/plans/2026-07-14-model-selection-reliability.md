@@ -40,3 +40,4 @@
 - Frontend build 綠；Chromium 不低於 39 passed，所有新增情境綠。
 - 真瀏覽器 smoke 覆蓋建立 assignment、reload、Provider discovery/manual fallback。
 - `git diff --check` 綠；雙軸 review pass；不修改或回填既有 meeting/events。
+- 所有測試 fixture、logs 與 server data 必須位於 worktree `.scratch/`；禁止使用 `/tmp`、`mktemp` 或任何 workspace 外路徑。

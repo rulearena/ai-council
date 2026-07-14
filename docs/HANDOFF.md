@@ -54,13 +54,17 @@ Backlog 82「每場會議的 LLM attempt 診斷紀錄與檢視器」已實作並
 - 後端測試：`cd backend && .venv/bin/python -m pytest tests/ -q`（venv 在主 repo `backend/.venv`；worktree 沒有 venv——pytest `pythonpath=["."]` 會 import 執行目錄的程式碼，所以**在 worktree 的 backend 目錄下用主 repo 的 venv 跑**即測 worktree 的碼）。
 - **已知 flake（backlog 76）**：已於 2026-07-13 將 `test_api.py` 的 `wait_for_activity` deadline 放寬到 5s；若全套仍有單一 activity timeout，先單獨重跑再判斷。
 - e2e：`playwright.config.ts` 無 webServer，baseURL 吃 `E2E_BASE_URL`（預設 3009）。**主 repo 的 3009/5009 常被使用者的 dev server 佔用**——一律用空閒 port 自起：
+  所有測試資料必須留在 workspace 內；不得使用 `mktemp -d`、`/tmp` 或其他 workspace 外路徑。每次以新的 repo-local 目錄執行，完成後只清理該目錄：
   ```bash
-  DATA=$(mktemp -d); cp config/models.yaml.example $DATA/models.yaml
-  AI_COUNCIL_DATA_DIR=$DATA AI_COUNCIL_MODEL_CONFIG_PATH=$DATA/models.yaml \
+  DATA="$PWD/.scratch/e2e-runtime"
+  mkdir -p "$DATA"
+  cp config/models.yaml.example "$DATA/models.yaml"
+  AI_COUNCIL_DATA_DIR="$DATA/data" AI_COUNCIL_MODEL_CONFIG_PATH="$DATA/models.yaml" \
     <主repo>/backend/.venv/bin/python -m uvicorn ai_council.main:app --port 8123 &
   cd frontend && npx vite --port 3123 &
   E2E_BASE_URL=http://127.0.0.1:3123 \
-  PLAYWRIGHT_BROWSERS_PATH=<主repo>/frontend/.cache/ms-playwright npx playwright test
+    PLAYWRIGHT_BROWSERS_PATH=<主repo>/frontend/.cache/ms-playwright npx playwright test
+  # 停止自起服務後，回到 repo root 清理：rm -rf .scratch/e2e-runtime
   ```
   e2e 會寫入 models.yaml（模型管理測試），**絕不可指向 repo 的 config/**。跑完清理進程與暫存目錄。
 - 環境變數：`AI_COUNCIL_DATA_DIR` / `AI_COUNCIL_MODEL_CONFIG_PATH` / `AI_COUNCIL_MODES_CONFIG_PATH` / `AI_COUNCIL_PROMPT_DIR`（見 `.env.example`）。
