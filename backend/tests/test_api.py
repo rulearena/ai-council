@@ -1966,6 +1966,128 @@ def test_create_parallel_without_participants_materializes_default_model_roster(
     ]
 
 
+def test_create_fixed_parallel_materializes_and_accepts_canonical_six_hats_roster(
+    tmp_path: Path,
+) -> None:
+    client = TestClient(create_test_app(tmp_path))
+    expected_roles = [
+        "HatWhite",
+        "HatRed",
+        "HatBlack",
+        "HatYellow",
+        "HatGreen",
+        "HatBlue",
+    ]
+
+    defaulted = client.post(
+        "/meetings",
+        json={"topic": "Default six hats", "mode_id": "six-hats"},
+    )
+    explicit = client.post(
+        "/meetings",
+        json={
+            "topic": "Explicit six hats",
+            "mode_id": "six-hats",
+            "participants": [
+                {"role_id": role_id, "model_config_id": "mock-fast"}
+                for role_id in expected_roles
+            ],
+        },
+    )
+
+    assert defaulted.status_code == 200
+    assert explicit.status_code == 200
+    assert [item["role_id"] for item in defaulted.json()["participants"]] == expected_roles
+    assert {item["model_config_id"] for item in defaulted.json()["participants"]} == {
+        "mock-fast"
+    }
+    metadata_path = (
+        tmp_path
+        / "data"
+        / "meetings"
+        / defaulted.json()["meeting_id"]
+        / "metadata.json"
+    )
+    assert [
+        (item["role_id"], item["model_config_id"])
+        for item in json.loads(metadata_path.read_text(encoding="utf-8"))["participants"]
+    ] == [(role_id, "mock-fast") for role_id in expected_roles]
+
+
+def test_create_parallel_validates_fixed_roster_and_preserves_dynamic_persona_shape(
+    tmp_path: Path,
+) -> None:
+    client = TestClient(create_test_app(tmp_path))
+    fixed_roles = ["HatWhite", "HatRed", "HatBlack", "HatYellow", "HatGreen", "HatBlue"]
+
+    missing_role = client.post(
+        "/meetings",
+        json={
+            "topic": "Missing green hat",
+            "mode_id": "six-hats",
+            "participants": [
+                {"role_id": role_id, "model_config_id": "mock-fast"}
+                for role_id in fixed_roles
+                if role_id != "HatGreen"
+            ],
+        },
+    )
+    unknown_role = client.post(
+        "/meetings",
+        json={
+            "topic": "Unknown hat",
+            "mode_id": "six-hats",
+            "participants": [
+                {"role_id": role_id, "model_config_id": "mock-fast"}
+                for role_id in [*fixed_roles[:-1], "HatPurple", "HatBlue"]
+            ],
+        },
+    )
+    missing_model = client.post(
+        "/meetings",
+        json={
+            "topic": "Missing hat model",
+            "mode_id": "six-hats",
+            "participants": [
+                {
+                    "role_id": role_id,
+                    "model_config_id": None if role_id == "HatWhite" else "mock-fast",
+                }
+                for role_id in fixed_roles
+            ],
+        },
+    )
+    unknown_model = client.post(
+        "/meetings",
+        json={
+            "topic": "Unknown hat model",
+            "mode_id": "six-hats",
+            "participants": [
+                {
+                    "role_id": role_id,
+                    "model_config_id": "missing-model" if role_id == "HatWhite" else "mock-fast",
+                }
+                for role_id in fixed_roles
+            ],
+        },
+    )
+    persona = client.post(
+        "/meetings",
+        json={"topic": "Default personas", "mode_id": "persona-testing"},
+    )
+
+    assert missing_role.status_code == 400
+    assert unknown_role.status_code == 400
+    assert missing_model.status_code == 400
+    assert unknown_model.status_code == 404
+    assert persona.status_code == 200
+    assert [item["role_id"] for item in persona.json()["participants"]] == [
+        "Persona-1",
+        "Persona-2",
+        "ProductAdvisor",
+    ]
+
+
 def test_create_meeting_with_courtroom_mode(tmp_path: Path) -> None:
     app = create_test_app(tmp_path)
     client = TestClient(app)

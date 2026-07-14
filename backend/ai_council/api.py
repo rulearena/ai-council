@@ -949,16 +949,23 @@ def normalize_participants(
 
     participants = [participant.model_dump() for participant in requested]
     if not participants:
-        participants = [
-            {
-                "role_id": f"{mode.fanout.role}-{index}",
-                "model_config_id": default_model_id,
-            }
-            for index in range(1, mode.fanout.min_instances + 1)
-        ]
-        participants.append(
-            {"role_id": mode.synthesis.role, "model_config_id": default_model_id}
-        )
+        fixed_member_ids = [role.id for role in mode.roles if role.kind == "member"]
+        if fixed_member_ids:
+            participants = [
+                {"role_id": role.id, "model_config_id": default_model_id}
+                for role in mode.roles
+            ]
+        else:
+            participants = [
+                {
+                    "role_id": f"{mode.fanout.role}-{index}",
+                    "model_config_id": default_model_id,
+                }
+                for index in range(1, mode.fanout.min_instances + 1)
+            ]
+            participants.append(
+                {"role_id": mode.synthesis.role, "model_config_id": default_model_id}
+            )
     validate_participant_ids(
         mode=mode,
         participants=participants,
