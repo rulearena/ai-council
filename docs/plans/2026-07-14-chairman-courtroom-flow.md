@@ -1,6 +1,6 @@
 # 主席操作與逐一爭點法院流程實作計畫
 
-Canonical backlog: `spec.md` §15 #87  
+Canonical backlog: `spec.md` §15 #87
 PRD: `.scratch/chairman-courtroom-flow/PRD.md`
 
 ## 基線與限制
