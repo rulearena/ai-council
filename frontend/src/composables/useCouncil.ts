@@ -460,12 +460,17 @@ export function useCouncil() {
   // selectedModels/modelTestResults against it - the sole GET /models call site, reused by
   // both startup (refreshAll) and ModelManagerPanel after a create/update/delete
   // so a freshly added/removed model shows up in the role dropdowns without a page reload.
-  async function refreshModels() {
-    models.value = await getModels()
-    if (selectedMeeting.value) {
-      selectedMeeting.value = await getMeeting(selectedMeeting.value.meeting_id)
+  async function refreshModels(shouldCommit: () => boolean = () => true) {
+    const refreshedModels = await getModels()
+    if (!shouldCommit()) return
+    models.value = refreshedModels
+    const meetingId = selectedMeeting.value?.meeting_id
+    if (meetingId) {
+      const refreshedMeeting = await getMeeting(meetingId)
+      if (!shouldCommit() || selectedMeeting.value?.meeting_id !== meetingId) return
+      selectedMeeting.value = refreshedMeeting
       selectedModels.value = Object.fromEntries(
-        selectedMeeting.value.participants.map((participant) => [
+        refreshedMeeting.participants.map((participant) => [
           participant.role_id,
           participant.model_config_id ?? '',
         ]),

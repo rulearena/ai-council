@@ -43,13 +43,13 @@ const sceneModel = computed({
 type SettingsTab = 'general' | 'models'
 const activeTab = ref<SettingsTab>('general')
 
-// activeTab lives here in SettingsModal, which stays mounted across modal close/reopen
-// (only `show` toggles), so without this it would silently keep whatever tab was active
-// last time - reset to 一般 on every reopen so a previous 模型管理 visit doesn't linger.
+// Resetting on close unmounts ModelManagerPanel immediately, invalidating any pending
+// row-level test feedback. It also means every reopen starts from 一般 rather than
+// silently keeping the previously active tab.
 watch(
   () => props.show,
-  (visible) => {
-    if (visible) activeTab.value = 'general'
+  () => {
+    activeTab.value = 'general'
   },
 )
 </script>
@@ -77,7 +77,7 @@ watch(
       </button>
     </div>
 
-    <ModelManagerPanel v-if="activeTab === 'models'" />
+    <ModelManagerPanel v-if="show && activeTab === 'models'" />
 
     <template v-else>
     <section class="settings-scene-row">

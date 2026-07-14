@@ -1,4 +1,4 @@
-import { expect, test, type Page } from '@playwright/test'
+import { expect, test, type Page, type Route } from '@playwright/test'
 
 // The whole UI is now a stage with modals/drawers layered on top of it, so most flows
 // need a small amount of "open this surface, do the thing, close it" choreography.
@@ -2185,6 +2185,339 @@ test('model manager tab supports create, test, edit, and delete for a model conf
   await closeSettings(page)
 })
 
+test('model manager shows accessible connection-test progress, slow feedback, and success', async ({
+  page,
+}) => {
+  let pendingRoute: Route | undefined
+  let requestCount = 0
+  let markRequestStarted!: () => void
+  const requestStarted = new Promise<void>((resolve) => {
+    markRequestStarted = resolve
+  })
+  await page.route('**/models/mock-slow/test', async (route) => {
+    requestCount += 1
+    pendingRoute = route
+    markRequestStarted()
+  })
+
+  await page.goto('/')
+  await page.getByTestId('settings-button').click()
+  await page.getByTestId('model-manager-tab').click()
+
+  const row = modelManagerRow(page, 'mock-slow')
+  const button = page.getByTestId('test-model-button-mock-slow')
+  const status = row.getByTestId('model-test-feedback-mock-slow')
+  await button.click()
+  await requestStarted
+
+  await expect(button).toBeDisabled()
+  await expect(button).toContainText('正在測試連線…')
+  await expect(button.locator('.spinner')).toBeVisible()
+  await expect(status).toHaveAttribute('aria-live', 'polite')
+  await expect(status).toHaveText('正在測試連線…')
+  await button.evaluate((element) => (element as HTMLButtonElement).click())
+  expect(requestCount).toBe(1)
+
+  await expect(status).toHaveText('Provider 回應較慢，仍在等待…', { timeout: 3_000 })
+  await pendingRoute!.fulfill({
+    contentType: 'application/json',
+    body: JSON.stringify({ status: 'available', tested_at: '2026-07-14T12:00:00Z' }),
+  })
+
+  await expect(button).toBeEnabled()
+  await expect(status).toHaveText('連線成功')
+  await expect(row.locator('.status-dot')).toHaveAttribute('data-status', 'available')
+})
+
+test('model manager reports a clear connection-test failure', async ({ page }) => {
+  await page.route('**/models/mock-fast/test', async (route) => {
+    await route.fulfill({
+      status: 503,
+      contentType: 'application/json',
+      body: JSON.stringify({ detail: 'Provider 暫時無法連線' }),
+    })
+  })
+
+  await page.goto('/')
+  await page.getByTestId('settings-button').click()
+  await page.getByTestId('model-manager-tab').click()
+  await page.getByTestId('test-model-button-mock-fast').click()
+
+  const feedback = modelManagerRow(page, 'mock-fast').getByTestId('model-test-feedback-mock-fast')
+  await expect(feedback).toHaveText('測試失敗：Provider 暫時無法連線')
+  await expect(feedback).toHaveAttribute('role', 'status')
+})
+
+test('model health remains projected after connection-test feedback is unmounted', async ({
+  page,
+}) => {
+  const modelId = `e2e-health-projection-${Date.now()}`
+  await page.goto('/')
+  await page.getByTestId('settings-button').click()
+  await page.getByTestId('model-manager-tab').click()
+  await page.getByTestId('add-model-button').click()
+  await page.getByTestId('model-form-id-input').fill(modelId)
+  await page.getByTestId('model-form-save').click()
+  const row = modelManagerRow(page, modelId)
+  await expect(row.locator('.status-dot')).toHaveAttribute('data-status', 'unknown')
+
+  await page.getByTestId(`test-model-button-${modelId}`).click()
+  await expect(row.getByTestId(`model-test-feedback-${modelId}`)).toHaveText('連線成功')
+  await page.getByTestId('general-tab').click()
+  await page.getByTestId('model-manager-tab').click()
+  await expect(modelManagerRow(page, modelId).locator('.status-dot')).toHaveAttribute(
+    'data-status',
+    'available',
+  )
+
+  await page.getByTestId(`edit-model-button-${modelId}`).click()
+  await page.getByTestId('model-form-provider-select').selectOption('custom-openai-compatible')
+  await page.getByTestId('model-form-base-url-input').fill('http://127.0.0.1:9/v1')
+  await page.getByTestId('model-form-model-input').fill('unreachable-model')
+  await page.getByTestId('model-form-timeout-input').fill('1')
+  await page.getByTestId('model-form-save').click()
+  await expect(modelManagerRow(page, modelId).locator('.status-dot')).toHaveAttribute(
+    'data-status',
+    'unknown',
+  )
+  await page.getByTestId(`test-model-button-${modelId}`).click()
+  await expect(
+    modelManagerRow(page, modelId).getByTestId(`model-test-feedback-${modelId}`),
+  ).toContainText('測試失敗：')
+  await page.getByTestId('general-tab').click()
+  await page.getByTestId('model-manager-tab').click()
+  const failedRow = modelManagerRow(page, modelId)
+  await expect(failedRow.locator('.status-dot')).toHaveAttribute('data-status', 'unavailable')
+  await expect(failedRow.locator('.model-manager-test-error')).not.toBeEmpty()
+
+  page.once('dialog', (dialog) => dialog.accept())
+  await page.getByTestId(`delete-model-button-${modelId}`).click()
+  await expect(modelManagerRow(page, modelId)).toHaveCount(0)
+})
+
+test('a late connection-test response cannot replace a newer result after the modal closes', async ({
+  page,
+}) => {
+  const pendingRoutes: Route[] = []
+  let markFirstRequestStarted!: () => void
+  const firstRequestStarted = new Promise<void>((resolve) => {
+    markFirstRequestStarted = resolve
+  })
+  await page.route('**/models/mock-fast/test', async (route) => {
+    pendingRoutes.push(route)
+    if (pendingRoutes.length === 1) markFirstRequestStarted()
+  })
+
+  await page.goto('/')
+  await page.getByTestId('settings-button').click()
+  await page.getByTestId('model-manager-tab').click()
+  await page.getByTestId('test-model-button-mock-fast').click()
+  await firstRequestStarted
+  await closeSettings(page)
+
+  await page.getByTestId('settings-button').click()
+  await page.getByTestId('model-manager-tab').click()
+  await page.getByTestId('test-model-button-mock-fast').click()
+  await expect.poll(() => pendingRoutes.length).toBe(2)
+  await pendingRoutes[1].fulfill({
+    contentType: 'application/json',
+    body: JSON.stringify({ status: 'available', tested_at: '2026-07-14T12:01:00Z' }),
+  })
+
+  const row = modelManagerRow(page, 'mock-fast')
+  const feedback = row.getByTestId('model-test-feedback-mock-fast')
+  await expect(feedback).toHaveText('連線成功')
+  await pendingRoutes[0].fulfill({
+    status: 503,
+    contentType: 'application/json',
+    body: JSON.stringify({ detail: '舊請求失敗' }),
+  })
+  await expect(feedback).toHaveText('連線成功')
+  await expect(row).not.toContainText('舊請求失敗')
+})
+
+test('editing a model invalidates its pending connection-test feedback', async ({ page }) => {
+  let pendingRoute: Route | undefined
+  await page.route('**/models/mock-fast/test', async (route) => {
+    pendingRoute = route
+  })
+
+  await page.goto('/')
+  await page.getByTestId('settings-button').click()
+  await page.getByTestId('model-manager-tab').click()
+  await page.getByTestId('test-model-button-mock-fast').click()
+  await expect.poll(() => Boolean(pendingRoute)).toBe(true)
+  await page.getByTestId('edit-model-button-mock-fast').click()
+  await expect(page.getByTestId('model-form-id-input')).toHaveValue('mock-fast')
+  await pendingRoute!.fulfill({
+    contentType: 'application/json',
+    body: JSON.stringify({ status: 'available', tested_at: '2026-07-14T12:02:00Z' }),
+  })
+
+  await expect(
+    modelManagerRow(page, 'mock-fast').getByTestId('model-test-feedback-mock-fast'),
+  ).toHaveCount(0)
+})
+
+test('editing another model invalidates every pending connection test', async ({ page }) => {
+  let pendingTestRoute: Route | undefined
+  let modelRefreshCount = 0
+  await page.goto('/')
+  await page.getByTestId('settings-button').click()
+  await page.getByTestId('model-manager-tab').click()
+  const testedRow = modelManagerRow(page, 'mock-fast')
+  const initialStatus = await testedRow.locator('.status-dot').getAttribute('data-status')
+
+  await page.route('**/models', async (route) => {
+    if (route.request().method() !== 'GET') return route.continue()
+    modelRefreshCount += 1
+    const response = await route.fetch()
+    const models = (await response.json()) as Array<Record<string, unknown>>
+    const staleStatus = initialStatus === 'unavailable' ? 'available' : 'unavailable'
+    await route.fulfill({
+      response,
+      json: models.map((model) =>
+        model.id === 'mock-fast'
+          ? { ...model, status: staleStatus, health_error: 'stale test result' }
+          : model,
+      ),
+    })
+  })
+  await page.route('**/models/mock-fast/test', async (route) => {
+    pendingTestRoute = route
+  })
+
+  await page.getByTestId('test-model-button-mock-fast').click()
+  await expect.poll(() => Boolean(pendingTestRoute)).toBe(true)
+  await page.getByTestId('edit-model-button-mock-slow').click()
+  await expect(page.getByTestId('model-form-id-input')).toHaveValue('mock-slow')
+  await pendingTestRoute!.fulfill({
+    contentType: 'application/json',
+    body: JSON.stringify({ status: 'available', tested_at: '2026-07-14T12:04:00Z' }),
+  })
+
+  await expect(testedRow.getByTestId('model-test-feedback-mock-fast')).toHaveCount(0)
+  await page.evaluate(
+    () =>
+      new Promise<void>((resolve) =>
+        requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
+      ),
+  )
+  expect(modelRefreshCount).toBe(0)
+  await expect(testedRow.locator('.status-dot')).toHaveAttribute('data-status', initialStatus!)
+})
+
+test('an invalidated model refresh cannot overwrite a newer shared health projection', async ({
+  page,
+}) => {
+  let modelGetCount = 0
+  let oldGetRoute: Route | undefined
+  let oldGetResponse: Awaited<ReturnType<Route['fetch']>> | undefined
+  let oldModels: Array<Record<string, unknown>> = []
+  let markOldGetStarted!: () => void
+  const oldGetStarted = new Promise<void>((resolve) => {
+    markOldGetStarted = resolve
+  })
+
+  await page.goto('/')
+  await page.getByTestId('settings-button').click()
+  await page.getByTestId('model-manager-tab').click()
+  await page.route('**/models/mock-fast/test', async (route) => {
+    await route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify({ status: 'available', tested_at: '2026-07-14T12:05:00Z' }),
+    })
+  })
+  await page.route('**/models', async (route) => {
+    if (route.request().method() !== 'GET') return route.continue()
+    modelGetCount += 1
+    const response = await route.fetch()
+    const models = (await response.json()) as Array<Record<string, unknown>>
+    if (modelGetCount === 1) {
+      oldGetRoute = route
+      oldGetResponse = response
+      oldModels = models.map((model) =>
+        model.id === 'mock-fast'
+          ? { ...model, status: 'unavailable', health_error: 'stale health projection' }
+          : model,
+      )
+      markOldGetStarted()
+      return
+    }
+    await route.fulfill({
+      response,
+      json: models.map((model) =>
+        model.id === 'mock-fast'
+          ? { ...model, status: 'available', health_error: null }
+          : model,
+      ),
+    })
+  })
+
+  await page.getByTestId('test-model-button-mock-fast').click()
+  await oldGetStarted
+  await closeSettings(page)
+  await page.getByTestId('settings-button').click()
+  await page.getByTestId('model-manager-tab').click()
+  await page.getByTestId('test-model-button-mock-fast').click()
+  await expect.poll(() => modelGetCount).toBe(2)
+  await expect(
+    modelManagerRow(page, 'mock-fast').getByTestId('model-test-feedback-mock-fast'),
+  ).toHaveText('連線成功')
+
+  await oldGetRoute!.fulfill({ response: oldGetResponse!, json: oldModels })
+  await page.evaluate(
+    () =>
+      new Promise<void>((resolve) =>
+        requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
+      ),
+  )
+  await page.getByTestId('general-tab').click()
+  await page.getByTestId('model-manager-tab').click()
+  const row = modelManagerRow(page, 'mock-fast')
+  await expect(row.locator('.status-dot')).toHaveAttribute('data-status', 'available')
+  await expect(row).not.toContainText('stale health projection')
+})
+
+test('deleting and recreating a model cannot inherit its pending connection-test result', async ({
+  page,
+}) => {
+  const modelId = `e2e-stale-test-${Date.now()}`
+  let pendingRoute: Route | undefined
+  await page.route(`**/models/${modelId}/test`, async (route) => {
+    pendingRoute = route
+  })
+
+  await page.goto('/')
+  await page.getByTestId('settings-button').click()
+  await page.getByTestId('model-manager-tab').click()
+  await page.getByTestId('add-model-button').click()
+  await page.getByTestId('model-form-id-input').fill(modelId)
+  await page.getByTestId('model-form-save').click()
+  await page.getByTestId(`test-model-button-${modelId}`).click()
+  await expect.poll(() => Boolean(pendingRoute)).toBe(true)
+
+  page.once('dialog', (dialog) => dialog.accept())
+  await page.getByTestId(`delete-model-button-${modelId}`).click()
+  await expect(modelManagerRow(page, modelId)).toHaveCount(0)
+  await page.getByTestId('add-model-button').click()
+  await page.getByTestId('model-form-id-input').fill(modelId)
+  await page.getByTestId('model-form-save').click()
+  await expect(modelManagerRow(page, modelId)).toBeVisible()
+
+  await pendingRoute!.fulfill({
+    contentType: 'application/json',
+    body: JSON.stringify({ status: 'available', tested_at: '2026-07-14T12:03:00Z' }),
+  })
+  await expect(
+    modelManagerRow(page, modelId).getByTestId(`model-test-feedback-${modelId}`),
+  ).toHaveCount(0)
+
+  page.once('dialog', (dialog) => dialog.accept())
+  await page.getByTestId(`delete-model-button-${modelId}`).click()
+  await expect(modelManagerRow(page, modelId)).toHaveCount(0)
+})
+
 test('model manager creates an OpenAI config through provider-guided preview discovery', async ({
   page,
 }) => {
@@ -2227,6 +2560,214 @@ test('model manager creates an OpenAI config through provider-guided preview dis
   await closeSettings(page)
 })
 
+test('model manager discovers and saves exact Anthropic and Gemini model IDs', async ({ page }) => {
+  const previewPayloads: Record<string, unknown>[] = []
+  await page.route('**/models/available-models', async (route) => {
+    if (route.request().method() !== 'POST') return route.continue()
+    const payload = route.request().postDataJSON() as Record<string, unknown>
+    previewPayloads.push(payload)
+    const models = payload.adapter === 'anthropic-http'
+      ? ['claude-opus-4-1', 'claude-sonnet-4-5']
+      : ['gemini-2.5-flash', 'gemini-2.5-pro']
+    await route.fulfill({ json: { models } })
+  })
+  await page.goto('/')
+  await page.getByTestId('settings-button').click()
+  await page.getByTestId('model-manager-tab').click()
+
+  const cases = [
+    {
+      provider: 'anthropic',
+      adapter: 'anthropic-http',
+      baseUrl: 'https://api.anthropic.com/v1',
+      apiKeyEnv: 'ANTHROPIC_API_KEY',
+      model: 'claude-sonnet-4-5',
+      label: 'Anthropic · claude-sonnet-4-5',
+    },
+    {
+      provider: 'gemini',
+      adapter: 'gemini-http',
+      baseUrl: 'https://generativelanguage.googleapis.com/v1beta',
+      apiKeyEnv: 'GEMINI_API_KEY',
+      model: 'gemini-2.5-pro',
+      label: 'Gemini · gemini-2.5-pro',
+    },
+  ] as const
+
+  for (const providerCase of cases) {
+    await page.getByTestId('add-model-button').click()
+    await page.getByTestId('model-form-provider-select').selectOption(providerCase.provider)
+    await page.getByTestId('model-form-discover-button').click()
+    await expect(page.getByTestId('model-form-discovered-model-select')).toBeVisible()
+    await expect(page.getByTestId('model-form-discover-button')).toHaveText('重新整理可用模型')
+    await page.getByTestId('model-form-discover-button').click()
+    await page.getByTestId('model-form-discovered-model-select').selectOption(providerCase.model)
+
+    const modelId = `e2e-${providerCase.provider}-discovery-${Date.now()}`
+    await page.getByTestId('model-form-id-input').fill(modelId)
+    await page.getByTestId('model-form-save').click()
+    await expect(modelManagerRow(page, modelId)).toContainText(providerCase.label)
+
+    page.once('dialog', (dialog) => dialog.accept())
+    await page.getByTestId(`delete-model-button-${modelId}`).click()
+  }
+
+  expect(previewPayloads).toEqual(cases.flatMap((providerCase) => {
+    const payload = {
+      adapter: providerCase.adapter,
+      base_url: providerCase.baseUrl,
+      api_key_env: providerCase.apiKeyEnv,
+    }
+    return [payload, payload]
+  }))
+  await closeSettings(page)
+})
+
+test('model discovery search filters a large list and preserves exact model selection', async ({
+  page,
+}) => {
+  let createRequests = 0
+  await page.route('**/models/available-models', async (route) => {
+    if (route.request().method() !== 'POST') return route.continue()
+    await route.fulfill({
+      json: {
+        models: [
+          'gemini-2.0-flash',
+          'gemini-2.5-flash',
+          'gemini-2.5-pro',
+          'gemini-exp-1206',
+        ],
+      },
+    })
+  })
+  await page.route('**/models', async (route) => {
+    if (route.request().method() === 'POST') createRequests += 1
+    await route.continue()
+  })
+  await page.goto('/')
+  await page.getByTestId('settings-button').click()
+  await page.getByTestId('model-manager-tab').click()
+  await page.getByTestId('add-model-button').click()
+  await page.getByTestId('model-form-provider-select').selectOption('gemini')
+  await page.getByTestId('model-form-discover-button').click()
+
+  const search = page.getByRole('searchbox', { name: '搜尋已載入模型' })
+  const modelSelect = page.getByTestId('model-form-discovered-model-select')
+  await expect(modelSelect.locator('option')).toHaveCount(4)
+  await search.fill('2.5')
+  await expect(modelSelect.locator('option')).toHaveCount(2)
+  await expect(modelSelect).toHaveValue('gemini-2.5-flash')
+  await search.fill('not-a-provider-model')
+  const noMatch = page.getByTestId('model-form-discovery-no-match')
+  await expect(noMatch).toHaveText('找不到符合的模型。')
+  await expect(noMatch).toHaveAttribute('role', 'status')
+  await expect(page.getByTestId('model-form-save')).toBeDisabled()
+  await search.press('Enter')
+  expect(createRequests).toBe(0)
+  await expect(page.getByTestId('model-form')).toBeVisible()
+  await search.clear()
+  await expect(modelSelect.locator('option')).toHaveCount(4)
+  await expect(modelSelect).toHaveValue('gemini-2.0-flash')
+  await expect(page.getByTestId('model-form-save')).toBeEnabled()
+  await search.fill('2.5-pro')
+  await expect(modelSelect.locator('option')).toHaveCount(1)
+  await expect(modelSelect).toHaveValue('gemini-2.5-pro')
+
+  const modelId = `e2e-gemini-search-${Date.now()}`
+  await page.getByTestId('model-form-id-input').fill(modelId)
+  await page.getByTestId('model-form-save').click()
+  expect(createRequests).toBe(1)
+  await expect(modelManagerRow(page, modelId)).toContainText('Gemini · gemini-2.5-pro')
+
+  page.once('dialog', (dialog) => dialog.accept())
+  await page.getByTestId(`delete-model-button-${modelId}`).click()
+  await closeSettings(page)
+})
+
+test('model manager creates a subscription config from a guided CLI preset', async ({ page }) => {
+  let createPayload: Record<string, unknown> | null = null
+  await page.route('**/models', async (route) => {
+    if (route.request().method() === 'POST') {
+      createPayload = route.request().postDataJSON() as Record<string, unknown>
+    }
+    await route.continue()
+  })
+  await page.goto('/')
+  await page.getByTestId('settings-button').click()
+  await page.getByTestId('model-manager-tab').click()
+  await page.getByTestId('add-model-button').click()
+  await page.getByTestId('model-form-provider-select').selectOption('subscription-cli')
+
+  await expect(page.getByTestId('model-form-cli-preset-select')).toHaveValue('claude')
+  await expect(page.getByTestId('model-form-cli-model-mode-select')).toHaveValue('default')
+  await expect(page.getByTestId('model-form-cli-model-default')).toContainText(
+    '使用 CLI 自動選擇模型',
+  )
+  await expect(page.getByTestId('model-form-command-textarea')).toHaveCount(0)
+
+  const modelId = `e2e-cli-preset-${Date.now()}`
+  await page.getByTestId('model-form-id-input').fill(modelId)
+  await page.getByTestId('model-form-cli-preset-select').selectOption('agy')
+  await page.getByTestId('model-form-save').click()
+  await expect(modelManagerRow(page, modelId)).toContainText('Subscription CLI')
+  expect(createPayload).toMatchObject({
+    adapter: 'subscription-cli',
+    command: ['agy', '-p', '{prompt}'],
+    extra_body: { cli_provider: 'agy' },
+  })
+
+  page.once('dialog', (dialog) => dialog.accept())
+  await page.getByTestId(`delete-model-button-${modelId}`).click()
+  await closeSettings(page)
+})
+
+test('guided CLI preset validates and saves an advanced exact model ID', async ({ page }) => {
+  let createRequests = 0
+  let createPayload: Record<string, unknown> | null = null
+  await page.route('**/models', async (route) => {
+    if (route.request().method() === 'POST') {
+      createRequests += 1
+      createPayload = route.request().postDataJSON() as Record<string, unknown>
+    }
+    await route.continue()
+  })
+  await page.goto('/')
+  await page.getByTestId('settings-button').click()
+  await page.getByTestId('model-manager-tab').click()
+  await page.getByTestId('add-model-button').click()
+  await page.getByTestId('model-form-provider-select').selectOption('subscription-cli')
+  const modelId = `e2e-cli-exact-${Date.now()}`
+  await page.getByTestId('model-form-id-input').fill(modelId)
+  await page.getByTestId('model-form-cli-preset-select').selectOption('agy')
+  await page.getByTestId('model-form-cli-model-mode-select').selectOption('exact')
+
+  await page.getByTestId('model-form-save').click()
+  await expect(page.getByTestId('model-form-cli-exact-model-error')).toContainText(
+    '請輸入 exact model ID',
+  )
+  expect(createRequests).toBe(0)
+
+  await page.getByTestId('model-form-cli-exact-model-input').fill('agy-exact-x')
+  await page.getByTestId('model-form-save').click()
+  expect(createRequests).toBe(1)
+  expect(createPayload).toMatchObject({
+    adapter: 'subscription-cli',
+    command: ['agy', '--model', 'agy-exact-x', '-p', '{prompt}'],
+    extra_body: { cli_provider: 'agy' },
+  })
+  await expect(modelManagerRow(page, modelId)).toContainText(
+    'Subscription CLI · AGY · agy-exact-x',
+  )
+  await page.getByTestId('general-tab').click()
+  await expect(page.getByTestId('blue-model-select').locator(`option[value="${modelId}"]`)).toHaveText(
+    'Subscription CLI · AGY · agy-exact-x',
+  )
+  await page.getByTestId('model-manager-tab').click()
+  page.once('dialog', (dialog) => dialog.accept())
+  await page.getByTestId(`delete-model-button-${modelId}`).click()
+  await closeSettings(page)
+})
+
 test('model labels show Provider and exact model across model list and role selectors', async ({
   page,
 }) => {
@@ -2255,7 +2796,7 @@ test('model labels show Provider and exact model across model list and role sele
   await page.getByTestId('new-case-close-button').click()
 })
 
-test('model discovery failure, empty results, and unsupported providers retain manual entry', async ({
+test('Anthropic failure and Gemini empty discovery retain manual exact model entry', async ({
   page,
 }) => {
   let discoveryAttempt = 0
@@ -2277,26 +2818,48 @@ test('model discovery failure, empty results, and unsupported providers retain m
   await page.getByTestId('add-model-button').click()
 
   await page.getByTestId('model-form-provider-select').selectOption('anthropic')
-  await expect(page.getByTestId('model-form-discovery-unsupported')).toContainText(
-    'Anthropic 暫不支援自動載入模型',
-  )
-  await expect(page.getByTestId('model-form-model-input')).toBeVisible()
-
-  await page.getByTestId('model-form-provider-select').selectOption('subscription-cli')
-  await expect(page.getByTestId('model-form-cli-discovery-unsupported')).toContainText(
-    '不支援自動載入模型；執行型號由 command 決定',
-  )
-
-  await page.getByTestId('model-form-provider-select').selectOption('custom-openai-compatible')
-  await page.getByTestId('model-form-base-url-input').fill('http://provider.example.test/v1')
   await page.getByTestId('model-form-discover-button').click()
   await expect(page.getByTestId('model-form-discovery-message')).toContainText('Provider unavailable')
   await expect(page.getByTestId('model-form-model-input')).toBeVisible()
 
-  await page.getByTestId('model-form-provider-select').selectOption('openai')
+  await page.getByTestId('model-form-provider-select').selectOption('gemini')
   await page.getByTestId('model-form-discover-button').click()
   await expect(page.getByTestId('model-form-discovery-message')).toContainText('沒有回傳可用模型')
   await expect(page.getByTestId('model-form-model-input')).toBeVisible()
+
+  await page.getByTestId('model-form-provider-select').selectOption('subscription-cli')
+  await expect(page.getByTestId('model-form-cli-preset-select')).toHaveValue('claude')
+  await expect(page.getByTestId('model-form-cli-model-default')).toContainText('CLI 自動選擇模型')
+  await page.getByTestId('model-form-cancel').click()
+  await closeSettings(page)
+})
+
+test('provider change and manual model edit discard late discovery responses', async ({ page }) => {
+  const pendingRoutes: Route[] = []
+  await page.route('**/models/available-models', async (route) => {
+    if (route.request().method() !== 'POST') return route.continue()
+    pendingRoutes.push(route)
+  })
+  await page.goto('/')
+  await page.getByTestId('settings-button').click()
+  await page.getByTestId('model-manager-tab').click()
+  await page.getByTestId('add-model-button').click()
+
+  await page.getByTestId('model-form-provider-select').selectOption('anthropic')
+  await page.getByTestId('model-form-discover-button').click()
+  await expect.poll(() => pendingRoutes.length).toBe(1)
+  await page.getByTestId('model-form-provider-select').selectOption('gemini')
+  await pendingRoutes[0].fulfill({ json: { models: ['claude-late-result'] } })
+  await expect(page.getByTestId('model-form-discovered-model-select')).toHaveCount(0)
+  await expect(page.getByTestId('model-form-model-input')).toHaveValue('')
+
+  await page.getByTestId('model-form-discover-button').click()
+  await expect.poll(() => pendingRoutes.length).toBe(2)
+  await page.getByTestId('model-form-model-input').fill('gemini-manual-exact')
+  await pendingRoutes[1].fulfill({ json: { models: ['gemini-late-result'] } })
+  await expect(page.getByTestId('model-form-discovered-model-select')).toHaveCount(0)
+  await expect(page.getByTestId('model-form-model-input')).toHaveValue('gemini-manual-exact')
+
   await page.getByTestId('model-form-cancel').click()
   await closeSettings(page)
 })
@@ -2318,6 +2881,43 @@ test('editing an existing config refreshes discovery through its saved-config en
   await page.getByTestId('model-form-discover-button').click()
   await expect.poll(() => existingDiscoveryRequests).toBe(1)
   await expect(page.getByTestId('model-form-discovered-model-select')).toHaveValue('qwen/existing')
+  await page.getByTestId('model-form-cancel').click()
+  await closeSettings(page)
+})
+
+test('editing with changed connection fields previews the current draft instead of saved config', async ({
+  page,
+}) => {
+  let savedConfigRequests = 0
+  const previewPayloads: Record<string, unknown>[] = []
+  await page.route('**/models/qwen27/available-models', async (route) => {
+    savedConfigRequests += 1
+    await route.fulfill({ json: { models: ['must-not-use-saved-connection'] } })
+  })
+  await page.route('**/models/available-models', async (route) => {
+    if (route.request().method() !== 'POST') return route.continue()
+    previewPayloads.push(route.request().postDataJSON() as Record<string, unknown>)
+    await route.fulfill({ json: { models: ['claude-current-draft'] } })
+  })
+
+  await page.goto('/')
+  await page.getByTestId('settings-button').click()
+  await page.getByTestId('model-manager-tab').click()
+  await page.getByTestId('edit-model-button-qwen27').click()
+  await page.getByTestId('model-form-provider-select').selectOption('anthropic')
+  await page.getByTestId('model-form-base-url-input').fill('https://anthropic-proxy.example.test/v1')
+  await page.getByTestId('model-form-api-key-env-input').fill('ANTHROPIC_PROXY_KEY')
+  await page.getByTestId('model-form-discover-button').click()
+
+  await expect(page.getByTestId('model-form-discovered-model-select')).toHaveValue(
+    'claude-current-draft',
+  )
+  expect(previewPayloads).toEqual([{
+    adapter: 'anthropic-http',
+    base_url: 'https://anthropic-proxy.example.test/v1',
+    api_key_env: 'ANTHROPIC_PROXY_KEY',
+  }])
+  expect(savedConfigRequests).toBe(0)
   await page.getByTestId('model-form-cancel').click()
   await closeSettings(page)
 })
@@ -2372,10 +2972,108 @@ test('provider-guided edits preserve legacy extra body, pricing, and CLI command
   })
   await page.getByTestId('edit-model-button-codex-subscription').click()
   await expect(page.getByTestId('model-form-provider-select')).toHaveValue('subscription-cli')
+  await expect(page.getByTestId('model-form-cli-preset-select')).toHaveValue('codex')
+  await expect(page.getByTestId('model-form-command-textarea')).toHaveCount(0)
   await page.getByTestId('model-form-save').click()
   expect(cliUpdate).toMatchObject({
     command: ['codex', 'exec', '{prompt}'],
     extra_body: { cli_provider: 'codex' },
+  })
+
+  page.once('dialog', (dialog) => dialog.accept())
+  await page.getByTestId(`delete-model-button-${modelId}`).click()
+  await closeSettings(page)
+})
+
+test('saving a recognized markerless CLI preset does not inject cli_provider', async ({ page }) => {
+  const modelsResponsePromise = page.waitForResponse(
+    (response) => response.request().method() === 'GET' && response.url().endsWith('/models'),
+  )
+  await page.goto('/')
+  const apiOrigin = new URL((await modelsResponsePromise).url()).origin
+  const modelId = `e2e-markerless-cli-${Date.now()}`
+  expect((await page.request.post(`${apiOrigin}/models`, {
+    data: {
+      id: modelId,
+      adapter: 'subscription-cli',
+      command: ['claude', '-p', '{prompt}'],
+      extra_body: {},
+      timeout_seconds: 300,
+    },
+  })).ok()).toBeTruthy()
+  await page.reload()
+  await page.getByTestId('settings-button').click()
+  await page.getByTestId('model-manager-tab').click()
+
+  let updatePayload: Record<string, unknown> | null = null
+  await page.route(`**/models/${modelId}`, async (route) => {
+    if (route.request().method() === 'PUT') {
+      updatePayload = route.request().postDataJSON() as Record<string, unknown>
+    }
+    await route.continue()
+  })
+  await page.getByTestId(`edit-model-button-${modelId}`).click()
+  await expect(page.getByTestId('model-form-cli-preset-select')).toHaveValue('claude')
+  await expect(page.getByTestId('model-form-cli-model-mode-select')).toHaveValue('default')
+  await page.getByTestId('model-form-save').click()
+  expect(updatePayload).toMatchObject({
+    command: ['claude', '-p', '{prompt}'],
+    extra_body: {},
+  })
+  await expect(page.getByTestId('model-form')).not.toBeVisible()
+
+  updatePayload = null
+  await page.getByTestId(`edit-model-button-${modelId}`).click()
+  await page.getByTestId('model-form-cli-model-mode-select').selectOption('exact')
+  await page.getByTestId('model-form-cli-exact-model-input').fill('claude-exact-x')
+  await page.getByTestId('model-form-save').click()
+  expect(updatePayload).toMatchObject({
+    command: ['claude', '--model', 'claude-exact-x', '-p', '{prompt}'],
+    extra_body: { cli_provider: 'claude' },
+  })
+  await expect(page.getByTestId('model-form')).not.toBeVisible()
+  page.once('dialog', (dialog) => dialog.accept())
+  await page.getByTestId(`delete-model-button-${modelId}`).click()
+  await closeSettings(page)
+})
+
+test('unknown legacy subscription commands stay custom and round-trip unchanged', async ({ page }) => {
+  const modelsResponsePromise = page.waitForResponse(
+    (response) => response.request().method() === 'GET' && response.url().endsWith('/models'),
+  )
+  await page.goto('/')
+  const apiOrigin = new URL((await modelsResponsePromise).url()).origin
+  const modelId = `e2e-custom-cli-${Date.now()}`
+  const command = ['company-wrapper', '--profile', 'work', '{prompt}']
+  const extraBody = { cli_provider: 'company-internal', preserve: { mode: 'safe' } }
+  expect((await page.request.post(`${apiOrigin}/models`, {
+    data: {
+      id: modelId,
+      adapter: 'subscription-cli',
+      command,
+      extra_body: extraBody,
+      timeout_seconds: 77,
+    },
+  })).ok()).toBeTruthy()
+  await page.reload()
+  await page.getByTestId('settings-button').click()
+  await page.getByTestId('model-manager-tab').click()
+
+  let updatePayload: Record<string, unknown> | null = null
+  await page.route(`**/models/${modelId}`, async (route) => {
+    if (route.request().method() === 'PUT') {
+      updatePayload = route.request().postDataJSON() as Record<string, unknown>
+    }
+    await route.continue()
+  })
+  await page.getByTestId(`edit-model-button-${modelId}`).click()
+  await expect(page.getByTestId('model-form-cli-preset-select')).toHaveValue('custom')
+  await expect(page.getByTestId('model-form-command-textarea')).toHaveValue(command.join('\n'))
+  await page.getByTestId('model-form-save').click()
+  expect(updatePayload).toMatchObject({
+    command,
+    extra_body: extraBody,
+    timeout_seconds: 77,
   })
 
   page.once('dialog', (dialog) => dialog.accept())

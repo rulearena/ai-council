@@ -6,6 +6,7 @@ import sys
 import threading
 import time
 import urllib.error
+import urllib.parse
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
@@ -625,7 +626,312 @@ def test_model_discovery_preview_preserves_an_empty_model_list(
     assert response.json() == {"models": []}
 
 
-@pytest.mark.parametrize("adapter", ["anthropic-http", "gemini-http", "subscription-cli", "mock"])
+def test_anthropic_model_discovery_preview_uses_provider_contract_and_normalizes_models(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("ANTHROPIC_DISCOVERY_KEY", "anthropic-secret")
+
+    def fake_urlopen(request, timeout):
+        assert request.full_url == "https://api.anthropic.test/v1/models"
+        assert request.get_header("X-api-key") == "anthropic-secret"
+        assert request.get_header("Anthropic-version") == "2023-06-01"
+        return FakeHTTPResponse(
+            {
+                "data": [
+                    {"id": "claude-z"},
+                    {"id": "claude-a"},
+                    {"id": "claude-z"},
+                ],
+                "has_more": False,
+            }
+        )
+
+    monkeypatch.setattr("ai_council.models.adapters.urllib.request.urlopen", fake_urlopen)
+    client = TestClient(create_test_app(tmp_path))
+
+    response = client.post(
+        "/models/available-models",
+        json={
+            "adapter": "anthropic-http",
+            "base_url": "https://api.anthropic.test/v1/",
+            "api_key_env": "ANTHROPIC_DISCOVERY_KEY",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {"models": ["claude-a", "claude-z"]}
+
+
+def test_anthropic_existing_model_discovery_follows_provider_pagination(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("ANTHROPIC_EXISTING_KEY", "existing-secret")
+    requests = []
+
+    def fake_urlopen(request, timeout):
+        requests.append(request)
+        if request.full_url == "https://api.anthropic.test/v1/models":
+            return FakeHTTPResponse(
+                {
+                    "data": [{"id": "claude-b"}, {"id": "claude-a"}],
+                    "has_more": True,
+                    "last_id": "claude-b",
+                }
+            )
+        assert request.full_url == (
+            "https://api.anthropic.test/v1/models?after_id=claude-b"
+        )
+        return FakeHTTPResponse(
+            {
+                "data": [{"id": "claude-c"}, {"id": "claude-a"}],
+                "has_more": False,
+            }
+        )
+
+    monkeypatch.setattr("ai_council.models.adapters.urllib.request.urlopen", fake_urlopen)
+    client = TestClient(
+        create_test_app(
+            tmp_path,
+            models_yaml="""
+models:
+  - id: claude-existing
+    adapter: anthropic-http
+    base_url: https://api.anthropic.test/v1
+    model: claude-a
+    api_key_env: ANTHROPIC_EXISTING_KEY
+""".strip(),
+        )
+    )
+
+    response = client.get("/models/claude-existing/available-models")
+
+    assert response.status_code == 200
+    assert response.json() == {"models": ["claude-a", "claude-b", "claude-c"]}
+    assert len(requests) == 2
+    assert all(request.get_header("X-api-key") == "existing-secret" for request in requests)
+
+
+def test_gemini_model_discovery_preview_uses_provider_contract_and_paginates(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("GEMINI_DISCOVERY_KEY", "gemini-secret")
+    requested_urls = []
+
+    def fake_urlopen(request, timeout):
+        requested_urls.append(request.full_url)
+        if request.full_url == (
+            "https://generativelanguage.googleapis.test/v1beta/models?key=gemini-secret"
+        ):
+            return FakeHTTPResponse(
+                {
+                    "models": [
+                        {"name": "models/gemini-z"},
+                        {"name": "models/gemini-a"},
+                    ],
+                    "nextPageToken": "page two",
+                }
+            )
+        assert request.full_url == (
+            "https://generativelanguage.googleapis.test/v1beta/models"
+            "?key=gemini-secret&pageToken=page+two"
+        )
+        return FakeHTTPResponse(
+            {"models": [{"name": "models/gemini-a"}, {"name": "models/gemini-m"}]}
+        )
+
+    monkeypatch.setattr("ai_council.models.adapters.urllib.request.urlopen", fake_urlopen)
+    client = TestClient(create_test_app(tmp_path))
+
+    response = client.post(
+        "/models/available-models",
+        json={
+            "adapter": "gemini-http",
+            "base_url": "https://generativelanguage.googleapis.test/v1beta/",
+            "api_key_env": "GEMINI_DISCOVERY_KEY",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {"models": ["gemini-a", "gemini-m", "gemini-z"]}
+    assert len(requested_urls) == 2
+
+
+def test_gemini_existing_model_discovery_lists_only_generate_content_models(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("GEMINI_EXISTING_KEY", "existing-gemini-secret")
+
+    def fake_urlopen(request, timeout):
+        assert request.full_url == (
+            "https://generativelanguage.googleapis.test/v1beta/models"
+            "?key=existing-gemini-secret"
+        )
+        return FakeHTTPResponse(
+            {
+                "models": [
+                    {
+                        "name": "models/gemini-generative",
+                        "supportedGenerationMethods": ["generateContent", "countTokens"],
+                    },
+                    {
+                        "name": "models/text-embedding-only",
+                        "supportedGenerationMethods": ["embedContent"],
+                    },
+                ]
+            }
+        )
+
+    monkeypatch.setattr("ai_council.models.adapters.urllib.request.urlopen", fake_urlopen)
+    client = TestClient(
+        create_test_app(
+            tmp_path,
+            models_yaml="""
+models:
+  - id: gemini-existing
+    adapter: gemini-http
+    base_url: https://generativelanguage.googleapis.test/v1beta
+    model: gemini-generative
+    api_key_env: GEMINI_EXISTING_KEY
+""".strip(),
+        )
+    )
+
+    response = client.get("/models/gemini-existing/available-models")
+
+    assert response.status_code == 200
+    assert response.json() == {"models": ["gemini-generative"]}
+
+
+@pytest.mark.parametrize(
+    ("adapter", "payload"),
+    [
+        ("anthropic-http", {"data": [], "has_more": False}),
+        ("gemini-http", {"models": []}),
+    ],
+)
+def test_provider_model_discovery_preserves_empty_lists(
+    tmp_path: Path,
+    monkeypatch,
+    adapter: str,
+    payload: dict[str, object],
+) -> None:
+    monkeypatch.setattr(
+        "ai_council.models.adapters.urllib.request.urlopen",
+        lambda request, timeout: FakeHTTPResponse(payload),
+    )
+    client = TestClient(create_test_app(tmp_path))
+
+    response = client.post(
+        "/models/available-models",
+        json={"adapter": adapter, "base_url": "https://empty.example.test/v1"},
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {"models": []}
+
+
+@pytest.mark.parametrize("adapter", ["anthropic-http", "gemini-http"])
+def test_provider_model_discovery_redacts_upstream_errors(
+    tmp_path: Path,
+    monkeypatch,
+    adapter: str,
+) -> None:
+    secret = f"{adapter}-secret"
+    monkeypatch.setenv("PROVIDER_DISCOVERY_KEY", secret)
+
+    def reject_request(request, timeout):
+        raise urllib.error.URLError(f"provider rejected credential {secret}")
+
+    monkeypatch.setattr(
+        "ai_council.models.adapters.urllib.request.urlopen",
+        reject_request,
+    )
+    client = TestClient(create_test_app(tmp_path))
+
+    response = client.post(
+        "/models/available-models",
+        json={
+            "adapter": adapter,
+            "base_url": "https://failure.example.test/v1",
+            "api_key_env": "PROVIDER_DISCOVERY_KEY",
+        },
+    )
+
+    assert response.status_code == 502
+    serialized = json.dumps(response.json())
+    assert secret not in serialized
+    assert "[REDACTED]" in serialized
+
+
+def test_gemini_model_discovery_redacts_encoded_credentials_from_upstream_urls(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    secret = "key+ /?%&"
+    monkeypatch.setenv("GEMINI_RESERVED_KEY", secret)
+
+    def echo_request_url(request, timeout):
+        raise urllib.error.URLError(f"request failed: {request.full_url}")
+
+    monkeypatch.setattr(
+        "ai_council.models.adapters.urllib.request.urlopen",
+        echo_request_url,
+    )
+    client = TestClient(create_test_app(tmp_path))
+
+    response = client.post(
+        "/models/available-models",
+        json={
+            "adapter": "gemini-http",
+            "base_url": "https://failure.example.test/v1beta",
+            "api_key_env": "GEMINI_RESERVED_KEY",
+        },
+    )
+
+    assert response.status_code == 502
+    serialized = json.dumps(response.json())
+    encoded_variants = {
+        secret,
+        urllib.parse.quote(secret),
+        urllib.parse.quote(secret, safe=""),
+        urllib.parse.quote_plus(secret),
+        urllib.parse.urlencode({"key": secret}).partition("=")[2],
+    }
+    assert all(variant not in serialized for variant in encoded_variants)
+    assert "[REDACTED]" in serialized
+
+
+@pytest.mark.parametrize("adapter", ["anthropic-http", "gemini-http"])
+def test_provider_model_discovery_reports_missing_credential_environment(
+    tmp_path: Path,
+    monkeypatch,
+    adapter: str,
+) -> None:
+    monkeypatch.delenv("MISSING_PROVIDER_DISCOVERY_KEY", raising=False)
+    client = TestClient(create_test_app(tmp_path))
+
+    response = client.post(
+        "/models/available-models",
+        json={
+            "adapter": adapter,
+            "base_url": "https://unused.example.test/v1",
+            "api_key_env": "MISSING_PROVIDER_DISCOVERY_KEY",
+        },
+    )
+
+    assert response.status_code == 502
+    assert response.json() == {
+        "detail": (
+            "Environment variable MISSING_PROVIDER_DISCOVERY_KEY is not set for API key"
+        )
+    }
+
+
+@pytest.mark.parametrize("adapter", ["subscription-cli", "mock"])
 def test_model_discovery_preview_rejects_unsupported_adapters(
     tmp_path: Path,
     adapter: str,
@@ -785,26 +1091,88 @@ models:
     assert listed["status"] == "unavailable"
 
 
-def test_model_health_store_drops_stale_generation_record() -> None:
+def test_model_health_store_only_records_latest_started_check() -> None:
     store = ModelHealthCheckStore()
 
-    # Simulate a health check that started before a save cleared the record.
-    generation = store.generation("m")
-    store.clear("m")  # e.g. a concurrent PUT resets status to "unknown"
+    older_check = store.begin("m")
+    newer_check = store.begin("m")
+
+    newer_result = ModelHealthCheckResult(status="unavailable", checked_at="t2")
+    store.record("m", newer_result, newer_check)
+
+    older_result = ModelHealthCheckResult(status="available", checked_at="t1")
+    store.record("m", older_result, older_check)
+
+    assert store.get("m") == newer_result
+
+
+def test_model_health_store_clear_invalidates_in_flight_check() -> None:
+    store = ModelHealthCheckStore()
+
+    in_flight_check = store.begin("m")
+    store.clear("m")
 
     stale_result = ModelHealthCheckResult(status="available", checked_at="t1")
-    store.record("m", stale_result, generation)
+    store.record("m", stale_result, in_flight_check)
 
-    assert store.get("m") is None  # stale result must be dropped, not applied
+    assert store.get("m") is None
 
-    fresh_generation = store.generation("m")
+    fresh_check = store.begin("m")
     fresh_result = ModelHealthCheckResult(status="unavailable", checked_at="t2")
-    store.record("m", fresh_result, fresh_generation)
+    store.record("m", fresh_result, fresh_check)
 
     assert store.get("m") == fresh_result
 
 
-def test_test_model_endpoint_drops_stale_check_when_save_races_between_read_and_generation(
+def test_concurrent_test_requests_keep_newer_health_result(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    app = create_test_app(tmp_path)
+    older_check_started = threading.Event()
+    release_older_check = threading.Event()
+    call_lock = threading.Lock()
+    call_count = 0
+
+    def complete_in_reverse_order(self, request):
+        nonlocal call_count
+        with call_lock:
+            call_count += 1
+            call_number = call_count
+        if call_number == 1:
+            older_check_started.set()
+            assert release_older_check.wait(timeout=2)
+            return ModelResponse(
+                raw_output='{"summary":"old","arguments":[],"risks":[],"recommendation":"old"}'
+            )
+        raise AdapterError("newer check failed")
+
+    monkeypatch.setattr(MockModelAdapter, "complete", complete_in_reverse_order)
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        older_response = executor.submit(
+            lambda: TestClient(app).post("/models/mock-fast/test")
+        )
+        assert older_check_started.wait(timeout=2)
+        newer_response = TestClient(app).post("/models/mock-fast/test")
+        release_older_check.set()
+        older_payload = older_response.result(timeout=2)
+
+    assert older_payload.json()["status"] == "available"
+    newer_payload = newer_response.json()
+    assert newer_payload["status"] == "unavailable"
+    assert newer_payload["tested_at"]
+    assert newer_payload["error"] == "newer check failed"
+    listed = next(
+        model
+        for model in TestClient(app).get("/models").json()
+        if model["id"] == "mock-fast"
+    )
+    assert listed["status"] == "unavailable"
+    assert listed["health_error"] == "newer check failed"
+
+
+def test_test_model_endpoint_drops_stale_check_when_save_races_after_begin(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
@@ -817,10 +1185,8 @@ def test_test_model_endpoint_drops_stale_check_when_save_races_between_read_and_
 
     def get_model_then_race(repository, model_id):
         # Return the model as it was read, but land a concurrent PUT (which
-        # saves + clears the health record) before the caller can capture a
-        # generation for its own in-flight check. A correct implementation
-        # must capture its generation *before* reading the model config, so
-        # this race can never land inside that window.
+        # saves + clears the health record) while this check is in flight.
+        # The token acquired before the config read must then be stale.
         model = original_get_model(repository, model_id)
         response = client.put(f"/models/{model_id}", json={"adapter": "mock"})
         assert response.status_code == 200

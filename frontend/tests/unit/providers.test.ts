@@ -2,11 +2,169 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 
 import {
+  CLI_PRESETS,
   PROVIDERS,
+  cliConfigPayload,
+  projectCliConfig,
   modelConfigPayloadForProvider,
   modelDisplayLabel,
   providerIdForModel,
 } from '../../src/providers.ts'
+
+test('subscription CLI presets generate safe default argv without user-authored command parts', () => {
+  assert.deepEqual(
+    CLI_PRESETS.map(({ id, name }) => ({ id, name })),
+    [
+      { id: 'claude', name: 'Claude CLI' },
+      { id: 'codex', name: 'Codex CLI' },
+      { id: 'agy', name: 'AGY' },
+      { id: 'custom', name: 'Custom CLI' },
+    ],
+  )
+  assert.deepEqual(cliConfigPayload('claude'), {
+    command: ['claude', '-p', '{prompt}'],
+    extra_body: { cli_provider: 'claude' },
+  })
+  assert.deepEqual(cliConfigPayload('codex'), {
+    command: ['codex', 'exec', '{prompt}'],
+    extra_body: { cli_provider: 'codex' },
+  })
+  assert.deepEqual(cliConfigPayload('agy'), {
+    command: ['agy', '-p', '{prompt}'],
+    extra_body: { cli_provider: 'agy' },
+  })
+})
+
+test('subscription CLI presets generate and project advanced exact model argv', () => {
+  // Canonical argv literals are the Human Owner-approved backlog #85 / PRD contract.
+  // They intentionally remain independent expected values rather than being derived from CLI_PRESETS.
+  assert.deepEqual(
+    cliConfigPayload('claude', [], {}, { modelMode: 'exact', exactModelId: ' claude-opus-x ' }),
+    {
+      command: ['claude', '--model', 'claude-opus-x', '-p', '{prompt}'],
+      extra_body: { cli_provider: 'claude' },
+    },
+  )
+  assert.deepEqual(
+    cliConfigPayload('codex', [], {}, { modelMode: 'exact', exactModelId: 'gpt-x' }),
+    {
+      command: ['codex', 'exec', '--model', 'gpt-x', '{prompt}'],
+      extra_body: { cli_provider: 'codex' },
+    },
+  )
+  assert.deepEqual(
+    cliConfigPayload('agy', [], {}, { modelMode: 'exact', exactModelId: 'agy-x' }),
+    {
+      command: ['agy', '--model', 'agy-x', '-p', '{prompt}'],
+      extra_body: { cli_provider: 'agy' },
+    },
+  )
+  assert.throws(
+    () => cliConfigPayload('claude', [], {}, { modelMode: 'exact', exactModelId: '  ' }),
+    /exact model ID is required/,
+  )
+  assert.deepEqual(
+    projectCliConfig({
+      command: ['claude', '--model', 'claude-opus-x', '-p', '{prompt}'],
+      extra_body: {},
+    }),
+    {
+      presetId: 'claude',
+      modelMode: 'exact',
+      exactModelId: 'claude-opus-x',
+      command: ['claude', '--model', 'claude-opus-x', '-p', '{prompt}'],
+      extraBody: {},
+    },
+  )
+  assert.deepEqual(
+    projectCliConfig({
+      command: ['codex', 'exec', '--model', 'gpt-x', '{prompt}'],
+      extra_body: { cli_provider: 'codex' },
+    }),
+    {
+      presetId: 'codex',
+      modelMode: 'exact',
+      exactModelId: 'gpt-x',
+      command: ['codex', 'exec', '--model', 'gpt-x', '{prompt}'],
+      extraBody: { cli_provider: 'codex' },
+    },
+  )
+  assert.deepEqual(
+    projectCliConfig({
+      command: ['agy', '--model', 'agy-x', '-p', '{prompt}'],
+      extra_body: { cli_provider: 'agy' },
+    }),
+    {
+      presetId: 'agy',
+      modelMode: 'exact',
+      exactModelId: 'agy-x',
+      command: ['agy', '--model', 'agy-x', '-p', '{prompt}'],
+      extraBody: { cli_provider: 'agy' },
+    },
+  )
+})
+
+test('saving an unchanged recognized legacy preset preserves provider marker absence or value', () => {
+  const withoutMarker = projectCliConfig({ command: ['claude', '-p', '{prompt}'], extra_body: {} })
+  assert.deepEqual(
+    cliConfigPayload(
+      withoutMarker.presetId,
+      withoutMarker.command,
+      withoutMarker.extraBody,
+      {
+        modelMode: withoutMarker.modelMode,
+        exactModelId: withoutMarker.exactModelId,
+        preserveProviderMarker: true,
+      },
+    ),
+    { command: ['claude', '-p', '{prompt}'], extra_body: {} },
+  )
+
+  const existingExtraBody = { cli_provider: 'codex', profile: 'work' }
+  assert.deepEqual(
+    cliConfigPayload('codex', [], existingExtraBody, { preserveProviderMarker: true }),
+    {
+      command: ['codex', 'exec', '{prompt}'],
+      extra_body: existingExtraBody,
+    },
+  )
+})
+
+test('subscription CLI projection recognizes presets and preserves unknown legacy commands as custom', () => {
+  assert.deepEqual(
+    projectCliConfig({
+      command: ['codex', 'exec', '{prompt}'],
+      extra_body: { cli_provider: 'codex', profile: 'work' },
+    }),
+    {
+      presetId: 'codex',
+      modelMode: 'default',
+      exactModelId: '',
+      command: ['codex', 'exec', '{prompt}'],
+      extraBody: { cli_provider: 'codex', profile: 'work' },
+    },
+  )
+
+  const legacy = {
+    command: ['company-wrapper', '--stdin', '{prompt}'],
+    extra_body: { cli_provider: 'company-internal', keep: true },
+  }
+  const projected = projectCliConfig(legacy)
+  assert.deepEqual(projected, {
+    presetId: 'custom',
+    modelMode: 'default',
+    exactModelId: '',
+    command: ['company-wrapper', '--stdin', '{prompt}'],
+    extraBody: { cli_provider: 'company-internal', keep: true },
+  })
+  assert.deepEqual(
+    cliConfigPayload(projected.presetId, projected.command, projected.extraBody),
+    {
+      command: ['company-wrapper', '--stdin', '{prompt}'],
+      extra_body: { cli_provider: 'company-internal', keep: true },
+    },
+  )
+})
 
 test('provider catalog exposes product concepts and transport presets', () => {
   assert.deepEqual(
@@ -33,7 +191,7 @@ test('provider catalog exposes product concepts and transport presets', () => {
         adapter: 'anthropic-http',
         defaultBaseUrl: 'https://api.anthropic.com/v1',
         defaultApiKeyEnv: 'ANTHROPIC_API_KEY',
-        discovery: 'manual-only',
+        discovery: 'provider-specific',
       },
       {
         id: 'gemini',
@@ -41,7 +199,7 @@ test('provider catalog exposes product concepts and transport presets', () => {
         adapter: 'gemini-http',
         defaultBaseUrl: 'https://generativelanguage.googleapis.com/v1beta',
         defaultApiKeyEnv: 'GEMINI_API_KEY',
-        discovery: 'manual-only',
+        discovery: 'provider-specific',
       },
       {
         id: 'custom-openai-compatible',
@@ -172,6 +330,28 @@ test('model labels use provider and exact model id without exposing adapters', (
   assert.equal(
     modelDisplayLabel({ id: 'claude-subscription', adapter: 'subscription-cli', base_url: null, model: null }),
     'Subscription CLI · 由 command 決定（claude-subscription）',
+  )
+  assert.equal(
+    modelDisplayLabel({
+      id: 'claude-exact',
+      adapter: 'subscription-cli',
+      base_url: null,
+      model: null,
+      command: ['claude', '--model', 'claude-opus-4-1', '-p', '{prompt}'],
+      extra_body: { cli_provider: 'claude' },
+    }),
+    'Subscription CLI · Claude CLI · claude-opus-4-1',
+  )
+  assert.equal(
+    modelDisplayLabel({
+      id: 'legacy-subscription',
+      adapter: 'subscription-cli',
+      base_url: null,
+      model: null,
+      command: ['company-wrapper', '--stdin', '{prompt}'],
+      extra_body: {},
+    }),
+    'Subscription CLI · 由 command 決定（legacy-subscription）',
   )
   assert.equal(
     modelDisplayLabel({ id: 'mock-fast', adapter: 'mock', base_url: null, model: null }),

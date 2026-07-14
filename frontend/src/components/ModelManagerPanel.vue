@@ -6,7 +6,7 @@
 // SettingsModal's 一般 tab (and the sanitize watch in useCouncil.ts that fallback-clears a
 // deleted model's role selections) pick up the change through the exact same path a fresh
 // page load would.
-import { computed, inject, ref } from 'vue'
+import { computed, inject, onBeforeUnmount, ref, watch } from 'vue'
 import { councilKey } from '../composables/useCouncil'
 import {
   ApiError,
@@ -20,11 +20,16 @@ import {
   type ModelConfigPayload,
 } from '../api'
 import {
+  CLI_PRESETS,
   PROVIDERS,
+  cliConfigPayload,
   getProvider,
   modelConfigPayloadForProvider,
   modelDisplayLabel,
   providerIdForModel,
+  projectCliConfig,
+  type CliModelMode,
+  type CliPresetId,
   type ProviderId,
 } from '../providers'
 import { LatestDiscoveryRequest, type DiscoveryEvent } from '../modelDiscovery'
@@ -53,6 +58,7 @@ const deletingId = ref<string | null>(null)
 
 async function handleDelete(id: string) {
   if (!window.confirm(`確定刪除模型 ${id}？`)) return
+  invalidateModelTest(id)
   deleteWarning.value = null
   deleteError.value = ''
   deletingId.value = id
@@ -69,28 +75,116 @@ async function handleDelete(id: string) {
 
 // -------- test --------
 
-const testingId = ref<string | null>(null)
-const testErrors = ref<Record<string, string>>({})
+type TestFeedback = {
+  phase: 'testing' | 'slow' | 'success' | 'error'
+  message: string
+  status?: ModelConfig['status']
+}
 
-async function handleTest(id: string) {
-  testingId.value = id
-  testErrors.value = { ...testErrors.value, [id]: '' }
-  try {
-    // Health result lands in the backend's health store; re-fetching models (rather than
-    // reading testModel's own response) is what updates this row's status dot, matching
-    // GET /models projecting model_health.get(model.id) onto each entry.
-    await testModel(id)
-    await refreshModels()
-  } catch (caught) {
-    testErrors.value = { ...testErrors.value, [id]: caught instanceof Error ? caught.message : String(caught) }
-  } finally {
-    testingId.value = null
+const TEST_SLOW_THRESHOLD_MS = 1_000
+const testFeedback = ref<Record<string, TestFeedback>>({})
+const testGenerations = new Map<string, number>()
+const testSlowTimers = new Map<string, ReturnType<typeof setTimeout>>()
+let testContextActive = true
+
+function clearTestSlowTimer(id: string) {
+  const timer = testSlowTimers.get(id)
+  if (timer !== undefined) clearTimeout(timer)
+  testSlowTimers.delete(id)
+}
+
+function isCurrentModelTest(id: string, generation: number): boolean {
+  return testContextActive
+    && testGenerations.get(id) === generation
+    && models.value.some((model) => model.id === id)
+}
+
+function invalidateModelTest(id: string) {
+  testGenerations.set(id, (testGenerations.get(id) ?? 0) + 1)
+  clearTestSlowTimer(id)
+  const next = { ...testFeedback.value }
+  delete next[id]
+  testFeedback.value = next
+}
+
+function invalidatePendingModelTests() {
+  for (const [id, feedback] of Object.entries(testFeedback.value)) {
+    if (feedback.phase === 'testing' || feedback.phase === 'slow') invalidateModelTest(id)
   }
 }
+
+function testIsRunning(id: string): boolean {
+  const phase = testFeedback.value[id]?.phase
+  return phase === 'testing' || phase === 'slow'
+}
+
+function testErrorMessage(caught: unknown): string {
+  if (caught instanceof ApiError && typeof caught.detail === 'string') return caught.detail
+  return caught instanceof Error ? caught.message : String(caught)
+}
+
+async function handleTest(id: string) {
+  if (testIsRunning(id)) return
+  const generation = (testGenerations.get(id) ?? 0) + 1
+  testGenerations.set(id, generation)
+  testFeedback.value = {
+    ...testFeedback.value,
+    [id]: { phase: 'testing', message: '正在測試連線…' },
+  }
+  clearTestSlowTimer(id)
+  testSlowTimers.set(id, setTimeout(() => {
+    if (!isCurrentModelTest(id, generation)) return
+    testFeedback.value = {
+      ...testFeedback.value,
+      [id]: { phase: 'slow', message: 'Provider 回應較慢，仍在等待…' },
+    }
+  }, TEST_SLOW_THRESHOLD_MS))
+  try {
+    const result = await testModel(id)
+    if (!isCurrentModelTest(id, generation)) return
+    await refreshModels(() => isCurrentModelTest(id, generation))
+    if (!isCurrentModelTest(id, generation)) return
+    clearTestSlowTimer(id)
+    testFeedback.value = {
+      ...testFeedback.value,
+      [id]: result.status === 'available'
+        ? { phase: 'success', message: '連線成功', status: 'available' }
+        : {
+            phase: 'error',
+            message: `測試失敗：${result.error || 'Provider 回報連線不可用'}`,
+            status: 'unavailable',
+          },
+    }
+  } catch (caught) {
+    if (!isCurrentModelTest(id, generation)) return
+    clearTestSlowTimer(id)
+    testFeedback.value = {
+      ...testFeedback.value,
+      [id]: {
+        phase: 'error',
+        message: `測試失敗：${testErrorMessage(caught)}`,
+        status: 'unavailable',
+      },
+    }
+  } finally {
+    if (isCurrentModelTest(id, generation)) clearTestSlowTimer(id)
+  }
+}
+
+onBeforeUnmount(() => {
+  testContextActive = false
+  for (const id of testSlowTimers.keys()) clearTestSlowTimer(id)
+  testGenerations.clear()
+})
 
 // -------- create/edit form --------
 
 type FormMode = 'create' | 'edit'
+type DiscoveryConnection = {
+  adapter: string
+  baseUrl: string | null
+  apiKeyEnv: string | null
+}
 const showForm = ref(false)
 const formMode = ref<FormMode>('create')
 const formId = ref('')
@@ -100,6 +194,11 @@ const formModel = ref('')
 const formApiKeyEnv = ref('')
 const formSupportsJsonMode = ref(false)
 const formTimeoutSeconds = ref(120)
+const formCliPreset = ref<CliPresetId>('claude')
+const formCliModelMode = ref<CliModelMode>('default')
+const formCliExactModelId = ref('')
+const formPreserveCliProviderMarker = ref(false)
+const formCliExactModelError = ref('')
 const formCommandText = ref('')
 // Not rendered as inputs (round-trip only, per the fidelity requirement below) -
 // carried through from the model being edited and sent back unchanged on save so a PUT
@@ -108,14 +207,30 @@ const formCommandText = ref('')
 const formExtraBody = ref<Record<string, unknown>>({})
 const formPricing = ref<ModelConfig['pricing']>(null)
 const discoveryModels = ref<string[]>([])
+const discoveryQuery = ref('')
 const discoveryLoading = ref(false)
 const discoveryMessage = ref('')
 const manualModelEntry = ref(true)
+const originalDiscoveryConnection = ref<DiscoveryConnection | null>(null)
 const discoveryRequest = new LatestDiscoveryRequest()
 
 const providerDefinition = computed(() => getProvider(formProvider.value))
 const formAdapter = computed(() => providerDefinition.value.adapter)
-const supportsDiscovery = computed(() => providerDefinition.value.discovery === 'openai-compatible')
+const supportsDiscovery = computed(() => providerDefinition.value.discovery !== 'manual-only')
+const filteredDiscoveryModels = computed(() => {
+  const query = discoveryQuery.value.trim().toLocaleLowerCase()
+  if (!query) return discoveryModels.value
+  return discoveryModels.value.filter((modelId) => modelId.toLocaleLowerCase().includes(query))
+})
+const discoveryHasNoMatches = computed(() => discoveryModels.value.length > 0
+  && !manualModelEntry.value
+  && discoveryQuery.value.trim().length > 0
+  && filteredDiscoveryModels.value.length === 0)
+
+watch(discoveryQuery, () => {
+  if (manualModelEntry.value || !filteredDiscoveryModels.value.length) return
+  formModel.value = filteredDiscoveryModels.value[0]
+})
 
 const saving = ref(false)
 const fieldErrors = ref<Record<string, string>>({})
@@ -130,11 +245,13 @@ function fieldError(field: string): string {
 function resetFormErrors() {
   fieldErrors.value = {}
   formGeneralError.value = ''
+  formCliExactModelError.value = ''
 }
 
 function resetDiscovery() {
   discoveryRequest.invalidate()
   discoveryModels.value = []
+  discoveryQuery.value = ''
   discoveryLoading.value = false
   discoveryMessage.value = ''
   manualModelEntry.value = true
@@ -143,6 +260,7 @@ function resetDiscovery() {
 function handleManualModelInput() {
   discoveryRequest.manualModelEdited()
   discoveryModels.value = []
+  discoveryQuery.value = ''
   discoveryLoading.value = false
   discoveryMessage.value = ''
   manualModelEntry.value = true
@@ -159,6 +277,10 @@ function handleProviderChange() {
   formBaseUrl.value = provider.defaultBaseUrl ?? ''
   formApiKeyEnv.value = provider.defaultApiKeyEnv ?? ''
   formModel.value = ''
+  formCliPreset.value = 'claude'
+  formCliModelMode.value = 'default'
+  formCliExactModelId.value = ''
+  formPreserveCliProviderMarker.value = false
   formCommandText.value = ''
   resetDiscovery()
 }
@@ -172,15 +294,22 @@ function openCreateForm() {
   formApiKeyEnv.value = ''
   formSupportsJsonMode.value = false
   formTimeoutSeconds.value = 120
+  formCliPreset.value = 'claude'
+  formCliModelMode.value = 'default'
+  formCliExactModelId.value = ''
+  formPreserveCliProviderMarker.value = false
   formCommandText.value = ''
   formExtraBody.value = {}
   formPricing.value = null
+  originalDiscoveryConnection.value = null
   resetDiscovery()
   resetFormErrors()
   showForm.value = true
 }
 
 function openEditForm(model: ModelConfig) {
+  invalidatePendingModelTests()
+  invalidateModelTest(model.id)
   formMode.value = 'edit'
   formId.value = model.id
   formProvider.value = providerIdForModel(model) ?? 'custom-openai-compatible'
@@ -189,9 +318,19 @@ function openEditForm(model: ModelConfig) {
   formApiKeyEnv.value = model.api_key_env ?? ''
   formSupportsJsonMode.value = model.supports_json_mode
   formTimeoutSeconds.value = model.timeout_seconds
-  formCommandText.value = (model.command ?? []).join('\n')
   formExtraBody.value = model.extra_body ?? {}
+  const cliProjection = projectCliConfig(model)
+  formCliPreset.value = cliProjection.presetId
+  formCliModelMode.value = cliProjection.modelMode
+  formCliExactModelId.value = cliProjection.exactModelId
+  formPreserveCliProviderMarker.value = isCliAdapter(model.adapter)
+  formCommandText.value = cliProjection.command.join('\n')
   formPricing.value = model.pricing ?? null
+  originalDiscoveryConnection.value = {
+    adapter: model.adapter,
+    baseUrl: model.base_url?.trim() || null,
+    apiKeyEnv: model.api_key_env?.trim() || null,
+  }
   resetDiscovery()
   resetFormErrors()
   showForm.value = true
@@ -202,18 +341,42 @@ function closeForm() {
   showForm.value = false
 }
 
+function handleCliPresetChange() {
+  formPreserveCliProviderMarker.value = false
+  formCliModelMode.value = 'default'
+  formCliExactModelId.value = ''
+  formCliExactModelError.value = ''
+}
+
+function handleCliModelModeChange() {
+  formPreserveCliProviderMarker.value = false
+  formCliExactModelError.value = ''
+  if (formCliModelMode.value === 'default') formCliExactModelId.value = ''
+}
+
+function handleCliExactModelInput() {
+  formPreserveCliProviderMarker.value = false
+  formCliExactModelError.value = ''
+}
+
 function buildPayload(): ModelConfigPayload {
+  const customCommand = formCommandText.value
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean)
+  const cliConfig = cliConfigPayload(formCliPreset.value, customCommand, formExtraBody.value, {
+    modelMode: formCliModelMode.value,
+    exactModelId: formCliExactModelId.value,
+    preserveProviderMarker: formPreserveCliProviderMarker.value,
+  })
   return modelConfigPayloadForProvider(formProvider.value, {
     base_url: formBaseUrl.value,
     model: formModel.value,
     api_key_env: formApiKeyEnv.value,
     supports_json_mode: formSupportsJsonMode.value,
-    command: formCommandText.value
-      .split('\n')
-      .map((line) => line.trim())
-      .filter(Boolean),
+    command: cliConfig.command,
     timeout_seconds: formTimeoutSeconds.value,
-    extra_body: formExtraBody.value,
+    extra_body: isCliAdapter(formAdapter.value) ? cliConfig.extra_body : formExtraBody.value,
     pricing: formPricing.value,
   })
 }
@@ -228,7 +391,12 @@ async function discoverModels() {
     apiKeyEnv: formApiKeyEnv.value.trim() || null,
   }
   const identity = JSON.stringify(snapshot)
-  const load = snapshot.mode === 'edit'
+  const original = originalDiscoveryConnection.value
+  const connectionIsUnchanged = original !== null
+    && snapshot.adapter === original.adapter
+    && snapshot.baseUrl === original.baseUrl
+    && snapshot.apiKeyEnv === original.apiKeyEnv
+  const load = snapshot.mode === 'edit' && connectionIsUnchanged
     ? () => getAvailableModels(snapshot.id)
     : () => previewAvailableModels({
         adapter: snapshot.adapter,
@@ -293,6 +461,14 @@ function applySaveError(caught: unknown) {
 
 async function saveForm() {
   resetFormErrors()
+  if (discoveryHasNoMatches.value) return
+  if (isCliAdapter(formAdapter.value)
+    && formCliPreset.value !== 'custom'
+    && formCliModelMode.value === 'exact'
+    && !formCliExactModelId.value.trim()) {
+    formCliExactModelError.value = '請輸入 exact model ID。'
+    return
+  }
   saving.value = true
   try {
     const payload = buildPayload()
@@ -326,22 +502,33 @@ async function saveForm() {
         :data-model-id="model.id"
       >
         <span class="model-manager-id">
-          <i class="status-dot" :data-status="model.status" aria-hidden="true"></i>
+          <i class="status-dot" :data-status="testFeedback[model.id]?.status ?? model.status" aria-hidden="true"></i>
           {{ model.id }}
         </span>
         <span class="model-manager-provider">{{ modelDisplayLabel(model) }}</span>
         <span class="model-manager-summary">{{ model.base_url ?? model.command?.[0] ?? '' }}</span>
-        <em v-if="testErrors[model.id]" class="model-manager-test-error">{{ testErrors[model.id] }}</em>
+        <span
+          v-if="testFeedback[model.id]"
+          class="model-manager-test-feedback"
+          :class="{ 'model-manager-test-error': testFeedback[model.id].phase === 'error' }"
+          :data-testid="`model-test-feedback-${model.id}`"
+          role="status"
+          aria-live="polite"
+          aria-atomic="true"
+        >
+          {{ testFeedback[model.id].message }}
+        </span>
         <em v-else-if="model.health_error" class="model-manager-test-error">{{ model.health_error }}</em>
         <span class="model-manager-actions">
           <button
             type="button"
             class="btn btn-secondary btn-sm"
             :data-testid="`test-model-button-${model.id}`"
-            :disabled="testingId === model.id"
+            :disabled="testIsRunning(model.id)"
             @click="handleTest(model.id)"
           >
-            {{ testingId === model.id ? '測試中…' : 'Test' }}
+            <i v-if="testIsRunning(model.id)" class="spinner" aria-hidden="true"></i>
+            {{ testIsRunning(model.id) ? '正在測試連線…' : 'Test' }}
           </button>
           <button
             type="button"
@@ -422,9 +609,24 @@ async function saveForm() {
         </p>
         <p v-if="discoveryMessage" class="error" data-testid="model-form-discovery-message" role="alert">{{ discoveryMessage }}</p>
         <label v-if="discoveryModels.length && !manualModelEntry" class="topic-input-row">
+          搜尋已載入模型
+          <input
+            v-model="discoveryQuery"
+            type="search"
+            data-testid="model-form-discovery-search"
+            aria-label="搜尋已載入模型"
+          />
+        </label>
+        <p
+          v-if="discoveryModels.length && !manualModelEntry && discoveryQuery.trim() && !filteredDiscoveryModels.length"
+          class="model-form-hint"
+          data-testid="model-form-discovery-no-match"
+          role="status"
+        >找不到符合的模型。</p>
+        <label v-if="filteredDiscoveryModels.length && !manualModelEntry" class="topic-input-row">
           Exact model ID
           <select v-model="formModel" data-testid="model-form-discovered-model-select" @change="handleDiscoveredModelChange">
-            <option v-for="modelId in discoveryModels" :key="modelId" :value="modelId">{{ modelId }}</option>
+            <option v-for="modelId in filteredDiscoveryModels" :key="modelId" :value="modelId">{{ modelId }}</option>
           </select>
         </label>
         <button
@@ -457,10 +659,33 @@ async function saveForm() {
       </template>
 
       <template v-else-if="isCliAdapter(formAdapter)">
-        <p class="model-form-hint" data-testid="model-form-cli-discovery-unsupported">
-          Subscription CLI 不支援自動載入模型；執行型號由 command 決定，請在下方確認命令。
-        </p>
         <label class="topic-input-row">
+          CLI Provider
+          <select v-model="formCliPreset" data-testid="model-form-cli-preset-select" @change="handleCliPresetChange">
+            <option v-for="preset in CLI_PRESETS" :key="preset.id" :value="preset.id">{{ preset.name }}</option>
+          </select>
+        </label>
+        <template v-if="formCliPreset !== 'custom'">
+          <label class="topic-input-row">
+            模型選擇
+            <select v-model="formCliModelMode" data-testid="model-form-cli-model-mode-select" @change="handleCliModelModeChange">
+              <option value="default">使用 CLI 預設模型</option>
+              <option value="exact">指定 exact model ID</option>
+            </select>
+          </label>
+          <p v-if="formCliModelMode === 'default'" class="model-form-hint" data-testid="model-form-cli-model-default">
+            使用 CLI 自動選擇模型（推薦）。命令與 prompt 參數會由 preset 安全產生，不需手動輸入。
+          </p>
+          <label v-else class="topic-input-row">
+            Exact model ID
+            <input v-model="formCliExactModelId" data-testid="model-form-cli-exact-model-input" aria-label="CLI exact model ID" @input="handleCliExactModelInput" />
+            <em v-if="formCliExactModelError" class="model-form-field-error" data-testid="model-form-cli-exact-model-error">{{ formCliExactModelError }}</em>
+          </label>
+        </template>
+        <p v-else class="model-form-hint" data-testid="model-form-cli-custom-hint">
+          Custom CLI 是進階逃生路徑；未知的既有命令會保持原樣，不會自動改寫。
+        </p>
+        <label v-if="formCliPreset === 'custom'" class="topic-input-row">
           command（一行一個參數，需含 {prompt} 佔位符）
           <textarea
             v-model="formCommandText"
@@ -484,7 +709,7 @@ async function saveForm() {
       </template>
 
       <div class="model-form-actions">
-        <button type="submit" class="btn btn-primary" data-testid="model-form-save" :disabled="saving">
+        <button type="submit" class="btn btn-primary" data-testid="model-form-save" :disabled="saving || discoveryHasNoMatches">
           {{ saving ? '儲存中…' : '儲存' }}
         </button>
         <button type="button" class="btn btn-ghost" data-testid="model-form-cancel" @click="closeForm">

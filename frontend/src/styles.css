@@ -975,11 +975,26 @@ h2 {
   overflow-wrap: anywhere;
 }
 
+.model-manager-test-feedback {
+  color: var(--color-text-secondary);
+  font-size: 12px;
+}
+
+.model-manager-test-feedback.model-manager-test-error {
+  color: var(--color-danger-hover);
+}
+
 .model-manager-actions {
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
   margin-top: 4px;
+}
+
+.model-manager-actions button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
 }
 
 .model-manager-empty {
