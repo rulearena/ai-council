@@ -6,6 +6,7 @@ import { DEFAULT_MODE_ID, getModeById, refreshModeCatalog, type ModeDefinition, 
 import { applyModeScene } from '../scenes'
 import { roleDisplayName } from '../presentation'
 import {
+  chairmanActionBlockReason,
   chairmanActionOptions,
   chairmanActionPresentation,
   executeChairmanAction,
@@ -362,6 +363,18 @@ export function useCouncil() {
     return lifecycleEvent?.status === 'closed' || lifecycleEvent?.status === 'cancelled'
   })
   const isMeetingRunning = computed(() => selectedMeeting.value?.activity_status === 'running')
+  // A failed role step must be retried before any new AI batch. The backend cannot
+  // advance that fixed round through generic /start, so every AI composer path shares
+  // this gate while plain chairman notes remain available.
+  const failedRole = computed<CouncilRole | null>(() => {
+    for (const role of councilRoles.value) {
+      const latest = [...events.value]
+        .reverse()
+        .find((event) => event.role === role && ['completed', 'failed'].includes(event.status))
+      if (latest?.status === 'failed') return role
+    }
+    return null
+  })
   const primaryAction = computed<PrimaryAction>(() => projectPrimaryAction({
     modeId: selectedMeeting.value?.mode_id ?? activeMode.value.id,
     steps: activeMode.value.steps ?? [],
@@ -375,6 +388,7 @@ export function useCouncil() {
     participants: selectedMeeting.value?.participants ?? [],
     courtroom: selectedMeeting.value?.courtroom ?? null,
     nextActionLabel: primaryAction.value.label,
+    failedRole: failedRole.value,
   }))
   watch(chairmanOptions, (options) => {
     if (!options.some((option) => option.value === chairmanAction.value)) {
@@ -451,17 +465,6 @@ export function useCouncil() {
       !isMeetingRunning.value &&
       councilRoles.value.every((role) => selectedModels.value[role]),
   )
-  // The role whose latest event is a failure, if any. Both /start and /sequences are a
-  // known silent no-op once a step has failed (confirmed against the real backend: it
-  // returns 200 "running" but appends zero events and never clears activity_status -
-  // see runner.py's _first_incomplete_step_index returning None for a non-completed
-  // latest event). Retrying the specific step via retrySelectedStep is the only way
-  // forward, so callers use this to disable the round-level actions and point the user
-  // at the failed seat instead of letting them hit that trap.
-  const failedRole = computed<CouncilRole | null>(
-    () => councilRoles.value.find((role) => roleSeatStatus(role) === 'failed') ?? null,
-  )
-
   // Relay step-progress display (spec.md 16.6: "第 2 步／共 4 步：紅軍質詢中"), derived
   // purely from mode.steps + pendingRoles - display-only, and deliberately does not
   // drive any runtime behavior (the actual queue logic - applyPendingRoleUpdates et al -
@@ -962,6 +965,15 @@ export function useCouncil() {
     const content = chairMessage.value.trim()
     if (!selectedMeeting.value || !content || isMeetingRunning.value || isTerminalMeeting.value) return false
     chairmanActionFeedback.value = ''
+    const blockedReason = chairmanActionBlockReason(
+      chairmanAction.value,
+      failedRole.value,
+      selectedMeeting.value.participants,
+    )
+    if (blockedReason) {
+      chairmanActionFeedback.value = blockedReason
+      return false
+    }
     const succeeded = await executeChairmanAction(chairmanAction.value, content, {
       appendNote: () => sendChairMessage(),
       requestAll: () => executePrimaryAction(),

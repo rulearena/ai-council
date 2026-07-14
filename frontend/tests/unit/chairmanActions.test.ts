@@ -3,6 +3,7 @@ import test from 'node:test'
 
 import {
   chairmanActionOptions,
+  chairmanActionBlockReason,
   chairmanActionPresentation,
   executeChairmanAction,
   runWithPendingRoles,
@@ -73,6 +74,38 @@ test('parallel composer only exposes actions supported by the backend mode capab
       { value: 'note', label: '記錄補充（不會呼叫 AI）' },
       { value: 'all', label: '請全體回應' },
     ],
+  )
+})
+
+test('failed relay step leaves only notes until the failed role is cleared', () => {
+  const input = {
+    modeId: 'red-blue',
+    modeCategory: 'relay',
+    participants: roles,
+    courtroom: null,
+  }
+
+  assert.deepEqual(
+    chairmanActionOptions({ ...input, failedRole: 'Defense' }),
+    [{ value: 'note', label: '記錄補充（不會呼叫 AI）' }],
+  )
+  assert.equal(
+    chairmanActionBlockReason('all', 'Defense', roles),
+    '辯護律師的回應失敗，請先重試失敗步驟，再請 AI 回應。',
+  )
+  assert.equal(
+    chairmanActionBlockReason('role:Prosecutor', 'Defense', roles),
+    '辯護律師的回應失敗，請先重試失敗步驟，再請 AI 回應。',
+  )
+  assert.equal(chairmanActionBlockReason('note', 'Defense', roles), null)
+
+  assert.equal(
+    chairmanActionOptions({ ...input, failedRole: null }).some((option) => option.value === 'all'),
+    true,
+  )
+  assert.equal(
+    chairmanActionOptions({ ...input, failedRole: null }).some((option) => option.value === 'role:Defense'),
+    true,
   )
 })
 

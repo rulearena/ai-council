@@ -84,6 +84,7 @@ const lastStepLabel = computed(() => {
 const canSubmitChairman = computed(() => {
   if (!selectedMeeting.value || isTerminalMeeting.value || isMeetingRunning.value || loading.value || !chairMessage.value.trim()) return false
   if (chairmanAction.value === 'note') return true
+  if (failedRole.value) return false
   if (chairmanAction.value === 'all') return canRun.value && !primaryAction.value.disabled
   return canRun.value
 })

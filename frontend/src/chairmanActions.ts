@@ -89,10 +89,12 @@ export function chairmanActionOptions(input: {
   participants: ChairmanParticipant[]
   courtroom: CourtroomProjection | null
   nextActionLabel?: string
+  failedRole?: string | null
 }): ChairmanActionOption[] {
   const options: ChairmanActionOption[] = [
     { value: 'note', label: '記錄補充（不會呼叫 AI）' },
   ]
+  if (input.failedRole) return options
   const courtroomActions = new Set(input.courtroom?.available_actions ?? [])
   const canAskAll = input.modeId !== 'courtroom' || projectCourtroomPrimaryAction(input.courtroom!).disabled === false
   const canDirect = input.modeCategory === 'relay' && (
@@ -116,6 +118,15 @@ export function chairmanActionOptions(input: {
     })))
   }
   return options
+}
+
+export function chairmanActionBlockReason(
+  action: string,
+  failedRole: string | null,
+  participants: ChairmanParticipant[],
+): string | null {
+  if (action === 'note' || !failedRole) return null
+  return `${participantName(participants, failedRole)}的回應失敗，請先重試失敗步驟，再請 AI 回應。`
 }
 
 export function chairmanActionPresentation(
