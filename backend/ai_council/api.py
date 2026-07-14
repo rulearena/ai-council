@@ -16,12 +16,16 @@ from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconn
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, PlainTextResponse, Response
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from ai_council.meetings.execution_state import (
     ActiveExecutionState,
     MeetingExecutionStateStore,
     interrupted_execution_event,
+)
+from ai_council.meetings.assignments import (
+    AssignmentValidationError,
+    MeetingModelAssignments,
 )
 from ai_council.meetings.modes import (
     DEFAULT_MODE_ID,
@@ -128,11 +132,15 @@ class CreateMeetingRequest(BaseModel):
 
 
 class StartMeetingRequest(BaseModel):
-    models: dict[str, str]
+    models: dict[str, str] = Field(default_factory=dict)
 
 
 class RunRoleSequenceRequest(BaseModel):
     roles: list[str]
+    models: dict[str, str] = Field(default_factory=dict)
+
+
+class UpdateParticipantModelsRequest(BaseModel):
     models: dict[str, str]
 
 
@@ -168,6 +176,14 @@ class CreateModelConfigRequest(UpsertModelConfigRequest):
     id: str
 
 
+class ModelDiscoveryPreviewRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    adapter: str
+    base_url: str | None = None
+    api_key_env: str | None = None
+
+
 class ModelPricingRequest(BaseModel):
     currency: str
     input_per_1m_tokens: float = Field(ge=0)
@@ -201,7 +217,10 @@ def create_app(
         request: Request,
         exc: RequestValidationError,
     ) -> JSONResponse:
-        if (request.method == "POST" and request.url.path == "/models") or (
+        if (
+            request.method == "POST"
+            and request.url.path in {"/models", "/models/available-models"}
+        ) or (
             request.method == "PUT" and request.url.path.startswith("/models/")
         ):
             detail = [
@@ -219,6 +238,11 @@ def create_app(
     repository = MeetingRepository(data_path)
     execution_state_store = MeetingExecutionStateStore(data_path)
     model_repository = ModelConfigRepository(model_config_path)
+    meeting_assignments = MeetingModelAssignments(
+        metadata_store,
+        repository,
+        model_repository,
+    )
     output_schemas = DEFAULT_OUTPUT_SCHEMA_REGISTRY
     mode_catalog = ModeCatalogRepository(
         modes_config_path,
@@ -343,7 +367,34 @@ def create_app(
         try:
             return {"models": adapter.discover_models(model)}
         except AdapterError as error:
-            raise HTTPException(status_code=502, detail=str(error)) from error
+            raise HTTPException(
+                status_code=502,
+                detail=model_discovery_error_detail(error, model),
+            ) from error
+
+    @app.post("/models/available-models")
+    def preview_available_models(
+        request: ModelDiscoveryPreviewRequest,
+    ) -> dict[str, list[str]]:
+        adapter = model_adapters.get(request.adapter)
+        if not isinstance(adapter, OpenAICompatibleHTTPAdapter):
+            raise HTTPException(
+                status_code=400,
+                detail=f"Model discovery is not supported for adapter: {request.adapter}",
+            )
+        model = ModelConfig(
+            id="discovery-preview",
+            adapter=request.adapter,
+            base_url=request.base_url,
+            api_key_env=request.api_key_env,
+        )
+        try:
+            return {"models": adapter.discover_models(model)}
+        except AdapterError as error:
+            raise HTTPException(
+                status_code=502,
+                detail=model_discovery_error_detail(error, model),
+            ) from error
 
     @app.get("/modes")
     def list_modes_catalog() -> list[dict[str, Any]]:
@@ -401,7 +452,13 @@ def create_app(
         metadata_store.save(metadata)
         if case_files:
             repository.save_case_files(meeting_id, case_files)
-        return project_meeting_summary(metadata, [], mode=mode, model_pricing={})
+        return project_meeting_summary(
+            metadata,
+            [],
+            mode=mode,
+            model_pricing={},
+            meeting_assignments=meeting_assignments,
+        )
 
     @app.get("/meetings")
     def list_meetings(q: str | None = None) -> list[dict[str, Any]]:
@@ -427,6 +484,7 @@ def create_app(
                     events,
                     mode=mode,
                     model_pricing=pricing,
+                    meeting_assignments=meeting_assignments,
                     activity_status=live_activity_status(events, jobs.is_running(meeting_id), mode),
                 )
             )
@@ -442,6 +500,7 @@ def create_app(
                 events,
                 mode=meeting_mode(mode_catalog, metadata),
                 model_pricing=model_pricing_by_id(model_repository),
+                meeting_assignments=meeting_assignments,
                 activity_status=live_activity_status(
                     events,
                     jobs.is_running(meeting_id),
@@ -454,15 +513,17 @@ def create_app(
 
     @app.put("/meetings/{meeting_id}/tags")
     def update_meeting_tags(meeting_id: str, request: UpdateMeetingTagsRequest) -> dict[str, Any]:
-        metadata = metadata_store.get(meeting_id)
-        metadata["tags"] = request.tags
-        metadata_store.save(metadata)
+        metadata = metadata_store.update(
+            meeting_id,
+            lambda current: {**current, "tags": request.tags},
+        )
         events = repository.read_events(meeting_id)
         return project_meeting_summary(
             metadata,
             events,
             mode=meeting_mode(mode_catalog, metadata),
             model_pricing=model_pricing_by_id(model_repository),
+            meeting_assignments=meeting_assignments,
             activity_status=live_activity_status(
                 events,
                 jobs.is_running(meeting_id),
@@ -475,15 +536,17 @@ def create_app(
         meeting_id: str,
         request: UpdateMeetingPinnedRequest,
     ) -> dict[str, Any]:
-        metadata = metadata_store.get(meeting_id)
-        metadata["pinned"] = request.pinned
-        metadata_store.save(metadata)
+        metadata = metadata_store.update(
+            meeting_id,
+            lambda current: {**current, "pinned": request.pinned},
+        )
         events = repository.read_events(meeting_id)
         return project_meeting_summary(
             metadata,
             events,
             mode=meeting_mode(mode_catalog, metadata),
             model_pricing=model_pricing_by_id(model_repository),
+            meeting_assignments=meeting_assignments,
             activity_status=live_activity_status(
                 events,
                 jobs.is_running(meeting_id),
@@ -491,22 +554,42 @@ def create_app(
             ),
         )
 
+    @app.put("/meetings/{meeting_id}/participant-models")
+    def update_participant_models(
+        meeting_id: str,
+        request: UpdateParticipantModelsRequest,
+    ) -> dict[str, Any]:
+        metadata = metadata_store.get(meeting_id)
+        mode = meeting_mode(mode_catalog, metadata)
+        role_ids = [
+            str(participant["role_id"])
+            for participant in project_participants(mode, metadata)
+        ]
+        try:
+            metadata = meeting_assignments.replace(meeting_id, role_ids, request.models)
+        except AssignmentValidationError as error:
+            status_code = 404 if str(error).startswith("Unknown model:") else 400
+            raise HTTPException(status_code=status_code, detail=str(error)) from error
+        events = repository.read_events(meeting_id)
+        return project_meeting_summary(
+            metadata,
+            events,
+            mode=mode,
+            model_pricing=model_pricing_by_id(model_repository),
+            meeting_assignments=meeting_assignments,
+            activity_status=live_activity_status(events, jobs.is_running(meeting_id), mode),
+        )
+
     @app.post("/meetings/{meeting_id}/start", status_code=202)
     def start_meeting(meeting_id: str, request: StartMeetingRequest) -> dict[str, str]:
         metadata = metadata_store.get(meeting_id)
         reject_terminal_meeting(repository, meeting_id)
         mode = meeting_mode(mode_catalog, metadata)
-        participant_roles = {item["role_id"] for item in project_participants(mode, metadata)}
-        missing_roles = sorted(participant_roles - request.models.keys())
-        if missing_roles:
-            raise HTTPException(
-                status_code=400,
-                detail=f"Missing model assignments: {', '.join(missing_roles)}",
-            )
-        model_assignments = {
-            role: get_model(model_repository, model_id)
-            for role, model_id in request.models.items()
-        }
+        model_assignments = resolved_meeting_models(
+            meeting_assignments,
+            metadata,
+            mode,
+        )
         if not jobs.start(
             meeting_id,
             lambda: start_runner_for_mode(
@@ -622,10 +705,11 @@ def create_app(
                 meeting_id=meeting_id,
                 topic=metadata["topic"],
                 role=role,
-                model_assignments={
-                    role_name: get_model(model_repository, model_id)
-                    for role_name, model_id in request.models.items()
-                },
+                model_assignments=resolved_meeting_models(
+                    meeting_assignments,
+                    metadata,
+                    mode,
+                ),
                 plan=relay_plan(mode),
                 inputs=meeting_inputs_for_runner(metadata, repository.read_case_files(meeting_id)),
             )
@@ -648,10 +732,11 @@ def create_app(
                 meeting_id=meeting_id,
                 topic=metadata["topic"],
                 roles=request.roles,
-                model_assignments={
-                    role_name: get_model(model_repository, model_id)
-                    for role_name, model_id in request.models.items()
-                },
+                model_assignments=resolved_meeting_models(
+                    meeting_assignments,
+                    metadata,
+                    mode,
+                ),
                 plan=relay_plan(mode),
                 inputs=meeting_inputs_for_runner(metadata, repository.read_case_files(meeting_id)),
             )
@@ -668,10 +753,11 @@ def create_app(
         metadata = metadata_store.get(meeting_id)
         reject_terminal_meeting(repository, meeting_id)
         mode = meeting_mode(mode_catalog, metadata)
-        model_assignments = {
-            role: get_model(model_repository, model_id)
-            for role, model_id in request.models.items()
-        }
+        model_assignments = resolved_meeting_models(
+            meeting_assignments,
+            metadata,
+            mode,
+        )
         try:
             if mode.category == "relay":
                 runner.retry_failed_step(
@@ -834,8 +920,15 @@ def normalize_participants(
     requested: list[MeetingParticipantRequest],
     model_repository: ModelConfigRepository,
 ) -> list[dict[str, Any]]:
+    configured_models = model_repository.list_models()
+    default_model_id = configured_models[0].id if configured_models else None
     if mode.category == "relay":
         participants = [participant.model_dump() for participant in requested]
+        if not participants:
+            participants = [
+                {"role_id": role_id, "model_config_id": default_model_id}
+                for role_id in mode.role_ids()
+            ]
         role_ids = set(mode.role_ids())
         validate_participant_ids(
             mode=mode,
@@ -843,6 +936,12 @@ def normalize_participants(
             allowed_role_ids=role_ids,
             model_repository=model_repository,
         )
+        missing_roles = sorted(role_ids - {str(item["role_id"]) for item in participants})
+        if missing_roles:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Missing participant roles: {', '.join(missing_roles)}",
+            )
         return participants
 
     if mode.fanout is None or mode.synthesis is None:
@@ -850,12 +949,23 @@ def normalize_participants(
 
     participants = [participant.model_dump() for participant in requested]
     if not participants:
-        participants = [
-            {"role_id": f"{mode.fanout.role}-{index}", "model_config_id": None}
-            for index in range(1, mode.fanout.min_instances + 1)
-        ]
-        participants.append({"role_id": mode.synthesis.role, "model_config_id": None})
-
+        fixed_member_ids = [role.id for role in mode.roles if role.kind == "member"]
+        if fixed_member_ids:
+            participants = [
+                {"role_id": role.id, "model_config_id": default_model_id}
+                for role in mode.roles
+            ]
+        else:
+            participants = [
+                {
+                    "role_id": f"{mode.fanout.role}-{index}",
+                    "model_config_id": default_model_id,
+                }
+                for index in range(1, mode.fanout.min_instances + 1)
+            ]
+            participants.append(
+                {"role_id": mode.synthesis.role, "model_config_id": default_model_id}
+            )
     validate_participant_ids(
         mode=mode,
         participants=participants,
@@ -872,7 +982,10 @@ def normalize_participants(
             ),
         )
     if mode.synthesis.role not in {str(item.get("role_id")) for item in participants}:
-        participants.append({"role_id": mode.synthesis.role, "model_config_id": None})
+        raise HTTPException(
+            status_code=400,
+            detail=f"Missing participant roles: {mode.synthesis.role}",
+        )
     return participants
 
 
@@ -1046,8 +1159,12 @@ def validate_participant_ids(
             )
         seen_role_ids.add(role_id)
         model_config_id = participant.get("model_config_id")
-        if model_config_id is not None:
-            get_model(model_repository, str(model_config_id))
+        if not isinstance(model_config_id, str) or not model_config_id:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Missing model assignment for participant: {role_id}",
+            )
+        get_model(model_repository, model_config_id)
 
 
 def parallel_allowed_role_ids(
@@ -1192,6 +1309,20 @@ def start_runner_for_mode(
     )
 
 
+def resolved_meeting_models(
+    meeting_assignments: MeetingModelAssignments,
+    metadata: dict[str, Any],
+    mode: ModeDefinition,
+) -> dict[str, ModelConfig]:
+    try:
+        return meeting_assignments.resolve_models(
+            metadata,
+            project_participants(mode, metadata),
+        )
+    except AssignmentValidationError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+
+
 def get_model(repository: ModelConfigRepository, model_id: str) -> ModelConfig:
     try:
         models = repository.list_models()
@@ -1201,6 +1332,15 @@ def get_model(repository: ModelConfigRepository, model_id: str) -> ModelConfig:
         if model.id == model_id:
             return model
     raise HTTPException(status_code=404, detail=f"Unknown model: {model_id}")
+
+
+def model_discovery_error_detail(error: AdapterError, model: ModelConfig) -> str:
+    detail = str(error)
+    if model.api_key_env:
+        secret = os.environ.get(model.api_key_env)
+        if secret:
+            detail = detail.replace(secret, "[REDACTED]")
+    return detail
 
 
 def save_model_or_422(
@@ -1437,6 +1577,7 @@ def project_meeting_summary(
     events: list[dict[str, Any]],
     *,
     mode: ModeDefinition,
+    meeting_assignments: MeetingModelAssignments,
     model_pricing: dict[str, ConfigModelPricing | None] | None = None,
     activity_status: str | None = None,
 ) -> dict[str, Any]:
@@ -1455,7 +1596,11 @@ def project_meeting_summary(
         "tags": metadata.get("tags") or [],
         "pinned": bool(metadata.get("pinned", False)),
         "mode_id": mode.id,
-        "participants": project_participants(mode, metadata),
+        "participants": meeting_assignments.project(
+            metadata,
+            project_participants(mode, metadata),
+            events=events,
+        ),
         "case_files": case_file_manifest(metadata.get("case_files") or []),
     }
 
@@ -1694,26 +1839,52 @@ class MeetingStreamBus:
 class MeetingMetadataStore:
     def __init__(self, data_dir: Path) -> None:
         self.data_dir = data_dir
+        self._lock = threading.RLock()
 
-    def save(self, metadata: dict[str, str]) -> None:
+    def save(self, metadata: dict[str, Any]) -> None:
+        with self._lock:
+            self._save_unlocked(metadata)
+
+    def update(
+        self,
+        meeting_id: str,
+        transform: Callable[[dict[str, Any]], dict[str, Any]],
+    ) -> dict[str, Any]:
+        with self._lock:
+            metadata = self._get_unlocked(meeting_id)
+            updated = transform(metadata)
+            self._save_unlocked(updated)
+            return updated
+
+    def _save_unlocked(self, metadata: dict[str, Any]) -> None:
         path = self._metadata_path(metadata["meeting_id"])
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps(metadata, ensure_ascii=False), encoding="utf-8")
+        temp_path = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
+        try:
+            temp_path.write_text(json.dumps(metadata, ensure_ascii=False), encoding="utf-8")
+            os.replace(temp_path, path)
+        finally:
+            temp_path.unlink(missing_ok=True)
 
-    def get(self, meeting_id: str) -> dict[str, str]:
+    def get(self, meeting_id: str) -> dict[str, Any]:
+        with self._lock:
+            return self._get_unlocked(meeting_id)
+
+    def _get_unlocked(self, meeting_id: str) -> dict[str, Any]:
         path = self._metadata_path(meeting_id)
         if not path.exists():
             raise HTTPException(status_code=404, detail=f"Unknown meeting: {meeting_id}")
         return json.loads(path.read_text(encoding="utf-8"))
 
-    def list(self) -> list[dict[str, str]]:
-        meeting_root = self.data_dir / "meetings"
-        if not meeting_root.exists():
-            return []
-        return [
-            json.loads(path.read_text(encoding="utf-8"))
-            for path in sorted(meeting_root.glob("*/metadata.json"))
-        ]
+    def list(self) -> list[dict[str, Any]]:
+        with self._lock:
+            meeting_root = self.data_dir / "meetings"
+            if not meeting_root.exists():
+                return []
+            return [
+                json.loads(path.read_text(encoding="utf-8"))
+                for path in sorted(meeting_root.glob("*/metadata.json"))
+            ]
 
     def _metadata_path(self, meeting_id: str) -> Path:
         return self.data_dir / "meetings" / meeting_id / "metadata.json"

@@ -6,17 +6,32 @@
 // SettingsModal's 一般 tab (and the sanitize watch in useCouncil.ts that fallback-clears a
 // deleted model's role selections) pick up the change through the exact same path a fresh
 // page load would.
-import { inject, ref } from 'vue'
+import { computed, inject, ref } from 'vue'
 import { councilKey } from '../composables/useCouncil'
-import { ApiError, createModel, deleteModel, testModel, updateModel, type ModelConfig, type ModelConfigPayload } from '../api'
+import {
+  ApiError,
+  createModel,
+  deleteModel,
+  getAvailableModels,
+  previewAvailableModels,
+  testModel,
+  updateModel,
+  type ModelConfig,
+  type ModelConfigPayload,
+} from '../api'
+import {
+  PROVIDERS,
+  getProvider,
+  modelConfigPayloadForProvider,
+  modelDisplayLabel,
+  providerIdForModel,
+  type ProviderId,
+} from '../providers'
+import { LatestDiscoveryRequest, type DiscoveryEvent } from '../modelDiscovery'
 
 const store = inject(councilKey)!
 const { models, refreshModels } = store
 
-// Mirrors backend/ai_council/models/config.py's SUPPORTED_ADAPTERS - kept as a literal
-// list (not fetched) since the set is small and rarely changes; adding a sixth adapter
-// there needs a matching edit here regardless of where the list lives.
-const ADAPTERS = ['mock', 'openai-compatible-http', 'anthropic-http', 'gemini-http', 'subscription-cli'] as const
 const HTTP_ADAPTERS = new Set(['openai-compatible-http', 'anthropic-http', 'gemini-http'])
 
 function isHttpAdapter(adapter: string): boolean {
@@ -25,12 +40,6 @@ function isHttpAdapter(adapter: string): boolean {
 
 function isCliAdapter(adapter: string): boolean {
   return adapter === 'subscription-cli'
-}
-
-function modelSummary(model: ModelConfig): string {
-  if (isHttpAdapter(model.adapter)) return [model.base_url, model.model].filter(Boolean).join(' / ')
-  if (isCliAdapter(model.adapter)) return model.command?.[0] ?? ''
-  return ''
 }
 
 // -------- delete --------
@@ -85,7 +94,7 @@ type FormMode = 'create' | 'edit'
 const showForm = ref(false)
 const formMode = ref<FormMode>('create')
 const formId = ref('')
-const formAdapter = ref<string>('mock')
+const formProvider = ref<ProviderId>('mock')
 const formBaseUrl = ref('')
 const formModel = ref('')
 const formApiKeyEnv = ref('')
@@ -98,6 +107,15 @@ const formCommandText = ref('')
 // models.yaml.
 const formExtraBody = ref<Record<string, unknown>>({})
 const formPricing = ref<ModelConfig['pricing']>(null)
+const discoveryModels = ref<string[]>([])
+const discoveryLoading = ref(false)
+const discoveryMessage = ref('')
+const manualModelEntry = ref(true)
+const discoveryRequest = new LatestDiscoveryRequest()
+
+const providerDefinition = computed(() => getProvider(formProvider.value))
+const formAdapter = computed(() => providerDefinition.value.adapter)
+const supportsDiscovery = computed(() => providerDefinition.value.discovery === 'openai-compatible')
 
 const saving = ref(false)
 const fieldErrors = ref<Record<string, string>>({})
@@ -114,10 +132,41 @@ function resetFormErrors() {
   formGeneralError.value = ''
 }
 
+function resetDiscovery() {
+  discoveryRequest.invalidate()
+  discoveryModels.value = []
+  discoveryLoading.value = false
+  discoveryMessage.value = ''
+  manualModelEntry.value = true
+}
+
+function handleManualModelInput() {
+  discoveryRequest.manualModelEdited()
+  discoveryModels.value = []
+  discoveryLoading.value = false
+  discoveryMessage.value = ''
+  manualModelEntry.value = true
+}
+
+function handleDiscoveredModelChange() {
+  discoveryRequest.invalidate()
+  discoveryLoading.value = false
+  discoveryMessage.value = ''
+}
+
+function handleProviderChange() {
+  const provider = providerDefinition.value
+  formBaseUrl.value = provider.defaultBaseUrl ?? ''
+  formApiKeyEnv.value = provider.defaultApiKeyEnv ?? ''
+  formModel.value = ''
+  formCommandText.value = ''
+  resetDiscovery()
+}
+
 function openCreateForm() {
   formMode.value = 'create'
   formId.value = ''
-  formAdapter.value = 'mock'
+  formProvider.value = 'mock'
   formBaseUrl.value = ''
   formModel.value = ''
   formApiKeyEnv.value = ''
@@ -126,6 +175,7 @@ function openCreateForm() {
   formCommandText.value = ''
   formExtraBody.value = {}
   formPricing.value = null
+  resetDiscovery()
   resetFormErrors()
   showForm.value = true
 }
@@ -133,7 +183,7 @@ function openCreateForm() {
 function openEditForm(model: ModelConfig) {
   formMode.value = 'edit'
   formId.value = model.id
-  formAdapter.value = model.adapter
+  formProvider.value = providerIdForModel(model) ?? 'custom-openai-compatible'
   formBaseUrl.value = model.base_url ?? ''
   formModel.value = model.model ?? ''
   formApiKeyEnv.value = model.api_key_env ?? ''
@@ -142,33 +192,83 @@ function openEditForm(model: ModelConfig) {
   formCommandText.value = (model.command ?? []).join('\n')
   formExtraBody.value = model.extra_body ?? {}
   formPricing.value = model.pricing ?? null
+  resetDiscovery()
   resetFormErrors()
   showForm.value = true
 }
 
 function closeForm() {
+  resetDiscovery()
   showForm.value = false
 }
 
 function buildPayload(): ModelConfigPayload {
-  const payload: ModelConfigPayload = {
-    adapter: formAdapter.value,
+  return modelConfigPayloadForProvider(formProvider.value, {
+    base_url: formBaseUrl.value,
+    model: formModel.value,
+    api_key_env: formApiKeyEnv.value,
+    supports_json_mode: formSupportsJsonMode.value,
+    command: formCommandText.value
+      .split('\n')
+      .map((line) => line.trim())
+      .filter(Boolean),
     timeout_seconds: formTimeoutSeconds.value,
     extra_body: formExtraBody.value,
     pricing: formPricing.value,
+  })
+}
+
+async function discoverModels() {
+  const snapshot = {
+    mode: formMode.value,
+    id: formId.value,
+    provider: formProvider.value,
+    adapter: formAdapter.value,
+    baseUrl: formBaseUrl.value.trim() || null,
+    apiKeyEnv: formApiKeyEnv.value.trim() || null,
   }
-  if (isHttpAdapter(formAdapter.value)) {
-    payload.base_url = formBaseUrl.value.trim() || null
-    payload.model = formModel.value.trim() || null
-    payload.api_key_env = formApiKeyEnv.value.trim() || null
-    payload.supports_json_mode = formSupportsJsonMode.value
-  } else if (isCliAdapter(formAdapter.value)) {
-    payload.command = formCommandText.value
-      .split('\n')
-      .map((line) => line.trim())
-      .filter(Boolean)
+  const identity = JSON.stringify(snapshot)
+  const load = snapshot.mode === 'edit'
+    ? () => getAvailableModels(snapshot.id)
+    : () => previewAvailableModels({
+        adapter: snapshot.adapter,
+        base_url: snapshot.baseUrl,
+        api_key_env: snapshot.apiKeyEnv,
+      })
+  await discoveryRequest.run(identity, load, applyDiscoveryEvent)
+}
+
+function applyDiscoveryEvent(event: DiscoveryEvent) {
+  if (event.type === 'started') {
+    discoveryLoading.value = true
+    discoveryMessage.value = ''
+    return
   }
-  return payload
+  if (event.type === 'succeeded') {
+    discoveryModels.value = event.models
+    if (event.models.length) {
+      formModel.value = event.models.includes(formModel.value) ? formModel.value : event.models[0]
+      manualModelEntry.value = false
+    } else {
+      discoveryMessage.value = 'Provider 沒有回傳可用模型，請手動輸入 exact model ID。'
+      manualModelEntry.value = true
+    }
+    return
+  }
+  if (event.type === 'failed') {
+    discoveryModels.value = []
+    const reason = event.error instanceof ApiError && typeof event.error.detail === 'string'
+      ? event.error.detail
+      : event.error instanceof Error
+        ? event.error.message
+        : String(event.error)
+    discoveryMessage.value = `${reason}；請手動輸入 exact model ID。`
+    manualModelEntry.value = true
+    return
+  }
+  if (event.type === 'settled') {
+    discoveryLoading.value = false
+  }
 }
 
 function applySaveError(caught: unknown) {
@@ -229,8 +329,8 @@ async function saveForm() {
           <i class="status-dot" :data-status="model.status" aria-hidden="true"></i>
           {{ model.id }}
         </span>
-        <span class="model-manager-adapter">{{ model.adapter }}</span>
-        <span class="model-manager-summary">{{ modelSummary(model) }}</span>
+        <span class="model-manager-provider">{{ modelDisplayLabel(model) }}</span>
+        <span class="model-manager-summary">{{ model.base_url ?? model.command?.[0] ?? '' }}</span>
         <em v-if="testErrors[model.id]" class="model-manager-test-error">{{ testErrors[model.id] }}</em>
         <em v-else-if="model.health_error" class="model-manager-test-error">{{ model.health_error }}</em>
         <span class="model-manager-actions">
@@ -292,9 +392,9 @@ async function saveForm() {
       </label>
 
       <label class="topic-input-row">
-        adapter
-        <select v-model="formAdapter" data-testid="model-form-adapter-select">
-          <option v-for="adapter in ADAPTERS" :key="adapter" :value="adapter">{{ adapter }}</option>
+        Provider
+        <select v-model="formProvider" data-testid="model-form-provider-select" @change="handleProviderChange">
+          <option v-for="provider in PROVIDERS" :key="provider.id" :value="provider.id">{{ provider.name }}</option>
         </select>
         <em v-if="fieldError('adapter')" class="model-form-field-error" data-testid="model-form-error-adapter">{{ fieldError('adapter') }}</em>
       </label>
@@ -302,21 +402,43 @@ async function saveForm() {
       <template v-if="isHttpAdapter(formAdapter)">
         <label class="topic-input-row">
           base_url
-          <input v-model="formBaseUrl" data-testid="model-form-base-url-input" aria-label="base_url" />
+          <input v-model="formBaseUrl" data-testid="model-form-base-url-input" aria-label="base_url" @input="resetDiscovery" />
           <em v-if="fieldError('base_url')" class="model-form-field-error" data-testid="model-form-error-base_url">{{ fieldError('base_url') }}</em>
         </label>
         <label class="topic-input-row">
-          model
-          <input v-model="formModel" data-testid="model-form-model-input" aria-label="model" />
-          <em v-if="fieldError('model')" class="model-form-field-error" data-testid="model-form-error-model">{{ fieldError('model') }}</em>
+          Credential 環境變數名稱
+          <input v-model="formApiKeyEnv" data-testid="model-form-api-key-env-input" aria-label="api_key_env" @input="resetDiscovery" />
         </label>
-        <label class="topic-input-row">
-          api_key_env
-          <input v-model="formApiKeyEnv" data-testid="model-form-api-key-env-input" aria-label="api_key_env" />
-        </label>
-        <p class="model-form-hint">
+        <p class="model-form-hint" data-testid="model-form-credential-hint">
           此欄位填<strong>環境變數名稱</strong>（如 <code>OPENAI_API_KEY</code>），不是 API 金鑰本身。金鑰請設在後端環境變數中，勿貼在此處。
         </p>
+        <div v-if="supportsDiscovery" class="model-discovery-actions">
+          <button type="button" class="btn btn-secondary" data-testid="model-form-discover-button" :disabled="discoveryLoading" @click="discoverModels">
+            {{ discoveryLoading ? '載入中…' : (discoveryModels.length ? '重新整理可用模型' : '載入可用模型') }}
+          </button>
+        </div>
+        <p v-else class="model-form-hint" data-testid="model-form-discovery-unsupported">
+          {{ providerDefinition.name }} 暫不支援自動載入模型，請手動輸入 exact model ID。
+        </p>
+        <p v-if="discoveryMessage" class="error" data-testid="model-form-discovery-message" role="alert">{{ discoveryMessage }}</p>
+        <label v-if="discoveryModels.length && !manualModelEntry" class="topic-input-row">
+          Exact model ID
+          <select v-model="formModel" data-testid="model-form-discovered-model-select" @change="handleDiscoveredModelChange">
+            <option v-for="modelId in discoveryModels" :key="modelId" :value="modelId">{{ modelId }}</option>
+          </select>
+        </label>
+        <button
+          v-if="discoveryModels.length"
+          type="button"
+          class="btn btn-ghost btn-sm"
+          data-testid="model-form-manual-model-toggle"
+          @click="manualModelEntry = !manualModelEntry"
+        >{{ manualModelEntry ? '改用已載入模型' : '手動輸入新 model ID' }}</button>
+        <label v-if="manualModelEntry" class="topic-input-row">
+          Exact model ID
+          <input v-model="formModel" data-testid="model-form-model-input" aria-label="model" @input="handleManualModelInput" />
+          <em v-if="fieldError('model')" class="model-form-field-error" data-testid="model-form-error-model">{{ fieldError('model') }}</em>
+        </label>
         <label class="dev-mode-toggle">
           <input type="checkbox" v-model="formSupportsJsonMode" data-testid="model-form-supports-json-mode-checkbox" />
           supports_json_mode
@@ -335,6 +457,9 @@ async function saveForm() {
       </template>
 
       <template v-else-if="isCliAdapter(formAdapter)">
+        <p class="model-form-hint" data-testid="model-form-cli-discovery-unsupported">
+          Subscription CLI 不支援自動載入模型；執行型號由 command 決定，請在下方確認命令。
+        </p>
         <label class="topic-input-row">
           command（一行一個參數，需含 {prompt} 佔位符）
           <textarea

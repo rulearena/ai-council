@@ -6,12 +6,29 @@ import RoleSilhouette from './RoleSilhouette.vue'
 import { useScenePreference } from '../scenes'
 import Modal from './Modal.vue'
 import ModelManagerPanel from './ModelManagerPanel.vue'
+import { modelDisplayLabel } from '../providers'
 
 const props = defineProps<{ show: boolean }>()
 defineEmits<{ close: [] }>()
 
 const store = inject(councilKey)!
-const { models, selectedModels, modelTestResults, devMode, testSelectedModel, loading } = store
+const {
+  models,
+  selectedMeeting,
+  selectedModels,
+  modelTestResults,
+  devMode,
+  testSelectedModel,
+  updateSelectedModel,
+  assignmentUpdateError,
+  loading,
+} = store
+
+const assignmentWarnings = computed(() =>
+  (selectedMeeting.value?.participants ?? []).filter(
+    (participant) => participant.model_assignment_warning,
+  ),
+)
 
 const { scenes, currentScene, setScene } = useScenePreference()
 // Reads currentScene (not the persisted selectedSceneId) so the dropdown always matches
@@ -83,8 +100,13 @@ watch(
           {{ role }}
         </span>
         <span class="model-control">
-          <select v-model="selectedModels[role]" :data-testid="`${role.toLowerCase()}-model-select`">
-            <option v-for="model in models" :key="model.id" :value="model.id">{{ model.id }}</option>
+          <select
+            :value="selectedModels[role]"
+            :data-testid="`${role.toLowerCase()}-model-select`"
+            :disabled="loading"
+            @change="updateSelectedModel(role, ($event.target as HTMLSelectElement).value)"
+          >
+            <option v-for="model in models" :key="model.id" :value="model.id">{{ modelDisplayLabel(model) }}</option>
           </select>
           <button
             type="button"
@@ -98,6 +120,21 @@ watch(
         </span>
       </label>
     </section>
+
+    <div
+      v-if="assignmentWarnings.length"
+      class="error"
+      data-testid="assignment-fallback-warning"
+      role="alert"
+    >
+      <p v-for="participant in assignmentWarnings" :key="participant.role_id">
+        {{ participant.role_id }}：{{ participant.model_assignment_warning }}
+      </p>
+    </div>
+
+    <p v-if="assignmentUpdateError" class="error" data-testid="assignment-update-error" role="alert">
+      {{ assignmentUpdateError }}
+    </p>
 
     <section class="model-test-status" data-testid="model-test-status">
       <span v-for="role in councilRoles" :key="role">

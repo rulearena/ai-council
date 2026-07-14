@@ -11,6 +11,7 @@ async function createMeetingViaNewCase(
     modeId?: string
     inputs?: Record<string, string>
     caseFiles?: Array<{ title: string; content: string; visibleRoles: string[] }>
+    modelAssignments?: Record<string, string>
   } = {},
 ) {
   const modeId = options.modeId ?? 'red-blue'
@@ -28,6 +29,9 @@ async function createMeetingViaNewCase(
   // one labeled field per input id - see NewCaseModal.vue's textInputs.
   for (const [inputId, value] of Object.entries(options.inputs ?? {})) {
     await page.getByTestId(`mode-input-${inputId}`).fill(value)
+  }
+  for (const [role, modelId] of Object.entries(options.modelAssignments ?? {})) {
+    await page.getByTestId(`new-case-${role.toLowerCase()}-model-select`).selectOption(modelId)
   }
   for (const [index, file] of (options.caseFiles ?? []).entries()) {
     const fileNumber = index + 1
@@ -53,13 +57,326 @@ async function createMeetingViaNewCase(
   await expect(page.getByTestId('new-case-modal')).not.toBeVisible()
 }
 
+test('New Case persists the complete relay model roster and reload hydrates that meeting', async ({
+  page,
+}) => {
+  let createPayload: Record<string, unknown> | null = null
+  await page.route('**/meetings', async (route) => {
+    if (route.request().method() === 'POST') {
+      createPayload = route.request().postDataJSON() as Record<string, unknown>
+    }
+    await route.continue()
+  })
+  await page.goto('/')
+
+  const topic = `E2E persisted relay assignment ${Date.now()}`
+  await createMeetingViaNewCase(page, topic, {
+    modelAssignments: {
+      Blue: 'mock-slow',
+      Red: 'mock-fast',
+      Judge: 'mock-broken',
+    },
+  })
+
+  expect(createPayload).toMatchObject({
+    participants: [
+      { role_id: 'Blue', model_config_id: 'mock-slow' },
+      { role_id: 'Red', model_config_id: 'mock-fast' },
+      { role_id: 'Judge', model_config_id: 'mock-broken' },
+    ],
+  })
+  await expect(page.getByTestId('seat-model-label-blue')).toHaveText('Mock · mock-slow')
+  await expect(page.getByTestId('seat-model-label-red')).toHaveText('Mock · mock-fast')
+  await expect(page.getByTestId('seat-model-label-judge')).toHaveText('Custom OpenAI-compatible · mock-broken')
+
+  await page.reload()
+  await page.getByTestId('past-topics-button').click()
+  await page.getByTestId('meeting-list-item').filter({ hasText: topic }).locator('.meeting-item').click()
+  await expect(page.getByTestId('seat-model-label-blue')).toHaveText('Mock · mock-slow')
+  await expect(page.getByTestId('seat-model-label-red')).toHaveText('Mock · mock-fast')
+  await expect(page.getByTestId('seat-model-label-judge')).toHaveText('Custom OpenAI-compatible · mock-broken')
+})
+
+test('Settings persists complete participant assignments across reload', async ({ page }) => {
+  const replacementPayloads: Array<Record<string, string>> = []
+  await page.route('**/meetings/*/participant-models', async (route) => {
+    replacementPayloads.push((route.request().postDataJSON() as { models: Record<string, string> }).models)
+    await route.continue()
+  })
+  await page.goto('/')
+
+  const topic = `E2E persisted Settings assignment ${Date.now()}`
+  await createMeetingViaNewCase(page, topic)
+  await setModelsInSettings(page, {
+    blue: 'mock-slow',
+    red: 'mock-fast',
+    judge: 'mock-broken',
+  })
+  await closeSettings(page)
+
+  expect(replacementPayloads.at(-1)).toEqual({
+    Blue: 'mock-slow',
+    Red: 'mock-fast',
+    Judge: 'mock-broken',
+  })
+  await page.reload()
+  await page.getByTestId('past-topics-button').click()
+  await page.getByTestId('meeting-list-item').filter({ hasText: topic }).locator('.meeting-item').click()
+  await expect(page.getByTestId('seat-model-label-blue')).toHaveText('Mock · mock-slow')
+  await expect(page.getByTestId('seat-model-label-red')).toHaveText('Mock · mock-fast')
+  await expect(page.getByTestId('seat-model-label-judge')).toHaveText('Custom OpenAI-compatible · mock-broken')
+})
+
+test('Settings rolls back a rejected participant assignment and shows the server error', async ({
+  page,
+}) => {
+  await page.goto('/')
+  await createMeetingViaNewCase(page, `E2E assignment rollback ${Date.now()}`)
+  await page.getByTestId('settings-button').click()
+  await expect(page.getByTestId('blue-model-select')).toHaveValue('mock-fast')
+  await page.route(/\/meetings\/[^/]+\/participant-models$/, (route) =>
+    route.fulfill({
+      status: 500,
+      contentType: 'application/json',
+      body: JSON.stringify({ detail: 'Assignment save failed' }),
+    }),
+  )
+
+  await page.getByTestId('blue-model-select').selectOption('mock-slow')
+
+  await expect(page.getByTestId('assignment-update-error')).toHaveText('Assignment save failed')
+  await expect(page.getByTestId('blue-model-select')).toHaveValue('mock-fast')
+  await closeSettings(page)
+  await expect(page.getByTestId('seat-model-label-blue')).toHaveText('Mock · mock-fast')
+})
+
+test('a delayed assignment save cannot overwrite a meeting selected while it was pending', async ({
+  page,
+}) => {
+  await page.goto('/')
+  const topicA = `E2E delayed assignment A ${Date.now()}`
+  const topicB = `E2E delayed assignment B ${Date.now()}`
+  await createMeetingViaNewCase(page, topicA)
+  const meetingAId = await page.getByTestId('meeting-id-display').innerText()
+  await createMeetingViaNewCase(page, topicB, {
+    modelAssignments: { Blue: 'mock-broken' },
+  })
+  const meetingBId = await page.getByTestId('meeting-id-display').innerText()
+
+  const openTopic = async (topic: string) => {
+    await page.getByTestId('past-topics-button').click()
+    await page.getByTestId('meeting-list-item').filter({ hasText: topic }).locator('.meeting-item').click()
+  }
+  const assignmentUrl = new RegExp(`/meetings/${meetingAId}/participant-models$`)
+
+  await openTopic(topicA)
+  let releaseSuccess!: () => void
+  const successGate = new Promise<void>((resolve) => {
+    releaseSuccess = resolve
+  })
+  let successIntercepted = false
+  await page.route(assignmentUrl, async (route) => {
+    successIntercepted = true
+    await successGate
+    const response = await route.fetch()
+    await route.fulfill({ response })
+  })
+  await page.getByTestId('settings-button').click()
+  const successResponse = page.waitForResponse(assignmentUrl)
+  await page.getByTestId('blue-model-select').selectOption('mock-slow')
+  await expect.poll(() => successIntercepted).toBe(true)
+  await closeSettings(page)
+  await openTopic(topicB)
+  releaseSuccess()
+  await successResponse
+
+  await expect(page.getByTestId('meeting-id-display')).toHaveText(meetingBId)
+  await expect(page.getByTestId('seat-model-label-blue')).toContainText('mock-broken')
+
+  await page.unroute(assignmentUrl)
+  await openTopic(topicA)
+  let releaseFailure!: () => void
+  const failureGate = new Promise<void>((resolve) => {
+    releaseFailure = resolve
+  })
+  let failureIntercepted = false
+  await page.route(assignmentUrl, async (route) => {
+    failureIntercepted = true
+    await failureGate
+    await route.fulfill({
+      status: 500,
+      contentType: 'application/json',
+      body: JSON.stringify({ detail: 'Delayed A save failed' }),
+    })
+  })
+  await page.getByTestId('settings-button').click()
+  const failureResponse = page.waitForResponse(assignmentUrl)
+  await page.getByTestId('blue-model-select').selectOption('mock-broken')
+  await expect.poll(() => failureIntercepted).toBe(true)
+  await closeSettings(page)
+  await openTopic(topicB)
+  releaseFailure()
+  await failureResponse
+
+  await expect(page.getByTestId('meeting-id-display')).toHaveText(meetingBId)
+  await expect(page.getByTestId('seat-model-label-blue')).toContainText('mock-broken')
+  await page.getByTestId('settings-button').click()
+  await expect(page.getByTestId('assignment-update-error')).toHaveCount(0)
+})
+
+test('a deleted assigned model shows the backend fallback warning without persisting it', async ({
+  page,
+}) => {
+  const modelsResponsePromise = page.waitForResponse(
+    (response) => response.request().method() === 'GET' && response.url().endsWith('/models'),
+  )
+  await page.goto('/')
+  const apiOrigin = new URL((await modelsResponsePromise).url()).origin
+  const deletedModelId = `e2e-deleted-assignment-${Date.now()}`
+  expect(
+    (
+      await page.request.post(`${apiOrigin}/models`, {
+        data: { id: deletedModelId, adapter: 'mock' },
+      })
+    ).ok(),
+  ).toBeTruthy()
+  await page.reload()
+
+  const topic = `E2E deleted assignment fallback ${Date.now()}`
+  await createMeetingViaNewCase(page, topic, {
+    modelAssignments: { Blue: deletedModelId },
+  })
+  const meetingId = await page.getByTestId('meeting-id-display').innerText()
+  expect((await page.request.delete(`${apiOrigin}/models/${deletedModelId}`)).ok()).toBeTruthy()
+
+  await page.reload()
+  await page.getByTestId('past-topics-button').click()
+  await page.getByTestId('meeting-list-item').filter({ hasText: topic }).locator('.meeting-item').click()
+  await page.getByTestId('settings-button').click()
+  await expect(page.getByTestId('assignment-fallback-warning')).toContainText(deletedModelId)
+
+  const projected = await (await page.request.get(`${apiOrigin}/meetings/${meetingId}`)).json()
+  const blue = projected.participants.find(
+    (participant: { role_id: string }) => participant.role_id === 'Blue',
+  )
+  expect(blue.model_assignment_source).toBe('default')
+  expect(blue.model_assignment_warning).toContain(deletedModelId)
+})
+
+test('run actions omit frontend model maps and rely on the meeting assignment', async ({ page }) => {
+  const runBodies: Record<string, unknown>[] = []
+  page.on('request', (request) => {
+    if (
+      request.method() === 'POST' &&
+      (/\/start$/.test(request.url()) ||
+        /\/roles\/[^/]+\/respond$/.test(request.url()) ||
+        /\/sequences$/.test(request.url()))
+    ) {
+      runBodies.push({ url: request.url(), body: request.postDataJSON() })
+    }
+  })
+  await page.goto('/')
+  await createMeetingViaNewCase(page, `E2E authoritative run assignment ${Date.now()}`)
+
+  await page.getByTestId('start-meeting-button').click()
+  await expect(page.getByTestId('operation-status')).toContainText('狀態：completed')
+  await openRoleDrawer(page, 'blue')
+  await page.getByTestId('request-blue-response-button').click()
+  await expect(page.getByTestId('operation-status')).toContainText('狀態：completed')
+  await closeRoleDrawer(page)
+  await openAdvancedOptions(page)
+  await page.getByTestId('run-sequence-button').click()
+  await expect(page.getByTestId('operation-status')).toContainText('狀態：completed')
+
+  expect(runBodies.map(({ url, body }) => ({ path: new URL(url as string).pathname, body }))).toEqual([
+    { path: expect.stringMatching(/\/start$/), body: {} },
+    { path: expect.stringMatching(/\/roles\/Blue\/respond$/), body: {} },
+    { path: expect.stringMatching(/\/sequences$/), body: { roles: ['Red', 'Blue', 'Judge'] } },
+  ])
+})
+
+test('meeting switches hydrate isolated assignments and New Case keeps local defaults', async ({
+  page,
+}) => {
+  await page.goto('/')
+  const topicA = `E2E isolated assignment A ${Date.now()}`
+  const topicB = `E2E isolated assignment B ${Date.now()}`
+  await createMeetingViaNewCase(page, topicA, {
+    modelAssignments: { Blue: 'mock-slow' },
+  })
+  await createMeetingViaNewCase(page, topicB)
+  await expect(page.getByTestId('seat-model-label-blue')).toHaveText('Mock · mock-fast')
+
+  await page.getByTestId('past-topics-button').click()
+  await page.getByTestId('meeting-list-item').filter({ hasText: topicA }).locator('.meeting-item').click()
+  await expect(page.getByTestId('seat-model-label-blue')).toHaveText('Mock · mock-slow')
+  await page.getByTestId('past-topics-button').click()
+  await page.getByTestId('meeting-list-item').filter({ hasText: topicB }).locator('.meeting-item').click()
+  await expect(page.getByTestId('seat-model-label-blue')).toHaveText('Mock · mock-fast')
+
+  await page.getByTestId('new-case-button').click()
+  await page
+    .getByTestId('mode-select-card-red-blue')
+    .getByRole('button', { name: '選擇此模式' })
+    .click()
+  await expect(page.getByTestId('new-case-blue-model-select')).toHaveValue('mock-fast')
+})
+
+test('legacy recovery hydration trusts the participant projection instead of event history', async ({
+  page,
+}) => {
+  await page.goto('/')
+  const topic = `E2E legacy recovered assignment ${Date.now()}`
+  await createMeetingViaNewCase(page, topic)
+  const meetingId = await page.getByTestId('meeting-id-display').innerText()
+  await page.route(new RegExp(`/meetings/${meetingId}$`), async (route) => {
+    const response = await route.fetch()
+    const meeting = await response.json()
+    meeting.participants = meeting.participants.map(
+      (participant: { role_id: string; model_config_id: string; model_assignment_source: string }) =>
+        participant.role_id === 'Blue'
+          ? {
+              ...participant,
+              model_config_id: 'mock-slow',
+              model_assignment_source: 'latest-event',
+            }
+          : participant,
+    )
+    meeting.events = [
+      {
+        event_id: 'contradictory-event',
+        meeting_id: meetingId,
+        step_id: 'blue-propose',
+        role: 'Blue',
+        status: 'completed',
+        model_config_id: 'mock-broken',
+      },
+    ]
+    await route.fulfill({ response, json: meeting })
+  })
+
+  await page.getByTestId('past-topics-button').click()
+  await page.getByTestId('meeting-list-item').filter({ hasText: topic }).locator('.meeting-item').click()
+
+  await expect(page.getByTestId('seat-model-label-blue')).toHaveText('Mock · mock-slow')
+})
+
 // Generalized model-assignment helper (mode-system slice B task 9 made the model-select
 // testid role-derived - `${role.toLowerCase()}-model-select` - for any mode's roster, not
 // just red-blue's Blue/Red/Judge). Leaves the Settings modal open, same as before.
 async function setRoleModelsInSettings(page: Page, assignments: Record<string, string>) {
   await page.getByTestId('settings-button').click()
   for (const [role, model] of Object.entries(assignments)) {
-    await page.getByTestId(`${role.toLowerCase()}-model-select`).selectOption(model)
+    const select = page.getByTestId(`${role.toLowerCase()}-model-select`)
+    if ((await select.inputValue()) === model) continue
+    const response = page.waitForResponse(
+      (candidate) =>
+        candidate.request().method() === 'PUT' &&
+        candidate.url().includes('/participant-models'),
+    )
+    await select.selectOption(model)
+    await response
+    await expect(select).toBeEnabled()
   }
 }
 
@@ -400,6 +717,12 @@ test('shows a connection error banner when the backend is unreachable on load', 
 test('role seat shows failed state, halts the rest of the round, and recovers via retry', async ({
   page,
 }) => {
+  let retryBody: unknown
+  page.on('request', (request) => {
+    if (request.method() === 'POST' && /\/steps\/[^/]+\/retry$/.test(request.url())) {
+      retryBody = request.postDataJSON()
+    }
+  })
   await page.goto('/')
 
   const topic = `E2E failing role seat ${Date.now()}`
@@ -430,6 +753,7 @@ test('role seat shows failed state, halts the rest of the round, and recovers vi
 
   await openRoleDrawer(page, 'blue')
   await page.getByTestId('role-status-retry-button').click()
+  await expect.poll(() => retryBody).toEqual({})
 
   // retrySelectedStep pushes the whole remaining fixed-round tail (Blue, Red, Blue, Judge
   // for a blue-propose retry), so the seat flips to "thinking" immediately on click.
@@ -1465,48 +1789,51 @@ test('New Case creates a meeting with numbered role-scoped case files', async ({
     .click()
 })
 
-test('seat nameplate shows the selected model, with a placeholder when unset, and updates live from Settings', async ({
+test('New Case blocks an empty model catalog and seat nameplates follow persisted Settings', async ({
   page,
 }) => {
-  // Force an empty model catalog first - every real /models response is non-empty and
-  // Settings' <select> has no blank option of its own, so this is the only reliable way
-  // to observe the "未選模型" placeholder (selectedModels' auto-pick-the-first-model
-  // fallback in useCouncil.ts's refreshAll has nothing to pick from).
+  // New meetings now require a complete assignment roster, so an empty catalog must
+  // fail closed before creation instead of producing an unassigned meeting.
   await page.route('**/models', (route) => route.fulfill({ json: [] }))
   await page.goto('/')
 
   const topic = `E2E seat model label ${Date.now()}`
-  await createMeetingViaNewCase(page, topic)
+  await page.getByTestId('new-case-button').click()
+  await page
+    .getByTestId('mode-select-card-red-blue')
+    .getByRole('button', { name: '選擇此模式' })
+    .click()
+  await page.getByLabel('會議主題').fill(topic)
+  await expect(page.getByTestId('new-case-model-error')).toBeVisible()
+  await expect(page.getByTestId('create-meeting-button')).toBeDisabled()
+  await page.getByTestId('new-case-close-button').click()
 
-  await expect(page.getByTestId('seat-model-label-blue')).toHaveText('未選模型')
-  await expect(page.getByTestId('seat-model-label-blue')).toHaveClass(/seat-model-label-empty/)
+  await page.unroute('**/models')
+  await page.reload()
+  await createMeetingViaNewCase(page, topic)
   // Chairman is the fixed human seat, not a mode role - it never gets a model label.
   await expect(
     page.getByTestId('role-seat-chairman').locator('[data-testid^="seat-model-label"]'),
   ).toHaveCount(0)
 
-  // Reload against the real (unmocked) backend and reopen the same meeting - every role
-  // auto-picks the catalog's first model on load, so the placeholder should be gone.
-  await page.unroute('**/models')
-  await page.reload()
-  await page.getByTestId('past-topics-button').click()
-  await page.getByTestId('meeting-list-item').filter({ hasText: topic }).locator('.meeting-item').click()
-  await expect(page.getByTestId('seat-model-label-blue')).not.toHaveText('未選模型')
-
   await setModelsInSettings(page, { blue: 'mock-slow', red: 'mock-fast', judge: 'mock-broken' })
   await closeSettings(page)
 
-  await expect(page.getByTestId('seat-model-label-blue')).toHaveText('mock-slow')
-  await expect(page.getByTestId('seat-model-label-red')).toHaveText('mock-fast')
-  await expect(page.getByTestId('seat-model-label-judge')).toHaveText('mock-broken')
-  await expect(page.getByTestId('seat-model-label-blue')).toHaveAttribute('title', 'mock-slow')
+  await expect(page.getByTestId('seat-model-label-blue')).toHaveText('Mock · mock-slow')
+  await expect(page.getByTestId('seat-model-label-red')).toHaveText('Mock · mock-fast')
+  await expect(page.getByTestId('seat-model-label-judge')).toHaveText('Custom OpenAI-compatible · mock-broken')
+  await expect(page.getByTestId('seat-model-label-blue')).toHaveAttribute('title', 'Mock · mock-slow')
 
   // Changing the model again in Settings must update the seat immediately -
-  // selectedModels is the same reactive ref both surfaces read, no reload/reopen needed.
+  // and persist through the explicit participant-model replacement endpoint.
   await page.getByTestId('settings-button').click()
+  const saved = page.waitForResponse(
+    (response) => response.request().method() === 'PUT' && response.url().includes('/participant-models'),
+  )
   await page.getByTestId('blue-model-select').selectOption('mock-fast')
+  await saved
   await page.getByTestId('settings-close-button').click()
-  await expect(page.getByTestId('seat-model-label-blue')).toHaveText('mock-fast')
+  await expect(page.getByTestId('seat-model-label-blue')).toHaveText('Mock · mock-fast')
 
   await page.getByTestId('past-topics-button').click()
   page.once('dialog', (dialog) => dialog.accept())
@@ -1593,8 +1920,27 @@ test('brainstorm mode creates member instances and runs fanout plus synthesis', 
   await page.getByTestId('parallel-member-2-prompt').fill('從新手使用者角度發想')
   await page.getByTestId('parallel-member-3-name').fill('營運委員')
   await page.getByTestId('parallel-member-3-prompt').fill('從營運落地角度發想')
+  await page.getByTestId('new-case-member-1-model-select').selectOption('mock-slow')
+  await page.getByTestId('new-case-member-2-model-select').selectOption('mock-fast')
+  await page.getByTestId('new-case-member-3-model-select').selectOption('mock-fast')
+  await page.getByTestId('new-case-moderator-model-select').selectOption('mock-slow')
+  const createResponsePromise = page.waitForResponse(
+    (response) => response.request().method() === 'POST' && response.url().endsWith('/meetings'),
+  )
   await page.getByTestId('create-meeting-button').click()
   await expect(page.getByTestId('new-case-modal')).not.toBeVisible()
+  const created = await (await createResponsePromise).json()
+  expect(
+    created.participants.map((participant: { role_id: string; model_config_id: string }) => [
+      participant.role_id,
+      participant.model_config_id,
+    ]),
+  ).toEqual([
+    ['Member-1', 'mock-slow'],
+    ['Member-2', 'mock-fast'],
+    ['Member-3', 'mock-fast'],
+    ['Moderator', 'mock-slow'],
+  ])
 
   await expect(page.getByTestId('role-seat-member-1')).toBeVisible()
   await expect(page.getByTestId('role-seat-member-2')).toBeVisible()
@@ -1631,6 +1977,55 @@ test('brainstorm mode creates member instances and runs fanout plus synthesis', 
     .filter({ hasText: topic })
     .getByTestId('delete-meeting-button')
     .click()
+})
+
+test('six-hats New Case persists its fixed catalog roster and reloads every assignment', async ({
+  page,
+}) => {
+  await page.goto('/')
+  const topic = `E2E fixed six hats roster ${Date.now()}`
+  await page.getByTestId('new-case-button').click()
+  await page
+    .getByTestId('mode-select-card-six-hats')
+    .getByRole('button', { name: '選擇此模式' })
+    .click()
+  await page.getByLabel('會議主題').fill(topic)
+  await expect(page.getByTestId('parallel-member-editor')).toHaveCount(0)
+
+  const assignments: Record<string, string> = {
+    HatWhite: 'mock-slow',
+    HatRed: 'mock-fast',
+    HatBlack: 'mock-slow',
+    HatYellow: 'mock-fast',
+    HatGreen: 'mock-slow',
+    HatBlue: 'mock-fast',
+  }
+  for (const [role, modelId] of Object.entries(assignments)) {
+    await page.getByTestId(`new-case-${role.toLowerCase()}-model-select`).selectOption(modelId)
+  }
+  const createdResponsePromise = page.waitForResponse(
+    (response) => response.request().method() === 'POST' && response.url().endsWith('/meetings'),
+  )
+  await page.getByTestId('create-meeting-button').click()
+  const createdResponse = await createdResponsePromise
+  expect(createdResponse.ok()).toBeTruthy()
+  await expect(page.getByTestId('new-case-modal')).not.toBeVisible()
+  const created = await createdResponse.json()
+  expect(
+    created.participants.map((participant: { role_id: string; model_config_id: string }) => [
+      participant.role_id,
+      participant.model_config_id,
+    ]),
+  ).toEqual(Object.entries(assignments))
+
+  await page.reload()
+  await page.getByTestId('past-topics-button').click()
+  await page.getByTestId('meeting-list-item').filter({ hasText: topic }).locator('.meeting-item').click()
+  for (const [role, modelId] of Object.entries(assignments)) {
+    await expect(page.getByTestId(`role-seat-${role.toLowerCase()}`)).toBeVisible()
+    await expect(page.getByTestId(`seat-model-label-${role.toLowerCase()}`)).toContainText(modelId)
+  }
+  await expect(page.locator('[data-testid^="role-seat-hat-"]')).toHaveCount(0)
 })
 
 test('debate mode gates creation on both position inputs, then builds a Pro/Con/Arbiter meeting', async ({
@@ -1741,7 +2136,7 @@ test('model manager tab supports create, test, edit, and delete for a model conf
 
   await page.getByTestId('add-model-button').click()
   await page.getByTestId('model-form-id-input').fill(modelId)
-  // adapter select defaults to 'mock' (ModelManagerPanel's openCreateForm) - leave it, so
+  // Provider defaults to Mock - leave it, so
   // the Test step below resolves deterministically to "available" with no real network
   // call (check_model_health's mock branch just calls adapter.complete() locally).
   await page.getByTestId('model-form-save').click()
@@ -1760,14 +2155,13 @@ test('model manager tab supports create, test, edit, and delete for a model conf
     'available',
   )
 
-  // Editing: timeout_seconds only renders for http/cli adapters (ModelManagerPanel.vue's
-  // isHttpAdapter/isCliAdapter template branches) - a mock model has no editable field
-  // besides its (readonly) id, so exercising a real edit means switching the adapter as
-  // part of the edit, same as an operator converting a placeholder mock entry into a real
+  // A mock model has no editable connection field besides its (readonly) id, so
+  // exercising a real edit means switching the Provider as part of the edit, like an
+  // operator converting a placeholder mock entry into a real
   // one would.
   await page.getByTestId(`edit-model-button-${modelId}`).click()
   await expect(page.getByTestId('model-form-id-input')).toHaveValue(modelId)
-  await page.getByTestId('model-form-adapter-select').selectOption('openai-compatible-http')
+  await page.getByTestId('model-form-provider-select').selectOption('custom-openai-compatible')
   await page.getByTestId('model-form-base-url-input').fill('http://127.0.0.1:9/v1')
   await page.getByTestId('model-form-model-input').fill('dummy-model')
   await page.getByTestId('model-form-timeout-input').fill('60')
@@ -1791,6 +2185,204 @@ test('model manager tab supports create, test, edit, and delete for a model conf
   await closeSettings(page)
 })
 
+test('model manager creates an OpenAI config through provider-guided preview discovery', async ({
+  page,
+}) => {
+  let previewPayload: Record<string, unknown> | null = null
+  await page.route('**/models/available-models', async (route) => {
+    if (route.request().method() !== 'POST') return route.continue()
+    previewPayload = route.request().postDataJSON() as Record<string, unknown>
+    await route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify({ models: ['gpt-5.4', 'gpt-5.4-mini'] }),
+    })
+  })
+  await page.goto('/')
+  await page.getByTestId('settings-button').click()
+  await page.getByTestId('model-manager-tab').click()
+  await page.getByTestId('add-model-button').click()
+
+  await expect(page.getByTestId('model-form-adapter-select')).toHaveCount(0)
+  await page.getByTestId('model-form-provider-select').selectOption('openai')
+  await expect(page.getByTestId('model-form-base-url-input')).toHaveValue('https://api.openai.com/v1')
+  await expect(page.getByTestId('model-form-api-key-env-input')).toHaveValue('OPENAI_API_KEY')
+  await expect(page.getByTestId('model-form-credential-hint')).toContainText('環境變數名稱')
+
+  await page.getByTestId('model-form-discover-button').click()
+  expect(previewPayload).toEqual({
+    adapter: 'openai-compatible-http',
+    base_url: 'https://api.openai.com/v1',
+    api_key_env: 'OPENAI_API_KEY',
+  })
+  await expect(page.getByTestId('model-form-discovered-model-select')).toHaveValue('gpt-5.4')
+  await page.getByTestId('model-form-discovered-model-select').selectOption('gpt-5.4-mini')
+
+  const modelId = `e2e-provider-openai-${Date.now()}`
+  await page.getByTestId('model-form-id-input').fill(modelId)
+  await page.getByTestId('model-form-save').click()
+  await expect(modelManagerRow(page, modelId)).toContainText('OpenAI · gpt-5.4-mini')
+
+  page.once('dialog', (dialog) => dialog.accept())
+  await page.getByTestId(`delete-model-button-${modelId}`).click()
+  await closeSettings(page)
+})
+
+test('model labels show Provider and exact model across model list and role selectors', async ({
+  page,
+}) => {
+  await page.goto('/')
+  await page.getByTestId('settings-button').click()
+  await expect(page.getByTestId('blue-model-select').locator('option[value="claude-api"]')).toHaveText(
+    'Anthropic · claude-sonnet-4-5',
+  )
+  await page.getByTestId('model-manager-tab').click()
+  await expect(modelManagerRow(page, 'qwen27')).toContainText(
+    'Custom OpenAI-compatible · bartowski/Qwen_Qwen3.6-27B-GGUF',
+  )
+  await expect(modelManagerRow(page, 'claude-subscription')).toContainText(
+    'Subscription CLI · 由 command 決定（claude-subscription）',
+  )
+  await closeSettings(page)
+
+  await page.getByTestId('new-case-button').click()
+  await page
+    .getByTestId('mode-select-card-red-blue')
+    .getByRole('button', { name: '選擇此模式' })
+    .click()
+  await expect(
+    page.getByTestId('new-case-blue-model-select').locator('option[value="gemini-api"]'),
+  ).toHaveText('Gemini · gemini-2.5-pro')
+  await page.getByTestId('new-case-close-button').click()
+})
+
+test('model discovery failure, empty results, and unsupported providers retain manual entry', async ({
+  page,
+}) => {
+  let discoveryAttempt = 0
+  await page.route('**/models/available-models', async (route) => {
+    if (route.request().method() !== 'POST') return route.continue()
+    discoveryAttempt += 1
+    if (discoveryAttempt === 1) {
+      return route.fulfill({
+        status: 502,
+        contentType: 'application/json',
+        body: JSON.stringify({ detail: 'Provider unavailable' }),
+      })
+    }
+    await route.fulfill({ json: { models: [] } })
+  })
+  await page.goto('/')
+  await page.getByTestId('settings-button').click()
+  await page.getByTestId('model-manager-tab').click()
+  await page.getByTestId('add-model-button').click()
+
+  await page.getByTestId('model-form-provider-select').selectOption('anthropic')
+  await expect(page.getByTestId('model-form-discovery-unsupported')).toContainText(
+    'Anthropic 暫不支援自動載入模型',
+  )
+  await expect(page.getByTestId('model-form-model-input')).toBeVisible()
+
+  await page.getByTestId('model-form-provider-select').selectOption('subscription-cli')
+  await expect(page.getByTestId('model-form-cli-discovery-unsupported')).toContainText(
+    '不支援自動載入模型；執行型號由 command 決定',
+  )
+
+  await page.getByTestId('model-form-provider-select').selectOption('custom-openai-compatible')
+  await page.getByTestId('model-form-base-url-input').fill('http://provider.example.test/v1')
+  await page.getByTestId('model-form-discover-button').click()
+  await expect(page.getByTestId('model-form-discovery-message')).toContainText('Provider unavailable')
+  await expect(page.getByTestId('model-form-model-input')).toBeVisible()
+
+  await page.getByTestId('model-form-provider-select').selectOption('openai')
+  await page.getByTestId('model-form-discover-button').click()
+  await expect(page.getByTestId('model-form-discovery-message')).toContainText('沒有回傳可用模型')
+  await expect(page.getByTestId('model-form-model-input')).toBeVisible()
+  await page.getByTestId('model-form-cancel').click()
+  await closeSettings(page)
+})
+
+test('editing an existing config refreshes discovery through its saved-config endpoint', async ({
+  page,
+}) => {
+  let existingDiscoveryRequests = 0
+  await page.route('**/models/qwen27/available-models', async (route) => {
+    existingDiscoveryRequests += 1
+    await route.fulfill({ json: { models: ['qwen/existing', 'qwen/new'] } })
+  })
+  await page.goto('/')
+  await page.getByTestId('settings-button').click()
+  await page.getByTestId('model-manager-tab').click()
+  await page.getByTestId('edit-model-button-qwen27').click()
+
+  await expect(page.getByTestId('model-form-provider-select')).toHaveValue('custom-openai-compatible')
+  await page.getByTestId('model-form-discover-button').click()
+  await expect.poll(() => existingDiscoveryRequests).toBe(1)
+  await expect(page.getByTestId('model-form-discovered-model-select')).toHaveValue('qwen/existing')
+  await page.getByTestId('model-form-cancel').click()
+  await closeSettings(page)
+})
+
+test('provider-guided edits preserve legacy extra body, pricing, and CLI command fields', async ({
+  page,
+}) => {
+  const modelsResponsePromise = page.waitForResponse(
+    (response) => response.request().method() === 'GET' && response.url().endsWith('/models'),
+  )
+  await page.goto('/')
+  const apiOrigin = new URL((await modelsResponsePromise).url()).origin
+  const modelId = `e2e-legacy-roundtrip-${Date.now()}`
+  const pricing = { currency: 'USD', input_per_1m_tokens: 1.25, output_per_1m_tokens: 5 }
+  expect((await page.request.post(`${apiOrigin}/models`, {
+    data: {
+      id: modelId,
+      adapter: 'openai-compatible-http',
+      base_url: 'http://legacy.example.test/v1',
+      model: 'legacy/exact-id',
+      api_key_env: 'LEGACY_API_KEY',
+      extra_body: { chat_template_kwargs: { enable_thinking: false } },
+      pricing,
+    },
+  })).ok()).toBeTruthy()
+  await page.reload()
+  await page.getByTestId('settings-button').click()
+  await page.getByTestId('model-manager-tab').click()
+
+  let httpUpdate: Record<string, unknown> | null = null
+  await page.route(`**/models/${modelId}`, async (route) => {
+    if (route.request().method() === 'PUT') {
+      httpUpdate = route.request().postDataJSON() as Record<string, unknown>
+    }
+    await route.continue()
+  })
+  await page.getByTestId(`edit-model-button-${modelId}`).click()
+  await expect(page.getByTestId('model-form-provider-select')).toHaveValue('custom-openai-compatible')
+  await page.getByTestId('model-form-save').click()
+  await expect(page.getByTestId('model-form')).not.toBeVisible()
+  expect(httpUpdate).toMatchObject({
+    extra_body: { chat_template_kwargs: { enable_thinking: false } },
+    pricing,
+  })
+
+  let cliUpdate: Record<string, unknown> | null = null
+  await page.route('**/models/codex-subscription', async (route) => {
+    if (route.request().method() === 'PUT') {
+      cliUpdate = route.request().postDataJSON() as Record<string, unknown>
+    }
+    await route.continue()
+  })
+  await page.getByTestId('edit-model-button-codex-subscription').click()
+  await expect(page.getByTestId('model-form-provider-select')).toHaveValue('subscription-cli')
+  await page.getByTestId('model-form-save').click()
+  expect(cliUpdate).toMatchObject({
+    command: ['codex', 'exec', '{prompt}'],
+    extra_body: { cli_provider: 'codex' },
+  })
+
+  page.once('dialog', (dialog) => dialog.accept())
+  await page.getByTestId(`delete-model-button-${modelId}`).click()
+  await closeSettings(page)
+})
+
 test('model manager form shows per-field validation errors and does not create the model', async ({
   page,
 }) => {
@@ -1802,7 +2394,7 @@ test('model manager form shows per-field validation errors and does not create t
 
   await page.getByTestId('add-model-button').click()
   await page.getByTestId('model-form-id-input').fill(modelId)
-  await page.getByTestId('model-form-adapter-select').selectOption('openai-compatible-http')
+  await page.getByTestId('model-form-provider-select').selectOption('custom-openai-compatible')
   // base_url/model left empty on purpose - validate_model_config_fields (backend) requires
   // both for the http-family adapters.
   await page.getByTestId('model-form-save').click()

@@ -25,6 +25,7 @@ import {
   testModel,
   transcriptDownloadUrl,
   updateMeetingPinned,
+  updateMeetingParticipantModels,
   updateMeetingTags,
   type Meeting,
   type MeetingEvent,
@@ -239,8 +240,10 @@ export function useCouncil() {
   const loading = ref(false)
   const error = ref('')
   const meetingCreationError = ref('')
+  const assignmentUpdateError = ref('')
   const devMode = ref(false)
   let closeEventStream: (() => void) | null = null
+  let assignmentSaveGeneration = 0
 
   // event_ids this session has already processed for the currently-open meeting - lets
   // the WS handler tell a genuinely new event apart from one merely being resent (every
@@ -311,25 +314,18 @@ export function useCouncil() {
     applyModeScene(meeting ? resolveActiveMode(meeting).defaultScene : null)
   })
 
-  // Keeps selectedModels/modelTestResults' keys in sync with whichever roster is active
-  // right now (councilRoles, driven by activeModeSource - see the selectedMeeting watcher
-  // below) AND sanitizes selectedModels against whichever models currently exist (models,
-  // refreshed by refreshModels() - see ModelManagerPanel, which deletes/renames
-  // models out from under an already-selected role). A role's current selection survives
-  // as long as it's still a role in the roster *and* still a real model id; otherwise it
-  // falls back to the first available model (spec.md 17.3's delete-fallback contract). A
-  // role that's newly in the roster gets the same fallback. `immediate: true` also does
-  // this composable's original one-time startup seeding, so no separate init is needed.
+  // The open meeting projection is authoritative. With no meeting selected, seed the
+  // inactive stage from the first configured model only so its controls remain usable.
   watch(
     [councilRoles, models],
     ([roles]) => {
       const firstModel = models.value[0]?.id ?? ''
-      const validModelIds = new Set(models.value.map((model) => model.id))
       selectedModels.value = Object.fromEntries(
-        roles.map((role) => {
-          const current = selectedModels.value[role]
-          return [role, current && validModelIds.has(current) ? current : firstModel]
-        }),
+        roles.map((role) => [
+          role,
+          selectedMeeting.value?.participants.find((participant) => participant.role_id === role)
+            ?.model_config_id ?? firstModel,
+        ]),
       )
       modelTestResults.value = Object.fromEntries(
         roles.map((role) => [
@@ -466,6 +462,15 @@ export function useCouncil() {
   // so a freshly added/removed model shows up in the role dropdowns without a page reload.
   async function refreshModels() {
     models.value = await getModels()
+    if (selectedMeeting.value) {
+      selectedMeeting.value = await getMeeting(selectedMeeting.value.meeting_id)
+      selectedModels.value = Object.fromEntries(
+        selectedMeeting.value.participants.map((participant) => [
+          participant.role_id,
+          participant.model_config_id ?? '',
+        ]),
+      )
+    }
   }
 
   async function refreshAll() {
@@ -535,6 +540,13 @@ export function useCouncil() {
       seenEventIds = new Set()
     }
     selectedMeeting.value = await getMeeting(meetingId)
+    assignmentUpdateError.value = ''
+    selectedModels.value = Object.fromEntries(
+      selectedMeeting.value.participants.map((participant) => [
+        participant.role_id,
+        participant.model_config_id ?? '',
+      ]),
+    )
     selectedEvent.value = selectedMeeting.value.events?.at(-1) ?? null
     transcript.value = await getTranscript(meetingId)
     connectMeetingEvents(meetingId)
@@ -574,7 +586,7 @@ export function useCouncil() {
     pendingRoles.value.push(...queuedRoles)
     connectMeetingEvents(meetingId)
     await runAction(async () => {
-      await startMeeting(meetingId, selectedModels.value)
+      await startMeeting(meetingId)
       if (selectedMeeting.value?.meeting_id === meetingId) {
         selectedMeeting.value = { ...selectedMeeting.value, activity_status: 'running' }
       }
@@ -745,6 +757,67 @@ export function useCouncil() {
     })
   }
 
+  async function updateSelectedModel(role: CouncilRole, modelId: string) {
+    if (selectedModels.value[role] === modelId) return
+    if (!selectedMeeting.value) {
+      selectedModels.value = { ...selectedModels.value, [role]: modelId }
+      return
+    }
+    const meetingId = selectedMeeting.value.meeting_id
+    const requestGeneration = ++assignmentSaveGeneration
+    const previous = { ...selectedModels.value }
+    const next = { ...previous, [role]: modelId }
+    selectedModels.value = next
+    assignmentUpdateError.value = ''
+    loading.value = true
+    try {
+      const meeting = await updateMeetingParticipantModels(
+        meetingId,
+        next,
+      )
+      if (requestGeneration !== assignmentSaveGeneration) return
+      meetings.value = meetings.value.map((candidate) =>
+        candidate.meeting_id === meetingId
+          ? {
+              ...candidate,
+              ...meeting,
+              events: candidate.events,
+              case_files: candidate.case_files,
+            }
+          : candidate,
+      )
+      if (selectedMeeting.value?.meeting_id !== meetingId) return
+      selectedMeeting.value = {
+        ...selectedMeeting.value,
+        ...meeting,
+        events: selectedMeeting.value.events,
+        case_files: selectedMeeting.value.case_files,
+      }
+      selectedModels.value = Object.fromEntries(
+        meeting.participants.map((participant) => [
+          participant.role_id,
+          participant.model_config_id ?? '',
+        ]),
+      )
+    } catch (caught) {
+      if (
+        requestGeneration !== assignmentSaveGeneration ||
+        selectedMeeting.value?.meeting_id !== meetingId
+      ) {
+        return
+      }
+      selectedModels.value = previous
+      assignmentUpdateError.value =
+        caught instanceof ApiError && typeof caught.detail === 'string'
+          ? caught.detail
+          : caught instanceof Error
+            ? caught.message
+            : String(caught)
+    } finally {
+      if (requestGeneration === assignmentSaveGeneration) loading.value = false
+    }
+  }
+
   async function sendChairMessage() {
     if (!selectedMeeting.value || !chairMessage.value.trim()) return
     await runAction(async () => {
@@ -781,7 +854,7 @@ export function useCouncil() {
     clearContinueHint()
     pendingRoles.value.push(role)
     await runAction(async () => {
-      await requestRoleResponse(selectedMeeting.value!.meeting_id, role, selectedModels.value)
+      await requestRoleResponse(selectedMeeting.value!.meeting_id, role)
       await openMeeting(selectedMeeting.value!.meeting_id)
     })
   }
@@ -798,7 +871,6 @@ export function useCouncil() {
       await requestRoleSequence(
         selectedMeeting.value!.meeting_id,
         selectedSequencePreset.value.roles,
-        selectedModels.value,
       )
       await openMeeting(selectedMeeting.value!.meeting_id)
     })
@@ -812,7 +884,7 @@ export function useCouncil() {
     const remainingRoles = cascade.length ? cascade : isCouncilRole(event.role) ? [event.role] : []
     pendingRoles.value.push(...remainingRoles)
     await runAction(async () => {
-      await retryStep(selectedMeeting.value!.meeting_id, event.step_id, selectedModels.value)
+      await retryStep(selectedMeeting.value!.meeting_id, event.step_id)
       await openMeeting(selectedMeeting.value!.meeting_id)
     })
   }
@@ -893,6 +965,7 @@ export function useCouncil() {
     loading,
     error,
     meetingCreationError,
+    assignmentUpdateError,
     devMode,
     pendingRoles,
     meetingIdCopied,
@@ -929,6 +1002,7 @@ export function useCouncil() {
     toggleMeetingPinned,
     searchTranscripts,
     testSelectedModel,
+    updateSelectedModel,
     sendChairMessage,
     correctSelectedMessage,
     requestSelectedRoleResponse,

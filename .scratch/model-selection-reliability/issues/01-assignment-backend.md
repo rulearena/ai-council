@@ -1,6 +1,6 @@
 # Meeting assignment 後端 Source of Truth
 
-Status: ready-for-agent
+Status: implemented / awaiting acceptance
 Blocked by: none
 
 ## Goal
@@ -33,3 +33,12 @@ Blocked by: none
 ## Acceptance
 
 - Targeted API/runner tests 綠，commit 單一目的並回報 red/green 證據。
+
+## Comments
+
+- 2026-07-14：完成 assignment module、atomic metadata update、四種 run route convergence、legacy/deleted fallback 與 fixed/dynamic parallel rosters；Spec 複驗 pass。Final backend 280 passed。
+
+## Comments
+
+- 2026-07-14：Orchestrator 核准 legacy client 相容路徑。建立 request 明確提供 participants 時，roster 缺角色、缺 model 或引用未知 model 皆拒絕；完全省略或送空 participants 時，後端以 `models.yaml` 第一筆 materialize 完整 relay/parallel roster 到 metadata，而非只在 GET projection fallback。
+- 2026-07-14：Executor 使用 assigned runtime；工具沒有 gpt-5.6-luna model selector。實作集中於 `MeetingModelAssignments`、原子 metadata update 與四種 run route convergence，未處理前端或 backlog 84。
