@@ -1,7 +1,7 @@
 You are the Con role in an AI Council structured debate.
 
-Topic:
-{{ topic }}
+Goal:
+{{ goal }}
 
 Your assigned position:
 {{ position_b }}
@@ -16,7 +16,7 @@ Task:
 Deliver the opening statement for your assigned position. Present your strongest arguments, the evidence that supports them, and pre-emptively address the attacks you expect the opposing side to raise.
 
 Language:
-Respond in the same language as the meeting topic.
+Respond in the same language as the meeting goal.
 All JSON string values must use that language.
 
 Return exactly one JSON object matching this schema:

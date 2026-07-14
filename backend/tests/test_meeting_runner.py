@@ -62,10 +62,10 @@ VALID_STRUCTURED_VERDICT = json.dumps(
     ensure_ascii=False,
 )
 TEST_PROMPT_TEMPLATE_HASHES = {
-    "blue_propose": "81abba70bd2c176005a3fd28dd13ef9bda68f441de574976e8d7161e23fb5f9d",
-    "red_critique": "604dfa9b918ab543afbde7e2098e0eb560967abb658c3ef9e06534bf37dcfb24",
-    "blue_revise": "572aea2442be4b659e3cd7f4d02afc1b6e9ae485a2b1972dc40757c0fa64e06e",
-    "judge_decide": "b804a5f1bb3893a45854d48085dc2ffc8496e9b61819c4a4c31ea4192b847e25",
+    "blue_propose": "e7d46f095166a1501d42f5376af61e82d8773d48a960ce8ec81331f5dc45351d",
+    "red_critique": "0705ea3dafccdd8ce99db2616e291a7cb394a664b22b1164ba52090ce3beb462",
+    "blue_revise": "cf63dcc57d7a55c8bfb95892b78d87febe08a6ab807dbac82f8974ccce752dea",
+    "judge_decide": "a206142cb8fcffced199d9d7facc39b6fd9ace7e2595a76c49241f2d82dd50f3",
 }
 TEST_OUTPUT_SCHEMA_HASH = "15a45919652be5c70d3fd1690a10d37f876f19a14b2a76cc0f21765def281377"
 TEST_ONLY_SCHEMA = '{"value":"string"}'
@@ -159,7 +159,7 @@ def test_runner_completes_fixed_red_blue_judge_flow(tmp_path: Path) -> None:
     runner.start(
         plan=RED_BLUE_PLAN,
         meeting_id="meeting-1",
-        topic="先做後端？",
+        goal="先做後端？",
         model_assignments={
             "Blue": ModelConfig(id="mock-blue", adapter="mock"),
             "Red": ModelConfig(id="mock-red", adapter="mock"),
@@ -179,6 +179,28 @@ def test_runner_completes_fixed_red_blue_judge_flow(tmp_path: Path) -> None:
     assert completed_steps[0]["parsed_output"]["summary"] == "OK"
 
 
+def test_runner_prompt_contains_goal_without_human_facing_title(tmp_path: Path) -> None:
+    adapter = FakeAdapter([VALID_OUTPUT] * 4)
+    runner = build_runner(tmp_path, adapter=adapter)
+
+    runner.start(
+        plan=RED_BLUE_PLAN,
+        meeting_id="meeting-goal-only",
+        goal="判斷被告是否構成無權占有",
+        model_assignments={
+            "Blue": ModelConfig(id="mock-blue", adapter="mock"),
+            "Red": ModelConfig(id="mock-red", adapter="mock"),
+            "Judge": ModelConfig(id="mock-judge", adapter="mock"),
+        },
+        inputs={"title": "土地糾紛案", "topic": "舊主題不得使用"},
+    )
+
+    assert adapter.requests
+    assert all("判斷被告是否構成無權占有" in request.prompt for request in adapter.requests)
+    assert all("土地糾紛案" not in request.prompt for request in adapter.requests)
+    assert all("舊主題不得使用" not in request.prompt for request in adapter.requests)
+
+
 def test_runner_persists_model_token_usage_on_completed_events(tmp_path: Path) -> None:
     runner = build_runner(
         tmp_path,
@@ -191,7 +213,7 @@ def test_runner_persists_model_token_usage_on_completed_events(tmp_path: Path) -
     runner.respond_as_role(
         plan=RED_BLUE_PLAN,
         meeting_id="meeting-1",
-        topic="先做後端？",
+        goal="先做後端？",
         role="Blue",
         model_assignments={"Blue": ModelConfig(id="mock-blue", adapter="mock")},
     )
@@ -217,7 +239,7 @@ def test_runner_persists_prompt_metadata_on_completed_events(tmp_path: Path) -> 
     runner.respond_as_role(
         plan=RED_BLUE_PLAN,
         meeting_id="meeting-1",
-        topic="先做後端？",
+        goal="先做後端？",
         role="Blue",
         model_assignments={"Blue": ModelConfig(id="mock-blue", adapter="mock")},
     )
@@ -253,7 +275,7 @@ def test_directed_response_uses_step_output_schema_for_prompt_parser_and_event(
     runner.respond_as_role(
         plan=plan,
         meeting_id="meeting-1",
-        topic="schema selection",
+        goal="schema selection",
         role="Blue",
         model_assignments={"Blue": ModelConfig(id="mock-blue", adapter="mock")},
     )
@@ -291,7 +313,7 @@ def test_output_schema_codec_accepts_a_dict_returning_parser(tmp_path: Path) -> 
     runner.respond_as_role(
         plan=plan,
         meeting_id="meeting-1",
-        topic="schema selection",
+        goal="schema selection",
         role="Blue",
         model_assignments={"Blue": ModelConfig(id="mock-blue", adapter="mock")},
     )
@@ -328,7 +350,7 @@ def test_codec_decode_error_auto_retries_once_then_allows_manual_retry(
     runner.start(
         plan=plan,
         meeting_id="meeting-1",
-        topic="schema selection",
+        goal="schema selection",
         model_assignments={"Blue": ModelConfig(id="mock-blue", adapter="mock")},
     )
 
@@ -343,7 +365,7 @@ def test_codec_decode_error_auto_retries_once_then_allows_manual_retry(
         plan=plan,
         meeting_id="meeting-1",
         step_id="blue-propose",
-        topic="schema selection",
+        goal="schema selection",
         model_assignments={"Blue": ModelConfig(id="mock-blue", adapter="mock")},
     )
 
@@ -373,7 +395,7 @@ def test_rich_parse_failure_is_recorded_then_automatically_retried_once(
     runner.start(
         plan=plan,
         meeting_id="meeting-1",
-        topic="是否核准上線？",
+        goal="是否核准上線？",
         model_assignments={"Judge": ModelConfig(id="mock-judge", adapter="mock")},
     )
 
@@ -409,7 +431,7 @@ def test_non_string_model_output_uses_parse_failure_retry_flow(tmp_path: Path) -
     runner.respond_as_role(
         plan=RED_BLUE_PLAN,
         meeting_id="meeting-1",
-        topic="非字串輸出",
+        goal="非字串輸出",
         role="Blue",
         model_assignments={"Blue": ModelConfig(id="mock-blue", adapter="mock")},
     )
@@ -438,7 +460,7 @@ def test_parse_failure_attempt_persists_complete_diagnostics_before_retry(
     runner.respond_as_role(
         plan=RED_BLUE_PLAN,
         meeting_id="meeting-1",
-        topic="診斷格式錯誤",
+        goal="診斷格式錯誤",
         role="Blue",
         model_assignments={"Blue": ModelConfig(id="mock-blue", adapter="mock")},
     )
@@ -492,7 +514,7 @@ def test_parallel_parse_failure_diagnostics_preserve_attempt_semantics(
 
     runner.start_parallel(
         meeting_id="meeting-1",
-        topic="平行診斷",
+        goal="平行診斷",
         model_assignments={
             "Member-1": ModelConfig(id="mock-member", adapter="mock"),
             "Moderator": ModelConfig(id="mock-moderator", adapter="mock"),
@@ -565,7 +587,7 @@ modes:
     runner.start(
         plan=plan,
         meeting_id="meeting-1",
-        topic="schema selection",
+        goal="schema selection",
         model_assignments={"Blue": ModelConfig(id="mock-blue", adapter="mock")},
     )
 
@@ -582,7 +604,7 @@ def test_runner_persists_prompt_metadata_on_failed_events(tmp_path: Path) -> Non
     runner.respond_as_role(
         plan=RED_BLUE_PLAN,
         meeting_id="meeting-1",
-        topic="先做後端？",
+        goal="先做後端？",
         role="Red",
         model_assignments={"Red": ModelConfig(id="mock-red", adapter="mock")},
     )
@@ -601,7 +623,7 @@ def test_runner_persists_prompt_template_names_for_fixed_flow(tmp_path: Path) ->
     runner.start(
         plan=RED_BLUE_PLAN,
         meeting_id="meeting-1",
-        topic="先做後端？",
+        goal="先做後端？",
         model_assignments={
             "Blue": ModelConfig(id="mock-blue", adapter="mock"),
             "Red": ModelConfig(id="mock-red", adapter="mock"),
@@ -648,7 +670,7 @@ def test_runner_start_resumes_from_first_incomplete_step_after_restart(tmp_path:
     runner.start(
         plan=RED_BLUE_PLAN,
         meeting_id="meeting-1",
-        topic="先做後端？",
+        goal="先做後端？",
         model_assignments={
             "Blue": ModelConfig(id="mock-blue", adapter="mock"),
             "Red": ModelConfig(id="mock-red", adapter="mock"),
@@ -709,7 +731,7 @@ def test_runner_start_defers_to_explicit_retry_when_a_step_already_failed(
     runner.start(
         plan=RED_BLUE_PLAN,
         meeting_id="meeting-1",
-        topic="先做後端？",
+        goal="先做後端？",
         model_assignments={
             "Blue": ModelConfig(id="mock-blue", adapter="mock"),
             "Red": ModelConfig(id="mock-red", adapter="mock"),
@@ -733,7 +755,7 @@ def test_runner_starts_follow_up_round_after_human_feedback(tmp_path: Path) -> N
     runner.start(
         plan=RED_BLUE_PLAN,
         meeting_id="meeting-1",
-        topic="先做後端？",
+        goal="先做後端？",
         model_assignments=model_assignments,
     )
     runner.repository.append_event(
@@ -752,7 +774,7 @@ def test_runner_starts_follow_up_round_after_human_feedback(tmp_path: Path) -> N
     runner.start(
         plan=RED_BLUE_PLAN,
         meeting_id="meeting-1",
-        topic="先做後端？",
+        goal="先做後端？",
         model_assignments=model_assignments,
     )
 
@@ -794,7 +816,7 @@ def test_runner_runs_single_chair_directed_role_response(tmp_path: Path) -> None
     runner.respond_as_role(
         plan=RED_BLUE_PLAN,
         meeting_id="meeting-1",
-        topic="先做後端？",
+        goal="先做後端？",
         role="Blue",
         model_assignments={
             "Blue": ModelConfig(id="mock-blue", adapter="mock"),
@@ -821,14 +843,14 @@ def test_directed_parse_retry_reuses_sequence_number_for_the_next_response(
     runner.respond_as_role(
         plan=RED_BLUE_PLAN,
         meeting_id="meeting-1",
-        topic="先做後端？",
+        goal="先做後端？",
         role="Blue",
         model_assignments=assignments,
     )
     runner.respond_as_role(
         plan=RED_BLUE_PLAN,
         meeting_id="meeting-1",
-        topic="先做後端？",
+        goal="先做後端？",
         role="Blue",
         model_assignments=assignments,
     )
@@ -861,7 +883,7 @@ def test_runner_runs_chair_directed_role_sequence(tmp_path: Path) -> None:
     runner.respond_as_sequence(
         plan=RED_BLUE_PLAN,
         meeting_id="meeting-1",
-        topic="先做後端？",
+        goal="先做後端？",
         roles=["Red", "Blue", "Judge"],
         model_assignments={
             "Blue": ModelConfig(id="mock-blue", adapter="mock"),
@@ -911,7 +933,7 @@ def test_role_sequence_uses_each_step_output_schema(tmp_path: Path) -> None:
     runner.respond_as_sequence(
         plan=plan,
         meeting_id="meeting-1",
-        topic="schema selection",
+        goal="schema selection",
         roles=["Blue"],
         model_assignments={"Blue": ModelConfig(id="mock-blue", adapter="mock")},
     )
@@ -928,7 +950,7 @@ def test_runner_marks_step_failed_when_adapter_raises(tmp_path: Path) -> None:
     runner.start(
         plan=RED_BLUE_PLAN,
         meeting_id="meeting-1",
-        topic="先做後端？",
+        goal="先做後端？",
         model_assignments={"Blue": ModelConfig(id="mock-blue", adapter="mock")},
     )
 
@@ -944,7 +966,7 @@ def test_runner_marks_step_failed_when_output_cannot_be_parsed(tmp_path: Path) -
     runner.start(
         plan=RED_BLUE_PLAN,
         meeting_id="meeting-1",
-        topic="先做後端？",
+        goal="先做後端？",
         model_assignments={"Blue": ModelConfig(id="mock-blue", adapter="mock")},
     )
 
@@ -979,7 +1001,7 @@ def test_runner_retry_failed_step_creates_second_attempt_and_continues(
         plan=RED_BLUE_PLAN,
         meeting_id="meeting-1",
         step_id="blue-propose",
-        topic="先做後端？",
+        goal="先做後端？",
         model_assignments={
             "Blue": ModelConfig(id="mock-blue", adapter="mock"),
             "Red": ModelConfig(id="mock-red", adapter="mock"),
@@ -1030,7 +1052,7 @@ def test_retry_uses_the_failed_step_role_output_schema(tmp_path: Path) -> None:
         plan=plan,
         meeting_id="meeting-1",
         step_id="blue-propose",
-        topic="schema selection",
+        goal="schema selection",
         model_assignments={"Blue": ModelConfig(id="mock-blue", adapter="mock")},
     )
 
@@ -1062,7 +1084,7 @@ def test_runner_retries_round_scoped_failed_step(tmp_path: Path) -> None:
         plan=RED_BLUE_PLAN,
         meeting_id="meeting-1",
         step_id="round-2-red-critique",
-        topic="先做後端？",
+        goal="先做後端？",
         model_assignments={
             "Red": ModelConfig(id="mock-red", adapter="mock"),
             "Blue": ModelConfig(id="mock-blue", adapter="mock"),
@@ -1085,7 +1107,7 @@ def test_runner_rejects_retry_when_step_is_not_failed(tmp_path: Path) -> None:
     runner.start(
         plan=RED_BLUE_PLAN,
         meeting_id="meeting-1",
-        topic="先做後端？",
+        goal="先做後端？",
         model_assignments={
             "Blue": ModelConfig(id="mock-blue", adapter="mock"),
             "Red": ModelConfig(id="mock-red", adapter="mock"),
@@ -1098,7 +1120,7 @@ def test_runner_rejects_retry_when_step_is_not_failed(tmp_path: Path) -> None:
             plan=RED_BLUE_PLAN,
             meeting_id="meeting-1",
             step_id="blue-propose",
-            topic="先做後端？",
+            goal="先做後端？",
             model_assignments={"Blue": ModelConfig(id="mock-blue", adapter="mock")},
         )
 
@@ -1111,7 +1133,7 @@ def test_runner_rejects_retry_for_unknown_step(tmp_path: Path) -> None:
             plan=RED_BLUE_PLAN,
             meeting_id="meeting-1",
             step_id="unknown-step",
-            topic="先做後端？",
+            goal="先做後端？",
             model_assignments={"Blue": ModelConfig(id="mock-blue", adapter="mock")},
         )
 
@@ -1125,7 +1147,7 @@ def test_runner_cancel_records_cancellation_and_start_does_not_run_steps(
     runner.start(
         plan=RED_BLUE_PLAN,
         meeting_id="meeting-1",
-        topic="先做後端？",
+        goal="先做後端？",
         model_assignments={"Blue": ModelConfig(id="mock-blue", adapter="mock")},
     )
 
@@ -1149,7 +1171,7 @@ def test_runner_start_tags_adapter_requests_with_meeting_id(tmp_path: Path) -> N
     runner.start(
         plan=RED_BLUE_PLAN,
         meeting_id="meeting-1",
-        topic="先做後端？",
+        goal="先做後端？",
         model_assignments={
             "Blue": ModelConfig(id="mock-blue", adapter="mock"),
             "Red": ModelConfig(id="mock-red", adapter="mock"),
@@ -1184,7 +1206,7 @@ def test_runner_records_cancelled_subscription_cli_attempt_without_transcript_ou
     prompt_dir = tmp_path / "prompts"
     prompt_dir.mkdir()
     (prompt_dir / "blue_revise.md").write_text(
-        "{{ role }} {{ topic }} {{ prior_transcript }} {{ required_json_schema }}",
+        "{{ role }} {{ goal }} {{ prior_transcript }} {{ required_json_schema }}",
         encoding="utf-8",
     )
     runner = MeetingRunner(
@@ -1202,7 +1224,7 @@ def test_runner_records_cancelled_subscription_cli_attempt_without_transcript_ou
         target=lambda: runner.respond_as_role(
             plan=RED_BLUE_PLAN,
             meeting_id="meeting-1",
-            topic="取消 CLI",
+            goal="取消 CLI",
             role="Blue",
             model_assignments={"Blue": model},
         )
@@ -1269,7 +1291,7 @@ def test_sequential_terminal_result_is_recorded_as_discarded_without_parse_retry
     prompt_dir = tmp_path / "prompts"
     prompt_dir.mkdir()
     (prompt_dir / "blue_revise.md").write_text(
-        "{{ role }} {{ topic }} {{ prior_transcript }} {{ required_json_schema }}",
+        "{{ role }} {{ goal }} {{ prior_transcript }} {{ required_json_schema }}",
         encoding="utf-8",
     )
     runner = MeetingRunner(
@@ -1281,7 +1303,7 @@ def test_sequential_terminal_result_is_recorded_as_discarded_without_parse_retry
     runner.respond_as_role(
         plan=RED_BLUE_PLAN,
         meeting_id="meeting-1",
-        topic="terminal response",
+        goal="terminal response",
         role="Blue",
         model_assignments={"Blue": ModelConfig(id="mock-blue", adapter="mock")},
     )
@@ -1331,7 +1353,7 @@ def test_relay_cancel_after_parse_failure_does_not_start_scheduled_retry(
     prompt_dir = tmp_path / "prompts"
     prompt_dir.mkdir()
     (prompt_dir / "blue_revise.md").write_text(
-        "{{ role }} {{ topic }} {{ prior_transcript }} {{ required_json_schema }}",
+        "{{ role }} {{ goal }} {{ prior_transcript }} {{ required_json_schema }}",
         encoding="utf-8",
     )
     runner = MeetingRunner(
@@ -1343,7 +1365,7 @@ def test_relay_cancel_after_parse_failure_does_not_start_scheduled_retry(
     runner.respond_as_role(
         plan=RED_BLUE_PLAN,
         meeting_id="meeting-1",
-        topic="retry dispatch 前取消",
+        goal="retry dispatch 前取消",
         role="Blue",
         model_assignments={"Blue": ModelConfig(id="mock-blue", adapter="mock")},
     )
@@ -1389,7 +1411,7 @@ def test_parallel_cancel_after_members_complete_does_not_start_synthesis(
     prompt_dir.mkdir()
     for template in ("brainstorm_member", "brainstorm_synthesis"):
         (prompt_dir / f"{template}.md").write_text(
-            "{{ role }} {{ topic }} {{ prior_transcript }} "
+            "{{ role }} {{ goal }} {{ prior_transcript }} "
             "{{ required_json_schema }} {{ fanout_outputs }}",
             encoding="utf-8",
         )
@@ -1402,7 +1424,7 @@ def test_parallel_cancel_after_members_complete_does_not_start_synthesis(
     runner.start_parallel(
         plan=PARALLEL_PLAN,
         meeting_id="meeting-1",
-        topic="synthesis dispatch 前取消",
+        goal="synthesis dispatch 前取消",
         model_assignments=parallel_model_assignments(),
     )
 
@@ -1452,7 +1474,7 @@ def test_parallel_cancel_records_each_started_member_in_deterministic_order(
         target=lambda: runner.start_parallel(
             plan=PARALLEL_PLAN,
             meeting_id="meeting-1",
-            topic="取消平行執行",
+            goal="取消平行執行",
             model_assignments=parallel_model_assignments(),
         )
     )
@@ -1489,7 +1511,7 @@ def test_runner_close_records_closure_and_blocks_future_ai_steps(tmp_path: Path)
     runner.start(
         plan=RED_BLUE_PLAN,
         meeting_id="meeting-1",
-        topic="先做後端？",
+        goal="先做後端？",
         model_assignments={
             "Blue": ModelConfig(id="mock-blue", adapter="mock"),
             "Red": ModelConfig(id="mock-red", adapter="mock"),
@@ -1499,14 +1521,14 @@ def test_runner_close_records_closure_and_blocks_future_ai_steps(tmp_path: Path)
     runner.respond_as_role(
         plan=RED_BLUE_PLAN,
         meeting_id="meeting-1",
-        topic="先做後端？",
+        goal="先做後端？",
         role="Blue",
         model_assignments={"Blue": ModelConfig(id="mock-blue", adapter="mock")},
     )
     runner.respond_as_sequence(
         plan=RED_BLUE_PLAN,
         meeting_id="meeting-1",
-        topic="先做後端？",
+        goal="先做後端？",
         roles=["Red", "Judge"],
         model_assignments={
             "Red": ModelConfig(id="mock-red", adapter="mock"),
@@ -1577,7 +1599,7 @@ def test_runner_allows_steps_after_reopened_terminal_event(tmp_path: Path) -> No
     runner.start(
         plan=RED_BLUE_PLAN,
         meeting_id="meeting-1",
-        topic="先做後端？",
+        goal="先做後端？",
         model_assignments={
             "Blue": ModelConfig(id="mock-blue", adapter="mock"),
             "Red": ModelConfig(id="mock-red", adapter="mock"),
@@ -1616,7 +1638,7 @@ def test_runner_completes_courtroom_flow(tmp_path: Path) -> None:
     runner.start(
         plan=COURTROOM_PLAN,
         meeting_id="meeting-1",
-        topic="被告是否有罪？",
+        goal="被告是否有罪？",
         model_assignments=model_assignments,
     )
 
@@ -1632,7 +1654,7 @@ def test_runner_completes_courtroom_flow(tmp_path: Path) -> None:
     runner.start(
         plan=COURTROOM_PLAN,
         meeting_id="meeting-1",
-        topic="被告是否有罪？",
+        goal="被告是否有罪？",
         model_assignments=model_assignments,
     )
 
@@ -1660,7 +1682,7 @@ def test_runner_renders_mode_inputs_into_prompt(tmp_path: Path) -> None:
     runner.respond_as_role(
         plan=RED_BLUE_PLAN,
         meeting_id="meeting-1",
-        topic="先做後端？",
+        goal="先做後端？",
         role="Blue",
         model_assignments={"Blue": ModelConfig(id="mock-blue", adapter="mock")},
         inputs={"position_a": "先做後端"},
@@ -1683,7 +1705,7 @@ def test_parallel_runner_completes_fanout_then_synthesis(tmp_path: Path) -> None
     runner.start_parallel(
         plan=PARALLEL_PLAN,
         meeting_id="meeting-1",
-        topic="如何改善 onboarding？",
+        goal="如何改善 onboarding？",
         model_assignments=parallel_model_assignments(),
     )
 
@@ -1743,7 +1765,7 @@ def test_parallel_fanout_and_synthesis_use_their_step_output_schemas(tmp_path: P
     runner.start_parallel(
         plan=plan,
         meeting_id="meeting-1",
-        topic="schema selection",
+        goal="schema selection",
         model_assignments={
             "Member-1": ModelConfig(id="mock-member", adapter="mock"),
             "Moderator": ModelConfig(id="mock-moderator", adapter="mock"),
@@ -1824,7 +1846,7 @@ def test_parallel_member_parse_failure_is_recorded_then_auto_retried(
     runner.start_parallel(
         plan=plan,
         meeting_id="meeting-1",
-        topic="schema retry",
+        goal="schema retry",
         model_assignments={
             "Member-1": ModelConfig(id="mock-member-1", adapter="mock"),
             "Member-2": ModelConfig(id="mock-member-2", adapter="mock"),
@@ -1893,7 +1915,7 @@ def test_parallel_member_two_parse_failures_wait_for_manual_attempt_three(
     runner.start_parallel(
         plan=plan,
         meeting_id="meeting-1",
-        topic="schema retry",
+        goal="schema retry",
         model_assignments=assignments,
     )
 
@@ -1907,7 +1929,7 @@ def test_parallel_member_two_parse_failures_wait_for_manual_attempt_three(
         plan=plan,
         meeting_id="meeting-1",
         step_id="fanout-1-member-1",
-        topic="schema retry",
+        goal="schema retry",
         model_assignments=assignments,
     )
 
@@ -1988,7 +2010,7 @@ def test_parallel_parse_retry_stops_before_second_call_when_meeting_is_cancelled
     runner.start_parallel(
         plan=plan,
         meeting_id="meeting-1",
-        topic="取消 retry",
+        goal="取消 retry",
         model_assignments={
             "Member-1": ModelConfig(id="mock-member", adapter="mock"),
             "Moderator": ModelConfig(id="mock-moderator", adapter="mock"),
@@ -2066,7 +2088,7 @@ def test_parallel_cancel_during_parse_retry_preserves_the_finished_first_attempt
         target=lambda: runner.start_parallel(
             plan=plan,
             meeting_id="meeting-1",
-            topic="retry 期間取消",
+            goal="retry 期間取消",
             model_assignments={
                 "Member-1": ModelConfig(id="mock-member", adapter="mock"),
                 "Moderator": ModelConfig(id="mock-moderator", adapter="mock"),
@@ -2128,7 +2150,7 @@ def test_parallel_runner_can_anonymize_synthesis_inputs(tmp_path: Path) -> None:
     runner.start_parallel(
         plan=ANONYMIZED_PARALLEL_PLAN,
         meeting_id="meeting-1",
-        topic="如何改善 onboarding？",
+        goal="如何改善 onboarding？",
         model_assignments=parallel_model_assignments(),
     )
 
@@ -2157,7 +2179,7 @@ def test_parallel_runner_records_individual_failures_without_stopping_other_memb
     runner.start_parallel(
         plan=PARALLEL_PLAN,
         meeting_id="meeting-1",
-        topic="如何改善 onboarding？",
+        goal="如何改善 onboarding？",
         model_assignments=parallel_model_assignments(),
     )
 
@@ -2183,7 +2205,7 @@ def test_parallel_runner_retry_failed_member_runs_only_that_member_then_synthesi
     runner.start_parallel(
         plan=PARALLEL_PLAN,
         meeting_id="meeting-1",
-        topic="如何改善 onboarding？",
+        goal="如何改善 onboarding？",
         model_assignments=model_assignments,
     )
     adapter.failing_model_ids.clear()
@@ -2192,7 +2214,7 @@ def test_parallel_runner_retry_failed_member_runs_only_that_member_then_synthesi
         plan=PARALLEL_PLAN,
         meeting_id="meeting-1",
         step_id="fanout-1-member-2",
-        topic="如何改善 onboarding？",
+        goal="如何改善 onboarding？",
         model_assignments=model_assignments,
     )
 
@@ -2218,13 +2240,13 @@ def test_parallel_runner_starts_next_round_after_synthesis_complete(tmp_path: Pa
     runner.start_parallel(
         plan=PARALLEL_PLAN,
         meeting_id="meeting-1",
-        topic="如何改善 onboarding？",
+        goal="如何改善 onboarding？",
         model_assignments=model_assignments,
     )
     runner.start_parallel(
         plan=PARALLEL_PLAN,
         meeting_id="meeting-1",
-        topic="如何改善 onboarding？",
+        goal="如何改善 onboarding？",
         model_assignments=model_assignments,
     )
 
@@ -2266,7 +2288,7 @@ def build_runner(
     prompt_dir.mkdir()
     for template in templates:
         (prompt_dir / f"{template}.md").write_text(
-            f"{template} {{{{ role }}}} {{{{ topic }}}} "
+            f"{template} {{{{ role }}}} {{{{ goal }}}} "
             "{{ prior_transcript }} {{ required_json_schema }}" + extra_placeholders,
             encoding="utf-8",
         )

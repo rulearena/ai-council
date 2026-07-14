@@ -123,7 +123,7 @@ function copyDiagnosticStatus(event: MeetingEvent) {
 
     <section v-if="activeTab === 'timeline'" class="timeline" data-testid="step-timeline">
       <div class="section-title">
-        <h2>{{ selectedMeeting?.topic ?? '尚未選擇會議' }}</h2>
+        <h2>{{ selectedMeeting?.title ?? '尚未選擇會議' }}</h2>
         <em v-if="selectedMeeting" class="status-badge" :data-status="selectedMeeting.status">{{ selectedMeeting.status }}</em>
         <em v-if="selectedMeeting" class="status-badge" :data-status="selectedMeeting.activity_status">{{ selectedMeeting.activity_status }}</em>
       </div>

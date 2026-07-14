@@ -6,8 +6,9 @@ import { expect, test, type Page, type Route } from '@playwright/test'
 
 async function createMeetingViaNewCase(
   page: Page,
-  topic: string,
+  title: string,
   options: {
+    goal?: string
     modeId?: string
     inputs?: Record<string, string>
     caseFiles?: Array<{ title: string; content: string; visibleRoles: string[] }>
@@ -23,8 +24,8 @@ async function createMeetingViaNewCase(
     .getByTestId(`mode-select-card-${modeId}`)
     .getByRole('button', { name: '選擇此模式' })
     .click()
-  // Step 2 (participant setup): the topic input moved here from the old flat form.
-  await page.getByLabel('會議主題').fill(topic)
+  await page.getByLabel('名稱', { exact: true }).fill(title)
+  await page.getByLabel('目標', { exact: true }).fill(options?.goal ?? title)
   // debate's position_a/position_b (or any future mode's `kind: 'text'` inputs) render as
   // one labeled field per input id - see NewCaseModal.vue's textInputs.
   for (const [inputId, value] of Object.entries(options.inputs ?? {})) {
@@ -1454,7 +1455,8 @@ test('New Case keeps user input when create fails', async ({ page }) => {
     .getByTestId('mode-select-card-red-blue')
     .getByRole('button', { name: '選擇此模式' })
     .click()
-  await page.getByLabel('會議主題').fill('保留這個輸入')
+  await page.getByLabel('名稱', { exact: true }).fill('保留這個輸入')
+  await page.getByLabel('目標', { exact: true }).fill('保留這個輸入')
   await page.getByTestId('add-case-file-button').click()
   await page.getByTestId('case-file-1-upload').setInputFiles({
     name: '保留案卷.md',
@@ -1465,7 +1467,7 @@ test('New Case keeps user input when create fails', async ({ page }) => {
   await page.getByTestId('create-meeting-button').click()
 
   await expect(page.getByTestId('new-case-modal')).toBeVisible()
-  await expect(page.getByLabel('會議主題')).toHaveValue('保留這個輸入')
+  await expect(page.getByLabel('名稱', { exact: true })).toHaveValue('保留這個輸入')
   await expect(page.getByTestId('case-file-1-title')).toHaveValue('保留案卷')
   await expect(page.getByTestId('case-file-1-content')).toHaveValue('失敗後不應清空這段內容')
   await expect(page.getByTestId('case-file-1-role-Blue')).toBeChecked()
@@ -1481,7 +1483,7 @@ test('New Case keeps user input when create fails', async ({ page }) => {
   await expect(page.getByTestId('new-case-server-error')).not.toBeVisible()
   await page.getByTestId('create-meeting-button').click()
   await expect(page.getByTestId('new-case-server-error')).toBeVisible()
-  await page.getByLabel('會議主題').fill('編輯主題後清除舊錯誤')
+  await page.getByLabel('名稱', { exact: true }).fill('編輯主題後清除舊錯誤')
   await expect(page.getByTestId('new-case-server-error')).not.toBeVisible()
 })
 
@@ -1510,7 +1512,8 @@ test('New Case uses server case file limits and blocks oversized drafts before P
     .getByTestId('mode-select-card-red-blue')
     .getByRole('button', { name: '選擇此模式' })
     .click()
-  await page.getByLabel('會議主題').fill('容量預檢')
+  await page.getByLabel('名稱', { exact: true }).fill('容量預檢')
+  await page.getByLabel('目標', { exact: true }).fill('容量預檢')
   await page.getByTestId('add-case-file-button').click()
   await page.getByTestId('case-file-1-title').fill('第一份')
   await page.getByTestId('case-file-1-content').fill('abcdefghijk')
@@ -1581,7 +1584,8 @@ test('New Case fails closed and can retry when limits endpoint is unavailable', 
     .getByTestId('mode-select-card-red-blue')
     .getByRole('button', { name: '選擇此模式' })
     .click()
-  await page.getByLabel('會議主題').fill('limits unavailable')
+  await page.getByLabel('名稱', { exact: true }).fill('limits unavailable')
+  await page.getByLabel('目標', { exact: true }).fill('limits unavailable')
   await page.getByTestId('add-case-file-button').click()
   await page.getByTestId('case-file-1-title').fill('draft')
   await page.getByTestId('case-file-1-content').fill('short')
@@ -1658,7 +1662,8 @@ test('New Case counts emoji as Unicode code points at the server boundary', asyn
     .getByTestId('mode-select-card-red-blue')
     .getByRole('button', { name: '選擇此模式' })
     .click()
-  await page.getByLabel('會議主題').fill('emoji boundary')
+  await page.getByLabel('名稱', { exact: true }).fill('emoji boundary')
+  await page.getByLabel('目標', { exact: true }).fill('emoji boundary')
   await page.getByTestId('add-case-file-button').click()
   await page.getByTestId('case-file-1-title').fill('emoji')
   await page.getByTestId('case-file-1-role-Blue').check()
@@ -1710,7 +1715,8 @@ test('New Case clears a stale creation error when parallel members change', asyn
     .getByTestId('mode-select-card-brainstorm')
     .getByRole('button', { name: '選擇此模式' })
     .click()
-  await page.getByLabel('會議主題').fill('parallel stale error')
+  await page.getByLabel('名稱', { exact: true }).fill('parallel stale error')
+  await page.getByLabel('目標', { exact: true }).fill('parallel stale error')
   await page.getByTestId('create-meeting-button').click()
   await expect(page.getByTestId('new-case-server-error')).toHaveText('Meeting rejected')
 
@@ -1754,7 +1760,8 @@ test('New Case creates a meeting with numbered role-scoped case files', async ({
   const createResponse = await createResponsePromise
 
   expect(createPayload).toMatchObject({
-    topic,
+    title: topic,
+    goal: topic,
     mode_id: 'courtroom',
     case_files: [
       {
@@ -1803,7 +1810,8 @@ test('New Case blocks an empty model catalog and seat nameplates follow persiste
     .getByTestId('mode-select-card-red-blue')
     .getByRole('button', { name: '選擇此模式' })
     .click()
-  await page.getByLabel('會議主題').fill(topic)
+  await page.getByLabel('名稱', { exact: true }).fill(topic)
+  await page.getByLabel('目標', { exact: true }).fill(topic)
   await expect(page.getByTestId('new-case-model-error')).toBeVisible()
   await expect(page.getByTestId('create-meeting-button')).toBeDisabled()
   await page.getByTestId('new-case-close-button').click()
@@ -1910,7 +1918,8 @@ test('brainstorm mode creates member instances and runs fanout plus synthesis', 
     .getByTestId('mode-select-card-brainstorm')
     .getByRole('button', { name: '選擇此模式' })
     .click()
-  await page.getByLabel('會議主題').fill(topic)
+  await page.getByLabel('名稱', { exact: true }).fill(topic)
+  await page.getByLabel('目標', { exact: true }).fill(topic)
   await expect(page.getByTestId('parallel-member-count')).toHaveText('2')
   await page.getByTestId('parallel-member-increment').click()
   await expect(page.getByTestId('parallel-member-count')).toHaveText('3')
@@ -1989,7 +1998,8 @@ test('six-hats New Case persists its fixed catalog roster and reloads every assi
     .getByTestId('mode-select-card-six-hats')
     .getByRole('button', { name: '選擇此模式' })
     .click()
-  await page.getByLabel('會議主題').fill(topic)
+  await page.getByLabel('名稱', { exact: true }).fill(topic)
+  await page.getByLabel('目標', { exact: true }).fill(topic)
   await expect(page.getByTestId('parallel-member-editor')).toHaveCount(0)
 
   const assignments: Record<string, string> = {
@@ -2040,7 +2050,8 @@ test('debate mode gates creation on both position inputs, then builds a Pro/Con/
     .click()
 
   const topic = `E2E debate inputs ${Date.now()}`
-  await page.getByLabel('會議主題').fill(topic)
+  await page.getByLabel('名稱', { exact: true }).fill(topic)
+  await page.getByLabel('目標', { exact: true }).fill(topic)
 
   // Both position_a/position_b are required `kind: 'text'` inputs (NewCaseModal.vue's
   // hasEmptyRequiredInput) - the create CTA must stay disabled until both are filled,

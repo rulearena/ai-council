@@ -108,7 +108,7 @@ const latestChairMessage = computed(() => chairmanEvents.value.at(-1)?.content ?
       :data-scene="scene.id"
     >
       <div class="stage-table" :style="topicStyle">
-        <span class="stage-table-topic">{{ selectedMeeting?.topic ?? '尚未選擇會議' }}</span>
+        <span class="stage-table-topic">{{ selectedMeeting?.title ?? '尚未選擇會議' }}</span>
         <span v-if="!selectedMeeting" class="stage-table-hint">從右上角 New Case 建立，或 Past Topics 選擇會議</span>
       </div>
 

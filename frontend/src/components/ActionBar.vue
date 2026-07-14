@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, inject, ref } from 'vue'
+import { computed, inject, ref, watch } from 'vue'
 import { activeMode, councilKey, formatDateTime, sequencePresets } from '../composables/useCouncil'
 
 const store = inject(councilKey)!
@@ -23,9 +23,21 @@ const {
   closeSelectedMeeting,
   reopenSelectedMeeting,
   requestSelectedRoleSequence,
+  updateSelectedMeetingDetails,
 } = store
 
 const advancedOpen = ref(false)
+const migrationTitle = ref('')
+const migrationGoal = ref('')
+
+watch(
+  () => selectedMeeting.value,
+  (meeting) => {
+    migrationTitle.value = meeting?.title ?? ''
+    migrationGoal.value = meeting?.goal ?? ''
+  },
+  { immediate: true },
+)
 
 function onKeydown(event: KeyboardEvent) {
   if (event.key === 'Escape') advancedOpen.value = false
@@ -44,6 +56,32 @@ const roundStepsSummary = computed(() => (activeMode.value.steps ?? []).map((ste
 <template>
   <footer class="action-bar" @keydown="onKeydown">
     <p v-if="error" class="error" data-testid="app-error">{{ error }}</p>
+
+    <section
+      v-if="selectedMeeting?.requires_goal"
+      class="meeting-goal-migration"
+      data-testid="meeting-goal-migration"
+    >
+      <strong>請先設定會議名稱與目標</strong>
+      <p>舊會議不會把原主題自動當成 AI 目標；保存後才能繼續執行。</p>
+      <label>
+        名稱
+        <input v-model="migrationTitle" aria-label="舊會議名稱" />
+      </label>
+      <label>
+        目標
+        <textarea v-model="migrationGoal" aria-label="舊會議目標" />
+      </label>
+      <button
+        type="button"
+        class="btn btn-primary"
+        data-testid="save-meeting-goal-button"
+        :disabled="loading || !migrationTitle.trim() || !migrationGoal.trim()"
+        @click="updateSelectedMeetingDetails(migrationTitle, migrationGoal)"
+      >
+        保存並啟用
+      </button>
+    </section>
 
     <div class="action-bar-status" data-testid="operation-status">
       <span><i class="status-dot" :data-status="operationStatus" aria-hidden="true"></i>狀態：{{ operationStatus }}</span>

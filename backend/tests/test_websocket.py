@@ -16,7 +16,9 @@ PROJECT_CONFIG_DIR = Path(__file__).resolve().parents[2] / "config"
 def test_meeting_websocket_replays_existing_events(tmp_path: Path) -> None:
     app = create_test_app(tmp_path)
     client = TestClient(app)
-    meeting_id = client.post("/meetings", json={"topic": "WS 測試"}).json()["meeting_id"]
+    meeting_id = client.post(
+        "/meetings", json={"title": "WS 測試", "goal": "WS 測試"}
+    ).json()["meeting_id"]
     client.post(
         f"/meetings/{meeting_id}/start",
         json={
@@ -60,7 +62,9 @@ def test_meeting_websocket_streams_background_run_status_and_events(
     monkeypatch.setattr(MockModelAdapter, "complete", slow_complete)
     app = create_test_app(tmp_path)
     client = TestClient(app)
-    meeting_id = client.post("/meetings", json={"topic": "WS 背景執行"}).json()["meeting_id"]
+    meeting_id = client.post(
+        "/meetings", json={"title": "WS 背景執行", "goal": "WS 背景執行"}
+    ).json()["meeting_id"]
 
     with client.websocket_connect(f"/meetings/{meeting_id}/events") as websocket:
         snapshot = websocket.receive_json()
@@ -115,9 +119,10 @@ models:
 """.strip(),
     )
     client = TestClient(app)
-    meeting_id = client.post("/meetings", json={"topic": "WS token streaming"}).json()[
-        "meeting_id"
-    ]
+    meeting_id = client.post(
+        "/meetings",
+        json={"title": "WS token streaming", "goal": "WS token streaming"},
+    ).json()["meeting_id"]
 
     with client.websocket_connect(f"/meetings/{meeting_id}/events") as websocket:
         snapshot = websocket.receive_json()
@@ -171,7 +176,7 @@ models:
     prompt_dir.mkdir()
     for template in ["blue_propose", "red_critique", "blue_revise", "judge_decide"]:
         (prompt_dir / f"{template}.md").write_text(
-            "{{ role }} {{ topic }} {{ prior_transcript }} {{ required_json_schema }}",
+            "{{ role }} {{ goal }} {{ prior_transcript }} {{ required_json_schema }}",
             encoding="utf-8",
         )
     return create_app(

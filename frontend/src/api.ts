@@ -39,7 +39,9 @@ export type CaseFileLimits = {
 
 export type Meeting = {
   meeting_id: string
-  topic: string
+  title: string
+  goal: string | null
+  requires_goal: boolean
   status: 'open' | 'closed' | 'cancelled'
   activity_status: 'idle' | 'running' | 'waiting' | 'completed' | 'failed' | 'closed' | 'cancelled'
   created_at: string
@@ -293,7 +295,8 @@ export async function getMeetings(query?: string): Promise<Meeting[]> {
 }
 
 export async function createMeeting(
-  topic: string,
+  title: string,
+  goal: string,
   options?: {
     modeId?: string
     inputs?: Record<string, string>
@@ -311,12 +314,21 @@ export async function createMeeting(
   },
 ): Promise<Meeting> {
   return postJson('/meetings', {
-    topic,
+    title,
+    goal,
     mode_id: options?.modeId ?? DEFAULT_MODE_ID,
     inputs: options?.inputs ?? {},
     participants: options?.participants ?? [],
     case_files: options?.caseFiles ?? [],
   })
+}
+
+export async function updateMeetingDetails(
+  meetingId: string,
+  title: string,
+  goal: string,
+): Promise<Meeting> {
+  return putJson(`/meetings/${meetingId}/details`, { title, goal })
 }
 
 export async function getMeeting(meetingId: string): Promise<Meeting> {

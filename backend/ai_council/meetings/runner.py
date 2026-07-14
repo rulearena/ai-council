@@ -105,7 +105,7 @@ class MeetingRunner:
         self,
         *,
         meeting_id: str,
-        topic: str,
+        goal: str,
         model_assignments: dict[str, ModelConfig],
         plan: RelayPlan,
         inputs: dict[str, str] | None = None,
@@ -118,7 +118,7 @@ class MeetingRunner:
             return
         self._run_from_step(
             meeting_id=meeting_id,
-            topic=topic,
+            goal=goal,
             model_assignments=model_assignments,
             steps=plan.steps,
             inputs=inputs,
@@ -132,7 +132,7 @@ class MeetingRunner:
         *,
         meeting_id: str,
         step_id: str,
-        topic: str,
+        goal: str,
         model_assignments: dict[str, ModelConfig],
         plan: RelayPlan,
         inputs: dict[str, str] | None = None,
@@ -149,7 +149,7 @@ class MeetingRunner:
             raise ValueError(f"Step is not part of this meeting's mode: {base_step_id}") from error
         self._run_from_step(
             meeting_id=meeting_id,
-            topic=topic,
+            goal=goal,
             model_assignments=model_assignments,
             steps=plan.steps,
             inputs=inputs,
@@ -162,7 +162,7 @@ class MeetingRunner:
         self,
         *,
         meeting_id: str,
-        topic: str,
+        goal: str,
         role: str,
         model_assignments: dict[str, ModelConfig],
         plan: RelayPlan,
@@ -178,7 +178,7 @@ class MeetingRunner:
         directed_sequence = self._next_directed_response_number(meeting_id)
         self._run_step(
             meeting_id=meeting_id,
-            topic=topic,
+            goal=goal,
             model_assignments=model_assignments,
             inputs=inputs,
             step=step,
@@ -196,7 +196,7 @@ class MeetingRunner:
         self,
         *,
         meeting_id: str,
-        topic: str,
+        goal: str,
         roles: list[str],
         model_assignments: dict[str, ModelConfig],
         plan: RelayPlan,
@@ -225,7 +225,7 @@ class MeetingRunner:
                 return
             if not self._run_step(
                 meeting_id=meeting_id,
-                topic=topic,
+                goal=goal,
                 model_assignments=model_assignments,
                 inputs=inputs,
                 step=step,
@@ -245,7 +245,7 @@ class MeetingRunner:
         self,
         *,
         meeting_id: str,
-        topic: str,
+        goal: str,
         model_assignments: dict[str, ModelConfig],
         plan: ParallelPlan,
         inputs: dict[str, str] | None = None,
@@ -267,7 +267,7 @@ class MeetingRunner:
         if pending_members:
             self._run_parallel_members(
                 meeting_id=meeting_id,
-                topic=topic,
+                goal=goal,
                 model_assignments=model_assignments,
                 members=pending_members,
                 inputs=inputs,
@@ -276,7 +276,7 @@ class MeetingRunner:
             )
         self._run_parallel_synthesis_if_ready(
             meeting_id=meeting_id,
-            topic=topic,
+            goal=goal,
             model_assignments=model_assignments,
             plan=plan,
             inputs=inputs,
@@ -288,7 +288,7 @@ class MeetingRunner:
         *,
         meeting_id: str,
         step_id: str,
-        topic: str,
+        goal: str,
         model_assignments: dict[str, ModelConfig],
         plan: ParallelPlan,
         inputs: dict[str, str] | None = None,
@@ -304,7 +304,7 @@ class MeetingRunner:
         attempt = int(failed_event.get("attempt", 1)) + 1
         self._run_parallel_members(
             meeting_id=meeting_id,
-            topic=topic,
+            goal=goal,
             model_assignments=model_assignments,
             members=[member],
             inputs=inputs,
@@ -313,7 +313,7 @@ class MeetingRunner:
         )
         self._run_parallel_synthesis_if_ready(
             meeting_id=meeting_id,
-            topic=topic,
+            goal=goal,
             model_assignments=model_assignments,
             plan=plan,
             inputs=inputs,
@@ -358,7 +358,7 @@ class MeetingRunner:
         self,
         *,
         meeting_id: str,
-        topic: str,
+        goal: str,
         model_assignments: dict[str, ModelConfig],
         steps: list[StepDefinition],
         inputs: dict[str, str] | None,
@@ -372,7 +372,7 @@ class MeetingRunner:
             attempt = attempt_override if index == start_index and attempt_override else 1
             if not self._run_step(
                 meeting_id=meeting_id,
-                topic=topic,
+                goal=goal,
                 model_assignments=model_assignments,
                 inputs=inputs,
                 step=step,
@@ -388,7 +388,7 @@ class MeetingRunner:
         self,
         *,
         meeting_id: str,
-        topic: str,
+        goal: str,
         model_assignments: dict[str, ModelConfig],
         inputs: dict[str, str] | None,
         step: StepDefinition,
@@ -409,13 +409,13 @@ class MeetingRunner:
         prompt = self.prompt_renderer.render(
             template_name=step.template_name,
             role=step.role,
-            topic=topic,
+            goal=goal,
             prior_transcript=(
                 prior_transcript_override
                 if prior_transcript_override is not None
                 else self.transcript_projector.project(
                     self.repository.read_events(meeting_id),
-                    title=topic,
+                    title=goal,
                 )
             ),
             required_json_schema=output_schema.schema,
@@ -498,7 +498,7 @@ class MeetingRunner:
             if parse_retries_remaining:
                 return self._run_step(
                     meeting_id=meeting_id,
-                    topic=topic,
+                    goal=goal,
                     model_assignments=model_assignments,
                     inputs=inputs,
                     step=step,
@@ -576,7 +576,7 @@ class MeetingRunner:
         self,
         *,
         meeting_id: str,
-        topic: str,
+        goal: str,
         model_assignments: dict[str, ModelConfig],
         members: list[ParallelMemberStep],
         inputs: dict[str, str] | None,
@@ -590,7 +590,7 @@ class MeetingRunner:
                 executor.submit(
                     self._build_parallel_member_events,
                     meeting_id=meeting_id,
-                    topic=topic,
+                    goal=goal,
                     model_assignments=model_assignments,
                     member=member,
                     inputs=inputs,
@@ -608,7 +608,7 @@ class MeetingRunner:
         self,
         *,
         meeting_id: str,
-        topic: str,
+        goal: str,
         model_assignments: dict[str, ModelConfig],
         member: ParallelMemberStep,
         inputs: dict[str, str] | None,
@@ -622,10 +622,10 @@ class MeetingRunner:
         prompt = self.prompt_renderer.render(
             template_name=member.template_name,
             role=member.role,
-            topic=topic,
+            goal=goal,
             prior_transcript=self.transcript_projector.project(
                 self.repository.read_events(meeting_id),
-                title=topic,
+                title=goal,
             ),
             required_json_schema=output_schema.schema,
             inputs=self._inputs_for_role(
@@ -814,7 +814,7 @@ class MeetingRunner:
         self,
         *,
         meeting_id: str,
-        topic: str,
+        goal: str,
         model_assignments: dict[str, ModelConfig],
         plan: ParallelPlan,
         inputs: dict[str, str] | None,
@@ -827,7 +827,7 @@ class MeetingRunner:
             return
         self._run_step(
             meeting_id=meeting_id,
-            topic=topic,
+            goal=goal,
             model_assignments=model_assignments,
             inputs=self._synthesis_inputs(
                 inputs,

@@ -1,7 +1,7 @@
 You are the Moderator role in an AI Council brainstorming session.
 
-Topic:
-{{ topic }}
+Goal:
+{{ goal }}
 
 Case files visible to you:
 {{ case_files }}
@@ -16,7 +16,7 @@ Task:
 Synthesize the member outputs into a clear report. Identify consensus ideas, productive disagreements, surprising options, major risks, and a practical recommendation for what to do next.
 
 Language:
-Respond in the same language as the meeting topic.
+Respond in the same language as the meeting goal.
 All JSON string values must use that language.
 
 Return exactly one JSON object matching this schema:

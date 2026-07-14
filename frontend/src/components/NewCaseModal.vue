@@ -19,7 +19,8 @@ const emit = defineEmits<{ close: [] }>()
 
 const store = inject(councilKey)!
 const {
-  topic,
+  title,
+  goal,
   models,
   loading,
   meetingCreationError,
@@ -165,7 +166,7 @@ async function refreshCaseFileLimits(generation: number) {
 }
 
 watch(
-  [topic, selectedModeId, inputValues, caseFiles, parallelMemberCount, parallelMembers],
+  [title, goal, selectedModeId, inputValues, caseFiles, parallelMemberCount, parallelMembers],
   clearMeetingCreationError,
   { deep: true },
 )
@@ -388,8 +389,13 @@ function buildParticipants() {
       <p class="participant-setup-tagline">{{ selectedMode.tagline }}</p>
 
       <label class="topic-input-row">
-        會議主題
-        <input v-model="topic" aria-label="會議主題" />
+        名稱
+        <input v-model="title" aria-label="名稱" />
+      </label>
+
+      <label class="topic-input-row">
+        目標
+        <textarea v-model="goal" aria-label="目標" />
       </label>
 
       <label v-for="input in textInputs" :key="input.id" class="topic-input-row">
@@ -625,7 +631,7 @@ function buildParticipants() {
         class="btn btn-primary create-meeting-cta"
         data-testid="create-meeting-button"
         @click="submit"
-        :disabled="loading || caseFileLimitsLoading || !caseFileLimits || !topic.trim() || hasEmptyRequiredInput || hasIncompleteModelAssignment || hasIncompleteCaseFile || hasOversizedCaseFile || hasOversizedCaseFileTotal"
+        :disabled="loading || caseFileLimitsLoading || !caseFileLimits || !title.trim() || !goal.trim() || hasEmptyRequiredInput || hasIncompleteModelAssignment || hasIncompleteCaseFile || hasOversizedCaseFile || hasOversizedCaseFileTotal"
       >
         建立
       </button>
