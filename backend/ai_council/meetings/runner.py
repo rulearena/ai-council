@@ -600,8 +600,6 @@ class MeetingRunner:
             event_groups = [future.result() for future in futures]
         for events in event_groups:
             for event in events:
-                if self._is_terminal(meeting_id) and not event.get("result_discarded"):
-                    event = self._discarded_terminal_attempt(event)
                 self.repository.append_event(meeting_id, event)
 
     def _build_parallel_member_events(

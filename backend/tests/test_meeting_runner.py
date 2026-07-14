@@ -1900,6 +1900,80 @@ def test_parallel_parse_retry_stops_before_second_call_when_meeting_is_cancelled
     )
 
 
+def test_parallel_cancel_during_parse_retry_preserves_the_finished_first_attempt(
+    tmp_path: Path,
+) -> None:
+    class RetryBlockingAdapter:
+        def __init__(self) -> None:
+            self.calls = 0
+            self.second_started = Event()
+            self.release = Event()
+
+        def complete(self, request: ModelRequest) -> ModelResponse:
+            self.calls += 1
+            if self.calls == 1:
+                return ModelResponse(raw_output="not json")
+            self.second_started.set()
+            assert self.release.wait(timeout=3)
+            return ModelResponse(raw_output='{"value":"discard me"}')
+
+        def cancel(self, meeting_id: str) -> None:
+            self.release.set()
+
+    schema_id = "test-output/v1"
+    plan = ParallelPlan(
+        members=[
+            ParallelMemberStep(
+                step_id="member-1",
+                role="Member-1",
+                template_name="brainstorm_member",
+                display_name="委員 1",
+                instance_prompt="",
+                index=1,
+                output_schema_id=schema_id,
+            )
+        ],
+        synthesis=StepDefinition(
+            "synthesis", "Moderator", "brainstorm_synthesis", schema_id
+        ),
+    )
+    adapter = RetryBlockingAdapter()
+    runner = build_runner(
+        tmp_path,
+        adapter=adapter,
+        templates=("brainstorm_member", "brainstorm_synthesis"),
+        output_schemas=OutputSchemaRegistry(
+            [OutputSchemaCodec(schema_id, TEST_ONLY_SCHEMA, TestOnlyParser())]
+        ),
+    )
+    thread = Thread(
+        target=lambda: runner.start_parallel(
+            plan=plan,
+            meeting_id="meeting-1",
+            topic="retry 期間取消",
+            model_assignments={
+                "Member-1": ModelConfig(id="mock-member", adapter="mock"),
+                "Moderator": ModelConfig(id="mock-moderator", adapter="mock"),
+            },
+        )
+    )
+    thread.start()
+    assert adapter.second_started.wait(timeout=3)
+
+    runner.cancel("meeting-1")
+    thread.join(timeout=3)
+
+    assert not thread.is_alive()
+    lifecycle, first_attempt, second_attempt = runner.repository.read_events("meeting-1")
+    assert lifecycle["status"] == "cancelled"
+    assert (first_attempt["attempt"], first_attempt["failure_kind"]) == (1, "parse_error")
+    assert first_attempt["retry_scheduled"] is True
+    assert "result_discarded" not in first_attempt
+    assert (second_attempt["attempt"], second_attempt["failure_kind"]) == (2, "interrupted")
+    assert second_attempt["retry_scheduled"] is False
+    assert second_attempt["result_discarded"] is True
+
+
 def test_parallel_runner_can_anonymize_synthesis_inputs(tmp_path: Path) -> None:
     outputs = [
         json.dumps(
