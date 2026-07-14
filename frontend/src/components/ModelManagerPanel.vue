@@ -6,7 +6,7 @@
 // SettingsModal's 一般 tab (and the sanitize watch in useCouncil.ts that fallback-clears a
 // deleted model's role selections) pick up the change through the exact same path a fresh
 // page load would.
-import { computed, inject, ref } from 'vue'
+import { computed, inject, onBeforeUnmount, ref } from 'vue'
 import { councilKey } from '../composables/useCouncil'
 import {
   ApiError,
@@ -57,6 +57,7 @@ const deletingId = ref<string | null>(null)
 
 async function handleDelete(id: string) {
   if (!window.confirm(`確定刪除模型 ${id}？`)) return
+  invalidateModelTest(id)
   deleteWarning.value = null
   deleteError.value = ''
   deletingId.value = id
@@ -73,24 +74,99 @@ async function handleDelete(id: string) {
 
 // -------- test --------
 
-const testingId = ref<string | null>(null)
-const testErrors = ref<Record<string, string>>({})
+type TestFeedback = {
+  phase: 'testing' | 'slow' | 'success' | 'error'
+  message: string
+  status?: ModelConfig['status']
+}
+
+const TEST_SLOW_THRESHOLD_MS = 1_000
+const testFeedback = ref<Record<string, TestFeedback>>({})
+const testGenerations = new Map<string, number>()
+const testSlowTimers = new Map<string, ReturnType<typeof setTimeout>>()
+let testContextActive = true
+
+function clearTestSlowTimer(id: string) {
+  const timer = testSlowTimers.get(id)
+  if (timer !== undefined) clearTimeout(timer)
+  testSlowTimers.delete(id)
+}
+
+function isCurrentModelTest(id: string, generation: number): boolean {
+  return testContextActive
+    && testGenerations.get(id) === generation
+    && models.value.some((model) => model.id === id)
+}
+
+function invalidateModelTest(id: string) {
+  testGenerations.set(id, (testGenerations.get(id) ?? 0) + 1)
+  clearTestSlowTimer(id)
+  const next = { ...testFeedback.value }
+  delete next[id]
+  testFeedback.value = next
+}
+
+function testIsRunning(id: string): boolean {
+  const phase = testFeedback.value[id]?.phase
+  return phase === 'testing' || phase === 'slow'
+}
+
+function testErrorMessage(caught: unknown): string {
+  if (caught instanceof ApiError && typeof caught.detail === 'string') return caught.detail
+  return caught instanceof Error ? caught.message : String(caught)
+}
 
 async function handleTest(id: string) {
-  testingId.value = id
-  testErrors.value = { ...testErrors.value, [id]: '' }
+  if (testIsRunning(id)) return
+  const generation = (testGenerations.get(id) ?? 0) + 1
+  testGenerations.set(id, generation)
+  testFeedback.value = {
+    ...testFeedback.value,
+    [id]: { phase: 'testing', message: '正在測試連線…' },
+  }
+  clearTestSlowTimer(id)
+  testSlowTimers.set(id, setTimeout(() => {
+    if (!isCurrentModelTest(id, generation)) return
+    testFeedback.value = {
+      ...testFeedback.value,
+      [id]: { phase: 'slow', message: 'Provider 回應較慢，仍在等待…' },
+    }
+  }, TEST_SLOW_THRESHOLD_MS))
   try {
-    // Health result lands in the backend's health store; re-fetching models (rather than
-    // reading testModel's own response) is what updates this row's status dot, matching
-    // GET /models projecting model_health.get(model.id) onto each entry.
-    await testModel(id)
-    await refreshModels()
+    const result = await testModel(id)
+    if (!isCurrentModelTest(id, generation)) return
+    clearTestSlowTimer(id)
+    testFeedback.value = {
+      ...testFeedback.value,
+      [id]: result.status === 'available'
+        ? { phase: 'success', message: '連線成功', status: 'available' }
+        : {
+            phase: 'error',
+            message: `測試失敗：${result.error || 'Provider 回報連線不可用'}`,
+            status: 'unavailable',
+          },
+    }
   } catch (caught) {
-    testErrors.value = { ...testErrors.value, [id]: caught instanceof Error ? caught.message : String(caught) }
+    if (!isCurrentModelTest(id, generation)) return
+    clearTestSlowTimer(id)
+    testFeedback.value = {
+      ...testFeedback.value,
+      [id]: {
+        phase: 'error',
+        message: `測試失敗：${testErrorMessage(caught)}`,
+        status: 'unavailable',
+      },
+    }
   } finally {
-    testingId.value = null
+    if (isCurrentModelTest(id, generation)) clearTestSlowTimer(id)
   }
 }
+
+onBeforeUnmount(() => {
+  testContextActive = false
+  for (const id of testSlowTimers.keys()) clearTestSlowTimer(id)
+  testGenerations.clear()
+})
 
 // -------- create/edit form --------
 
@@ -188,6 +264,7 @@ function openCreateForm() {
 }
 
 function openEditForm(model: ModelConfig) {
+  invalidateModelTest(model.id)
   formMode.value = 'edit'
   formId.value = model.id
   formProvider.value = providerIdForModel(model) ?? 'custom-openai-compatible'
@@ -337,22 +414,33 @@ async function saveForm() {
         :data-model-id="model.id"
       >
         <span class="model-manager-id">
-          <i class="status-dot" :data-status="model.status" aria-hidden="true"></i>
+          <i class="status-dot" :data-status="testFeedback[model.id]?.status ?? model.status" aria-hidden="true"></i>
           {{ model.id }}
         </span>
         <span class="model-manager-provider">{{ modelDisplayLabel(model) }}</span>
         <span class="model-manager-summary">{{ model.base_url ?? model.command?.[0] ?? '' }}</span>
-        <em v-if="testErrors[model.id]" class="model-manager-test-error">{{ testErrors[model.id] }}</em>
+        <span
+          v-if="testFeedback[model.id]"
+          class="model-manager-test-feedback"
+          :class="{ 'model-manager-test-error': testFeedback[model.id].phase === 'error' }"
+          :data-testid="`model-test-feedback-${model.id}`"
+          role="status"
+          aria-live="polite"
+          aria-atomic="true"
+        >
+          {{ testFeedback[model.id].message }}
+        </span>
         <em v-else-if="model.health_error" class="model-manager-test-error">{{ model.health_error }}</em>
         <span class="model-manager-actions">
           <button
             type="button"
             class="btn btn-secondary btn-sm"
             :data-testid="`test-model-button-${model.id}`"
-            :disabled="testingId === model.id"
+            :disabled="testIsRunning(model.id)"
             @click="handleTest(model.id)"
           >
-            {{ testingId === model.id ? '測試中…' : 'Test' }}
+            <i v-if="testIsRunning(model.id)" class="spinner" aria-hidden="true"></i>
+            {{ testIsRunning(model.id) ? '正在測試連線…' : 'Test' }}
           </button>
           <button
             type="button"

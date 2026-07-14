@@ -2185,6 +2185,172 @@ test('model manager tab supports create, test, edit, and delete for a model conf
   await closeSettings(page)
 })
 
+test('model manager shows accessible connection-test progress, slow feedback, and success', async ({
+  page,
+}) => {
+  let pendingRoute: Route | undefined
+  let requestCount = 0
+  let markRequestStarted!: () => void
+  const requestStarted = new Promise<void>((resolve) => {
+    markRequestStarted = resolve
+  })
+  await page.route('**/models/mock-slow/test', async (route) => {
+    requestCount += 1
+    pendingRoute = route
+    markRequestStarted()
+  })
+
+  await page.goto('/')
+  await page.getByTestId('settings-button').click()
+  await page.getByTestId('model-manager-tab').click()
+
+  const row = modelManagerRow(page, 'mock-slow')
+  const button = page.getByTestId('test-model-button-mock-slow')
+  const status = row.getByTestId('model-test-feedback-mock-slow')
+  await button.click()
+  await requestStarted
+
+  await expect(button).toBeDisabled()
+  await expect(button).toContainText('正在測試連線…')
+  await expect(button.locator('.spinner')).toBeVisible()
+  await expect(status).toHaveAttribute('aria-live', 'polite')
+  await expect(status).toHaveText('正在測試連線…')
+  await button.evaluate((element) => (element as HTMLButtonElement).click())
+  expect(requestCount).toBe(1)
+
+  await expect(status).toHaveText('Provider 回應較慢，仍在等待…', { timeout: 3_000 })
+  await pendingRoute!.fulfill({
+    contentType: 'application/json',
+    body: JSON.stringify({ status: 'available', tested_at: '2026-07-14T12:00:00Z' }),
+  })
+
+  await expect(button).toBeEnabled()
+  await expect(status).toHaveText('連線成功')
+  await expect(row.locator('.status-dot')).toHaveAttribute('data-status', 'available')
+})
+
+test('model manager reports a clear connection-test failure', async ({ page }) => {
+  await page.route('**/models/mock-fast/test', async (route) => {
+    await route.fulfill({
+      status: 503,
+      contentType: 'application/json',
+      body: JSON.stringify({ detail: 'Provider 暫時無法連線' }),
+    })
+  })
+
+  await page.goto('/')
+  await page.getByTestId('settings-button').click()
+  await page.getByTestId('model-manager-tab').click()
+  await page.getByTestId('test-model-button-mock-fast').click()
+
+  const feedback = modelManagerRow(page, 'mock-fast').getByTestId('model-test-feedback-mock-fast')
+  await expect(feedback).toHaveText('測試失敗：Provider 暫時無法連線')
+  await expect(feedback).toHaveAttribute('role', 'status')
+})
+
+test('a late connection-test response cannot replace a newer result after the modal closes', async ({
+  page,
+}) => {
+  const pendingRoutes: Route[] = []
+  let markFirstRequestStarted!: () => void
+  const firstRequestStarted = new Promise<void>((resolve) => {
+    markFirstRequestStarted = resolve
+  })
+  await page.route('**/models/mock-fast/test', async (route) => {
+    pendingRoutes.push(route)
+    if (pendingRoutes.length === 1) markFirstRequestStarted()
+  })
+
+  await page.goto('/')
+  await page.getByTestId('settings-button').click()
+  await page.getByTestId('model-manager-tab').click()
+  await page.getByTestId('test-model-button-mock-fast').click()
+  await firstRequestStarted
+  await closeSettings(page)
+
+  await page.getByTestId('settings-button').click()
+  await page.getByTestId('model-manager-tab').click()
+  await page.getByTestId('test-model-button-mock-fast').click()
+  await expect.poll(() => pendingRoutes.length).toBe(2)
+  await pendingRoutes[1].fulfill({
+    contentType: 'application/json',
+    body: JSON.stringify({ status: 'available', tested_at: '2026-07-14T12:01:00Z' }),
+  })
+
+  const row = modelManagerRow(page, 'mock-fast')
+  const feedback = row.getByTestId('model-test-feedback-mock-fast')
+  await expect(feedback).toHaveText('連線成功')
+  await pendingRoutes[0].fulfill({
+    status: 503,
+    contentType: 'application/json',
+    body: JSON.stringify({ detail: '舊請求失敗' }),
+  })
+  await expect(feedback).toHaveText('連線成功')
+  await expect(row).not.toContainText('舊請求失敗')
+})
+
+test('editing a model invalidates its pending connection-test feedback', async ({ page }) => {
+  let pendingRoute: Route | undefined
+  await page.route('**/models/mock-fast/test', async (route) => {
+    pendingRoute = route
+  })
+
+  await page.goto('/')
+  await page.getByTestId('settings-button').click()
+  await page.getByTestId('model-manager-tab').click()
+  await page.getByTestId('test-model-button-mock-fast').click()
+  await expect.poll(() => Boolean(pendingRoute)).toBe(true)
+  await page.getByTestId('edit-model-button-mock-fast').click()
+  await expect(page.getByTestId('model-form-id-input')).toHaveValue('mock-fast')
+  await pendingRoute!.fulfill({
+    contentType: 'application/json',
+    body: JSON.stringify({ status: 'available', tested_at: '2026-07-14T12:02:00Z' }),
+  })
+
+  await expect(
+    modelManagerRow(page, 'mock-fast').getByTestId('model-test-feedback-mock-fast'),
+  ).toHaveCount(0)
+})
+
+test('deleting and recreating a model cannot inherit its pending connection-test result', async ({
+  page,
+}) => {
+  const modelId = `e2e-stale-test-${Date.now()}`
+  let pendingRoute: Route | undefined
+  await page.route(`**/models/${modelId}/test`, async (route) => {
+    pendingRoute = route
+  })
+
+  await page.goto('/')
+  await page.getByTestId('settings-button').click()
+  await page.getByTestId('model-manager-tab').click()
+  await page.getByTestId('add-model-button').click()
+  await page.getByTestId('model-form-id-input').fill(modelId)
+  await page.getByTestId('model-form-save').click()
+  await page.getByTestId(`test-model-button-${modelId}`).click()
+  await expect.poll(() => Boolean(pendingRoute)).toBe(true)
+
+  page.once('dialog', (dialog) => dialog.accept())
+  await page.getByTestId(`delete-model-button-${modelId}`).click()
+  await expect(modelManagerRow(page, modelId)).toHaveCount(0)
+  await page.getByTestId('add-model-button').click()
+  await page.getByTestId('model-form-id-input').fill(modelId)
+  await page.getByTestId('model-form-save').click()
+  await expect(modelManagerRow(page, modelId)).toBeVisible()
+
+  await pendingRoute!.fulfill({
+    contentType: 'application/json',
+    body: JSON.stringify({ status: 'available', tested_at: '2026-07-14T12:03:00Z' }),
+  })
+  await expect(
+    modelManagerRow(page, modelId).getByTestId(`model-test-feedback-${modelId}`),
+  ).toHaveCount(0)
+
+  page.once('dialog', (dialog) => dialog.accept())
+  await page.getByTestId(`delete-model-button-${modelId}`).click()
+  await expect(modelManagerRow(page, modelId)).toHaveCount(0)
+})
+
 test('model manager creates an OpenAI config through provider-guided preview discovery', async ({
   page,
 }) => {
