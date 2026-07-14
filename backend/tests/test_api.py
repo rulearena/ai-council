@@ -6,6 +6,7 @@ import sys
 import threading
 import time
 import urllib.error
+import urllib.parse
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
@@ -863,6 +864,44 @@ def test_provider_model_discovery_redacts_upstream_errors(
     assert response.status_code == 502
     serialized = json.dumps(response.json())
     assert secret not in serialized
+    assert "[REDACTED]" in serialized
+
+
+def test_gemini_model_discovery_redacts_encoded_credentials_from_upstream_urls(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    secret = "key+ /?%&"
+    monkeypatch.setenv("GEMINI_RESERVED_KEY", secret)
+
+    def echo_request_url(request, timeout):
+        raise urllib.error.URLError(f"request failed: {request.full_url}")
+
+    monkeypatch.setattr(
+        "ai_council.models.adapters.urllib.request.urlopen",
+        echo_request_url,
+    )
+    client = TestClient(create_test_app(tmp_path))
+
+    response = client.post(
+        "/models/available-models",
+        json={
+            "adapter": "gemini-http",
+            "base_url": "https://failure.example.test/v1beta",
+            "api_key_env": "GEMINI_RESERVED_KEY",
+        },
+    )
+
+    assert response.status_code == 502
+    serialized = json.dumps(response.json())
+    encoded_variants = {
+        secret,
+        urllib.parse.quote(secret),
+        urllib.parse.quote(secret, safe=""),
+        urllib.parse.quote_plus(secret),
+        urllib.parse.urlencode({"key": secret}).partition("=")[2],
+    }
+    assert all(variant not in serialized for variant in encoded_variants)
     assert "[REDACTED]" in serialized
 
 

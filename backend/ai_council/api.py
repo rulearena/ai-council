@@ -4,6 +4,7 @@ import asyncio
 import json
 import os
 import threading
+import urllib.parse
 import uuid
 from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass
@@ -1341,7 +1342,15 @@ def model_discovery_error_detail(error: AdapterError, model: ModelConfig) -> str
     if model.api_key_env:
         secret = os.environ.get(model.api_key_env)
         if secret:
-            detail = detail.replace(secret, "[REDACTED]")
+            variants = {
+                secret,
+                urllib.parse.quote(secret),
+                urllib.parse.quote(secret, safe=""),
+                urllib.parse.quote_plus(secret),
+                urllib.parse.urlencode({"key": secret}).partition("=")[2],
+            }
+            for variant in sorted(variants, key=len, reverse=True):
+                detail = detail.replace(variant, "[REDACTED]")
     return detail
 
 

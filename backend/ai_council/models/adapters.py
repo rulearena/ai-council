@@ -273,8 +273,18 @@ def _request_json(
             and isinstance(error.reason, TimeoutError)
         )
         raise AdapterError(
-            str(error), failure_kind="timeout" if is_timeout else "adapter_error"
+            _safe_http_error_detail(error, url),
+            failure_kind="timeout" if is_timeout else "adapter_error",
         ) from error
+
+
+def _safe_http_error_detail(error: BaseException, request_url: str) -> str:
+    detail = str(error)
+    parsed_url = urllib.parse.urlsplit(request_url)
+    if parsed_url.query:
+        queryless_url = urllib.parse.urlunsplit(parsed_url._replace(query=""))
+        detail = detail.replace(request_url, f"{queryless_url}?[REDACTED]")
+    return detail
 
 
 def _post_json(url: str, payload: dict[str, object], headers: dict[str, str]) -> dict[str, object]:
