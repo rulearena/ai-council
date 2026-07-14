@@ -1,6 +1,6 @@
 # Provider 與 discovery foundation
 
-Status: ready-for-agent
+Status: implemented / awaiting review
 Blocked by: 01
 
 ## Goal
@@ -31,3 +31,9 @@ Blocked by: 01
 ## Acceptance
 
 - Discovery success/failure/empty/unsupported 與 secret safety tests 綠。
+
+## Comments
+
+- 2026-07-14：Executor 完成集中式 frontend Provider domain module、legacy config deterministic projection、provider payload/label public functions，以及未保存的 `POST /models/available-models` preview。Preview 僅接受 transport 設定與 credential 環境變數名稱；extra 欄位會以不回顯輸入值的 422 拒絕，provider error 也會遮罩實際環境變數內容。既有 GET discovery 保持相容並共用 error redaction。
+- 2026-07-14：TDD 證據包含 preview route 405→200、provider credential echo failure→redaction、明文 `api_key` 被接受→strict safe 422、legacy proxy base URL 被 preset 覆寫→round-trip 保留。Backend `test_api.py` 111 passed；frontend provider unit 5 passed；frontend build 與 `git diff --check` 通過。Node 22.17.0 以內建 TypeScript stripping test runner 執行，未新增 dependency 或 lockfile 變動。
+- 2026-07-14：工具沒有 gpt-5.6-luna selector，使用 assigned runtime。完整 ModelManager Provider UI 與 Playwright 流程保留給 issue 04。

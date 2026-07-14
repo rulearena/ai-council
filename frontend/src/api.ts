@@ -22,6 +22,16 @@ export type ModelTestResult = {
   error?: string
 }
 
+export type AvailableModelsResponse = {
+  models: string[]
+}
+
+export type ModelDiscoveryPreviewPayload = {
+  adapter: string
+  base_url?: string | null
+  api_key_env?: string | null
+}
+
 export type CaseFileLimits = {
   per_file_chars: number
   total_chars: number
@@ -257,6 +267,16 @@ export async function deleteModel(id: string): Promise<{ id: string; warning: st
 
 export async function testModel(modelId: string): Promise<ModelTestResult> {
   return postJson(`/models/${modelId}/test`, {})
+}
+
+export async function getAvailableModels(modelId: string): Promise<AvailableModelsResponse> {
+  return getJson(`/models/${encodeURIComponent(modelId)}/available-models`)
+}
+
+export async function previewAvailableModels(
+  payload: ModelDiscoveryPreviewPayload,
+): Promise<AvailableModelsResponse> {
+  return postJson('/models/available-models', payload)
 }
 
 export async function getModes(): Promise<BackendModeDefinition[]> {

@@ -16,7 +16,7 @@ from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconn
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, PlainTextResponse, Response
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from ai_council.meetings.execution_state import (
     ActiveExecutionState,
@@ -176,6 +176,14 @@ class CreateModelConfigRequest(UpsertModelConfigRequest):
     id: str
 
 
+class ModelDiscoveryPreviewRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    adapter: str
+    base_url: str | None = None
+    api_key_env: str | None = None
+
+
 class ModelPricingRequest(BaseModel):
     currency: str
     input_per_1m_tokens: float = Field(ge=0)
@@ -209,7 +217,10 @@ def create_app(
         request: Request,
         exc: RequestValidationError,
     ) -> JSONResponse:
-        if (request.method == "POST" and request.url.path == "/models") or (
+        if (
+            request.method == "POST"
+            and request.url.path in {"/models", "/models/available-models"}
+        ) or (
             request.method == "PUT" and request.url.path.startswith("/models/")
         ):
             detail = [
@@ -356,7 +367,34 @@ def create_app(
         try:
             return {"models": adapter.discover_models(model)}
         except AdapterError as error:
-            raise HTTPException(status_code=502, detail=str(error)) from error
+            raise HTTPException(
+                status_code=502,
+                detail=model_discovery_error_detail(error, model),
+            ) from error
+
+    @app.post("/models/available-models")
+    def preview_available_models(
+        request: ModelDiscoveryPreviewRequest,
+    ) -> dict[str, list[str]]:
+        adapter = model_adapters.get(request.adapter)
+        if not isinstance(adapter, OpenAICompatibleHTTPAdapter):
+            raise HTTPException(
+                status_code=400,
+                detail=f"Model discovery is not supported for adapter: {request.adapter}",
+            )
+        model = ModelConfig(
+            id="discovery-preview",
+            adapter=request.adapter,
+            base_url=request.base_url,
+            api_key_env=request.api_key_env,
+        )
+        try:
+            return {"models": adapter.discover_models(model)}
+        except AdapterError as error:
+            raise HTTPException(
+                status_code=502,
+                detail=model_discovery_error_detail(error, model),
+            ) from error
 
     @app.get("/modes")
     def list_modes_catalog() -> list[dict[str, Any]]:
@@ -1287,6 +1325,15 @@ def get_model(repository: ModelConfigRepository, model_id: str) -> ModelConfig:
         if model.id == model_id:
             return model
     raise HTTPException(status_code=404, detail=f"Unknown model: {model_id}")
+
+
+def model_discovery_error_detail(error: AdapterError, model: ModelConfig) -> str:
+    detail = str(error)
+    if model.api_key_env:
+        secret = os.environ.get(model.api_key_env)
+        if secret:
+            detail = detail.replace(secret, "[REDACTED]")
+    return detail
 
 
 def save_model_or_422(

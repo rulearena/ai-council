@@ -574,6 +574,129 @@ models:
     }
 
 
+def test_model_discovery_preview_lists_models_without_saving_config(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    app = create_test_app(tmp_path)
+    client = TestClient(app)
+    config_path = tmp_path / "config" / "models.yaml"
+    original_config = config_path.read_text(encoding="utf-8")
+
+    def fake_urlopen(request, timeout):
+        assert request.full_url == "http://preview.example.test/v1/models"
+        return FakeHTTPResponse({"data": [{"id": "preview-model"}]})
+
+    monkeypatch.setattr("ai_council.models.adapters.urllib.request.urlopen", fake_urlopen)
+
+    response = client.post(
+        "/models/available-models",
+        json={
+            "adapter": "openai-compatible-http",
+            "base_url": "http://preview.example.test/v1",
+            "api_key_env": None,
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {"models": ["preview-model"]}
+    assert config_path.read_text(encoding="utf-8") == original_config
+
+
+def test_model_discovery_preview_preserves_an_empty_model_list(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(
+        "ai_council.models.adapters.urllib.request.urlopen",
+        lambda request, timeout: FakeHTTPResponse({"data": []}),
+    )
+    client = TestClient(create_test_app(tmp_path))
+
+    response = client.post(
+        "/models/available-models",
+        json={
+            "adapter": "openai-compatible-http",
+            "base_url": "http://empty.example.test/v1",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {"models": []}
+
+
+@pytest.mark.parametrize("adapter", ["anthropic-http", "gemini-http", "subscription-cli", "mock"])
+def test_model_discovery_preview_rejects_unsupported_adapters(
+    tmp_path: Path,
+    adapter: str,
+) -> None:
+    client = TestClient(create_test_app(tmp_path))
+
+    response = client.post(
+        "/models/available-models",
+        json={"adapter": adapter, "base_url": "http://unused.example.test/v1"},
+    )
+
+    assert response.status_code == 400
+    assert response.json() == {
+        "detail": f"Model discovery is not supported for adapter: {adapter}"
+    }
+
+
+def test_model_discovery_preview_redacts_provider_errors(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    secret = "preview-secret-value"
+    monkeypatch.setenv("PREVIEW_API_KEY", secret)
+
+    def echo_secret_in_error(request, timeout):
+        raise urllib.error.URLError(f"provider rejected Bearer {secret}")
+
+    monkeypatch.setattr(
+        "ai_council.models.adapters.urllib.request.urlopen",
+        echo_secret_in_error,
+    )
+    client = TestClient(create_test_app(tmp_path))
+
+    response = client.post(
+        "/models/available-models",
+        json={
+            "adapter": "openai-compatible-http",
+            "base_url": "http://preview.example.test/v1",
+            "api_key_env": "PREVIEW_API_KEY",
+        },
+    )
+
+    assert response.status_code == 502
+    serialized = json.dumps(response.json())
+    assert secret not in serialized
+    assert "[REDACTED]" in serialized
+
+
+def test_model_discovery_preview_rejects_api_key_values_without_echoing_them(
+    tmp_path: Path,
+) -> None:
+    secret = "must-not-enter-preview-contract"
+    client = TestClient(create_test_app(tmp_path))
+
+    response = client.post(
+        "/models/available-models",
+        json={
+            "adapter": "openai-compatible-http",
+            "base_url": "http://preview.example.test/v1",
+            "api_key": secret,
+        },
+    )
+
+    assert response.status_code == 422
+    serialized = json.dumps(response.json())
+    assert secret not in serialized
+    assert response.json()["detail"] == [
+        {"field": "api_key", "message": "Extra inputs are not permitted"}
+    ]
+
+
 def test_model_discovery_rejects_unsupported_adapters(tmp_path: Path) -> None:
     app = create_test_app(tmp_path)
     client = TestClient(app)
