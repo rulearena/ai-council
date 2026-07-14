@@ -11,6 +11,7 @@ async function createMeetingViaNewCase(
     modeId?: string
     inputs?: Record<string, string>
     caseFiles?: Array<{ title: string; content: string; visibleRoles: string[] }>
+    modelAssignments?: Record<string, string>
   } = {},
 ) {
   const modeId = options.modeId ?? 'red-blue'
@@ -28,6 +29,9 @@ async function createMeetingViaNewCase(
   // one labeled field per input id - see NewCaseModal.vue's textInputs.
   for (const [inputId, value] of Object.entries(options.inputs ?? {})) {
     await page.getByTestId(`mode-input-${inputId}`).fill(value)
+  }
+  for (const [role, modelId] of Object.entries(options.modelAssignments ?? {})) {
+    await page.getByTestId(`new-case-${role.toLowerCase()}-model-select`).selectOption(modelId)
   }
   for (const [index, file] of (options.caseFiles ?? []).entries()) {
     const fileNumber = index + 1
@@ -53,13 +57,252 @@ async function createMeetingViaNewCase(
   await expect(page.getByTestId('new-case-modal')).not.toBeVisible()
 }
 
+test('New Case persists the complete relay model roster and reload hydrates that meeting', async ({
+  page,
+}) => {
+  let createPayload: Record<string, unknown> | null = null
+  await page.route('**/meetings', async (route) => {
+    if (route.request().method() === 'POST') {
+      createPayload = route.request().postDataJSON() as Record<string, unknown>
+    }
+    await route.continue()
+  })
+  await page.goto('/')
+
+  const topic = `E2E persisted relay assignment ${Date.now()}`
+  await createMeetingViaNewCase(page, topic, {
+    modelAssignments: {
+      Blue: 'mock-slow',
+      Red: 'mock-fast',
+      Judge: 'mock-broken',
+    },
+  })
+
+  expect(createPayload).toMatchObject({
+    participants: [
+      { role_id: 'Blue', model_config_id: 'mock-slow' },
+      { role_id: 'Red', model_config_id: 'mock-fast' },
+      { role_id: 'Judge', model_config_id: 'mock-broken' },
+    ],
+  })
+  await expect(page.getByTestId('seat-model-label-blue')).toHaveText('mock-slow')
+  await expect(page.getByTestId('seat-model-label-red')).toHaveText('mock-fast')
+  await expect(page.getByTestId('seat-model-label-judge')).toHaveText('mock-broken')
+
+  await page.reload()
+  await page.getByTestId('past-topics-button').click()
+  await page.getByTestId('meeting-list-item').filter({ hasText: topic }).locator('.meeting-item').click()
+  await expect(page.getByTestId('seat-model-label-blue')).toHaveText('mock-slow')
+  await expect(page.getByTestId('seat-model-label-red')).toHaveText('mock-fast')
+  await expect(page.getByTestId('seat-model-label-judge')).toHaveText('mock-broken')
+})
+
+test('Settings persists complete participant assignments across reload', async ({ page }) => {
+  const replacementPayloads: Array<Record<string, string>> = []
+  await page.route('**/meetings/*/participant-models', async (route) => {
+    replacementPayloads.push((route.request().postDataJSON() as { models: Record<string, string> }).models)
+    await route.continue()
+  })
+  await page.goto('/')
+
+  const topic = `E2E persisted Settings assignment ${Date.now()}`
+  await createMeetingViaNewCase(page, topic)
+  await setModelsInSettings(page, {
+    blue: 'mock-slow',
+    red: 'mock-fast',
+    judge: 'mock-broken',
+  })
+  await closeSettings(page)
+
+  expect(replacementPayloads.at(-1)).toEqual({
+    Blue: 'mock-slow',
+    Red: 'mock-fast',
+    Judge: 'mock-broken',
+  })
+  await page.reload()
+  await page.getByTestId('past-topics-button').click()
+  await page.getByTestId('meeting-list-item').filter({ hasText: topic }).locator('.meeting-item').click()
+  await expect(page.getByTestId('seat-model-label-blue')).toHaveText('mock-slow')
+  await expect(page.getByTestId('seat-model-label-red')).toHaveText('mock-fast')
+  await expect(page.getByTestId('seat-model-label-judge')).toHaveText('mock-broken')
+})
+
+test('Settings rolls back a rejected participant assignment and shows the server error', async ({
+  page,
+}) => {
+  await page.goto('/')
+  await createMeetingViaNewCase(page, `E2E assignment rollback ${Date.now()}`)
+  await page.getByTestId('settings-button').click()
+  await expect(page.getByTestId('blue-model-select')).toHaveValue('mock-fast')
+  await page.route(/\/meetings\/[^/]+\/participant-models$/, (route) =>
+    route.fulfill({
+      status: 500,
+      contentType: 'application/json',
+      body: JSON.stringify({ detail: 'Assignment save failed' }),
+    }),
+  )
+
+  await page.getByTestId('blue-model-select').selectOption('mock-slow')
+
+  await expect(page.getByTestId('assignment-update-error')).toHaveText('Assignment save failed')
+  await expect(page.getByTestId('blue-model-select')).toHaveValue('mock-fast')
+  await closeSettings(page)
+  await expect(page.getByTestId('seat-model-label-blue')).toHaveText('mock-fast')
+})
+
+test('a deleted assigned model shows the backend fallback warning without persisting it', async ({
+  page,
+}) => {
+  const modelsResponsePromise = page.waitForResponse(
+    (response) => response.request().method() === 'GET' && response.url().endsWith('/models'),
+  )
+  await page.goto('/')
+  const apiOrigin = new URL((await modelsResponsePromise).url()).origin
+  const deletedModelId = `e2e-deleted-assignment-${Date.now()}`
+  expect(
+    (
+      await page.request.post(`${apiOrigin}/models`, {
+        data: { id: deletedModelId, adapter: 'mock' },
+      })
+    ).ok(),
+  ).toBeTruthy()
+  await page.reload()
+
+  const topic = `E2E deleted assignment fallback ${Date.now()}`
+  await createMeetingViaNewCase(page, topic, {
+    modelAssignments: { Blue: deletedModelId },
+  })
+  const meetingId = await page.getByTestId('meeting-id-display').innerText()
+  expect((await page.request.delete(`${apiOrigin}/models/${deletedModelId}`)).ok()).toBeTruthy()
+
+  await page.reload()
+  await page.getByTestId('past-topics-button').click()
+  await page.getByTestId('meeting-list-item').filter({ hasText: topic }).locator('.meeting-item').click()
+  await page.getByTestId('settings-button').click()
+  await expect(page.getByTestId('assignment-fallback-warning')).toContainText(deletedModelId)
+
+  const projected = await (await page.request.get(`${apiOrigin}/meetings/${meetingId}`)).json()
+  const blue = projected.participants.find(
+    (participant: { role_id: string }) => participant.role_id === 'Blue',
+  )
+  expect(blue.model_assignment_source).toBe('default')
+  expect(blue.model_assignment_warning).toContain(deletedModelId)
+})
+
+test('run actions omit frontend model maps and rely on the meeting assignment', async ({ page }) => {
+  const runBodies: Record<string, unknown>[] = []
+  page.on('request', (request) => {
+    if (
+      request.method() === 'POST' &&
+      (/\/start$/.test(request.url()) ||
+        /\/roles\/[^/]+\/respond$/.test(request.url()) ||
+        /\/sequences$/.test(request.url()))
+    ) {
+      runBodies.push({ url: request.url(), body: request.postDataJSON() })
+    }
+  })
+  await page.goto('/')
+  await createMeetingViaNewCase(page, `E2E authoritative run assignment ${Date.now()}`)
+
+  await page.getByTestId('start-meeting-button').click()
+  await expect(page.getByTestId('operation-status')).toContainText('狀態：completed')
+  await openRoleDrawer(page, 'blue')
+  await page.getByTestId('request-blue-response-button').click()
+  await expect(page.getByTestId('operation-status')).toContainText('狀態：completed')
+  await closeRoleDrawer(page)
+  await openAdvancedOptions(page)
+  await page.getByTestId('run-sequence-button').click()
+  await expect(page.getByTestId('operation-status')).toContainText('狀態：completed')
+
+  expect(runBodies.map(({ url, body }) => ({ path: new URL(url as string).pathname, body }))).toEqual([
+    { path: expect.stringMatching(/\/start$/), body: {} },
+    { path: expect.stringMatching(/\/roles\/Blue\/respond$/), body: {} },
+    { path: expect.stringMatching(/\/sequences$/), body: { roles: ['Red', 'Blue', 'Judge'] } },
+  ])
+})
+
+test('meeting switches hydrate isolated assignments and New Case keeps local defaults', async ({
+  page,
+}) => {
+  await page.goto('/')
+  const topicA = `E2E isolated assignment A ${Date.now()}`
+  const topicB = `E2E isolated assignment B ${Date.now()}`
+  await createMeetingViaNewCase(page, topicA, {
+    modelAssignments: { Blue: 'mock-slow' },
+  })
+  await createMeetingViaNewCase(page, topicB)
+  await expect(page.getByTestId('seat-model-label-blue')).toHaveText('mock-fast')
+
+  await page.getByTestId('past-topics-button').click()
+  await page.getByTestId('meeting-list-item').filter({ hasText: topicA }).locator('.meeting-item').click()
+  await expect(page.getByTestId('seat-model-label-blue')).toHaveText('mock-slow')
+  await page.getByTestId('past-topics-button').click()
+  await page.getByTestId('meeting-list-item').filter({ hasText: topicB }).locator('.meeting-item').click()
+  await expect(page.getByTestId('seat-model-label-blue')).toHaveText('mock-fast')
+
+  await page.getByTestId('new-case-button').click()
+  await page
+    .getByTestId('mode-select-card-red-blue')
+    .getByRole('button', { name: '選擇此模式' })
+    .click()
+  await expect(page.getByTestId('new-case-blue-model-select')).toHaveValue('mock-fast')
+})
+
+test('legacy recovery hydration trusts the participant projection instead of event history', async ({
+  page,
+}) => {
+  await page.goto('/')
+  const topic = `E2E legacy recovered assignment ${Date.now()}`
+  await createMeetingViaNewCase(page, topic)
+  const meetingId = await page.getByTestId('meeting-id-display').innerText()
+  await page.route(new RegExp(`/meetings/${meetingId}$`), async (route) => {
+    const response = await route.fetch()
+    const meeting = await response.json()
+    meeting.participants = meeting.participants.map(
+      (participant: { role_id: string; model_config_id: string; model_assignment_source: string }) =>
+        participant.role_id === 'Blue'
+          ? {
+              ...participant,
+              model_config_id: 'mock-slow',
+              model_assignment_source: 'latest-event',
+            }
+          : participant,
+    )
+    meeting.events = [
+      {
+        event_id: 'contradictory-event',
+        meeting_id: meetingId,
+        step_id: 'blue-propose',
+        role: 'Blue',
+        status: 'completed',
+        model_config_id: 'mock-broken',
+      },
+    ]
+    await route.fulfill({ response, json: meeting })
+  })
+
+  await page.getByTestId('past-topics-button').click()
+  await page.getByTestId('meeting-list-item').filter({ hasText: topic }).locator('.meeting-item').click()
+
+  await expect(page.getByTestId('seat-model-label-blue')).toHaveText('mock-slow')
+})
+
 // Generalized model-assignment helper (mode-system slice B task 9 made the model-select
 // testid role-derived - `${role.toLowerCase()}-model-select` - for any mode's roster, not
 // just red-blue's Blue/Red/Judge). Leaves the Settings modal open, same as before.
 async function setRoleModelsInSettings(page: Page, assignments: Record<string, string>) {
   await page.getByTestId('settings-button').click()
   for (const [role, model] of Object.entries(assignments)) {
-    await page.getByTestId(`${role.toLowerCase()}-model-select`).selectOption(model)
+    const select = page.getByTestId(`${role.toLowerCase()}-model-select`)
+    if ((await select.inputValue()) === model) continue
+    const response = page.waitForResponse(
+      (candidate) =>
+        candidate.request().method() === 'PUT' &&
+        candidate.url().includes('/participant-models'),
+    )
+    await select.selectOption(model)
+    await response
+    await expect(select).toBeEnabled()
   }
 }
 
@@ -400,6 +643,12 @@ test('shows a connection error banner when the backend is unreachable on load', 
 test('role seat shows failed state, halts the rest of the round, and recovers via retry', async ({
   page,
 }) => {
+  let retryBody: unknown
+  page.on('request', (request) => {
+    if (request.method() === 'POST' && /\/steps\/[^/]+\/retry$/.test(request.url())) {
+      retryBody = request.postDataJSON()
+    }
+  })
   await page.goto('/')
 
   const topic = `E2E failing role seat ${Date.now()}`
@@ -430,6 +679,7 @@ test('role seat shows failed state, halts the rest of the round, and recovers vi
 
   await openRoleDrawer(page, 'blue')
   await page.getByTestId('role-status-retry-button').click()
+  await expect.poll(() => retryBody).toEqual({})
 
   // retrySelectedStep pushes the whole remaining fixed-round tail (Blue, Red, Blue, Judge
   // for a blue-propose retry), so the seat flips to "thinking" immediately on click.
@@ -1465,33 +1715,32 @@ test('New Case creates a meeting with numbered role-scoped case files', async ({
     .click()
 })
 
-test('seat nameplate shows the selected model, with a placeholder when unset, and updates live from Settings', async ({
+test('New Case blocks an empty model catalog and seat nameplates follow persisted Settings', async ({
   page,
 }) => {
-  // Force an empty model catalog first - every real /models response is non-empty and
-  // Settings' <select> has no blank option of its own, so this is the only reliable way
-  // to observe the "未選模型" placeholder (selectedModels' auto-pick-the-first-model
-  // fallback in useCouncil.ts's refreshAll has nothing to pick from).
+  // New meetings now require a complete assignment roster, so an empty catalog must
+  // fail closed before creation instead of producing an unassigned meeting.
   await page.route('**/models', (route) => route.fulfill({ json: [] }))
   await page.goto('/')
 
   const topic = `E2E seat model label ${Date.now()}`
-  await createMeetingViaNewCase(page, topic)
+  await page.getByTestId('new-case-button').click()
+  await page
+    .getByTestId('mode-select-card-red-blue')
+    .getByRole('button', { name: '選擇此模式' })
+    .click()
+  await page.getByLabel('會議主題').fill(topic)
+  await expect(page.getByTestId('new-case-model-error')).toBeVisible()
+  await expect(page.getByTestId('create-meeting-button')).toBeDisabled()
+  await page.getByTestId('new-case-close-button').click()
 
-  await expect(page.getByTestId('seat-model-label-blue')).toHaveText('未選模型')
-  await expect(page.getByTestId('seat-model-label-blue')).toHaveClass(/seat-model-label-empty/)
+  await page.unroute('**/models')
+  await page.reload()
+  await createMeetingViaNewCase(page, topic)
   // Chairman is the fixed human seat, not a mode role - it never gets a model label.
   await expect(
     page.getByTestId('role-seat-chairman').locator('[data-testid^="seat-model-label"]'),
   ).toHaveCount(0)
-
-  // Reload against the real (unmocked) backend and reopen the same meeting - every role
-  // auto-picks the catalog's first model on load, so the placeholder should be gone.
-  await page.unroute('**/models')
-  await page.reload()
-  await page.getByTestId('past-topics-button').click()
-  await page.getByTestId('meeting-list-item').filter({ hasText: topic }).locator('.meeting-item').click()
-  await expect(page.getByTestId('seat-model-label-blue')).not.toHaveText('未選模型')
 
   await setModelsInSettings(page, { blue: 'mock-slow', red: 'mock-fast', judge: 'mock-broken' })
   await closeSettings(page)
@@ -1502,9 +1751,13 @@ test('seat nameplate shows the selected model, with a placeholder when unset, an
   await expect(page.getByTestId('seat-model-label-blue')).toHaveAttribute('title', 'mock-slow')
 
   // Changing the model again in Settings must update the seat immediately -
-  // selectedModels is the same reactive ref both surfaces read, no reload/reopen needed.
+  // and persist through the explicit participant-model replacement endpoint.
   await page.getByTestId('settings-button').click()
+  const saved = page.waitForResponse(
+    (response) => response.request().method() === 'PUT' && response.url().includes('/participant-models'),
+  )
   await page.getByTestId('blue-model-select').selectOption('mock-fast')
+  await saved
   await page.getByTestId('settings-close-button').click()
   await expect(page.getByTestId('seat-model-label-blue')).toHaveText('mock-fast')
 
@@ -1593,8 +1846,27 @@ test('brainstorm mode creates member instances and runs fanout plus synthesis', 
   await page.getByTestId('parallel-member-2-prompt').fill('從新手使用者角度發想')
   await page.getByTestId('parallel-member-3-name').fill('營運委員')
   await page.getByTestId('parallel-member-3-prompt').fill('從營運落地角度發想')
+  await page.getByTestId('new-case-member-1-model-select').selectOption('mock-slow')
+  await page.getByTestId('new-case-member-2-model-select').selectOption('mock-fast')
+  await page.getByTestId('new-case-member-3-model-select').selectOption('mock-fast')
+  await page.getByTestId('new-case-moderator-model-select').selectOption('mock-slow')
+  const createResponsePromise = page.waitForResponse(
+    (response) => response.request().method() === 'POST' && response.url().endsWith('/meetings'),
+  )
   await page.getByTestId('create-meeting-button').click()
   await expect(page.getByTestId('new-case-modal')).not.toBeVisible()
+  const created = await (await createResponsePromise).json()
+  expect(
+    created.participants.map((participant: { role_id: string; model_config_id: string }) => [
+      participant.role_id,
+      participant.model_config_id,
+    ]),
+  ).toEqual([
+    ['Member-1', 'mock-slow'],
+    ['Member-2', 'mock-fast'],
+    ['Member-3', 'mock-fast'],
+    ['Moderator', 'mock-slow'],
+  ])
 
   await expect(page.getByTestId('role-seat-member-1')).toBeVisible()
   await expect(page.getByTestId('role-seat-member-2')).toBeVisible()

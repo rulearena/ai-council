@@ -64,6 +64,8 @@ export type MeetingParticipant = {
   model_config_id: string | null
   display_name: string
   instance_prompt: string | null
+  model_assignment_source: 'metadata' | 'latest-event' | 'default' | 'unavailable'
+  model_assignment_warning: string | null
 }
 
 export type BackendModeRole = {
@@ -301,11 +303,8 @@ export async function getMeeting(meetingId: string): Promise<Meeting> {
   return getJson(`/meetings/${meetingId}`)
 }
 
-export async function startMeeting(
-  meetingId: string,
-  models: Record<string, string>,
-): Promise<void> {
-  await postJson(`/meetings/${meetingId}/start`, { models })
+export async function startMeeting(meetingId: string): Promise<void> {
+  await postJson(`/meetings/${meetingId}/start`, {})
 }
 
 export async function cancelMeeting(meetingId: string): Promise<void> {
@@ -333,6 +332,13 @@ export async function updateMeetingPinned(meetingId: string, pinned: boolean): P
   return putJson(`/meetings/${meetingId}/pinned`, { pinned })
 }
 
+export async function updateMeetingParticipantModels(
+  meetingId: string,
+  models: Record<string, string>,
+): Promise<Meeting> {
+  return putJson(`/meetings/${meetingId}/participant-models`, { models })
+}
+
 export async function addMeetingMessage(
   meetingId: string,
   content: string,
@@ -351,25 +357,22 @@ export async function correctMeetingMessage(
 export async function requestRoleResponse(
   meetingId: string,
   role: string,
-  models: Record<string, string>,
 ): Promise<void> {
-  await postJson(`/meetings/${meetingId}/roles/${role}/respond`, { models })
+  await postJson(`/meetings/${meetingId}/roles/${role}/respond`, {})
 }
 
 export async function requestRoleSequence(
   meetingId: string,
   roles: string[],
-  models: Record<string, string>,
 ): Promise<void> {
-  await postJson(`/meetings/${meetingId}/sequences`, { roles, models })
+  await postJson(`/meetings/${meetingId}/sequences`, { roles })
 }
 
 export async function retryStep(
   meetingId: string,
   stepId: string,
-  models: Record<string, string>,
 ): Promise<void> {
-  await postJson(`/meetings/${meetingId}/steps/${stepId}/retry`, { models })
+  await postJson(`/meetings/${meetingId}/steps/${stepId}/retry`, {})
 }
 
 export async function getTranscript(meetingId: string): Promise<string> {

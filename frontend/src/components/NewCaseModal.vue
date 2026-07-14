@@ -19,6 +19,7 @@ const emit = defineEmits<{ close: [] }>()
 const store = inject(councilKey)!
 const {
   topic,
+  models,
   loading,
   meetingCreationError,
   createNewMeeting,
@@ -49,6 +50,7 @@ const caseFileLimitsError = ref('')
 let caseFileLimitsRequestGeneration = 0
 const parallelMemberCount = ref(2)
 const parallelMembers = ref<Array<{ displayName: string; instancePrompt: string }>>([])
+const draftModelAssignments = ref<Record<string, string>>({})
 const textInputs = computed(() => selectedMode.value.inputs.filter((input) => input.kind === 'text'))
 const hasEmptyRequiredInput = computed(() =>
   textInputs.value.some((input) => !(inputValues.value[input.id] ?? '').trim()),
@@ -98,6 +100,11 @@ const selectedModeParticipants = computed(() => {
   const synthesizers = mode.roles.filter((role) => role.kind === 'synthesizer')
   return [...members, ...synthesizers]
 })
+const hasIncompleteModelAssignment = computed(
+  () =>
+    models.value.length === 0 ||
+    selectedModeParticipants.value.some((participant) => !draftModelAssignments.value[participant.id]),
+)
 
 // Reopening the modal always starts over at the mode picker - a half-finished previous
 // attempt (e.g. closed after picking a mode but before creating) shouldn't linger.
@@ -106,11 +113,13 @@ watch(
   (visible) => {
     caseFileLimitsRequestGeneration += 1
     if (visible) {
+      selectedModeId.value = DEFAULT_MODE_ID
       step.value = 'mode'
       inputValues.value = {}
       caseFiles.value = []
       clearMeetingCreationError()
       resetParallelMembers(selectedMode.value)
+      resetModelAssignments()
       caseFileLimits.value = null
       void refreshCaseFileLimits(caseFileLimitsRequestGeneration)
     } else {
@@ -159,6 +168,7 @@ function chooseMode(mode: ModeDefinition) {
     resetParallelMembers(mode)
   }
   selectedModeId.value = mode.id
+  resetModelAssignments()
   step.value = 'participants'
 }
 
@@ -200,6 +210,17 @@ function setParallelMemberCount(nextCount: number) {
     parallelMembers.value.push({ displayName: `委員 ${index + 1}`, instancePrompt: '' })
   }
   parallelMembers.value.splice(clamped)
+  resetModelAssignments(true)
+}
+
+function resetModelAssignments(preserveExisting = false) {
+  const firstModelId = models.value[0]?.id ?? ''
+  draftModelAssignments.value = Object.fromEntries(
+    selectedModeParticipants.value.map((participant) => [
+      participant.id,
+      preserveExisting ? draftModelAssignments.value[participant.id] || firstModelId : firstModelId,
+    ]),
+  )
 }
 
 function addCaseFile() {
@@ -271,9 +292,15 @@ function buildCaseFiles() {
 
 function buildParticipants() {
   const mode = selectedMode.value
-  if (mode.category !== 'parallel' || !mode.fanout || !mode.synthesis) return []
+  if (mode.category !== 'parallel' || !mode.fanout || !mode.synthesis) {
+    return mode.roles.map((role) => ({
+      role_id: role.id,
+      model_config_id: draftModelAssignments.value[role.id],
+    }))
+  }
   const members = Array.from({ length: parallelMemberCount.value }, (_, index) => ({
     role_id: `${mode.fanout!.role}-${index + 1}`,
+    model_config_id: draftModelAssignments.value[`${mode.fanout!.role}-${index + 1}`],
     display_name: parallelMembers.value[index]?.displayName || `委員 ${index + 1}`,
     instance_prompt: parallelMembers.value[index]?.instancePrompt || null,
   }))
@@ -281,7 +308,11 @@ function buildParticipants() {
     ...members,
     ...mode.roles
       .filter((role) => role.kind === 'synthesizer')
-      .map((role) => ({ role_id: role.id, display_name: role.name })),
+      .map((role) => ({
+        role_id: role.id,
+        model_config_id: draftModelAssignments.value[role.id],
+        display_name: role.name,
+      })),
   ]
 }
 </script>
@@ -539,7 +570,24 @@ function buildParticipants() {
           {{ role.name }}
         </span>
       </div>
-      <p class="participant-setup-note">模型可於建立後在 Settings 中為每個角色指派。</p>
+      <section class="settings-role-grid" data-testid="new-case-model-assignments">
+        <label
+          v-for="participant in selectedModeParticipants"
+          :key="participant.id"
+          class="model-slot"
+        >
+          <span>{{ participant.name }}</span>
+          <select
+            v-model="draftModelAssignments[participant.id]"
+            :data-testid="`new-case-${participant.id.toLowerCase()}-model-select`"
+          >
+            <option v-for="model in models" :key="model.id" :value="model.id">{{ model.id }}</option>
+          </select>
+        </label>
+      </section>
+      <p v-if="models.length === 0" class="error" data-testid="new-case-model-error" role="alert">
+        沒有可用模型，請先在 Settings 建立模型設定。
+      </p>
 
       <p
         v-if="meetingCreationError"
@@ -555,7 +603,7 @@ function buildParticipants() {
         class="btn btn-primary create-meeting-cta"
         data-testid="create-meeting-button"
         @click="submit"
-        :disabled="loading || caseFileLimitsLoading || !caseFileLimits || !topic.trim() || hasEmptyRequiredInput || hasIncompleteCaseFile || hasOversizedCaseFile || hasOversizedCaseFileTotal"
+        :disabled="loading || caseFileLimitsLoading || !caseFileLimits || !topic.trim() || hasEmptyRequiredInput || hasIncompleteModelAssignment || hasIncompleteCaseFile || hasOversizedCaseFile || hasOversizedCaseFileTotal"
       >
         建立
       </button>
