@@ -1468,7 +1468,11 @@ test('shows a failed-step hint and disables round-level actions until the step i
   )
 
   await openAdvancedOptions(page)
-  await expect(page.getByTestId('start-new-round-button')).toBeDisabled()
+  await expect(page.getByTestId('run-sequence-button')).toBeDisabled()
+  await expect(page.getByTestId('run-sequence-button')).toHaveAttribute(
+    'title',
+    '藍軍的回應失敗了，請點擊席位重試該步驟',
+  )
   await closeAdvancedOptions(page)
 
   // Fix the broken assignment before retrying, same as a real operator would.
@@ -1485,6 +1489,9 @@ test('shows a failed-step hint and disables round-level actions until the step i
 
   await expect(page.getByTestId('operation-status')).toContainText('狀態：已完成')
   await expect(page.getByTestId('start-meeting-button')).toBeEnabled()
+  await openAdvancedOptions(page)
+  await expect(page.getByTestId('run-sequence-button')).toBeEnabled()
+  await closeAdvancedOptions(page)
 
   await page.getByTestId('past-topics-button').click()
   page.once('dialog', (dialog) => dialog.accept())

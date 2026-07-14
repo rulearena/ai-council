@@ -205,7 +205,8 @@ const canSubmitChairman = computed(() => {
               class="btn btn-secondary"
               data-testid="run-sequence-button"
               @click="requestSelectedRoleSequence"
-              :disabled="loading || !canRun"
+              :disabled="loading || !canRun || !!failedRole"
+              :title="failedStepTitle"
             >
               執行序列
             </button>

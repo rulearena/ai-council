@@ -12,6 +12,7 @@ import {
   executeChairmanAction,
   projectFixedRoundFailedRole,
   projectPrimaryAction,
+  requestRoleSequenceWithFailureGuard,
   runWithPendingRoles,
   type PrimaryAction,
 } from '../chairmanActions'
@@ -1013,21 +1014,29 @@ export function useCouncil() {
     }))
   }
 
-  async function requestSelectedRoleSequence() {
+  async function requestSelectedRoleSequence(): Promise<boolean> {
     // selectedSequencePreset can be undefined when the active mode's roster can't build
     // any presets (fewer than 2 members, or no adjudicator - see sequencePresets above,
     // which returns []). Parallel modes deliberately have no sequence presets, so guard
     // against the TypeError up front.
-    if (!selectedMeeting.value || !canRun.value || !selectedSequencePreset.value) return
+    if (!selectedMeeting.value || !canRun.value || !selectedSequencePreset.value) return false
+    const meetingId = selectedMeeting.value.meeting_id
+    const roles = [...selectedSequencePreset.value.roles]
     clearContinueHint()
-    pendingRoles.value.push(...selectedSequencePreset.value.roles)
-    await runAction(async () => {
-      await requestRoleSequence(
-        selectedMeeting.value!.meeting_id,
-        selectedSequencePreset.value.roles,
-      )
-      await openMeeting(selectedMeeting.value!.meeting_id)
-      void refreshMeetingUntilSettled(selectedMeeting.value!.meeting_id)
+    return requestRoleSequenceWithFailureGuard({
+      failedRole: failedRole.value,
+      participants: selectedMeeting.value.participants,
+      pendingRoles: pendingRoles.value,
+      queuedRoles: roles,
+      onBlocked: (reason) => {
+        error.value = reason
+        chairmanActionFeedback.value = reason
+      },
+      request: () => runAction(async () => {
+        await requestRoleSequence(meetingId, roles)
+        await openMeeting(meetingId)
+        void refreshMeetingUntilSettled(meetingId)
+      }),
     })
   }
 

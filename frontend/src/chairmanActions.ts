@@ -230,6 +230,22 @@ export async function runWithPendingRoles(
   }
 }
 
+export async function requestRoleSequenceWithFailureGuard(input: {
+  failedRole: string | null
+  participants: ChairmanParticipant[]
+  pendingRoles: string[]
+  queuedRoles: string[]
+  onBlocked: (reason: string) => void
+  request: () => Promise<boolean>
+}): Promise<boolean> {
+  const blockedReason = chairmanActionBlockReason('all', input.failedRole, input.participants)
+  if (blockedReason) {
+    input.onBlocked(blockedReason)
+    return false
+  }
+  return runWithPendingRoles(input.pendingRoles, input.queuedRoles, input.request)
+}
+
 export function projectPrimaryAction(input: {
   modeId: string
   steps: WorkflowStep[]

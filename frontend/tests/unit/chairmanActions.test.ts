@@ -10,6 +10,7 @@ import {
   meetingEditPolicy,
   projectFixedRoundFailedRole,
   projectPrimaryAction,
+  requestRoleSequenceWithFailureGuard,
 } from '../../src/chairmanActions.ts'
 
 const roles = [
@@ -194,6 +195,41 @@ test('accepted chairman AI action keeps its optimistic role queue', async () => 
 
   assert.equal(succeeded, true)
   assert.deepEqual(pendingRoles, ['Existing', 'Prosecutor', 'Defense'])
+})
+
+test('role sequence guard blocks stale direct calls and rolls back rejected requests', async () => {
+  const pendingRoles = ['Existing']
+  const blockedReasons: string[] = []
+  let requests = 0
+
+  const blocked = await requestRoleSequenceWithFailureGuard({
+    failedRole: 'Defense',
+    participants: roles,
+    pendingRoles,
+    queuedRoles: ['Prosecutor', 'Defense'],
+    onBlocked: (reason) => blockedReasons.push(reason),
+    request: async () => { requests += 1; return true },
+  })
+
+  assert.equal(blocked, false)
+  assert.equal(requests, 0)
+  assert.deepEqual(pendingRoles, ['Existing'])
+  assert.deepEqual(blockedReasons, [
+    '辯護律師的回應失敗，請先重試失敗步驟，再請 AI 回應。',
+  ])
+
+  const rejected = await requestRoleSequenceWithFailureGuard({
+    failedRole: null,
+    participants: roles,
+    pendingRoles,
+    queuedRoles: ['Prosecutor', 'Defense'],
+    onBlocked: (reason) => blockedReasons.push(reason),
+    request: async () => { requests += 1; return false },
+  })
+
+  assert.equal(rejected, false)
+  assert.equal(requests, 1)
+  assert.deepEqual(pendingRoles, ['Existing'])
 })
 
 test('primary action ignores Human notes and names the exact next relay action', () => {
