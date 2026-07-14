@@ -1194,8 +1194,16 @@ def test_cancelling_background_run_stays_cancelled_when_model_returns(
         release_model.set()
 
     time.sleep(0.1)
-    events = client.get(f"/meetings/{meeting_id}").json()["events"]
-    assert [event["status"] for event in events] == ["cancelled"]
+    meeting = client.get(f"/meetings/{meeting_id}").json()
+    events = meeting["events"]
+    assert meeting["activity_status"] == "cancelled"
+    assert [event["status"] for event in events] == ["cancelled", "failed"]
+    assert events[1]["failure_kind"] == "interrupted"
+    assert events[1]["result_discarded"] is True
+    assert events[1]["retry_scheduled"] is False
+    transcript = client.get(f"/meetings/{meeting_id}/transcript.md").text
+    assert events[1]["step_id"] not in transcript
+    assert "OK" not in transcript
 
 
 def test_cancel_terminates_running_subscription_cli_process(tmp_path: Path) -> None:
