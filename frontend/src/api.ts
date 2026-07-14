@@ -122,6 +122,7 @@ export type MeetingEvent = {
   sequence?: number
   sequence_index?: number
   model_config_id?: string
+  adapter?: string
   prompt_template_name?: string
   prompt_template_hash?: string
   output_schema_hash?: string
@@ -130,6 +131,13 @@ export type MeetingEvent = {
   raw_output?: string
   parsed_output?: RoleOutput
   token_usage?: TokenUsage
+  started_at?: string
+  completed_at?: string
+  duration_ms?: number
+  failure_kind?: 'parse_error' | 'timeout' | 'adapter_error' | 'configuration_error' | 'interrupted'
+  retry_scheduled?: boolean
+  adapter_stdout_excerpt?: string
+  adapter_stderr_excerpt?: string
   error?: string
   corrects_event_id?: string
 }

@@ -121,9 +121,14 @@ class SubscriptionCLIAdapter:
     def complete(self, request: ModelRequest) -> ModelResponse:
         config = request.model_config
         if not config.command:
-            raise AdapterError("Subscription CLI config requires command")
+            raise AdapterError(
+                "Subscription CLI config requires command", failure_kind="configuration_error"
+            )
         if not any("{prompt}" in argument for argument in config.command):
-            raise AdapterError("Subscription CLI command requires a {prompt} placeholder")
+            raise AdapterError(
+                "Subscription CLI command requires a {prompt} placeholder",
+                failure_kind="configuration_error",
+            )
 
         command = [argument.replace("{prompt}", request.prompt) for argument in config.command]
         try:
@@ -239,7 +244,10 @@ def _resolve_api_key(api_key_env: str | None) -> str | None:
         return None
     api_key = os.environ.get(api_key_env)
     if not api_key:
-        raise AdapterError(f"Environment variable {api_key_env} is not set for API key")
+        raise AdapterError(
+            f"Environment variable {api_key_env} is not set for API key",
+            failure_kind="configuration_error",
+        )
     return api_key
 
 
@@ -271,7 +279,10 @@ class OpenAICompatibleHTTPAdapter:
     def complete(self, request: ModelRequest) -> ModelResponse:
         config = request.model_config
         if not config.base_url or not config.model:
-            raise AdapterError("HTTP model config requires base_url and model")
+            raise AdapterError(
+                "HTTP model config requires base_url and model",
+                failure_kind="configuration_error",
+            )
 
         payload: dict[str, object] = {
             "model": config.model,
@@ -298,7 +309,9 @@ class OpenAICompatibleHTTPAdapter:
 
     def discover_models(self, config: ModelConfig) -> list[str]:
         if not config.base_url:
-            raise AdapterError("HTTP model config requires base_url")
+            raise AdapterError(
+                "HTTP model config requires base_url", failure_kind="configuration_error"
+            )
         headers = {"Content-Type": "application/json"}
         api_key = _resolve_api_key(config.api_key_env)
         if api_key:
@@ -318,7 +331,10 @@ class AnthropicHTTPAdapter:
     def complete(self, request: ModelRequest) -> ModelResponse:
         config = request.model_config
         if not config.base_url or not config.model:
-            raise AdapterError("HTTP model config requires base_url and model")
+            raise AdapterError(
+                "HTTP model config requires base_url and model",
+                failure_kind="configuration_error",
+            )
 
         payload: dict[str, object] = {
             "model": config.model,
@@ -347,7 +363,10 @@ class GeminiHTTPAdapter:
     def complete(self, request: ModelRequest) -> ModelResponse:
         config = request.model_config
         if not config.base_url or not config.model:
-            raise AdapterError("HTTP model config requires base_url and model")
+            raise AdapterError(
+                "HTTP model config requires base_url and model",
+                failure_kind="configuration_error",
+            )
 
         payload: dict[str, object] = {
             "contents": [{"parts": [{"text": request.prompt}]}],

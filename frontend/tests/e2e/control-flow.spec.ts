@@ -454,6 +454,53 @@ test('role seat shows failed state, halts the rest of the round, and recovers vi
     .click()
 })
 
+test('records drawer keeps failed attempt diagnostics collapsed and copies safe JSON', async ({
+  page,
+  context,
+}) => {
+  await context.grantPermissions(['clipboard-read', 'clipboard-write'])
+  await page.goto('/')
+
+  const topic = `E2E attempt diagnostics ${Date.now()}`
+  await createMeetingViaNewCase(page, topic)
+  await setModelsInSettings(page, { blue: 'mock-broken', red: 'mock-slow', judge: 'mock-slow' })
+  await closeSettings(page)
+  await page.getByTestId('start-meeting-button').click()
+  await expect(page.getByTestId('role-seat-blue')).toHaveAttribute('data-status', 'failed')
+
+  await page.getByTestId('records-button').click()
+  const diagnostics = page.getByTestId('meeting-attempt-diagnostics')
+  await expect(diagnostics).toHaveCount(1)
+  await expect(diagnostics).not.toHaveAttribute('open', '')
+  await diagnostics.locator('summary').click()
+  await expect(diagnostics).toHaveAttribute('open', '')
+  await expect(diagnostics).toContainText('configuration_error')
+  await expect(diagnostics).toContainText('mock-broken')
+  await expect(diagnostics).toContainText('openai-compatible-http')
+
+  await diagnostics.getByTestId('copy-attempt-diagnostics').click()
+  const copied = JSON.parse(await page.evaluate(() => navigator.clipboard.readText()))
+  expect(copied).toMatchObject({
+    failure_kind: 'configuration_error',
+    model_config_id: 'mock-broken',
+    adapter: 'openai-compatible-http',
+    attempt: 1,
+    retry_scheduled: false,
+  })
+  expect(copied.prompt_messages[0].role).toBe('user')
+  expect(copied).not.toHaveProperty('command')
+  expect(copied).not.toHaveProperty('env')
+
+  await page.getByTestId('records-close-button').click()
+  await page.getByTestId('past-topics-button').click()
+  page.once('dialog', (dialog) => dialog.accept())
+  await page
+    .getByTestId('meeting-list-item')
+    .filter({ hasText: topic })
+    .getByTestId('delete-meeting-button')
+    .click()
+})
+
 test('continuing a fully completed round runs the sequence preset instead of a no-op start', async ({
   page,
 }) => {

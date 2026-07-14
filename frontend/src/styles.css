@@ -1397,6 +1397,51 @@ h2 {
   overflow-wrap: anywhere;
 }
 
+.attempt-diagnostics {
+  grid-column: 1 / -1;
+  padding: 0 10px 10px;
+  color: var(--color-text-muted);
+}
+
+.attempt-diagnostics summary {
+  cursor: pointer;
+  font-weight: 700;
+}
+
+.attempt-diagnostics-fields {
+  display: grid;
+  gap: 6px;
+  margin: 10px 0;
+}
+
+.attempt-diagnostics-fields > div {
+  display: grid;
+  grid-template-columns: 72px minmax(0, 1fr);
+  gap: 8px;
+}
+
+.attempt-diagnostics-fields dt {
+  font-weight: 700;
+}
+
+.attempt-diagnostics-fields dd {
+  min-width: 0;
+  margin: 0;
+  overflow-wrap: anywhere;
+  color: var(--color-text);
+}
+
+.attempt-diagnostics-block {
+  margin: 10px 0;
+}
+
+.attempt-diagnostics-block pre {
+  max-height: 240px;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
 .timeline-main strong {
   flex: 1 1 100px;
   min-width: 0;

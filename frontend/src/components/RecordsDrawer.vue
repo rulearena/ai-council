@@ -4,6 +4,7 @@ import { councilKey, formatDateTime, roleClass, roleColor, roleColorVars, roleIc
 import Drawer from './Drawer.vue'
 import RoleSilhouette from './RoleSilhouette.vue'
 import { transcriptDownloadUrl } from '../api'
+import type { MeetingEvent } from '../api'
 
 defineProps<{ show: boolean }>()
 defineEmits<{ close: [] }>()
@@ -24,6 +25,47 @@ const {
 
 type RecordsTab = 'timeline' | 'transcript' | 'debug'
 const activeTab = ref<RecordsTab>('timeline')
+const copiedDiagnosticEventId = ref<string | null>(null)
+
+const diagnosticKeys = [
+  'event_id',
+  'meeting_id',
+  'step_id',
+  'base_step_id',
+  'round',
+  'role',
+  'attempt',
+  'status',
+  'failure_kind',
+  'model_config_id',
+  'adapter',
+  'prompt_messages',
+  'raw_output',
+  'parsed_output',
+  'token_usage',
+  'started_at',
+  'completed_at',
+  'duration_ms',
+  'retry_scheduled',
+  'error',
+  'adapter_stdout_excerpt',
+  'adapter_stderr_excerpt',
+] as const
+
+function hasAttemptDiagnostics(event: MeetingEvent) {
+  return Boolean(event.failure_kind || event.adapter || event.started_at)
+}
+
+function diagnosticBundle(event: MeetingEvent) {
+  return Object.fromEntries(
+    diagnosticKeys.flatMap((key) => (event[key] === undefined ? [] : [[key, event[key]]])),
+  )
+}
+
+async function copyAttemptDiagnostics(event: MeetingEvent) {
+  await navigator.clipboard.writeText(JSON.stringify(diagnosticBundle(event), null, 2))
+  copiedDiagnosticEventId.value = event.event_id
+}
 </script>
 
 <template>
@@ -105,6 +147,51 @@ const activeTab = ref<RecordsTab>('timeline')
         >
           編輯
         </button>
+        <details
+          v-if="hasAttemptDiagnostics(event)"
+          class="attempt-diagnostics"
+          data-testid="meeting-attempt-diagnostics"
+        >
+          <summary>LLM attempt 診斷</summary>
+          <dl class="attempt-diagnostics-fields">
+            <div><dt>分類</dt><dd>{{ event.failure_kind ?? 'completed' }}</dd></div>
+            <div><dt>模型</dt><dd>{{ event.model_config_id ?? '—' }}</dd></div>
+            <div><dt>Adapter</dt><dd>{{ event.adapter ?? '—' }}</dd></div>
+            <div><dt>Attempt</dt><dd>{{ event.attempt }}</dd></div>
+            <div><dt>開始</dt><dd>{{ event.started_at ?? '—' }}</dd></div>
+            <div><dt>完成</dt><dd>{{ event.completed_at ?? '—' }}</dd></div>
+            <div><dt>耗時</dt><dd>{{ event.duration_ms == null ? '—' : `${event.duration_ms} ms` }}</dd></div>
+            <div><dt>自動重試</dt><dd>{{ event.retry_scheduled == null ? '—' : event.retry_scheduled ? '是' : '否' }}</dd></div>
+          </dl>
+          <div v-if="event.error" class="attempt-diagnostics-block">
+            <strong>Error</strong>
+            <pre>{{ event.error }}</pre>
+          </div>
+          <div v-if="event.raw_output" class="attempt-diagnostics-block">
+            <strong>Raw output</strong>
+            <pre>{{ event.raw_output }}</pre>
+          </div>
+          <div v-if="event.adapter_stdout_excerpt" class="attempt-diagnostics-block">
+            <strong>Adapter stdout（尾端）</strong>
+            <pre>{{ event.adapter_stdout_excerpt }}</pre>
+          </div>
+          <div v-if="event.adapter_stderr_excerpt" class="attempt-diagnostics-block">
+            <strong>Adapter stderr（尾端）</strong>
+            <pre>{{ event.adapter_stderr_excerpt }}</pre>
+          </div>
+          <div v-if="event.prompt_messages" class="attempt-diagnostics-block">
+            <strong>Prompt messages</strong>
+            <pre>{{ JSON.stringify(event.prompt_messages, null, 2) }}</pre>
+          </div>
+          <button
+            type="button"
+            class="btn btn-secondary btn-sm"
+            data-testid="copy-attempt-diagnostics"
+            @click="copyAttemptDiagnostics(event)"
+          >
+            {{ copiedDiagnosticEventId === event.event_id ? '已複製' : '複製診斷 JSON' }}
+          </button>
+        </details>
       </div>
     </section>
 
