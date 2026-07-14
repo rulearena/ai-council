@@ -1,6 +1,6 @@
 # 模型選擇可靠性
 
-Status: approved / ready-for-agent
+Status: implemented / awaiting acceptance
 
 Human Owner 於 2026-07-14 核准 spec backlog 83、84 合併批次。產品 backlog 仍以 `spec.md` §15 為唯一 Source of Record；本目錄只保存已核准工作的執行資料。
 
@@ -29,3 +29,4 @@ Human Owner 於 2026-07-14 核准 spec backlog 83、84 合併批次。產品 bac
 ## Comments
 
 - 2026-07-14：Human Owner 核准完整批次；開始自主實作流程。
+- 2026-07-14：完成 backlog 83–84；Spec review pass、Standards review pass（僅 Provider transport Repeated Switches Minor deferred）。最終 gates：backend 280 passed、frontend unit 8 passed、build 綠、Chromium 53 passed、直接 Chromium smoke 通過。

@@ -1,6 +1,6 @@
 # Meeting assignment 前端建立、恢復與設定
 
-Status: implemented / awaiting review
+Status: implemented / awaiting acceptance
 Blocked by: 01
 
 ## Goal
@@ -33,6 +33,8 @@ Blocked by: 01
 - Targeted Chromium 與 frontend build 綠；既有模型選擇 e2e 更新為 persisted contract。
 
 ## Comments
+
+- 2026-07-14：完成 New Case 全 roster assignment、meeting hydration/isolation、Settings persistence/rollback/warning 與 run payload 去權威化；review 加入 fixed six-hats 與 delayed PUT generation guard。Chromium final 53 passed。
 
 - 2026-07-14：Executor 以 Playwright public seams 逐項完成 relay/parallel 建立、meeting hydration/switch isolation、Settings full replacement/rollback、legacy/deleted fallback，以及四種 run request 移除 models map。Assignment PUT 回傳 summary 不含 events，前端採合併 projection 並保留既有 events/case_files，避免設定更新後遺失 retry UI。
 - 2026-07-14：工具沒有 gpt-5.6-luna selector，使用 assigned runtime。Frontend build、完整 Chromium 45/45、assignment backend targeted 9/9 與 `git diff --check` 通過；新增 legacy projection Playwright targeted 1/1 於完整 suite 後另行通過。

@@ -1,6 +1,6 @@
 # Meeting assignment 後端 Source of Truth
 
-Status: implemented / awaiting review
+Status: implemented / awaiting acceptance
 Blocked by: none
 
 ## Goal
@@ -33,6 +33,10 @@ Blocked by: none
 ## Acceptance
 
 - Targeted API/runner tests 綠，commit 單一目的並回報 red/green 證據。
+
+## Comments
+
+- 2026-07-14：完成 assignment module、atomic metadata update、四種 run route convergence、legacy/deleted fallback 與 fixed/dynamic parallel rosters；Spec 複驗 pass。Final backend 280 passed。
 
 ## Comments
 

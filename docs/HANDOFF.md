@@ -1,4 +1,4 @@
-# 交接文件（2026-07-13，Claude → Codex）
+# 交接文件（2026-07-14，Codex）
 
 > 給接手開發的 agent（Codex 或任何新 session）。讀完本檔 + 引用的 spec 章節即可接續，不需要舊對話脈絡。
 
@@ -18,8 +18,9 @@
 | Evidence to Verdict | `96cd1d9`–`c597e32` | 證物引用錨點、versioned per-role output schema、adjudicator rich structured verdict、parse-only auto retry 與新舊輸出呈現（實作計畫：`docs/plans/2026-07-13-evidence-to-verdict.md`） |
 | Configurable Case File Limits | `2c3f069`–`b51052a` | 案卷單份/總量限制環境變數化（預設 50,000/120,000）、公開實際限制、建立前字元/token/context 提示、超限阻擋與 413 detail 保留（實作計畫：`docs/plans/2026-07-13-configurable-case-file-limits.md`） |
 | LLM Attempt Diagnostics | `9d5adae`–`b5ff417` | 每場 meeting 保存成功、parse、timeout、adapter、interrupted attempts 的完整可取得診斷；Records Drawer 可安全查看／複製（實作計畫：`docs/plans/2026-07-14-llm-attempt-diagnostics.md`） |
+| Model Selection Reliability | `6c2b033`–`50becfa` | 每場 meeting assignment 持久化與 deterministic legacy fallback；Provider-first 模型管理、preview/existing discovery、manual exact ID 與跨 meeting/request race guards（實作計畫：`docs/plans/2026-07-14-model-selection-reliability.md`） |
 
-**驗收基線（任何改動後不得低於此）**：後端 `pytest` **262 passed**；前端 `npm run build` 綠；e2e **39 passed**。
+**驗收基線（任何改動後不得低於此）**：後端 `pytest` **280 passed**；frontend unit **8 passed**；前端 `npm run build` 綠；e2e **53 passed**。
 
 ## 2. Agent 開發佇列與目前核准批次
 
@@ -28,6 +29,8 @@ Evidence to Verdict 批次已實作並等待 Human Owner acceptance。
 Backlog 81「案卷容量限制設定化與建立前提示」已實作並通過雙軸 review 與完整驗收，等待 Human Owner acceptance。預設單份/總量為 50,000/120,000 字元，環境變數可覆寫；前端僅在取得後端實際限制後允許建立，並顯示 token/context 風險、inline 錯誤與後端 413 detail。執行計畫：`docs/plans/2026-07-13-configurable-case-file-limits.md`；ticket：`.scratch/configurable-case-file-limits/`。
 
 Backlog 82「每場會議的 LLM attempt 診斷紀錄與檢視器」已實作並通過雙軸 review 與完整驗收，等待 Human Owner acceptance。失敗 attempt 現在保留 raw/parsed output、模型、prompt、時間、token、錯誤分類與安全的 adapter excerpts；Records Drawer 可查看／複製。取消中的 in-flight attempt 會留下 `interrupted/result_discarded` 診斷，但不進 transcript，且不會在 terminal 後啟動 retry 或 synthesis。執行計畫：`docs/plans/2026-07-14-llm-attempt-diagnostics.md`；ticket：`.scratch/llm-attempt-diagnostics/`。
+
+Backlog 83–84「模型選擇可靠性」已實作並通過雙軸 review 與完整驗收，等待 Human Owner acceptance。Meeting participant metadata 是 assignment Source of Truth；舊 meeting 僅 read-time 從最新 event/default 恢復，不改寫歷史。Model Manager 以 Provider-first 顯示 exact model ID，支援 preview/existing discovery 與 manual fallback。執行計畫：`docs/plans/2026-07-14-model-selection-reliability.md`；ticket：`.scratch/model-selection-reliability/`。
 
 已完成的 Evidence to Verdict 範圍：
 
@@ -46,8 +49,10 @@ Backlog 82「每場會議的 LLM attempt 診斷紀錄與檢視器」已實作並
 - **Runner**：relay 公開方法收 `plan: RelayPlan` + `inputs`（API 層用 `meeting_mode()` → `relay_plan(mode)` 解析）。relay round 計數 = `plan.steps[-1].step_id` 完成次數。parallel 走 `MeetingRunner.start_parallel()` / `retry_failed_parallel_step()` + `ParallelPlan`；fanout adapter calls 併發，事件按 member index 寫入，member failure 投影 `waiting`，retry 成功且全員完成後觸發 synthesis。`ParallelPlan.anonymize_synthesis_inputs` 開啟時，synthesis prompt 的 `prior_transcript` 會清空，僅透過匿名化 `fanout_outputs` 讀成員結果。
 - **模型寫入紀律**（§17 實作）：所有 models.yaml 寫入走 `model_write_lock`（存在性檢查+寫入+health clear 同鎖）；health store 有 generation token——**generation 取值必須在讀 model config 之前**（先取 gen → 讀 config → 檢查 → record(gen)，過期即丟棄）；`_write_config` 是 temp+rename 原子寫。
 - **422 契約**：/models 寫入路徑的驗證錯誤（含 pydantic 層）統一 `[{"field", "message"}]`，前端 `ApiError.detail` 依 field 對應表單欄位。
+- **Meeting model assignment**：participant metadata 是新 meeting 的唯一 assignment SoT；`PUT /meetings/{id}/participant-models` 完整替換 roster。Runner 的 start/respond/sequence/retry 只讀後端 resolved snapshot；legacy request `models` 不具權威。舊 meeting 的 event/default recovery 與 deleted-model fallback 只在 read time 投影，不寫 metadata/events。
+- **Provider 與 adapter 分離**：Provider 是前端產品概念，舊 `models.yaml` 仍保存 adapter schema，不需 migration。新 config discovery 走 `POST /models/available-models` preview，既有 config 沿用 `GET /models/{id}/available-models`；兩路都只接受 credential 環境變數名稱。
 - **前端 active mode**：`useCouncil.ts` 的 `activeModeSource`（module ref）跟著 `selectedMeeting.mode_id` 走（watchEffect，catalog splice 會重解析）；場景 override 是 keyed watch（`meeting_id::defaultScene` 字串）——**不要 watch 整顆 meeting 物件**（串流事件會整物件替換）。catalog 來源 = `GET /modes`，`modes.ts` 本地常數只是後端不可達時的 fallback。
-- **前端無 unit test runner**，只有 Playwright e2e（`frontend/tests/e2e/control-flow.spec.ts`，共用一個 spec 檔）。
+- **前端測試**：Provider/discovery pure modules 使用 Node 內建 test runner（`npm run test:unit`）；使用者流程使用 Playwright e2e（`frontend/tests/e2e/control-flow.spec.ts`）。
 
 ## 4. 開發環境
 
@@ -84,4 +89,5 @@ Backlog 82「每場會議的 LLM attempt 診斷紀錄與檢視器」已實作並
 - Evidence to Verdict 批次（backlog 80、63–65）已實作、雙軸 review 與完整驗收通過，等待 Human Owner acceptance。
 - Backlog 81 已實作、雙軸 review 與完整驗收通過，等待 Human Owner acceptance。
 - Backlog 82 已實作、雙軸 review 與完整驗收通過，等待 Human Owner acceptance。
+- Backlog 83–84 已實作、雙軸 review 與完整驗收通過，等待 Human Owner acceptance。
 - 使用者已裁定：個人版不做多人/帳號（backlog 有註記）；案卷 Phase 2/RAG 仍延後到 backlog 79。
