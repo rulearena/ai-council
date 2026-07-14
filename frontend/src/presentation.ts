@@ -7,7 +7,8 @@ export type PresentationMode = {
 }
 
 export type PresentationParticipant = {
-  role_id: string
+  role_id?: string
+  id?: string
   display_name?: string | null
   name?: string | null
 }
@@ -50,7 +51,9 @@ export function roleDisplayName(
 ): string {
   if (roleId === 'Human') return '主席'
   if (roleId === 'System') return '系統'
-  const participant = participants.find((candidate) => candidate.role_id === roleId)
+  const participant = participants.find(
+    (candidate) => (candidate.role_id ?? candidate.id) === roleId,
+  )
   const participantName = participant?.display_name?.trim() || participant?.name?.trim()
   if (participantName) return participantName
   return mode.roles.find((role) => role.id === roleId)?.name ?? roleId

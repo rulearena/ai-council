@@ -81,6 +81,10 @@ test('parallel participant display name wins over the catalog prototype and raw 
 
   assert.equal(roleDisplayName(brainstorm, participants, 'Member-1'), '資安顧問')
   assert.equal(
+    roleDisplayName(brainstorm, [{ id: 'Member-2', name: '委員 2' }], 'Member-2'),
+    '委員 2',
+  )
+  assert.equal(
     stepDisplayLabel(brainstorm, participants, {
       role: 'Member-1',
       step_id: 'fanout-1-member-1',

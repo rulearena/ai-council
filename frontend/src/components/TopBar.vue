@@ -3,7 +3,7 @@ import { inject } from 'vue'
 import { councilKey } from '../composables/useCouncil'
 
 const store = inject(councilKey)!
-const { selectedMeeting, meetingIdCopied, copyMeetingInfo } = store
+const { selectedMeeting, meetingInfoCopied, copyMeetingInfo } = store
 
 defineEmits<{
   'open-settings': []
@@ -19,22 +19,22 @@ defineEmits<{
     <div class="top-bar-left">
       <h1>AI 眾議院</h1>
       <template v-if="selectedMeeting">
-        <span class="meeting-id-pill" data-testid="meeting-title-display">{{ selectedMeeting.title }}</span>
+        <span class="meeting-title-pill" data-testid="meeting-title-display">{{ selectedMeeting.title }}</span>
         <button
           type="button"
-          class="btn btn-secondary btn-sm copy-meeting-id-button"
+          class="btn btn-secondary btn-sm copy-meeting-info-button"
           data-testid="copy-meeting-id-button"
-          :aria-label="meetingIdCopied ? '已複製會議資訊' : '複製會議資訊（包含會議 ID）'"
+          :aria-label="meetingInfoCopied ? '已複製會議資訊' : '複製會議資訊（包含會議 ID）'"
           @click="copyMeetingInfo(selectedMeeting)"
         >
-          <svg v-if="!meetingIdCopied" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <svg v-if="!meetingInfoCopied" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
             <rect x="9" y="9" width="11" height="11" rx="2" />
             <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
           </svg>
           <svg v-else viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
             <path d="M20 6 9 17l-5-5" />
           </svg>
-          {{ meetingIdCopied ? '已複製' : '複製' }}
+          {{ meetingInfoCopied ? '已複製' : '複製' }}
         </button>
       </template>
     </div>

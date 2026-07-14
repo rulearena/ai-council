@@ -13,6 +13,7 @@ import Modal from './Modal.vue'
 import ModeCard from './ModeCard.vue'
 import RoleSilhouette from './RoleSilhouette.vue'
 import { modelDisplayLabel } from '../providers'
+import { roleDisplayName } from '../presentation'
 
 const props = defineProps<{ show: boolean }>()
 const emit = defineEmits<{ close: [] }>()
@@ -227,6 +228,11 @@ function setParallelMemberCount(nextCount: number) {
   resetModelAssignments(true)
 }
 
+function parallelMemberDisplayName(index: number) {
+  const roleId = `${selectedMode.value.fanout!.role}-${index + 1}`
+  return roleDisplayName(selectedMode.value, selectedModeParticipants.value, roleId)
+}
+
 function resetModelAssignments(preserveExisting = false) {
   const firstModelId = models.value[0]?.id ?? ''
   draftModelAssignments.value = Object.fromEntries(
@@ -436,7 +442,7 @@ function buildParticipants() {
         </div>
 
         <label v-for="(_, index) in parallelMemberCount" :key="index" class="parallel-member-row">
-          <span>{{ selectedMode.fanout.role }}-{{ index + 1 }}</span>
+          <span>{{ parallelMemberDisplayName(index) }}</span>
           <input
             v-model="parallelMembers[index].displayName"
             :data-testid="`parallel-member-${index + 1}-name`"

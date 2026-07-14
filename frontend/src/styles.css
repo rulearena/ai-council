@@ -1115,12 +1115,6 @@ h2 {
   overflow-wrap: anywhere;
 }
 
-.meeting-id-text {
-  font-family: var(--font-mono);
-  font-size: 11px;
-  letter-spacing: 0.01em;
-}
-
 .meeting-item strong {
   color: var(--color-text-secondary);
   font-family: var(--font-display);

@@ -271,8 +271,8 @@ export function useCouncil() {
   // is the sole source of the "thinking" state: pendingRoles[0] is thinking, the rest are queued.
   const pendingRoles = ref<CouncilRole[]>([])
 
-  const meetingIdCopied = ref(false)
-  let meetingIdCopiedTimeout: ReturnType<typeof setTimeout> | null = null
+  const meetingInfoCopied = ref(false)
+  let meetingInfoCopiedTimeout: ReturnType<typeof setTimeout> | null = null
 
   // Briefly true right after a chair message is sent, so the Chairman seat can pop a
   // speech bubble even though the backend has no "speaking" concept of its own.
@@ -555,7 +555,7 @@ export function useCouncil() {
     // right after enqueuing roles, so clearing unconditionally would erase what was just pushed.
     if (meetingId !== selectedMeeting.value?.meeting_id) {
       pendingRoles.value = []
-      meetingIdCopied.value = false
+      meetingInfoCopied.value = false
       showContinueHint.value = false
       seenEventIds = new Set()
     }
@@ -654,7 +654,7 @@ export function useCouncil() {
         }
       },
       () => {
-        error.value = 'Meeting event stream disconnected.'
+        error.value = '會議事件串流已中斷。'
         pendingRoles.value = []
       },
     )
@@ -921,10 +921,10 @@ export function useCouncil() {
   async function copyMeetingInfo(meeting: Meeting) {
     try {
       await navigator.clipboard.writeText(`${meeting.title}\n會議 ID：${meeting.meeting_id}`)
-      meetingIdCopied.value = true
-      if (meetingIdCopiedTimeout) clearTimeout(meetingIdCopiedTimeout)
-      meetingIdCopiedTimeout = setTimeout(() => {
-        meetingIdCopied.value = false
+      meetingInfoCopied.value = true
+      if (meetingInfoCopiedTimeout) clearTimeout(meetingInfoCopiedTimeout)
+      meetingInfoCopiedTimeout = setTimeout(() => {
+        meetingInfoCopied.value = false
       }, 1500)
     } catch (caught) {
       error.value = caught instanceof Error ? caught.message : String(caught)
@@ -998,7 +998,7 @@ export function useCouncil() {
     assignmentUpdateError,
     devMode,
     pendingRoles,
-    meetingIdCopied,
+    meetingInfoCopied,
     chairmanSpeaking,
     showContinueHint,
     // computed
