@@ -2,8 +2,11 @@ from __future__ import annotations
 
 import hashlib
 import json
+import sys
+import time
 from dataclasses import dataclass
 from pathlib import Path
+from threading import Event, Lock, Thread
 
 import pytest
 
@@ -17,7 +20,12 @@ from ai_council.meetings.runner import (
     RunnerAdapters,
     StepDefinition,
 )
-from ai_council.models.adapters import AdapterError, ModelRequest, ModelResponse
+from ai_council.models.adapters import (
+    AdapterError,
+    ModelRequest,
+    ModelResponse,
+    SubscriptionCLIAdapter,
+)
 from ai_council.models.config import ModelConfig
 from ai_council.prompting.renderer import PromptRenderer
 from ai_council.prompting.schemas import (
@@ -1161,6 +1169,202 @@ def test_runner_cancel_notifies_adapters_that_support_cancellation(tmp_path: Pat
     assert adapter.cancelled_meeting_ids == ["meeting-1"]
 
 
+def test_runner_records_cancelled_subscription_cli_attempt_without_transcript_output(
+    tmp_path: Path,
+) -> None:
+    started_marker = tmp_path / "cli-started"
+    cli = tmp_path / "slow_cli.py"
+    cli.write_text(
+        "import pathlib, time\n"
+        f"pathlib.Path({str(started_marker)!r}).write_text('started')\n"
+        "print('partial subscription output', flush=True)\n"
+        "time.sleep(30)\n",
+        encoding="utf-8",
+    )
+    prompt_dir = tmp_path / "prompts"
+    prompt_dir.mkdir()
+    (prompt_dir / "blue_revise.md").write_text(
+        "{{ role }} {{ topic }} {{ prior_transcript }} {{ required_json_schema }}",
+        encoding="utf-8",
+    )
+    runner = MeetingRunner(
+        repository=MeetingRepository(tmp_path / "data"),
+        prompt_renderer=PromptRenderer(prompt_dir),
+        adapters=RunnerAdapters(by_name={"subscription-cli": SubscriptionCLIAdapter()}),
+    )
+    model = ModelConfig(
+        id="cli-blue",
+        adapter="subscription-cli",
+        command=[sys.executable, str(cli), "{prompt}"],
+        timeout_seconds=60,
+    )
+    thread = Thread(
+        target=lambda: runner.respond_as_role(
+            plan=RED_BLUE_PLAN,
+            meeting_id="meeting-1",
+            topic="取消 CLI",
+            role="Blue",
+            model_assignments={"Blue": model},
+        )
+    )
+    thread.start()
+    deadline = time.monotonic() + 3
+    while not started_marker.exists() and time.monotonic() < deadline:
+        time.sleep(0.01)
+    assert started_marker.exists(), "subscription CLI did not start"
+
+    runner.cancel("meeting-1")
+    thread.join(timeout=3)
+
+    assert not thread.is_alive()
+    lifecycle, diagnostic = runner.repository.read_events("meeting-1")
+    assert lifecycle["status"] == "cancelled"
+    assert diagnostic["status"] == "failed"
+    assert diagnostic["failure_kind"] == "interrupted"
+    assert diagnostic["retry_scheduled"] is False
+    assert diagnostic["result_discarded"] is True
+    assert diagnostic["adapter"] == "subscription-cli"
+    assert diagnostic["adapter_stdout_excerpt"] == "partial subscription output"
+    serialized = json.dumps(diagnostic)
+    assert str(cli) not in serialized
+    assert "command" not in diagnostic
+    assert "env" not in diagnostic
+    transcript = runner.transcript_projector.project(
+        runner.repository.read_events("meeting-1"), title="取消 CLI"
+    )
+    assert diagnostic["step_id"] not in transcript
+    assert "partial subscription output" not in transcript
+
+
+@pytest.mark.parametrize("raw_output", [VALID_OUTPUT, "not json"])
+def test_sequential_terminal_result_is_recorded_as_discarded_without_parse_retry(
+    tmp_path: Path,
+    raw_output: str,
+) -> None:
+    repository = MeetingRepository(tmp_path / "data")
+
+    class CancelThenRespondAdapter:
+        calls = 0
+
+        def complete(self, request: ModelRequest) -> ModelResponse:
+            self.calls += 1
+            assert request.meeting_id is not None
+            repository.append_event(
+                request.meeting_id,
+                {
+                    "event_id": f"{request.meeting_id}:cancelled",
+                    "meeting_id": request.meeting_id,
+                    "step_id": "meeting",
+                    "role": "System",
+                    "attempt": 1,
+                    "status": "cancelled",
+                },
+            )
+            return ModelResponse(
+                raw_output=raw_output,
+                token_usage={"prompt_tokens": 4, "completion_tokens": 1, "total_tokens": 5},
+            )
+
+    adapter = CancelThenRespondAdapter()
+    prompt_dir = tmp_path / "prompts"
+    prompt_dir.mkdir()
+    (prompt_dir / "blue_revise.md").write_text(
+        "{{ role }} {{ topic }} {{ prior_transcript }} {{ required_json_schema }}",
+        encoding="utf-8",
+    )
+    runner = MeetingRunner(
+        repository=repository,
+        prompt_renderer=PromptRenderer(prompt_dir),
+        adapters=RunnerAdapters(by_name={"mock": adapter}),
+    )
+
+    runner.respond_as_role(
+        plan=RED_BLUE_PLAN,
+        meeting_id="meeting-1",
+        topic="terminal response",
+        role="Blue",
+        model_assignments={"Blue": ModelConfig(id="mock-blue", adapter="mock")},
+    )
+
+    lifecycle, diagnostic = repository.read_events("meeting-1")
+    assert lifecycle["status"] == "cancelled"
+    assert adapter.calls == 1
+    assert diagnostic["status"] == "failed"
+    assert diagnostic["failure_kind"] == "interrupted"
+    assert diagnostic["result_discarded"] is True
+    assert diagnostic["retry_scheduled"] is False
+    assert diagnostic["raw_output"] == raw_output
+    assert diagnostic["token_usage"]["total_tokens"] == 5
+    assert "parsed_output" not in diagnostic
+    assert diagnostic["step_id"] not in runner.transcript_projector.project(
+        [lifecycle, diagnostic], title="terminal response"
+    )
+
+
+def test_parallel_cancel_records_each_started_member_in_deterministic_order(
+    tmp_path: Path,
+) -> None:
+    class BlockingAdapter:
+        def __init__(self, expected_calls: int) -> None:
+            self.expected_calls = expected_calls
+            self.calls = 0
+            self.lock = Lock()
+            self.all_started = Event()
+            self.release = Event()
+
+        def complete(self, request: ModelRequest) -> ModelResponse:
+            with self.lock:
+                self.calls += 1
+                if self.calls == self.expected_calls:
+                    self.all_started.set()
+            assert self.release.wait(timeout=3)
+            return ModelResponse(
+                raw_output=VALID_OUTPUT,
+                token_usage={"prompt_tokens": 3, "completion_tokens": 2, "total_tokens": 5},
+            )
+
+        def cancel(self, meeting_id: str) -> None:
+            self.release.set()
+
+    adapter = BlockingAdapter(expected_calls=3)
+    runner = build_runner(
+        tmp_path,
+        adapter=adapter,
+        templates=("brainstorm_member", "brainstorm_synthesis"),
+    )
+    thread = Thread(
+        target=lambda: runner.start_parallel(
+            plan=PARALLEL_PLAN,
+            meeting_id="meeting-1",
+            topic="取消平行執行",
+            model_assignments=parallel_model_assignments(),
+        )
+    )
+    thread.start()
+    assert adapter.all_started.wait(timeout=3)
+
+    runner.cancel("meeting-1")
+    thread.join(timeout=3)
+
+    assert not thread.is_alive()
+    events = runner.repository.read_events("meeting-1")
+    assert events[0]["status"] == "cancelled"
+    diagnostics = events[1:]
+    assert [event["step_id"] for event in diagnostics] == [
+        "fanout-1-member-1",
+        "fanout-1-member-2",
+        "fanout-1-member-3",
+    ]
+    assert all(event["status"] == "failed" for event in diagnostics)
+    assert all(event["failure_kind"] == "interrupted" for event in diagnostics)
+    assert all(event["retry_scheduled"] is False for event in diagnostics)
+    assert all(event["result_discarded"] is True for event in diagnostics)
+    assert all(event["raw_output"] == VALID_OUTPUT for event in diagnostics)
+    assert all(event["token_usage"]["total_tokens"] == 5 for event in diagnostics)
+    transcript = runner.transcript_projector.project(events, title="取消平行執行")
+    assert "fanout-1-member" not in transcript
+
+
 def test_runner_close_records_closure_and_blocks_future_ai_steps(tmp_path: Path) -> None:
     adapter = FakeAdapter([VALID_OUTPUT] * 2)
     runner = build_runner(tmp_path, adapter=adapter)
@@ -1676,16 +1880,24 @@ def test_parallel_parse_retry_stops_before_second_call_when_meeting_is_cancelled
     )
 
     assert adapter.calls == 1
-    assert strip_created_at(repository.read_events("meeting-1")) == [
-        {
-            "event_id": "meeting-1:cancelled",
-            "meeting_id": "meeting-1",
-            "step_id": "meeting-cancelled",
-            "role": "System",
-            "attempt": 1,
-            "status": "cancelled",
-        }
-    ]
+    events = repository.read_events("meeting-1")
+    assert strip_created_at(events)[0] == {
+        "event_id": "meeting-1:cancelled",
+        "meeting_id": "meeting-1",
+        "step_id": "meeting-cancelled",
+        "role": "System",
+        "attempt": 1,
+        "status": "cancelled",
+    }
+    diagnostic = events[1]
+    assert diagnostic["status"] == "failed"
+    assert diagnostic["failure_kind"] == "interrupted"
+    assert diagnostic["retry_scheduled"] is False
+    assert diagnostic["result_discarded"] is True
+    assert diagnostic["raw_output"] == "not json"
+    assert "fanout-1-member-1" not in runner.transcript_projector.project(
+        events, title="取消 retry"
+    )
 
 
 def test_parallel_runner_can_anonymize_synthesis_inputs(tmp_path: Path) -> None:

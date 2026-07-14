@@ -465,8 +465,6 @@ class MeetingRunner:
             parsed_output = output_schema.parse(response.raw_output)
         except OutputParseError as error:
             self._clear_active_execution(meeting_id)
-            if self._is_terminal(meeting_id):
-                return False
             failed_event: dict[str, object] = {
                 "event_id": f"{meeting_id}:{event_step_id}:attempt-{attempt}:failed",
                 "meeting_id": meeting_id,
@@ -489,6 +487,11 @@ class MeetingRunner:
             }
             if response is not None and response.token_usage is not None:
                 failed_event["token_usage"] = response.token_usage
+            if self._is_terminal(meeting_id):
+                self.repository.append_event(
+                    meeting_id, self._discarded_terminal_attempt(failed_event)
+                )
+                return False
             self.repository.append_event(meeting_id, failed_event)
             if parse_retries_remaining:
                 return self._run_step(
@@ -507,8 +510,6 @@ class MeetingRunner:
             return False
         except (AdapterError, KeyError) as error:
             self._clear_active_execution(meeting_id)
-            if self._is_terminal(meeting_id):
-                return False
             failed_event = {
                 "event_id": f"{meeting_id}:{event_step_id}:attempt-{attempt}:failed",
                 "meeting_id": meeting_id,
@@ -529,12 +530,15 @@ class MeetingRunner:
                 **extra_event_fields,
             }
             self._add_adapter_excerpts(failed_event, error)
+            if self._is_terminal(meeting_id):
+                self.repository.append_event(
+                    meeting_id, self._discarded_terminal_attempt(failed_event)
+                )
+                return False
             self.repository.append_event(meeting_id, failed_event)
             return False
 
         self._clear_active_execution(meeting_id)
-        if self._is_terminal(meeting_id):
-            return False
         completed_event = {
             "event_id": f"{meeting_id}:{event_step_id}:attempt-{attempt}:completed",
             "meeting_id": meeting_id,
@@ -555,6 +559,11 @@ class MeetingRunner:
         }
         if response.token_usage is not None:
             completed_event["token_usage"] = response.token_usage
+        if self._is_terminal(meeting_id):
+            self.repository.append_event(
+                meeting_id, self._discarded_terminal_attempt(completed_event)
+            )
+            return False
         self.repository.append_event(
             meeting_id,
             completed_event,
@@ -591,8 +600,8 @@ class MeetingRunner:
             event_groups = [future.result() for future in futures]
         for events in event_groups:
             for event in events:
-                if self._is_terminal(meeting_id):
-                    return
+                if self._is_terminal(meeting_id) and not event.get("result_discarded"):
+                    event = self._discarded_terminal_attempt(event)
                 self.repository.append_event(meeting_id, event)
 
     def _build_parallel_member_events(
@@ -646,8 +655,7 @@ class MeetingRunner:
                 )
                 parsed_output = output_schema.parse(response.raw_output)
             except OutputParseError as error:
-                events.append(
-                    self._parallel_member_failure_event(
+                failure_event = self._parallel_member_failure_event(
                         meeting_id=meeting_id,
                         event_step_id=event_step_id,
                         member=member,
@@ -662,11 +670,13 @@ class MeetingRunner:
                         started_clock=started_clock,
                         prompt_metadata=prompt_metadata,
                     )
-                )
+                if self._is_terminal(meeting_id):
+                    events.append(self._discarded_terminal_attempt(failure_event))
+                    return events
+                events.append(failure_event)
                 continue
             except (AdapterError, KeyError) as error:
-                events.append(
-                    self._parallel_member_failure_event(
+                failure_event = self._parallel_member_failure_event(
                         meeting_id=meeting_id,
                         event_step_id=event_step_id,
                         member=member,
@@ -681,7 +691,9 @@ class MeetingRunner:
                         started_clock=started_clock,
                         prompt_metadata=prompt_metadata,
                     )
-                )
+                if self._is_terminal(meeting_id):
+                    failure_event = self._discarded_terminal_attempt(failure_event)
+                events.append(failure_event)
                 return events
 
             completed_event: dict[str, object] = {
@@ -705,6 +717,8 @@ class MeetingRunner:
             }
             if response.token_usage is not None:
                 completed_event["token_usage"] = response.token_usage
+            if self._is_terminal(meeting_id):
+                completed_event = self._discarded_terminal_attempt(completed_event)
             events.append(completed_event)
             return events
         return events
@@ -776,6 +790,26 @@ class MeetingRunner:
             event["adapter_stdout_excerpt"] = error.stdout_excerpt
         if error.stderr_excerpt is not None:
             event["adapter_stderr_excerpt"] = error.stderr_excerpt
+
+    @staticmethod
+    def _discarded_terminal_attempt(event: dict[str, object]) -> dict[str, object]:
+        discarded = dict(event)
+        original_error = discarded.get("error")
+        event_id = str(discarded["event_id"])
+        discarded.update(
+            {
+                "event_id": f"{event_id.rsplit(':', 1)[0]}:interrupted",
+                "status": "failed",
+                "failure_kind": "interrupted",
+                "retry_scheduled": False,
+                "result_discarded": True,
+                "error": "Model attempt was interrupted because the meeting became terminal; result discarded.",
+            }
+        )
+        if original_error:
+            discarded["error"] = f"{discarded['error']} Original error: {original_error}"
+        discarded.pop("parsed_output", None)
+        return discarded
 
     def _run_parallel_synthesis_if_ready(
         self,

@@ -8,6 +8,8 @@ class TranscriptProjector:
         lines = [f"# {title}", ""]
 
         for index, event in enumerate(events):
+            if event.get("result_discarded"):
+                continue
             if index:
                 lines.append("")
             lines.extend(self._render_event(event))
