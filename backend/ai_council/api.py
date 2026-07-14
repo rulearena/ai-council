@@ -843,6 +843,15 @@ def create_app(
             metadata,
             mode,
         )
+        participants = project_participants(mode, metadata)
+        role_display_names = {
+            str(participant["role_id"]): str(
+                participant.get("display_name")
+                or participant.get("name")
+                or participant["role_id"]
+            )
+            for participant in participants
+        }
         try:
             if mode.category == "relay":
                 runner.retry_failed_step(
@@ -852,6 +861,7 @@ def create_app(
                     model_assignments=model_assignments,
                     plan=relay_plan(mode),
                     inputs=meeting_inputs_for_runner(metadata, repository.read_case_files(meeting_id)),
+                    role_display_names=role_display_names,
                 )
             else:
                 runner.retry_failed_parallel_step(
@@ -1593,19 +1603,21 @@ def transcript_presentation_labels(
     }
     step_labels.update(human_steps)
     for event in events:
+        event_id = str(event.get("event_id", ""))
         step_id = str(event.get("step_id", ""))
         base_step_id = str(event.get("base_step_id") or step_id)
+        event_label_key = event_id or step_id
         role_label = role_labels.get(str(event.get("role")), str(event.get("role", "")))
         interaction_type = event.get("interaction_type")
         if interaction_type == "directed-role-instruction":
             target_role = str(event.get("target_role_id", ""))
-            step_labels[base_step_id] = f"主席追問{role_labels.get(target_role, target_role)}"
+            step_labels[event_label_key] = f"主席追問{role_labels.get(target_role, target_role)}"
         elif interaction_type == "directed-role-response":
-            step_labels[base_step_id] = f"{role_label}回應主席追問"
+            step_labels[event_label_key] = f"{role_label}回應主席追問"
         elif interaction_type == "role-sequence-response":
-            step_labels[base_step_id] = f"{role_label}依序回應"
+            step_labels[event_label_key] = f"{role_label}依序回應"
         elif base_step_id.startswith("member-"):
-            step_labels[base_step_id] = f"{role_label}發想"
+            step_labels[event_label_key] = f"{role_label}發想"
     return role_labels, step_labels
 
 

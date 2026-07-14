@@ -56,8 +56,11 @@ class TranscriptProjector:
                 "reopened": "重新開啟會議",
             }.get(str(status), "會議狀態更新")
         step_label = step_labels.get(
-            base_step_id,
-            step_labels.get(str(step_id), built_in_step_labels.get(base_step_id, str(step_id))),
+            str(event.get("event_id", "")),
+            step_labels.get(
+                str(step_id),
+                step_labels.get(base_step_id, built_in_step_labels.get(base_step_id, str(step_id))),
+            ),
         )
         heading = f"## {role_label} - {step_label}"
         if event.get("corrects_event_id"):

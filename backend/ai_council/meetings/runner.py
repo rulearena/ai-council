@@ -137,10 +137,21 @@ class MeetingRunner:
         model_assignments: dict[str, ModelConfig],
         plan: RelayPlan,
         inputs: dict[str, str] | None = None,
+        role_display_names: dict[str, str] | None = None,
     ) -> None:
         failed_event = self._latest_event_for_step(meeting_id, step_id)
         if not failed_event or failed_event.get("status") != "failed":
             raise ValueError(f"Step is not failed: {step_id}")
+        if failed_event.get("interaction_type") == "directed-role-response":
+            self._retry_failed_directed_response(
+                meeting_id=meeting_id,
+                failed_event=failed_event,
+                goal=goal,
+                model_assignments=model_assignments,
+                inputs=inputs,
+                role_display_names=role_display_names or {},
+            )
+            return
         base_step_id = str(failed_event.get("base_step_id", failed_event.get("step_id")))
         try:
             start_index = next(
@@ -157,6 +168,69 @@ class MeetingRunner:
             start_index=start_index,
             attempt_override=int(failed_event.get("attempt", 1)) + 1,
             round_number=int(failed_event.get("round", 1)),
+        )
+
+    def _retry_failed_directed_response(
+        self,
+        *,
+        meeting_id: str,
+        failed_event: dict[str, object],
+        goal: str,
+        model_assignments: dict[str, ModelConfig],
+        inputs: dict[str, str] | None,
+        role_display_names: dict[str, str],
+    ) -> None:
+        role = str(failed_event.get("role", ""))
+        if role not in model_assignments:
+            raise ValueError(f"Missing model assignment for role: {role}")
+        instruction_event_id = str(failed_event.get("in_response_to_event_id", ""))
+        instruction_event = next(
+            (
+                event
+                for event in self.repository.read_events(meeting_id)
+                if event.get("event_id") == instruction_event_id
+            ),
+            None,
+        )
+        if (
+            not instruction_event
+            or instruction_event.get("interaction_type") != "directed-role-instruction"
+        ):
+            raise ValueError("Directed response instruction is unavailable for retry")
+        instruction = str(instruction_event.get("content", "")).strip()
+        if not instruction:
+            raise ValueError("Directed response instruction is unavailable for retry")
+        base_step_id = str(failed_event.get("base_step_id", failed_event.get("step_id")))
+        step = StepDefinition(
+            step_id=base_step_id,
+            role=role,
+            template_name="directed_role_response",
+            output_schema_id=str(
+                failed_event.get("output_schema_id") or DEFAULT_OUTPUT_SCHEMA_ID
+            ),
+        )
+        self._run_step(
+            meeting_id=meeting_id,
+            goal=goal,
+            model_assignments=model_assignments,
+            inputs=self._inputs_for_role(
+                inputs,
+                role,
+                extra={
+                    "instruction": instruction,
+                    "role_display_name": role_display_names.get(role, role),
+                },
+            ),
+            step=step,
+            attempt=int(failed_event.get("attempt", 1)) + 1,
+            round_number=int(failed_event.get("round", 1)),
+            event_step_id=str(failed_event["step_id"]),
+            extra_event_fields={
+                "interaction_type": "directed-role-response",
+                "directed_sequence": int(failed_event.get("directed_sequence", 1)),
+                "in_response_to_event_id": instruction_event_id,
+            },
+            prior_transcript_override=None,
         )
 
     def respond_as_role(

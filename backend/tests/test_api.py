@@ -2177,6 +2177,144 @@ def test_directed_role_response_rejects_blank_instruction(tmp_path: Path) -> Non
     assert client.get(f"/meetings/{meeting_id}").json()["events"] == []
 
 
+def test_retry_failed_directed_response_keeps_the_original_instruction_and_linkage(
+    tmp_path: Path,
+) -> None:
+    client = TestClient(
+        create_test_app(
+            tmp_path,
+            models_yaml="""
+models:
+  - id: mock-fast
+    adapter: mock
+  - id: mock-broken
+    adapter: openai-compatible-http
+""".strip(),
+        )
+    )
+    meeting_id = client.post(
+        "/meetings",
+        json={
+            "title": "定向追問重試",
+            "goal": "找出最小可行方案",
+            "participants": [
+                {"role_id": "Blue", "model_config_id": "mock-broken"},
+                {"role_id": "Red", "model_config_id": "mock-fast"},
+                {"role_id": "Judge", "model_config_id": "mock-fast"},
+            ],
+        },
+    ).json()["meeting_id"]
+
+    client.post(
+        f"/meetings/{meeting_id}/roles/Blue/respond",
+        json={"instruction": "請針對一週內交付補充說明"},
+    )
+    failed_events = client.get(f"/meetings/{meeting_id}").json()["events"]
+    instruction, failed = failed_events
+    assert failed["status"] == "failed"
+
+    client.put(
+        f"/meetings/{meeting_id}/participant-models",
+        json={
+            "models": {
+                "Blue": "mock-fast",
+                "Red": "mock-fast",
+                "Judge": "mock-fast",
+            }
+        },
+    )
+    retried = client.post(
+        f"/meetings/{meeting_id}/steps/{failed['step_id']}/retry",
+        json={},
+    )
+
+    assert retried.status_code == 200
+    events = client.get(f"/meetings/{meeting_id}").json()["events"]
+    assert len([event for event in events if event["role"] == "Human"]) == 1
+    completed = events[-1]
+    assert completed["status"] == "completed"
+    assert completed["attempt"] == 2
+    assert completed["in_response_to_event_id"] == instruction["event_id"]
+    assert "請針對一週內交付補充說明" in completed["prompt_messages"][0]["content"]
+    assert "藍軍" in completed["prompt_messages"][0]["content"]
+
+
+def test_transcript_uses_event_local_labels_for_directed_and_sequence_interactions(
+    tmp_path: Path,
+) -> None:
+    client = TestClient(create_test_app(tmp_path))
+    meeting_id = client.post(
+        "/meetings",
+        json={"title": "互動標籤", "goal": "確認每筆互動語意"},
+    ).json()["meeting_id"]
+    repository = MeetingRepository(tmp_path / "data")
+    events = [
+        {
+            "event_id": "instruction-defense",
+            "meeting_id": meeting_id,
+            "step_id": "human-directed-message",
+            "role": "Human",
+            "attempt": 1,
+            "status": "completed",
+            "interaction_type": "directed-role-instruction",
+            "target_role_id": "Blue",
+            "content": "請藍軍回答",
+        },
+        {
+            "event_id": "directed-blue",
+            "meeting_id": meeting_id,
+            "step_id": "directed-1-blue-response",
+            "base_step_id": "blue-response",
+            "role": "Blue",
+            "attempt": 1,
+            "status": "completed",
+            "interaction_type": "directed-role-response",
+            "parsed_output": {
+                "summary": "藍軍定向回答",
+                "arguments": [],
+                "risks": [],
+                "recommendation": "繼續",
+            },
+        },
+        {
+            "event_id": "sequence-blue",
+            "meeting_id": meeting_id,
+            "step_id": "sequence-1-blue-response",
+            "base_step_id": "blue-response",
+            "role": "Blue",
+            "attempt": 1,
+            "status": "completed",
+            "interaction_type": "role-sequence-response",
+            "parsed_output": {
+                "summary": "藍軍依序回答",
+                "arguments": [],
+                "risks": [],
+                "recommendation": "繼續",
+            },
+        },
+        {
+            "event_id": "instruction-judge",
+            "meeting_id": meeting_id,
+            "step_id": "human-directed-message",
+            "role": "Human",
+            "attempt": 1,
+            "status": "completed",
+            "interaction_type": "directed-role-instruction",
+            "target_role_id": "Judge",
+            "content": "請裁判回答",
+        },
+    ]
+    for event in events:
+        repository.append_event(meeting_id, event)
+
+    transcript = client.get(f"/meetings/{meeting_id}/transcript.md").text
+
+    assert "## 主席 - 主席追問藍軍" in transcript
+    assert "## 藍軍 - 藍軍回應主席追問" in transcript
+    assert "## 藍軍 - 藍軍依序回應" in transcript
+    assert "## 主席 - 主席追問裁判" in transcript
+
+
 def test_chair_can_request_role_sequence_response(tmp_path: Path) -> None:
     app = create_test_app(tmp_path)
     client = TestClient(app)

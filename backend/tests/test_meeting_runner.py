@@ -908,6 +908,140 @@ def test_directed_parse_retry_reuses_sequence_number_for_the_next_response(
     ]
 
 
+def test_retry_failed_directed_response_reuses_instruction_linkage_and_generic_prompt(
+    tmp_path: Path,
+) -> None:
+    adapter = FakeAdapter(["not json", "still not json", VALID_OUTPUT])
+    runner = build_runner(
+        tmp_path,
+        adapter=adapter,
+        templates=("courtroom_defense", "directed_role_response"),
+    )
+    prompt_dir = tmp_path / "prompts"
+    (prompt_dir / "courtroom_defense.md").write_text(
+        "PHASE-ONLY: Answer every charge raised by the Prosecutor.",
+        encoding="utf-8",
+    )
+    (prompt_dir / "directed_role_response.md").write_text(
+        "Role: {{ role_display_name }}\nGoal: {{ goal }}\n"
+        "Case files: {{ case_files }}\nInstruction: {{ instruction }}\n"
+        "Schema: {{ required_json_schema }}",
+        encoding="utf-8",
+    )
+    assignments = {"Defense": ModelConfig(id="mock-defense", adapter="mock")}
+    inputs = {
+        "__case_files_by_role": {
+            "Defense": "[證物二] 遺產稅繳納紀錄",
+        }
+    }
+
+    runner.respond_as_role(
+        plan=COURTROOM_PLAN,
+        meeting_id="meeting-1",
+        goal="判斷遺產稅損失是否具有因果關係",
+        role="Defense",
+        role_display_name="辯護律師",
+        instruction="請針對遺產稅因果關係補充答辯",
+        model_assignments=assignments,
+        inputs=inputs,
+    )
+    failed = runner.repository.read_events("meeting-1")[-1]
+
+    runner.retry_failed_step(
+        plan=COURTROOM_PLAN,
+        meeting_id="meeting-1",
+        step_id=failed["step_id"],
+        goal="判斷遺產稅損失是否具有因果關係",
+        model_assignments=assignments,
+        role_display_names={"Defense": "辯護律師"},
+        inputs=inputs,
+    )
+
+    events = runner.repository.read_events("meeting-1")
+    instructions = [
+        event
+        for event in events
+        if event.get("interaction_type") == "directed-role-instruction"
+    ]
+    responses = [
+        event
+        for event in events
+        if event.get("interaction_type") == "directed-role-response"
+    ]
+    assert len(instructions) == 1
+    assert [event["attempt"] for event in responses] == [1, 2, 3]
+    assert [event["status"] for event in responses] == ["failed", "failed", "completed"]
+    assert {event["in_response_to_event_id"] for event in responses} == {
+        instructions[0]["event_id"]
+    }
+    assert responses[-1]["step_id"] == "directed-1-defense-response"
+    assert responses[-1]["base_step_id"] == "defense-response"
+    retry_prompt = adapter.requests[-1].prompt
+    assert "辯護律師" in retry_prompt
+    assert "[證物二] 遺產稅繳納紀錄" in retry_prompt
+    assert "請針對遺產稅因果關係補充答辯" in retry_prompt
+    assert "PHASE-ONLY" not in retry_prompt
+
+
+@pytest.mark.parametrize("failure_kind", ["timeout", "interrupted"])
+def test_retry_timeout_or_interrupted_directed_response_reuses_instruction(
+    tmp_path: Path,
+    failure_kind: str,
+) -> None:
+    runner = build_runner(tmp_path, adapter=FakeAdapter([VALID_OUTPUT]))
+    instruction_event_id = "meeting-1:human-directed-message:original"
+    runner.repository.append_event(
+        "meeting-1",
+        {
+            "event_id": instruction_event_id,
+            "meeting_id": "meeting-1",
+            "step_id": "human-directed-message",
+            "role": "Human",
+            "attempt": 1,
+            "status": "completed",
+            "interaction_type": "directed-role-instruction",
+            "target_role_id": "Blue",
+            "content": "請補充回答 timeout 後的原問題",
+        },
+    )
+    runner.repository.append_event(
+        "meeting-1",
+        {
+            "event_id": f"meeting-1:directed-1-blue-response:attempt-1:{failure_kind}",
+            "meeting_id": "meeting-1",
+            "step_id": "directed-1-blue-response",
+            "base_step_id": "blue-response",
+            "round": 1,
+            "role": "Blue",
+            "attempt": 1,
+            "status": "failed",
+            "failure_kind": failure_kind,
+            "interaction_type": "directed-role-response",
+            "directed_sequence": 1,
+            "in_response_to_event_id": instruction_event_id,
+            "output_schema_id": "role-output/v1",
+            "error": "execution failed",
+        },
+    )
+
+    runner.retry_failed_step(
+        plan=RED_BLUE_PLAN,
+        meeting_id="meeting-1",
+        step_id="directed-1-blue-response",
+        goal="回答原追問",
+        model_assignments={"Blue": ModelConfig(id="mock-blue", adapter="mock")},
+        role_display_names={"Blue": "藍軍"},
+    )
+
+    events = runner.repository.read_events("meeting-1")
+    assert len([event for event in events if event["role"] == "Human"]) == 1
+    completed = events[-1]
+    assert completed["status"] == "completed"
+    assert completed["attempt"] == 2
+    assert completed["in_response_to_event_id"] == instruction_event_id
+    assert "請補充回答 timeout 後的原問題" in completed["prompt_messages"][0]["content"]
+
+
 def test_runner_runs_chair_directed_role_sequence(tmp_path: Path) -> None:
     adapter = FakeAdapter([VALID_OUTPUT] * 3)
     runner = build_runner(tmp_path, adapter=adapter)
@@ -1291,6 +1425,7 @@ def test_runner_records_cancelled_subscription_cli_attempt_without_transcript_ou
     assert lifecycle["status"] == "cancelled"
     assert diagnostic["status"] == "failed"
     assert diagnostic["failure_kind"] == "interrupted"
+    assert diagnostic["in_response_to_event_id"] == instruction["event_id"]
     assert diagnostic["retry_scheduled"] is False
     assert diagnostic["result_discarded"] is True
     assert diagnostic["adapter"] == "subscription-cli"
