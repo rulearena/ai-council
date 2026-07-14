@@ -33,6 +33,7 @@ def project_courtroom(
             "issues": [],
             "current_issue_id": None,
             "final_status": "not-ready",
+            "available_actions": ["draft-issues", "edit-issues"],
         }
     confirmed = bool(docket.get("confirmed"))
     revision = int(docket.get("revision", 0))
@@ -75,6 +76,23 @@ def project_courtroom(
         if confirmed and all_ruled
         else "not-ready"
     )
+    if not confirmed:
+        available_actions = ["draft-issues", "edit-issues", "confirm-issues"]
+    elif final_status == "ready":
+        available_actions = ["final-verdict"]
+    elif final_status == "failed":
+        available_actions = ["retry-failed-step"]
+    elif current_issue_id is not None:
+        current = next(issue for issue in issues if issue["id"] == current_issue_id)
+        available_actions = (
+            ["submit-ruling", "add-note", "directed-response"]
+            if current["status"] == "awaiting-ruling"
+            else ["retry-failed-step"]
+        )
+    elif any(issue["status"] == "pending" for issue in issues):
+        available_actions = ["start-issue", "add-note", "directed-response"]
+    else:
+        available_actions = []
     return {
         "schema_version": DOCKET_SCHEMA_VERSION,
         "revision": revision,
@@ -82,6 +100,7 @@ def project_courtroom(
         "issues": issues,
         "current_issue_id": current_issue_id,
         "final_status": final_status,
+        "available_actions": available_actions,
     }
 
 

@@ -69,6 +69,7 @@ def test_chairman_can_edit_reorder_and_confirm_a_persistent_courtroom_docket(
         ],
         "current_issue_id": None,
         "final_status": "not-ready",
+        "available_actions": ["draft-issues", "edit-issues", "confirm-issues"],
     }
 
     reordered = client.put(
