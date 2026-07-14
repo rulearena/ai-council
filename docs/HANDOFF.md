@@ -75,11 +75,11 @@ Backlog 85「Provider 與模型設定 UX 強化」已實作並通過 Standards/S
     <主repo>/backend/.venv/bin/python -c 'import os; from pathlib import Path; import uvicorn; from ai_council.api import create_app; app=create_app(data_dir=Path(os.environ["AI_COUNCIL_DATA_DIR"]), model_config_path=Path(os.environ["AI_COUNCIL_MODEL_CONFIG_PATH"]), modes_config_path=Path(os.environ["AI_COUNCIL_MODES_CONFIG_PATH"]), prompt_dir=Path(os.environ["AI_COUNCIL_PROMPT_DIR"]), start_model_health_checks=False); uvicorn.run(app, host="127.0.0.1", port=8123)' &
   cd ../frontend
   VITE_API_BASE_URL=http://127.0.0.1:8123 npx vite --port 3123 &
-  E2E_BASE_URL=http://127.0.0.1:3123 \
+  E2E_BASE_URL=http://127.0.0.1:3123 E2E_DATA_DIR="$DATA/data" \
     PLAYWRIGHT_BROWSERS_PATH=<主repo>/frontend/.cache/ms-playwright npx playwright test
   # 停止自起服務後，回到 repo root 清理：rm -rf .scratch/e2e-runtime
   ```
-  e2e 會寫入 models.yaml（模型管理測試），**絕不可指向 repo 的 config/**。跑完清理進程與暫存目錄。
+  `E2E_DATA_DIR` 是 Playwright fixture 明確使用的 backend data seam，必須與 backend 的 `AI_COUNCIL_DATA_DIR` 指向同一個 workspace-local `$DATA/data`。e2e 會寫入 models.yaml（模型管理測試），**絕不可指向 repo 的 config/**。跑完清理進程與暫存目錄。
 - 環境變數：`AI_COUNCIL_DATA_DIR` / `AI_COUNCIL_MODEL_CONFIG_PATH` / `AI_COUNCIL_MODES_CONFIG_PATH` / `AI_COUNCIL_PROMPT_DIR`（見 `.env.example`）。
 
 ## 5. 工作規範（使用者的既定政策）

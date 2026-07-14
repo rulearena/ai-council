@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, inject, ref, watch } from 'vue'
 import { activeMode, councilKey, formatDateTime, sequencePresets } from '../composables/useCouncil'
+import { nextMeetingMigrationDraft } from '../meetingMigration'
 import { roleDisplayName, statusDisplayLabel, stepDisplayLabel } from '../presentation'
 
 const store = inject(councilKey)!
@@ -32,10 +33,26 @@ const migrationTitle = ref('')
 const migrationGoal = ref('')
 
 watch(
-  () => selectedMeeting.value,
-  (meeting) => {
-    migrationTitle.value = meeting?.title ?? ''
-    migrationGoal.value = meeting?.goal ?? ''
+  [
+    () => selectedMeeting.value?.meeting_id,
+    () => selectedMeeting.value?.requires_goal,
+  ],
+  ([meetingId, requiresGoal], [previousMeetingId, previousRequiresGoal]) => {
+    const meeting = selectedMeeting.value
+    const next = nextMeetingMigrationDraft(
+      { title: migrationTitle.value, goal: migrationGoal.value },
+      { meetingId: previousMeetingId, requiresGoal: previousRequiresGoal },
+      meeting
+        ? {
+            meetingId: meeting.meeting_id,
+            requiresGoal: meeting.requires_goal,
+            title: meeting.title,
+            goal: meeting.goal,
+          }
+        : null,
+    )
+    migrationTitle.value = next.title
+    migrationGoal.value = next.goal
   },
   { immediate: true },
 )

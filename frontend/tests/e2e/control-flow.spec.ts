@@ -87,8 +87,8 @@ test('New Case requires separate title and goal fields before creation', async (
 test('legacy meeting requires explicit title and goal migration without rewriting events', async ({
   page,
 }) => {
-  const dataDir = process.env.AI_COUNCIL_DATA_DIR
-  expect(dataDir, 'AI_COUNCIL_DATA_DIR must point at the isolated e2e runtime').toBeTruthy()
+  const dataDir = process.env.E2E_DATA_DIR
+  expect(dataDir, 'E2E_DATA_DIR must point at the isolated e2e backend data directory').toBeTruthy()
   const meetingId = `meeting-legacy-ui-${Date.now()}`
   const legacyTitle = `舊土地案 ${meetingId}`
   const migratedTitle = `土地返還案 ${meetingId}`
