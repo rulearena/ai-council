@@ -249,12 +249,12 @@ def test_role_prompts_require_responses_to_follow_the_topic_language(
     rendered = PromptRenderer(prompt_dir).render(
         template_name=template_name,
         role=role,
-        topic="如何自動化開發？",
+        goal="如何自動化開發？",
         prior_transcript="尚未發言",
         required_json_schema='{"summary":"string"}',
     )
 
-    assert "Respond in the same language as the meeting topic." in rendered
+    assert "Respond in the same language as the meeting goal." in rendered
     assert "All JSON string values must use that language." in rendered
 
 
@@ -275,7 +275,7 @@ def test_adjudicator_prompts_require_grounded_evidence_refs(
     rendered = PromptRenderer(prompt_dir).render(
         template_name=template_name,
         role=role,
-        topic="是否核准上線？",
+        goal="是否核准上線？",
         prior_transcript="雙方已完成陳述。",
         required_json_schema=STRUCTURED_VERDICT_LITERAL,
         inputs={"case_files": "[證物一] 上線檢查表"},
@@ -287,18 +287,51 @@ def test_adjudicator_prompts_require_grounded_evidence_refs(
     assert "insufficient-evidence" in rendered
 
 
+@pytest.mark.parametrize(
+    ("template_name", "role"),
+    [
+        ("courtroom_charge", "Prosecutor"),
+        ("courtroom_defense", "Defense"),
+        ("courtroom_rebuttal", "Prosecutor"),
+        ("courtroom_verdict", "Judge"),
+    ],
+)
+def test_courtroom_prompts_treat_goal_as_adjudication_question_not_defendant(
+    template_name: str,
+    role: str,
+) -> None:
+    rendered = PromptRenderer(Path(__file__).parents[2] / "prompts").render(
+        template_name=template_name,
+        role=role,
+        goal="判斷被告是否構成無權占有？",
+        prior_transcript="雙方尚未發言。",
+        required_json_schema='{"summary":"string"}',
+        inputs={
+            "title": "土地糾紛案",
+            "case_files": "[證物一] 被告持續占用原告土地。",
+        },
+    )
+
+    assert "Adjudication objective/question:" in rendered
+    assert "判斷被告是否構成無權占有？" in rendered
+    assert "Treat it as the defendant" not in rendered
+    assert "the goal below is the incident" not in rendered.lower()
+    assert "土地糾紛案" not in rendered
+    assert "[證物一] 被告持續占用原告土地。" in rendered
+
+
 def test_prompt_renderer_loads_template_and_injects_context(tmp_path: Path) -> None:
     prompt_dir = tmp_path / "prompts"
     prompt_dir.mkdir()
     (prompt_dir / "blue_propose.md").write_text(
-        "Role={{ role }}\nTopic={{ topic }}\nTranscript={{ prior_transcript }}\nSchema={{ required_json_schema }}",
+        "Role={{ role }}\nTopic={{ goal }}\nTranscript={{ prior_transcript }}\nSchema={{ required_json_schema }}",
         encoding="utf-8",
     )
 
     rendered = PromptRenderer(prompt_dir).render(
         template_name="blue_propose",
         role="Blue",
-        topic="是否先做後端？",
+        goal="是否先做後端？",
         prior_transcript="Red 尚未發言",
         required_json_schema='{"summary":"string"}',
     )
@@ -308,16 +341,33 @@ def test_prompt_renderer_loads_template_and_injects_context(tmp_path: Path) -> N
     )
 
 
+def test_prompt_renderer_uses_goal_as_the_only_task_context(tmp_path: Path) -> None:
+    (tmp_path / "goal.md").write_text("Goal={{ goal }}", encoding="utf-8")
+
+    rendered = PromptRenderer(tmp_path).render(
+        template_name="goal",
+        role="Judge",
+        goal="判斷被告是否構成無權占有",
+        prior_transcript="",
+        required_json_schema="{}",
+        inputs={"title": "土地糾紛案", "goal": "不可注入的舊主題"},
+    )
+
+    assert rendered == "Goal=判斷被告是否構成無權占有"
+    assert "土地糾紛案" not in rendered
+    assert "不可注入的舊主題" not in rendered
+
+
 def test_renderer_injects_mode_inputs(tmp_path: Path) -> None:
     (tmp_path / "debate_statement_pro.md").write_text(
-        "{{ topic }} | {{ position_a }} vs {{ position_b }}", encoding="utf-8"
+        "{{ goal }} | {{ position_a }} vs {{ position_b }}", encoding="utf-8"
     )
     renderer = PromptRenderer(tmp_path)
 
     rendered = renderer.render(
         template_name="debate_statement_pro",
         role="Pro",
-        topic="T",
+        goal="T",
         prior_transcript="",
         required_json_schema="{}",
         inputs={"position_a": "先做後端", "position_b": "先做前端"},
@@ -327,16 +377,16 @@ def test_renderer_injects_mode_inputs(tmp_path: Path) -> None:
 
 
 def test_renderer_builtin_values_win_over_inputs(tmp_path: Path) -> None:
-    (tmp_path / "t.md").write_text("{{ topic }}", encoding="utf-8")
+    (tmp_path / "t.md").write_text("{{ goal }}", encoding="utf-8")
     renderer = PromptRenderer(tmp_path)
 
     rendered = renderer.render(
         template_name="t",
         role="Pro",
-        topic="real",
+        goal="real",
         prior_transcript="",
         required_json_schema="{}",
-        inputs={"topic": "hijacked"},
+        inputs={"goal": "hijacked"},
     )
 
     assert rendered == "real"

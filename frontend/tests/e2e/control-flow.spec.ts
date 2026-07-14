@@ -1,4 +1,6 @@
 import { expect, test, type Page, type Route } from '@playwright/test'
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { join } from 'node:path'
 
 // The whole UI is now a stage with modals/drawers layered on top of it, so most flows
 // need a small amount of "open this surface, do the thing, close it" choreography.
@@ -6,8 +8,9 @@ import { expect, test, type Page, type Route } from '@playwright/test'
 
 async function createMeetingViaNewCase(
   page: Page,
-  topic: string,
+  title: string,
   options: {
+    goal?: string
     modeId?: string
     inputs?: Record<string, string>
     caseFiles?: Array<{ title: string; content: string; visibleRoles: string[] }>
@@ -23,8 +26,8 @@ async function createMeetingViaNewCase(
     .getByTestId(`mode-select-card-${modeId}`)
     .getByRole('button', { name: '選擇此模式' })
     .click()
-  // Step 2 (participant setup): the topic input moved here from the old flat form.
-  await page.getByLabel('會議主題').fill(topic)
+  await page.getByLabel('會議名稱', { exact: true }).fill(title)
+  await page.getByLabel('目標', { exact: true }).fill(options?.goal ?? title)
   // debate's position_a/position_b (or any future mode's `kind: 'text'` inputs) render as
   // one labeled field per input id - see NewCaseModal.vue's textInputs.
   for (const [inputId, value] of Object.entries(options.inputs ?? {})) {
@@ -52,10 +55,122 @@ async function createMeetingViaNewCase(
       `目前 ${totalChars} / 120000 字元`,
     )
   }
+  const createdResponse = page.waitForResponse(
+    (response) => response.request().method() === 'POST' && response.url().endsWith('/meetings'),
+  )
   await page.getByTestId('create-meeting-button').click()
   // NewCaseModal closes itself once createNewMeeting() resolves.
   await expect(page.getByTestId('new-case-modal')).not.toBeVisible()
+  return ((await createdResponse).json() as Promise<{ meeting_id: string }>).then(
+    (meeting) => meeting.meeting_id,
+  )
 }
+
+test('New Case requires separate title and goal fields before creation', async ({
+  page,
+}) => {
+  await page.goto('/')
+  await page.getByTestId('new-case-button').click()
+  await page
+    .getByTestId('mode-select-card-red-blue')
+    .getByRole('button', { name: '選擇此模式' })
+    .click()
+
+  const createButton = page.getByTestId('create-meeting-button')
+  await expect(createButton).toBeDisabled()
+  await page.getByLabel('會議名稱', { exact: true }).fill('土地糾紛案')
+  await expect(createButton).toBeDisabled()
+  await page.getByLabel('目標', { exact: true }).fill('判斷被告是否構成無權占有？')
+  await expect(createButton).toBeEnabled()
+})
+
+test('legacy meeting requires explicit title and goal migration without rewriting events', async ({
+  page,
+}) => {
+  const dataDir = process.env.E2E_DATA_DIR
+  expect(dataDir, 'E2E_DATA_DIR must point at the isolated e2e backend data directory').toBeTruthy()
+  const meetingId = `meeting-legacy-ui-${Date.now()}`
+  const legacyTitle = `舊土地案 ${meetingId}`
+  const migratedTitle = `土地返還案 ${meetingId}`
+  const meetingDir = join(dataDir!, 'meetings', meetingId)
+  mkdirSync(meetingDir, { recursive: true })
+  writeFileSync(
+    join(meetingDir, 'metadata.json'),
+    JSON.stringify({
+      meeting_id: meetingId,
+      topic: legacyTitle,
+      created_at: '2026-07-14T00:00:00+00:00',
+      tags: [],
+      pinned: false,
+      mode_id: 'red-blue',
+      participants: ['Blue', 'Red', 'Judge'].map((role_id) => ({
+        role_id,
+        model_config_id: 'mock-fast',
+      })),
+      inputs: {},
+      case_files: [],
+    }),
+  )
+  const eventsPath = join(meetingDir, 'events.jsonl')
+  const originalEvents = `${JSON.stringify({
+    event_id: `${meetingId}:human-message:historical`,
+    meeting_id: meetingId,
+    step_id: 'human-message',
+    role: 'Human',
+    attempt: 1,
+    status: 'completed',
+    content: '既有紀錄不得改寫',
+    created_at: '2026-07-14T00:01:00+00:00',
+  })}\n`
+  writeFileSync(eventsPath, originalEvents)
+
+  await page.goto('/')
+  await page.getByTestId('past-topics-button').click()
+  await page
+    .getByTestId('meeting-list-item')
+    .filter({ hasText: legacyTitle })
+    .locator('.meeting-item')
+    .click()
+
+  await expect(page.getByTestId('meeting-goal-migration')).toBeVisible()
+  await expect(page.getByLabel('舊會議名稱')).toHaveValue(legacyTitle)
+  await expect(page.getByLabel('舊會議目標')).toHaveValue('')
+  await expect(page.getByTestId('start-meeting-button')).toBeDisabled()
+  await page.getByTestId('advanced-options-button').click()
+  await expect(page.getByTestId('run-sequence-button')).toBeDisabled()
+  await expect(page.getByTestId('start-new-round-button')).toBeDisabled()
+
+  await page.getByLabel('舊會議名稱').fill(migratedTitle)
+  await page.getByLabel('舊會議目標').fill('判斷被告是否應返還土地')
+  const updated = page.waitForResponse(
+    (response) =>
+      response.request().method() === 'PUT' &&
+      response.url().endsWith(`/meetings/${meetingId}/details`),
+  )
+  await page.getByTestId('save-meeting-goal-button').click()
+  expect((await updated).status()).toBe(200)
+  await expect(page.getByTestId('meeting-goal-migration')).not.toBeVisible()
+
+  const storedMetadata = JSON.parse(readFileSync(join(meetingDir, 'metadata.json'), 'utf8')) as Record<
+    string,
+    unknown
+  >
+  expect(storedMetadata.title).toBe(migratedTitle)
+  expect(storedMetadata.goal).toBe('判斷被告是否應返還土地')
+  expect(storedMetadata).not.toHaveProperty('topic')
+  expect(readFileSync(eventsPath, 'utf8')).toBe(originalEvents)
+
+  await page.reload()
+  await page.getByTestId('past-topics-button').click()
+  await page
+    .getByTestId('meeting-list-item')
+    .filter({ hasText: migratedTitle })
+    .locator('.meeting-item')
+    .click()
+  await expect(page.getByTestId('meeting-goal-migration')).not.toBeVisible()
+  await expect(page.getByTestId('start-meeting-button')).toBeEnabled()
+  expect(readFileSync(eventsPath, 'utf8')).toBe(originalEvents)
+})
 
 test('New Case persists the complete relay model roster and reload hydrates that meeting', async ({
   page,
@@ -156,12 +271,10 @@ test('a delayed assignment save cannot overwrite a meeting selected while it was
   await page.goto('/')
   const topicA = `E2E delayed assignment A ${Date.now()}`
   const topicB = `E2E delayed assignment B ${Date.now()}`
-  await createMeetingViaNewCase(page, topicA)
-  const meetingAId = await page.getByTestId('meeting-id-display').innerText()
-  await createMeetingViaNewCase(page, topicB, {
+  const meetingAId = await createMeetingViaNewCase(page, topicA)
+  const meetingBId = await createMeetingViaNewCase(page, topicB, {
     modelAssignments: { Blue: 'mock-broken' },
   })
-  const meetingBId = await page.getByTestId('meeting-id-display').innerText()
 
   const openTopic = async (topic: string) => {
     await page.getByTestId('past-topics-button').click()
@@ -190,7 +303,7 @@ test('a delayed assignment save cannot overwrite a meeting selected while it was
   releaseSuccess()
   await successResponse
 
-  await expect(page.getByTestId('meeting-id-display')).toHaveText(meetingBId)
+  await expect(page.getByTestId('meeting-title-display')).toHaveText(topicB)
   await expect(page.getByTestId('seat-model-label-blue')).toContainText('mock-broken')
 
   await page.unroute(assignmentUrl)
@@ -218,7 +331,7 @@ test('a delayed assignment save cannot overwrite a meeting selected while it was
   releaseFailure()
   await failureResponse
 
-  await expect(page.getByTestId('meeting-id-display')).toHaveText(meetingBId)
+  await expect(page.getByTestId('meeting-title-display')).toHaveText(topicB)
   await expect(page.getByTestId('seat-model-label-blue')).toContainText('mock-broken')
   await page.getByTestId('settings-button').click()
   await expect(page.getByTestId('assignment-update-error')).toHaveCount(0)
@@ -243,10 +356,9 @@ test('a deleted assigned model shows the backend fallback warning without persis
   await page.reload()
 
   const topic = `E2E deleted assignment fallback ${Date.now()}`
-  await createMeetingViaNewCase(page, topic, {
+  const meetingId = await createMeetingViaNewCase(page, topic, {
     modelAssignments: { Blue: deletedModelId },
   })
-  const meetingId = await page.getByTestId('meeting-id-display').innerText()
   expect((await page.request.delete(`${apiOrigin}/models/${deletedModelId}`)).ok()).toBeTruthy()
 
   await page.reload()
@@ -279,18 +391,22 @@ test('run actions omit frontend model maps and rely on the meeting assignment', 
   await createMeetingViaNewCase(page, `E2E authoritative run assignment ${Date.now()}`)
 
   await page.getByTestId('start-meeting-button').click()
-  await expect(page.getByTestId('operation-status')).toContainText('狀態：completed')
+  await expect(page.getByTestId('operation-status')).toContainText('狀態：已完成')
   await openRoleDrawer(page, 'blue')
+  await page.getByTestId('role-instruction-input').fill('請說明目前最小可行方案')
   await page.getByTestId('request-blue-response-button').click()
-  await expect(page.getByTestId('operation-status')).toContainText('狀態：completed')
+  await expect(page.getByTestId('operation-status')).toContainText('狀態：已完成')
   await closeRoleDrawer(page)
   await openAdvancedOptions(page)
   await page.getByTestId('run-sequence-button').click()
-  await expect(page.getByTestId('operation-status')).toContainText('狀態：completed')
+  await expect(page.getByTestId('operation-status')).toContainText('狀態：已完成')
 
   expect(runBodies.map(({ url, body }) => ({ path: new URL(url as string).pathname, body }))).toEqual([
     { path: expect.stringMatching(/\/start$/), body: {} },
-    { path: expect.stringMatching(/\/roles\/Blue\/respond$/), body: {} },
+    {
+      path: expect.stringMatching(/\/roles\/Blue\/respond$/),
+      body: { instruction: '請說明目前最小可行方案' },
+    },
     { path: expect.stringMatching(/\/sequences$/), body: { roles: ['Red', 'Blue', 'Judge'] } },
   ])
 })
@@ -327,8 +443,7 @@ test('legacy recovery hydration trusts the participant projection instead of eve
 }) => {
   await page.goto('/')
   const topic = `E2E legacy recovered assignment ${Date.now()}`
-  await createMeetingViaNewCase(page, topic)
-  const meetingId = await page.getByTestId('meeting-id-display').innerText()
+  const meetingId = await createMeetingViaNewCase(page, topic)
   await page.route(new RegExp(`/meetings/${meetingId}$`), async (route) => {
     const response = await route.fetch()
     const meeting = await response.json()
@@ -433,7 +548,7 @@ test('keeps the council stage centered with no horizontal scroll', async ({ page
     .toBe(await page.evaluate(() => document.documentElement.clientWidth))
 })
 
-test('shows the meeting ID next to the topic and copies it to the clipboard', async ({
+test('shows the meeting title and copies title plus ID to the clipboard', async ({
   page,
   context,
 }) => {
@@ -441,16 +556,14 @@ test('shows the meeting ID next to the topic and copies it to the clipboard', as
   await page.goto('/')
 
   const topic = `E2E meeting id ${Date.now()}`
-  await createMeetingViaNewCase(page, topic)
-
-  const meetingId = await page.getByTestId('meeting-id-display').innerText()
+  const meetingId = await createMeetingViaNewCase(page, topic)
   expect(meetingId).toMatch(/^meeting-/)
+  await expect(page.getByTestId('meeting-title-display')).toHaveText(topic)
+  await expect(page.getByText(meetingId, { exact: true })).toHaveCount(0)
 
-  // The same ID shows up in Past Topics, confirming the top bar reflects the real record.
+  // The meeting list is title-first and does not permanently expose the internal ID.
   await page.getByTestId('past-topics-button').click()
-  await expect(
-    page.getByTestId('meeting-list-item').filter({ hasText: topic }).locator('.meeting-id-text'),
-  ).toHaveText(meetingId)
+  await expect(page.getByTestId('meeting-list-item').filter({ hasText: topic })).not.toContainText(meetingId)
   await page.getByTestId('meetings-close-button').click()
 
   const copyButton = page.getByTestId('copy-meeting-id-button')
@@ -459,7 +572,7 @@ test('shows the meeting ID next to the topic and copies it to the clipboard', as
   await expect(copyButton).toContainText('已複製')
 
   const clipboardText = await page.evaluate(() => navigator.clipboard.readText())
-  expect(clipboardText).toBe(meetingId)
+  expect(clipboardText).toBe(`${topic}\n會議 ID：${meetingId}`)
 
   // Feedback reverts to the plain "複製" label ~1.5s after copying. "已複製" also
   // contains "複製" as a substring, so assert the "已" prefix is specifically gone
@@ -480,7 +593,7 @@ test('user can run a mock meeting and add chair feedback', async ({ page }) => {
   await page.goto('/')
 
   const topic = `E2E mock meeting ${Date.now()}`
-  await createMeetingViaNewCase(page, topic, {
+  const meetingId = await createMeetingViaNewCase(page, topic, {
     caseFiles: [
       {
         title: '上線檢查表',
@@ -490,13 +603,13 @@ test('user can run a mock meeting and add chair feedback', async ({ page }) => {
     ],
   })
 
-  await expect(page.getByTestId('operation-status')).toContainText('狀態：idle')
+  await expect(page.getByTestId('operation-status')).toContainText('狀態：尚未開始')
   await expect(page.getByTestId('role-seat-blue')).toHaveAttribute('data-status', 'waiting')
   await expect(page.getByTestId('role-seat-blue')).toHaveClass(/role-blue/)
 
   await setModelsInSettings(page, { blue: 'mock-slow', red: 'mock-slow', judge: 'mock-slow' })
   await page.getByTestId('test-blue-model-button').click()
-  await expect(page.getByTestId('model-test-status')).toContainText('Blue: available')
+  await expect(page.getByTestId('model-test-status')).toContainText('藍軍：可用')
   await expect(page.getByTestId('model-test-status')).toContainText('測試')
   await closeSettings(page)
 
@@ -507,21 +620,21 @@ test('user can run a mock meeting and add chair feedback', async ({ page }) => {
   await expect(page.getByTestId('role-seat-blue')).toHaveAttribute('data-status', 'thinking')
   await expect(page.getByTestId('role-seat-red')).toHaveAttribute('data-status', 'waiting')
 
-  await expect(page.getByTestId('operation-status')).toContainText('狀態：running')
+  await expect(page.getByTestId('operation-status')).toContainText('狀態：執行中')
   await expect(page.getByTestId('start-meeting-button')).toContainText('執行中...')
 
-  await expect(page.getByTestId('operation-status')).toContainText('狀態：completed')
-  await expect(page.getByTestId('operation-status')).toContainText('最後步驟：judge-decide')
+  await expect(page.getByTestId('operation-status')).toContainText('狀態：已完成')
+  await expect(page.getByTestId('operation-status')).toContainText('最後步驟：裁判裁決')
   await expect(page.getByTestId('role-seat-blue')).toHaveAttribute('data-status', 'completed')
   await expect(page.getByTestId('role-seat-red')).toHaveAttribute('data-status', 'completed')
   await expect(page.getByTestId('role-seat-judge')).toHaveAttribute('data-status', 'completed')
 
   await openRoleDrawer(page, 'judge')
-  await expect(page.getByTestId('role-output-panel')).toContainText('Role Outputs')
-  await expect(page.getByTestId('role-output-panel')).toContainText('judge-decide')
-  await expect(page.getByTestId('role-output-panel')).toContainText('Recommendation')
+  await expect(page.getByTestId('role-output-panel')).toContainText('角色回應')
+  await expect(page.getByTestId('role-output-panel')).toContainText('裁判裁決')
+  await expect(page.getByTestId('role-output-panel')).toContainText('建議處置')
   await expect(page.getByTestId('rich-verdict-decision')).toContainText(
-    'approve-with-conditions',
+    '有條件核准',
   )
   await expect(page.getByTestId('rich-verdict-findings')).toContainText('Mock finding')
   await expect(page.getByTestId('rich-verdict-findings')).toContainText('[證物一]')
@@ -530,7 +643,7 @@ test('user can run a mock meeting and add chair feedback', async ({ page }) => {
     'Is more evidence available?',
   )
   const outputRoleBadge = page.getByTestId('role-output-panel').getByTestId('role-badge')
-  await expect(outputRoleBadge.locator('img')).toHaveAttribute('alt', 'Judge')
+  await expect(outputRoleBadge.locator('img')).toHaveAttribute('alt', '裁判')
   await expect(outputRoleBadge).toHaveClass(/role-judge/)
   await closeRoleDrawer(page)
 
@@ -539,7 +652,7 @@ test('user can run a mock meeting and add chair feedback', async ({ page }) => {
   await page.getByTestId('chair-message-input').fill('主席補充：請先限制在一週可以完成的方案。')
   await page.getByTestId('send-chair-message-button').click()
 
-  await expect(page.getByTestId('operation-status')).toContainText('狀態：waiting')
+  await expect(page.getByTestId('operation-status')).toContainText('狀態：等待中')
   await expect(page.getByTestId('chair-message-input')).toHaveValue('')
 
   // The speech bubble is transient (auto-hides after ~2.5s) - assert it while it's up.
@@ -562,14 +675,22 @@ test('user can run a mock meeting and add chair feedback', async ({ page }) => {
   await closeRoleDrawer(page)
 
   await openRoleDrawer(page, 'blue')
+  await expect(page.getByTestId('request-blue-response-button')).toBeDisabled()
+  await page
+    .getByTestId('role-instruction-input')
+    .fill('請針對一週內可完成的最小可行方案補充說明')
   await page.getByTestId('request-blue-response-button').click()
   await expect(page.getByTestId('role-seat-blue')).toHaveAttribute('data-status', 'thinking')
-  await expect(page.getByTestId('operation-status')).toContainText('狀態：completed')
-  await expect(page.getByTestId('role-output-panel')).toContainText('directed-1-blue-response')
-  await expect(page.getByTestId('role-output-panel')).toContainText('Arguments')
+  await expect(page.getByTestId('operation-status')).toContainText('狀態：已完成')
+  await expect(page.getByTestId('role-output-panel')).toContainText('藍軍回應主席追問')
+  await expect(page.getByTestId('role-output-panel')).toContainText('論點')
   await expect(page.getByTestId('role-output-panel')).toContainText('Mock argument')
   await expect(page.getByTestId('rich-verdict-decision')).toHaveCount(0)
   await closeRoleDrawer(page)
+
+  await page.reload()
+  await page.getByTestId('past-topics-button').click()
+  await page.getByTestId('meeting-list-item').filter({ hasText: topic }).locator('.meeting-item').click()
 
   await openAdvancedOptions(page)
   await expect(page.getByTestId('role-sequence-controls')).toBeVisible()
@@ -581,42 +702,49 @@ test('user can run a mock meeting and add chair feedback', async ({ page }) => {
   // Sequence roles are also pushed synchronously before the network call.
   await expect(page.getByTestId('role-seat-red')).toHaveAttribute('data-status', 'thinking')
   await closeAdvancedOptions(page)
-  await expect(page.getByTestId('operation-status')).toContainText('狀態：completed')
+  await expect(page.getByTestId('operation-status')).toContainText('狀態：已完成')
 
   await openRoleDrawer(page, 'judge')
-  await expect(page.getByTestId('role-output-panel')).toContainText('sequence-1-judge-response')
+  await expect(page.getByTestId('role-output-panel')).toContainText('裁判依序回應')
   await closeRoleDrawer(page)
 
   await page.getByTestId('start-meeting-button').click()
-  await expect(page.getByTestId('operation-status')).toContainText('狀態：completed')
+  await expect(page.getByTestId('operation-status')).toContainText('狀態：已完成')
 
   await openRoleDrawer(page, 'blue')
   await expect(page.getByTestId('role-history-toggle')).toBeVisible()
   await page.getByTestId('role-history-toggle').click()
-  await expect(page.getByTestId('role-history-list')).toContainText('blue-revise')
+  await expect(page.getByTestId('role-history-list')).toContainText('藍軍修訂')
   await closeRoleDrawer(page)
 
   // Full audit trail lives in the records drawer.
   await page.getByTestId('records-button').click()
-  await expect(page.getByTestId('step-timeline')).toContainText('blue-propose')
-  await expect(page.getByTestId('step-timeline')).toContainText('red-critique')
-  await expect(page.getByTestId('step-timeline')).toContainText('judge-decide')
-  await expect(page.getByTestId('step-timeline')).toContainText('directed-1-blue-response')
-  await expect(page.getByTestId('step-timeline')).toContainText('sequence-1-red-response')
-  await expect(page.getByTestId('step-timeline')).toContainText('round-2-blue-propose')
-  await expect(page.getByTestId('step-timeline')).toContainText('round-2-judge-decide')
+  await expect(page.getByTestId('step-timeline')).toContainText('藍軍提案')
+  await expect(page.getByTestId('step-timeline')).toContainText('紅軍質詢')
+  await expect(page.getByTestId('step-timeline')).toContainText('裁判裁決')
+  await expect(page.getByTestId('step-timeline')).toContainText('主席追問藍軍')
+  await expect(page.getByTestId('step-timeline')).toContainText(
+    '請針對一週內可完成的最小可行方案補充說明',
+  )
+  await expect(page.getByTestId('step-timeline')).toContainText('藍軍回應主席追問')
+  await expect(page.getByTestId('step-timeline')).toContainText('紅軍依序回應')
+  const timelinePresentation = (
+    await page.getByTestId('step-timeline').locator('.timeline-main').allTextContents()
+  ).join('\n')
+  expect(timelinePresentation).not.toContain('round-2-blue-propose')
+  expect(timelinePresentation).not.toContain('round-2-judge-decide')
   await expect(
-    page.getByTestId('step-timeline').locator('.role-badge', { hasText: 'Red' }).first(),
+    page.getByTestId('step-timeline').locator('.role-badge', { hasText: '紅軍' }).first(),
   ).toHaveClass(/role-red/)
 
   await page.getByTestId('records-tab-transcript').click()
-  await expect(page.getByTestId('transcript-preview')).toContainText('## Blue - blue-propose')
-  await expect(page.getByTestId('transcript-preview')).toContainText('## Judge - judge-decide')
+  await expect(page.getByTestId('transcript-preview')).toContainText('## 藍軍 - 藍軍提案')
+  await expect(page.getByTestId('transcript-preview')).toContainText('## 裁判 - 裁判裁決')
   await expect(page.getByTestId('transcript-preview')).toContainText(
     '主席補充：請先限制在一週可以完成的方案。',
   )
   await expect(page.getByTestId('transcript-preview')).toContainText('主席修正：限制放寬到兩週。')
-  await expect(page.getByTestId('transcript-preview')).toContainText('## Blue - round-2-blue-propose')
+  await expect(page.getByTestId('transcript-preview')).not.toContainText('round-2-blue-propose')
 
   // Debug tab only exists once developer mode is on (toggled earlier is not the case here,
   // so it should be absent by default).
@@ -634,16 +762,17 @@ test('user can run a mock meeting and add chair feedback', async ({ page }) => {
   await page.getByTestId('records-tab-timeline').click()
   await page
     .getByTestId('step-timeline')
-    .locator('.timeline-main', { hasText: 'directed-1-blue-response' })
+    .locator('.timeline-main', { hasText: '藍軍回應主席追問' })
     .click()
   await page.getByTestId('records-tab-debug').click()
   await expect(page.getByTestId('debug-panel')).toContainText('"interaction_type": "directed-role-response"')
+  await expect(page.getByTestId('debug-panel')).toContainText('"in_response_to_event_id"')
   await expect(page.getByTestId('debug-panel')).toContainText('"status": "completed"')
 
   await page.getByTestId('records-tab-timeline').click()
   await page
     .getByTestId('step-timeline')
-    .locator('.timeline-main', { hasText: 'sequence-1-red-response' })
+    .locator('.timeline-main', { hasText: '紅軍依序回應' })
     .click()
   await page.getByTestId('records-tab-debug').click()
   await expect(page.getByTestId('debug-panel')).toContainText('"interaction_type": "role-sequence-response"')
@@ -657,10 +786,10 @@ test('user can run a mock meeting and add chair feedback', async ({ page }) => {
 
   await page.getByTestId('past-topics-button').click()
   await page.getByTestId('meeting-status-filter').selectOption('all')
-  await expect(page.getByTestId('meeting-list')).toContainText('closed')
+  await expect(page.getByTestId('meeting-list')).toContainText('已結案')
   await page.getByTestId('meetings-close-button').click()
 
-  await expect(page.getByTestId('operation-status')).toContainText('狀態：closed')
+  await expect(page.getByTestId('operation-status')).toContainText('狀態：已結案')
   await expect(page.getByTestId('start-meeting-button')).toBeDisabled()
   await expect(page.getByTestId('chair-message-input')).toBeDisabled()
   await expect(page.getByTestId('send-chair-message-button')).toBeDisabled()
@@ -760,13 +889,13 @@ test('role seat shows failed state, halts the rest of the round, and recovers vi
   await expect(page.getByTestId('role-seat-blue')).toHaveAttribute('data-status', 'thinking')
   await closeRoleDrawer(page)
 
-  await expect(page.getByTestId('operation-status')).toContainText('狀態：completed')
+  await expect(page.getByTestId('operation-status')).toContainText('狀態：已完成')
   await expect(page.getByTestId('role-seat-blue')).toHaveAttribute('data-status', 'completed')
   await expect(page.getByTestId('role-seat-red')).toHaveAttribute('data-status', 'completed')
   await expect(page.getByTestId('role-seat-judge')).toHaveAttribute('data-status', 'completed')
 
   await page.getByTestId('records-button').click()
-  await expect(page.getByTestId('step-timeline')).toContainText('judge-decide')
+  await expect(page.getByTestId('step-timeline')).toContainText('裁判裁決')
   await page.getByTestId('records-close-button').click()
 
   await page.getByTestId('past-topics-button').click()
@@ -883,13 +1012,13 @@ test('continuing a fully completed round runs the sequence preset instead of a n
   await closeSettings(page)
 
   await page.getByTestId('start-meeting-button').click()
-  await expect(page.getByTestId('operation-status')).toContainText('狀態：completed')
+  await expect(page.getByTestId('operation-status')).toContainText('狀態：已完成')
 
   // Sending a chair message on an idle (non-running) meeting should surface the hint.
   await expect(page.getByTestId('continue-hint')).not.toBeVisible()
   await page.getByTestId('chair-message-input').fill('主席補充：請議會針對成本做更仔細的討論。')
   await page.getByTestId('send-chair-message-button').click()
-  await expect(page.getByTestId('operation-status')).toContainText('狀態：waiting')
+  await expect(page.getByTestId('operation-status')).toContainText('狀態：等待中')
   await expect(page.getByTestId('continue-hint')).toBeVisible()
 
   // The fixed round (blue-propose/red-critique/blue-revise/judge-decide) is already
@@ -904,14 +1033,16 @@ test('continuing a fully completed round runs the sequence preset instead of a n
 
   // Sequence roles are pushed synchronously before the network call resolves.
   await expect(page.getByTestId('role-seat-red')).toHaveAttribute('data-status', 'thinking')
-  await expect(page.getByTestId('operation-status')).toContainText('狀態：completed', { timeout: 15000 })
+  await expect(page.getByTestId('operation-status')).toContainText('狀態：已完成', { timeout: 15000 })
 
   await page.getByTestId('records-button').click()
-  await expect(page.getByTestId('step-timeline')).toContainText('sequence-1-red-response')
-  await expect(page.getByTestId('step-timeline')).toContainText('sequence-1-blue-response')
-  await expect(page.getByTestId('step-timeline')).toContainText('sequence-1-judge-response')
+  await expect(page.getByTestId('step-timeline')).toContainText('紅軍依序回應')
+  await expect(page.getByTestId('step-timeline')).toContainText('藍軍依序回應')
+  await expect(page.getByTestId('step-timeline')).toContainText('裁判依序回應')
   // A no-op start() would never have produced a fresh fixed-round step for round 2.
-  await expect(page.getByTestId('step-timeline')).not.toContainText('round-2-blue-propose')
+  await expect(
+    page.getByTestId('step-timeline').locator('.timeline-row strong', { hasText: '藍軍提案' }),
+  ).toHaveCount(1)
   await page.getByTestId('records-close-button').click()
 
   await page.getByTestId('past-topics-button').click()
@@ -1008,7 +1139,7 @@ test('the explicit "開始新回合" button always starts a fresh fixed round', 
   await closeSettings(page)
 
   await page.getByTestId('start-meeting-button').click()
-  await expect(page.getByTestId('operation-status')).toContainText('狀態：completed')
+  await expect(page.getByTestId('operation-status')).toContainText('狀態：已完成')
 
   await openAdvancedOptions(page)
   // Mode-system slice B (feat: drive active mode from the selected meeting) replaced the
@@ -1024,7 +1155,7 @@ test('the explicit "開始新回合" button always starts a fresh fixed round', 
   await expect(page.getByTestId('role-seat-blue')).toHaveAttribute('data-status', 'thinking')
   await closeAdvancedOptions(page)
 
-  await expect(page.getByTestId('operation-status')).toContainText('狀態：completed', {
+  await expect(page.getByTestId('operation-status')).toContainText('狀態：已完成', {
     timeout: 15000,
   })
 
@@ -1037,8 +1168,12 @@ test('the explicit "開始新回合" button always starts a fresh fixed round', 
   await expect(page.getByTestId('role-seat-judge')).toHaveAttribute('data-status', 'completed')
 
   await page.getByTestId('records-button').click()
-  await expect(page.getByTestId('step-timeline')).toContainText('round-2-blue-propose')
-  await expect(page.getByTestId('step-timeline')).toContainText('round-2-judge-decide')
+  await expect(
+    page.getByTestId('step-timeline').locator('.timeline-row strong', { hasText: '藍軍提案' }),
+  ).toHaveCount(2)
+  await expect(
+    page.getByTestId('step-timeline').locator('.timeline-row strong', { hasText: '裁判裁決' }),
+  ).toHaveCount(2)
   await page.getByTestId('records-close-button').click()
 
   await page.getByTestId('past-topics-button').click()
@@ -1068,7 +1203,7 @@ test('reloading mid-round still shows the real final state after reopening the m
   )
   await page.getByTestId('start-meeting-button').click()
   await startAccepted
-  await expect(page.getByTestId('operation-status')).toContainText('狀態：running')
+  await expect(page.getByTestId('operation-status')).toContainText('狀態：執行中')
 
   // The backend keeps running the synchronous /start call regardless of the client, so
   // reloading here throws away every bit of in-memory state (pendingRoles, the
@@ -1081,13 +1216,13 @@ test('reloading mid-round still shows the real final state after reopening the m
   await page.getByTestId('past-topics-button').click()
   await page.getByTestId('meeting-list-item').filter({ hasText: topic }).locator('.meeting-item').click()
 
-  await expect(page.getByTestId('operation-status')).toContainText('狀態：completed', { timeout: 15000 })
+  await expect(page.getByTestId('operation-status')).toContainText('狀態：已完成', { timeout: 15000 })
   await expect(page.getByTestId('role-seat-blue')).toHaveAttribute('data-status', 'completed')
   await expect(page.getByTestId('role-seat-red')).toHaveAttribute('data-status', 'completed')
   await expect(page.getByTestId('role-seat-judge')).toHaveAttribute('data-status', 'completed')
 
   await page.getByTestId('records-button').click()
-  await expect(page.getByTestId('step-timeline')).toContainText('judge-decide')
+  await expect(page.getByTestId('step-timeline')).toContainText('裁判裁決')
   await page.getByTestId('records-close-button').click()
 
   await page.getByTestId('past-topics-button').click()
@@ -1109,7 +1244,7 @@ test('switching meetings does not leak pendingRoles state, and a revisited meeti
   await setModelsInSettings(page, { blue: 'mock-slow', red: 'mock-slow', judge: 'mock-slow' })
   await closeSettings(page)
   await page.getByTestId('start-meeting-button').click()
-  await expect(page.getByTestId('operation-status')).toContainText('狀態：completed')
+  await expect(page.getByTestId('operation-status')).toContainText('狀態：已完成')
 
   const topicB = `E2E switch meeting B ${Date.now()}`
   await createMeetingViaNewCase(page, topicB)
@@ -1129,7 +1264,7 @@ test('switching meetings does not leak pendingRoles state, and a revisited meeti
   await expect(page.getByTestId('role-seat-blue')).toHaveAttribute('data-status', 'thinking')
   await closeAdvancedOptions(page)
 
-  await expect(page.getByTestId('operation-status')).toContainText('狀態：completed', { timeout: 15000 })
+  await expect(page.getByTestId('operation-status')).toContainText('狀態：已完成', { timeout: 15000 })
 
   // The queue must actually drain, not just fill and stall - see the identical note in
   // the "開始新回合" test above for why this needs its own assertion on the seats.
@@ -1138,7 +1273,9 @@ test('switching meetings does not leak pendingRoles state, and a revisited meeti
   await expect(page.getByTestId('role-seat-judge')).toHaveAttribute('data-status', 'completed')
 
   await page.getByTestId('records-button').click()
-  await expect(page.getByTestId('step-timeline')).toContainText('round-2-blue-propose')
+  await expect(
+    page.getByTestId('step-timeline').locator('.timeline-row strong', { hasText: '藍軍提案' }),
+  ).toHaveCount(2)
   await page.getByTestId('records-close-button').click()
 
   await page.getByTestId('past-topics-button').click()
@@ -1169,7 +1306,7 @@ test('shows a failed-step hint and disables round-level actions until the step i
 
   await expect(page.getByTestId('failed-step-hint')).toBeVisible()
   await expect(page.getByTestId('failed-step-hint')).toContainText(
-    'Blue 的回應失敗了，點擊席位可重試',
+    '藍軍的回應失敗了，點擊席位可重試',
   )
 
   // Confirmed against the real backend: calling /start (or /sequences) again once a step
@@ -1179,7 +1316,7 @@ test('shows a failed-step hint and disables round-level actions until the step i
   await expect(page.getByTestId('start-meeting-button')).toBeDisabled()
   await expect(page.getByTestId('start-meeting-button')).toHaveAttribute(
     'title',
-    'Blue 的回應失敗了，請點擊席位重試該步驟',
+    '藍軍的回應失敗了，請點擊席位重試該步驟',
   )
 
   await openAdvancedOptions(page)
@@ -1198,7 +1335,7 @@ test('shows a failed-step hint and disables round-level actions until the step i
   await expect(page.getByTestId('failed-step-hint')).not.toBeVisible()
   await closeRoleDrawer(page)
 
-  await expect(page.getByTestId('operation-status')).toContainText('狀態：completed')
+  await expect(page.getByTestId('operation-status')).toContainText('狀態：已完成')
   await expect(page.getByTestId('start-meeting-button')).toBeEnabled()
 
   await page.getByTestId('past-topics-button').click()
@@ -1264,7 +1401,7 @@ test('cancelling or closing a meeting asks for confirmation first', async ({ pag
     await dialog.dismiss()
   })
   await page.getByTestId('cancel-meeting-button').click()
-  await expect(page.getByTestId('operation-status')).not.toContainText('狀態：cancelled')
+  await expect(page.getByTestId('operation-status')).not.toContainText('狀態：已取消')
 
   page.once('dialog', async (dialog) => {
     expect(dialog.message()).toContain('無法從介面復原')
@@ -1272,7 +1409,7 @@ test('cancelling or closing a meeting asks for confirmation first', async ({ pag
   })
   await page.getByTestId('cancel-meeting-button').click()
   await closeAdvancedOptions(page)
-  await expect(page.getByTestId('operation-status')).toContainText('狀態：cancelled')
+  await expect(page.getByTestId('operation-status')).toContainText('狀態：已取消')
 
   await page.getByTestId('past-topics-button').click()
   page.once('dialog', (dialog) => dialog.accept())
@@ -1294,7 +1431,7 @@ test('reopening a closed meeting restores discussion actions', async ({ page }) 
   await openAdvancedOptions(page)
   page.once('dialog', (dialog) => dialog.accept())
   await page.getByTestId('close-meeting-button').click()
-  await expect(page.getByTestId('operation-status')).toContainText('狀態：closed')
+  await expect(page.getByTestId('operation-status')).toContainText('狀態：已結案')
   await expect(page.getByTestId('start-new-round-button')).toBeDisabled()
 
   page.once('dialog', async (dialog) => {
@@ -1303,7 +1440,7 @@ test('reopening a closed meeting restores discussion actions', async ({ page }) 
   })
   await page.getByTestId('reopen-meeting-button').click()
 
-  await expect(page.getByTestId('operation-status')).toContainText('狀態：waiting')
+  await expect(page.getByTestId('operation-status')).toContainText('狀態：等待中')
   await expect(page.getByTestId('start-new-round-button')).toBeEnabled()
   await closeAdvancedOptions(page)
 })
@@ -1393,7 +1530,7 @@ test('step progress indicator reflects the active relay step during a fixed roun
   // so the indicator reflects step 1/4 (blue-propose) the instant the round starts.
   await expect(page.getByTestId('step-progress-indicator')).toContainText('第 1 步／共 4 步：藍軍提案中')
 
-  await expect(page.getByTestId('operation-status')).toContainText('狀態：completed')
+  await expect(page.getByTestId('operation-status')).toContainText('狀態：已完成')
   await expect(page.getByTestId('step-progress-indicator')).not.toBeVisible()
 
   await page.getByTestId('past-topics-button').click()
@@ -1454,7 +1591,8 @@ test('New Case keeps user input when create fails', async ({ page }) => {
     .getByTestId('mode-select-card-red-blue')
     .getByRole('button', { name: '選擇此模式' })
     .click()
-  await page.getByLabel('會議主題').fill('保留這個輸入')
+  await page.getByLabel('會議名稱', { exact: true }).fill('保留這個輸入')
+  await page.getByLabel('目標', { exact: true }).fill('保留這個輸入')
   await page.getByTestId('add-case-file-button').click()
   await page.getByTestId('case-file-1-upload').setInputFiles({
     name: '保留案卷.md',
@@ -1465,7 +1603,7 @@ test('New Case keeps user input when create fails', async ({ page }) => {
   await page.getByTestId('create-meeting-button').click()
 
   await expect(page.getByTestId('new-case-modal')).toBeVisible()
-  await expect(page.getByLabel('會議主題')).toHaveValue('保留這個輸入')
+  await expect(page.getByLabel('會議名稱', { exact: true })).toHaveValue('保留這個輸入')
   await expect(page.getByTestId('case-file-1-title')).toHaveValue('保留案卷')
   await expect(page.getByTestId('case-file-1-content')).toHaveValue('失敗後不應清空這段內容')
   await expect(page.getByTestId('case-file-1-role-Blue')).toBeChecked()
@@ -1481,7 +1619,7 @@ test('New Case keeps user input when create fails', async ({ page }) => {
   await expect(page.getByTestId('new-case-server-error')).not.toBeVisible()
   await page.getByTestId('create-meeting-button').click()
   await expect(page.getByTestId('new-case-server-error')).toBeVisible()
-  await page.getByLabel('會議主題').fill('編輯主題後清除舊錯誤')
+  await page.getByLabel('會議名稱', { exact: true }).fill('編輯主題後清除舊錯誤')
   await expect(page.getByTestId('new-case-server-error')).not.toBeVisible()
 })
 
@@ -1510,7 +1648,8 @@ test('New Case uses server case file limits and blocks oversized drafts before P
     .getByTestId('mode-select-card-red-blue')
     .getByRole('button', { name: '選擇此模式' })
     .click()
-  await page.getByLabel('會議主題').fill('容量預檢')
+  await page.getByLabel('會議名稱', { exact: true }).fill('容量預檢')
+  await page.getByLabel('目標', { exact: true }).fill('容量預檢')
   await page.getByTestId('add-case-file-button').click()
   await page.getByTestId('case-file-1-title').fill('第一份')
   await page.getByTestId('case-file-1-content').fill('abcdefghijk')
@@ -1581,7 +1720,8 @@ test('New Case fails closed and can retry when limits endpoint is unavailable', 
     .getByTestId('mode-select-card-red-blue')
     .getByRole('button', { name: '選擇此模式' })
     .click()
-  await page.getByLabel('會議主題').fill('limits unavailable')
+  await page.getByLabel('會議名稱', { exact: true }).fill('limits unavailable')
+  await page.getByLabel('目標', { exact: true }).fill('limits unavailable')
   await page.getByTestId('add-case-file-button').click()
   await page.getByTestId('case-file-1-title').fill('draft')
   await page.getByTestId('case-file-1-content').fill('short')
@@ -1658,7 +1798,8 @@ test('New Case counts emoji as Unicode code points at the server boundary', asyn
     .getByTestId('mode-select-card-red-blue')
     .getByRole('button', { name: '選擇此模式' })
     .click()
-  await page.getByLabel('會議主題').fill('emoji boundary')
+  await page.getByLabel('會議名稱', { exact: true }).fill('emoji boundary')
+  await page.getByLabel('目標', { exact: true }).fill('emoji boundary')
   await page.getByTestId('add-case-file-button').click()
   await page.getByTestId('case-file-1-title').fill('emoji')
   await page.getByTestId('case-file-1-role-Blue').check()
@@ -1710,7 +1851,8 @@ test('New Case clears a stale creation error when parallel members change', asyn
     .getByTestId('mode-select-card-brainstorm')
     .getByRole('button', { name: '選擇此模式' })
     .click()
-  await page.getByLabel('會議主題').fill('parallel stale error')
+  await page.getByLabel('會議名稱', { exact: true }).fill('parallel stale error')
+  await page.getByLabel('目標', { exact: true }).fill('parallel stale error')
   await page.getByTestId('create-meeting-button').click()
   await expect(page.getByTestId('new-case-server-error')).toHaveText('Meeting rejected')
 
@@ -1752,9 +1894,15 @@ test('New Case creates a meeting with numbered role-scoped case files', async ({
     ],
   })
   const createResponse = await createResponsePromise
+  const createdMeeting = (await createResponse.json()) as {
+    meeting_id: string
+    case_files: Array<{ evidence_index: number; citation_anchor: string }>
+  }
+  const meetingId = createdMeeting.meeting_id
 
   expect(createPayload).toMatchObject({
-    topic,
+    title: topic,
+    goal: topic,
     mode_id: 'courtroom',
     case_files: [
       {
@@ -1769,7 +1917,10 @@ test('New Case creates a meeting with numbered role-scoped case files', async ({
       },
     ],
   })
-  const meetingId = await page.getByTestId('meeting-id-display').innerText()
+  expect(createdMeeting.case_files).toMatchObject([
+    { evidence_index: 1, citation_anchor: '[證物一]' },
+    { evidence_index: 2, citation_anchor: '[證物二]' },
+  ])
   const meeting = await page.request.get(`${new URL(createResponse.url()).origin}/meetings/${meetingId}`)
   expect(meeting.ok()).toBeTruthy()
   expect((await meeting.json()).case_files).toMatchObject([
@@ -1803,7 +1954,8 @@ test('New Case blocks an empty model catalog and seat nameplates follow persiste
     .getByTestId('mode-select-card-red-blue')
     .getByRole('button', { name: '選擇此模式' })
     .click()
-  await page.getByLabel('會議主題').fill(topic)
+  await page.getByLabel('會議名稱', { exact: true }).fill(topic)
+  await page.getByLabel('目標', { exact: true }).fill(topic)
   await expect(page.getByTestId('new-case-model-error')).toBeVisible()
   await expect(page.getByTestId('create-meeting-button')).toBeDisabled()
   await page.getByTestId('new-case-close-button').click()
@@ -1858,6 +2010,9 @@ test('courtroom mode runs its full four-step relay and renders the Prosecutor/De
   await expect(page.getByTestId('role-seat-defense')).toBeVisible()
   await expect(page.getByTestId('role-seat-judge')).toBeVisible()
   await expect(page.getByTestId('role-seat-blue')).toHaveCount(0)
+  await expect(page.getByTestId('role-seat-prosecutor')).toContainText('檢察官')
+  await expect(page.getByTestId('role-seat-defense')).toContainText('辯護律師')
+  await expect(page.getByTestId('role-seat-judge')).toContainText('法官')
 
   await setRoleModelsInSettings(page, { Prosecutor: 'mock-slow', Defense: 'mock-slow', Judge: 'mock-slow' })
   await closeSettings(page)
@@ -1868,28 +2023,40 @@ test('courtroom mode runs its full four-step relay and renders the Prosecutor/De
   // first step) flips to "thinking" immediately.
   await expect(page.getByTestId('role-seat-prosecutor')).toHaveAttribute('data-status', 'thinking')
 
-  await expect(page.getByTestId('operation-status')).toContainText('狀態：completed', { timeout: 15000 })
-  await expect(page.getByTestId('operation-status')).toContainText('最後步驟：courtroom-verdict')
+  await expect(page.getByTestId('operation-status')).toContainText('狀態：已完成', { timeout: 15000 })
+  await expect(page.getByTestId('operation-status')).toContainText('最後步驟：法官判決')
   await expect(page.getByTestId('role-seat-prosecutor')).toHaveAttribute('data-status', 'completed')
   await expect(page.getByTestId('role-seat-defense')).toHaveAttribute('data-status', 'completed')
   await expect(page.getByTestId('role-seat-judge')).toHaveAttribute('data-status', 'completed')
+
+  await page.getByTestId('role-seat-defense').click()
+  await expect(page.getByTestId('role-drawer')).toContainText('辯護律師 詳情')
+  await expect(page.getByTestId('role-output-panel')).toContainText('辯護律師答辯')
+  await expect(page.getByTestId('role-output-panel')).toContainText('角色回應')
+  await expect(page.getByTestId('role-output-panel')).toContainText('論點')
+  await expect(page.getByTestId('role-output-panel')).not.toContainText('Defense')
+  await expect(page.getByTestId('role-output-panel')).not.toContainText('courtroom-defense')
+  await page.getByTestId('role-drawer-close-button').click()
 
   // Full step_id sequence in the records drawer confirms the relay actually ran
   // courtroom's mode-derived plan (courtroom-charge -> courtroom-defense ->
   // courtroom-rebuttal -> courtroom-verdict), not the red-blue fixed round.
   await page.getByTestId('records-button').click()
-  const courtroomStepIds = ['courtroom-charge', 'courtroom-defense', 'courtroom-rebuttal', 'courtroom-verdict']
-  for (const stepId of courtroomStepIds) {
-    await expect(page.getByTestId('step-timeline')).toContainText(stepId)
+  const courtroomStepLabels = ['檢察官指控', '辯護律師答辯', '檢察官再質詢', '法官判決']
+  for (const stepLabel of courtroomStepLabels) {
+    await expect(page.getByTestId('step-timeline')).toContainText(stepLabel)
   }
   // Presence alone (the loop above) would also pass if the steps ran out of order -
   // execution order is the relay executor's core guarantee, so read each row's step_id
   // (RecordsDrawer.vue renders `events` - and therefore these rows - in event order) and
   // assert courtroom's four steps appear in ascending position, not just somewhere.
-  const renderedStepIds = await page.getByTestId('step-timeline').locator('.timeline-row strong').allTextContents()
-  const observedPositions = courtroomStepIds.map((stepId) => renderedStepIds.indexOf(stepId))
+  const renderedStepLabels = await page.getByTestId('step-timeline').locator('.timeline-row strong').allTextContents()
+  const observedPositions = courtroomStepLabels.map((stepLabel) => renderedStepLabels.indexOf(stepLabel))
   expect(observedPositions.every((position) => position >= 0)).toBe(true)
   expect(observedPositions).toEqual([...observedPositions].sort((a, b) => a - b))
+  const primaryTimelineText = await page.getByTestId('step-timeline').locator('.timeline-main').allTextContents()
+  expect(primaryTimelineText.join('\n')).not.toContain('courtroom-defense')
+  expect(primaryTimelineText.join('\n')).not.toContain('Defense')
   await page.getByTestId('records-close-button').click()
 
   await page.getByTestId('past-topics-button').click()
@@ -1910,8 +2077,13 @@ test('brainstorm mode creates member instances and runs fanout plus synthesis', 
     .getByTestId('mode-select-card-brainstorm')
     .getByRole('button', { name: '選擇此模式' })
     .click()
-  await page.getByLabel('會議主題').fill(topic)
+  await page.getByLabel('會議名稱', { exact: true }).fill(topic)
+  await page.getByLabel('目標', { exact: true }).fill(topic)
   await expect(page.getByTestId('parallel-member-count')).toHaveText('2')
+  await expect(page.getByTestId('parallel-member-editor')).toContainText('委員 1')
+  await expect(page.getByTestId('parallel-member-editor')).toContainText('委員 2')
+  await expect(page.getByTestId('parallel-member-editor')).not.toContainText('Member-1')
+  await expect(page.getByTestId('parallel-member-editor')).not.toContainText('Member-2')
   await page.getByTestId('parallel-member-increment').click()
   await expect(page.getByTestId('parallel-member-count')).toHaveText('3')
   await page.getByTestId('parallel-member-1-name').fill('成本委員')
@@ -1957,8 +2129,8 @@ test('brainstorm mode creates member instances and runs fanout plus synthesis', 
 
   await page.getByTestId('start-meeting-button').click()
   await expect(page.getByTestId('role-seat-member-1')).toHaveAttribute('data-status', 'thinking')
-  await expect(page.getByTestId('operation-status')).toContainText('狀態：completed', { timeout: 15000 })
-  await expect(page.getByTestId('operation-status')).toContainText('最後步驟：synthesis-1')
+  await expect(page.getByTestId('operation-status')).toContainText('狀態：已完成', { timeout: 15000 })
+  await expect(page.getByTestId('operation-status')).toContainText('最後步驟：主持人彙整')
   await expect(page.getByTestId('role-seat-member-1')).toHaveAttribute('data-status', 'completed')
   await expect(page.getByTestId('role-seat-member-2')).toHaveAttribute('data-status', 'completed')
   await expect(page.getByTestId('role-seat-member-3')).toHaveAttribute('data-status', 'completed')
@@ -1989,7 +2161,8 @@ test('six-hats New Case persists its fixed catalog roster and reloads every assi
     .getByTestId('mode-select-card-six-hats')
     .getByRole('button', { name: '選擇此模式' })
     .click()
-  await page.getByLabel('會議主題').fill(topic)
+  await page.getByLabel('會議名稱', { exact: true }).fill(topic)
+  await page.getByLabel('目標', { exact: true }).fill(topic)
   await expect(page.getByTestId('parallel-member-editor')).toHaveCount(0)
 
   const assignments: Record<string, string> = {
@@ -2040,7 +2213,8 @@ test('debate mode gates creation on both position inputs, then builds a Pro/Con/
     .click()
 
   const topic = `E2E debate inputs ${Date.now()}`
-  await page.getByLabel('會議主題').fill(topic)
+  await page.getByLabel('會議名稱', { exact: true }).fill(topic)
+  await page.getByLabel('目標', { exact: true }).fill(topic)
 
   // Both position_a/position_b are required `kind: 'text'` inputs (NewCaseModal.vue's
   // hasEmptyRequiredInput) - the create CTA must stay disabled until both are filled,

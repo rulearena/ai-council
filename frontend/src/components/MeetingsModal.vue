@@ -3,6 +3,7 @@ import { inject } from 'vue'
 import { councilKey } from '../composables/useCouncil'
 import { formatDateTime } from '../composables/useCouncil'
 import Modal from './Modal.vue'
+import { statusDisplayLabel } from '../presentation'
 
 defineProps<{ show: boolean }>()
 const emit = defineEmits<{ close: [] }>()
@@ -30,7 +31,7 @@ async function selectMeeting(meetingId: string) {
 </script>
 
 <template>
-  <Modal :show="show" title="Past Topics" test-id="meetings-modal" close-test-id="meetings-close-button" @close="$emit('close')">
+  <Modal :show="show" title="歷史會議" test-id="meetings-modal" close-test-id="meetings-close-button" @close="$emit('close')">
     <div class="meeting-filters" data-testid="meeting-filters">
       <input
         v-model="meetingSearch"
@@ -40,9 +41,9 @@ async function selectMeeting(meetingId: string) {
       />
       <select v-model="statusFilter" data-testid="meeting-status-filter">
         <option value="all">全部</option>
-        <option value="open">open</option>
-        <option value="closed">closed</option>
-        <option value="cancelled">cancelled</option>
+        <option value="open">進行中</option>
+        <option value="closed">已結案</option>
+        <option value="cancelled">已取消</option>
       </select>
     </div>
 
@@ -64,12 +65,11 @@ async function selectMeeting(meetingId: string) {
             <svg v-if="meeting.pinned" class="pin-indicator" viewBox="0 0 24 24" width="12" height="12" fill="currentColor" aria-hidden="true">
               <path d="M11.525 2.295a.53.53 0 0 1 .95 0l2.31 4.679a2.123 2.123 0 0 0 1.595 1.16l5.166.756a.53.53 0 0 1 .294.904l-3.736 3.638a2.123 2.123 0 0 0-.611 1.878l.882 5.14a.53.53 0 0 1-.771.56l-4.618-2.428a2.122 2.122 0 0 0-1.973 0L6.396 21.01a.53.53 0 0 1-.77-.56l.881-5.139a2.122 2.122 0 0 0-.611-1.879L2.16 9.795a.53.53 0 0 1 .294-.906l5.165-.755a2.122 2.122 0 0 0 1.597-1.16z" />
             </svg>
-            {{ meeting.topic }}
+            {{ meeting.title }}
           </span>
-          <em class="status-badge" :data-status="meeting.status">{{ meeting.status }}</em>
-          <strong>{{ meeting.activity_status }}</strong>
+          <em class="status-badge" :data-status="meeting.status">{{ statusDisplayLabel(meeting.status) }}</em>
+          <strong>{{ statusDisplayLabel(meeting.activity_status) }}</strong>
           <small>更新 {{ formatDateTime(meeting.updated_at) }}</small>
-          <small class="meeting-id-text">{{ meeting.meeting_id }}</small>
           <span class="meeting-tags" data-testid="meeting-tags">
             <em v-for="tag in meeting.tags" :key="tag" class="tag-badge">{{ tag }}</em>
           </span>
@@ -79,7 +79,7 @@ async function selectMeeting(meetingId: string) {
           class="btn btn-icon pin-meeting-button"
           data-testid="pin-meeting-button"
           :class="{ active: meeting.pinned }"
-          :aria-label="`${meeting.pinned ? '取消釘選' : '釘選'} ${meeting.topic}`"
+          :aria-label="`${meeting.pinned ? '取消釘選' : '釘選'} ${meeting.title}`"
           :disabled="loading"
           @click="toggleMeetingPinned(meeting)"
         >
@@ -91,7 +91,7 @@ async function selectMeeting(meetingId: string) {
           type="button"
           class="btn btn-secondary btn-sm edit-tags-button"
           data-testid="edit-tags-button"
-          :aria-label="`編輯 ${meeting.topic} 的標籤`"
+          :aria-label="`編輯 ${meeting.title} 的標籤`"
           :disabled="loading"
           @click="editMeetingTags(meeting)"
         >
@@ -101,7 +101,7 @@ async function selectMeeting(meetingId: string) {
           type="button"
           class="btn btn-danger btn-sm delete-meeting-button"
           data-testid="delete-meeting-button"
-          :aria-label="`刪除 ${meeting.topic}`"
+          :aria-label="`刪除 ${meeting.title}`"
           :disabled="loading || meeting.activity_status === 'running'"
           @click="deleteExistingMeeting(meeting)"
         >
@@ -135,7 +135,7 @@ async function selectMeeting(meetingId: string) {
         <li v-if="transcriptSearchResults.length === 0">沒有符合的會議</li>
         <li v-for="meeting in transcriptSearchResults" :key="meeting.meeting_id">
           <button type="button" class="btn btn-ghost" @click="selectMeeting(meeting.meeting_id)">
-            {{ meeting.topic }} <small>{{ meeting.meeting_id }}</small>
+            {{ meeting.title }}
           </button>
         </li>
       </ul>

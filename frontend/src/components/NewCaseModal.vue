@@ -13,13 +13,15 @@ import Modal from './Modal.vue'
 import ModeCard from './ModeCard.vue'
 import RoleSilhouette from './RoleSilhouette.vue'
 import { modelDisplayLabel } from '../providers'
+import { roleDisplayName } from '../presentation'
 
 const props = defineProps<{ show: boolean }>()
 const emit = defineEmits<{ close: [] }>()
 
 const store = inject(councilKey)!
 const {
-  topic,
+  title,
+  goal,
   models,
   loading,
   meetingCreationError,
@@ -165,7 +167,7 @@ async function refreshCaseFileLimits(generation: number) {
 }
 
 watch(
-  [topic, selectedModeId, inputValues, caseFiles, parallelMemberCount, parallelMembers],
+  [title, goal, selectedModeId, inputValues, caseFiles, parallelMemberCount, parallelMembers],
   clearMeetingCreationError,
   { deep: true },
 )
@@ -224,6 +226,11 @@ function setParallelMemberCount(nextCount: number) {
   }
   parallelMembers.value.splice(clamped)
   resetModelAssignments(true)
+}
+
+function parallelMemberDisplayName(index: number) {
+  const roleId = `${selectedMode.value.fanout!.role}-${index + 1}`
+  return roleDisplayName(selectedMode.value, selectedModeParticipants.value, roleId)
 }
 
 function resetModelAssignments(preserveExisting = false) {
@@ -336,7 +343,7 @@ function buildParticipants() {
 </script>
 
 <template>
-  <Modal :show="show" title="New Case" test-id="new-case-modal" close-test-id="new-case-close-button" @close="$emit('close')">
+  <Modal :show="show" title="新增會議" test-id="new-case-modal" close-test-id="new-case-close-button" @close="$emit('close')">
     <p
       v-if="caseFileLimitsLoading"
       class="case-file-cost-note"
@@ -388,8 +395,13 @@ function buildParticipants() {
       <p class="participant-setup-tagline">{{ selectedMode.tagline }}</p>
 
       <label class="topic-input-row">
-        會議主題
-        <input v-model="topic" aria-label="會議主題" />
+        會議名稱
+        <input v-model="title" aria-label="會議名稱" />
+      </label>
+
+      <label class="topic-input-row">
+        目標
+        <textarea v-model="goal" aria-label="目標" />
       </label>
 
       <label v-for="input in textInputs" :key="input.id" class="topic-input-row">
@@ -430,7 +442,7 @@ function buildParticipants() {
         </div>
 
         <label v-for="(_, index) in parallelMemberCount" :key="index" class="parallel-member-row">
-          <span>{{ selectedMode.fanout.role }}-{{ index + 1 }}</span>
+          <span>{{ parallelMemberDisplayName(index) }}</span>
           <input
             v-model="parallelMembers[index].displayName"
             :data-testid="`parallel-member-${index + 1}-name`"
@@ -608,7 +620,7 @@ function buildParticipants() {
         </label>
       </section>
       <p v-if="models.length === 0" class="error" data-testid="new-case-model-error" role="alert">
-        沒有可用模型，請先在 Settings 建立模型設定。
+        沒有可用模型，請先到「設定」建立模型設定。
       </p>
 
       <p
@@ -625,7 +637,7 @@ function buildParticipants() {
         class="btn btn-primary create-meeting-cta"
         data-testid="create-meeting-button"
         @click="submit"
-        :disabled="loading || caseFileLimitsLoading || !caseFileLimits || !topic.trim() || hasEmptyRequiredInput || hasIncompleteModelAssignment || hasIncompleteCaseFile || hasOversizedCaseFile || hasOversizedCaseFileTotal"
+        :disabled="loading || caseFileLimitsLoading || !caseFileLimits || !title.trim() || !goal.trim() || hasEmptyRequiredInput || hasIncompleteModelAssignment || hasIncompleteCaseFile || hasOversizedCaseFile || hasOversizedCaseFileTotal"
       >
         建立
       </button>

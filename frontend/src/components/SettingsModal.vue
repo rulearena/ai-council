@@ -7,6 +7,8 @@ import { useScenePreference } from '../scenes'
 import Modal from './Modal.vue'
 import ModelManagerPanel from './ModelManagerPanel.vue'
 import { modelDisplayLabel } from '../providers'
+import { roleDisplayName, statusDisplayLabel } from '../presentation'
+import { activeMode } from '../composables/useCouncil'
 
 const props = defineProps<{ show: boolean }>()
 defineEmits<{ close: [] }>()
@@ -29,6 +31,8 @@ const assignmentWarnings = computed(() =>
     (participant) => participant.model_assignment_warning,
   ),
 )
+const participants = computed(() => selectedMeeting.value?.participants ?? [])
+const displayRole = (role: string) => roleDisplayName(activeMode.value, participants.value, role)
 
 const { scenes, currentScene, setScene } = useScenePreference()
 // Reads currentScene (not the persisted selectedSceneId) so the dropdown always matches
@@ -55,7 +59,7 @@ watch(
 </script>
 
 <template>
-  <Modal :show="show" title="Settings" test-id="settings-modal" close-test-id="settings-close-button" @close="$emit('close')">
+  <Modal :show="show" title="設定" test-id="settings-modal" close-test-id="settings-close-button" @close="$emit('close')">
     <div class="settings-tabs">
       <button
         type="button"
@@ -97,7 +101,7 @@ watch(
         <span class="role-badge" :class="roleClass(role)" :style="roleColorVars(role)" data-testid="role-badge">
           <img v-if="roleIcon(role)" :src="roleIcon(role)" class="role-icon" :alt="role" />
           <RoleSilhouette v-else :color="roleColor(role)" :size="20" />
-          {{ role }}
+          {{ displayRole(role) }}
         </span>
         <span class="model-control">
           <select
@@ -115,7 +119,7 @@ watch(
             @click="testSelectedModel(role)"
             :disabled="loading || !selectedModels[role]"
           >
-            Test
+            測試
           </button>
         </span>
       </label>
@@ -128,7 +132,7 @@ watch(
       role="alert"
     >
       <p v-for="participant in assignmentWarnings" :key="participant.role_id">
-        {{ participant.role_id }}：{{ participant.model_assignment_warning }}
+        {{ displayRole(participant.role_id) }}：{{ participant.model_assignment_warning }}
       </p>
     </div>
 
@@ -139,7 +143,7 @@ watch(
     <section class="model-test-status" data-testid="model-test-status">
       <span v-for="role in councilRoles" :key="role">
         <i class="status-dot" :data-status="modelTestResults[role].status" aria-hidden="true"></i>
-        {{ role }}: {{ modelTestResults[role].status }}
+        {{ displayRole(role) }}：{{ statusDisplayLabel(modelTestResults[role].status) }}
         <small v-if="modelTestResults[role].testedAt">測試 {{ formatDateTime(modelTestResults[role].testedAt) }}</small>
         <em v-if="modelTestResults[role].error">{{ modelTestResults[role].error }}</em>
       </span>

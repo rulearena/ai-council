@@ -4,6 +4,7 @@ import roleRedIcon from '../assets/roles/red.png'
 import roleJudgeIcon from '../assets/roles/judge.png'
 import { DEFAULT_MODE_ID, getModeById, refreshModeCatalog, type ModeDefinition, type ModeRoleDefinition } from '../modes'
 import { applyModeScene } from '../scenes'
+import { roleDisplayName } from '../presentation'
 import {
   ApiError,
   addMeetingMessage,
@@ -26,6 +27,7 @@ import {
   transcriptDownloadUrl,
   updateMeetingPinned,
   updateMeetingParticipantModels,
+  updateMeetingDetails,
   updateMeetingTags,
   type Meeting,
   type MeetingEvent,
@@ -93,12 +95,18 @@ export const sequencePresets = computed<SequencePreset[]>(() => {
   const adjudicator = mode.roles.find((role) => role.kind !== 'member')?.id
   if (!adjudicator || members.length < 2) return []
   const reversed = [...members].reverse()
-  const label = (roles: string[]) => roles.join(' -> ')
+  const presentationParticipants = activeRoleSource.value.map((role) => ({
+    role_id: role.id,
+    display_name: role.name,
+  }))
+  const label = (roles: string[]) =>
+    roles.map((role) => roleDisplayName(mode, presentationParticipants, role)).join(' → ')
+  const adjudicatorName = roleDisplayName(mode, presentationParticipants, adjudicator)
   return [
     { id: 'members-reversed-adj', label: label([...reversed, adjudicator]), roles: [...reversed, adjudicator] },
     { id: 'members-adj', label: label([...members, adjudicator]), roles: [...members, adjudicator] },
     { id: 'members-reversed', label: label(reversed), roles: reversed },
-    { id: 'adj-only', label: `${adjudicator} only`, roles: [adjudicator] },
+    { id: 'adj-only', label: `只請${adjudicatorName}`, roles: [adjudicator] },
   ]
 })
 
@@ -224,7 +232,8 @@ export function useCouncil() {
   const meetings = ref<Meeting[]>([])
   const selectedMeeting = ref<Meeting | null>(null)
   const selectedEvent = ref<MeetingEvent | null>(null)
-  const topic = ref('先做後端核心流程')
+  const title = ref('')
+  const goal = ref('')
   // Populated by the councilRoles watcher below - the roster (and therefore which keys
   // these need) now changes whenever the selected meeting's mode does, not just once at
   // startup.
@@ -262,8 +271,8 @@ export function useCouncil() {
   // is the sole source of the "thinking" state: pendingRoles[0] is thinking, the rest are queued.
   const pendingRoles = ref<CouncilRole[]>([])
 
-  const meetingIdCopied = ref(false)
-  let meetingIdCopiedTimeout: ReturnType<typeof setTimeout> | null = null
+  const meetingInfoCopied = ref(false)
+  let meetingInfoCopiedTimeout: ReturnType<typeof setTimeout> | null = null
 
   // Briefly true right after a chair message is sent, so the Chairman seat can pop a
   // speech bubble even though the backend has no "speaking" concept of its own.
@@ -363,7 +372,7 @@ export function useCouncil() {
     return meetings.value
       .filter((meeting) => {
         const matchesStatus = statusFilter.value === 'all' || meeting.status === statusFilter.value
-        const searchable = `${meeting.topic} ${meeting.meeting_id} ${meeting.last_step_id ?? ''} ${meeting.tags.join(' ')}`.toLowerCase()
+        const searchable = `${meeting.title} ${meeting.meeting_id} ${meeting.last_step_id ?? ''} ${meeting.tags.join(' ')}`.toLowerCase()
         return matchesStatus && (!query || searchable.includes(query))
       })
       .sort(
@@ -409,6 +418,7 @@ export function useCouncil() {
   const canRun = computed(
     () =>
       selectedMeeting.value &&
+      !selectedMeeting.value.requires_goal &&
       !isTerminalMeeting.value &&
       !isMeetingRunning.value &&
       councilRoles.value.every((role) => selectedModels.value[role]),
@@ -514,7 +524,12 @@ export function useCouncil() {
     error.value = ''
     meetingCreationError.value = ''
     try {
-      const meeting = await createMeeting(topic.value, { modeId, inputs, participants, caseFiles })
+      const meeting = await createMeeting(title.value, goal.value, {
+        modeId,
+        inputs,
+        participants,
+        caseFiles,
+      })
       meetings.value = await getMeetings()
       await openMeeting(meeting.meeting_id)
       return true
@@ -540,7 +555,7 @@ export function useCouncil() {
     // right after enqueuing roles, so clearing unconditionally would erase what was just pushed.
     if (meetingId !== selectedMeeting.value?.meeting_id) {
       pendingRoles.value = []
-      meetingIdCopied.value = false
+      meetingInfoCopied.value = false
       showContinueHint.value = false
       seenEventIds = new Set()
     }
@@ -555,6 +570,15 @@ export function useCouncil() {
     selectedEvent.value = selectedMeeting.value.events?.at(-1) ?? null
     transcript.value = await getTranscript(meetingId)
     connectMeetingEvents(meetingId)
+  }
+
+  async function updateSelectedMeetingDetails(nextTitle: string, nextGoal: string) {
+    if (!selectedMeeting.value || !nextTitle.trim() || !nextGoal.trim()) return false
+    const meetingId = selectedMeeting.value.meeting_id
+    return runAction(async () => {
+      selectedMeeting.value = await updateMeetingDetails(meetingId, nextTitle, nextGoal)
+      meetings.value = await getMeetings()
+    })
   }
 
   function clearContinueHint() {
@@ -630,7 +654,7 @@ export function useCouncil() {
         }
       },
       () => {
-        error.value = 'Meeting event stream disconnected.'
+        error.value = '會議事件串流已中斷。'
         pendingRoles.value = []
       },
     )
@@ -694,7 +718,7 @@ export function useCouncil() {
   }
 
   async function deleteExistingMeeting(meeting: Meeting) {
-    if (!window.confirm(`確定刪除「${meeting.topic}」？此操作無法復原。`)) return
+    if (!window.confirm(`確定刪除「${meeting.title}」？此操作無法復原。`)) return
     await runAction(async () => {
       await deleteMeeting(meeting.meeting_id)
       if (selectedMeeting.value?.meeting_id === meeting.meeting_id) {
@@ -854,12 +878,12 @@ export function useCouncil() {
     })
   }
 
-  async function requestSelectedRoleResponse(role: CouncilRole) {
-    if (!selectedMeeting.value || !canRun.value) return
+  async function requestSelectedRoleResponse(role: CouncilRole, instruction: string) {
+    if (!selectedMeeting.value || !canRun.value || !instruction.trim()) return false
     clearContinueHint()
     pendingRoles.value.push(role)
-    await runAction(async () => {
-      await requestRoleResponse(selectedMeeting.value!.meeting_id, role)
+    return runAction(async () => {
+      await requestRoleResponse(selectedMeeting.value!.meeting_id, role, instruction.trim())
       await openMeeting(selectedMeeting.value!.meeting_id)
     })
   }
@@ -894,13 +918,13 @@ export function useCouncil() {
     })
   }
 
-  async function copyMeetingId(meetingId: string) {
+  async function copyMeetingInfo(meeting: Meeting) {
     try {
-      await navigator.clipboard.writeText(meetingId)
-      meetingIdCopied.value = true
-      if (meetingIdCopiedTimeout) clearTimeout(meetingIdCopiedTimeout)
-      meetingIdCopiedTimeout = setTimeout(() => {
-        meetingIdCopied.value = false
+      await navigator.clipboard.writeText(`${meeting.title}\n會議 ID：${meeting.meeting_id}`)
+      meetingInfoCopied.value = true
+      if (meetingInfoCopiedTimeout) clearTimeout(meetingInfoCopiedTimeout)
+      meetingInfoCopiedTimeout = setTimeout(() => {
+        meetingInfoCopied.value = false
       }, 1500)
     } catch (caught) {
       error.value = caught instanceof Error ? caught.message : String(caught)
@@ -957,7 +981,8 @@ export function useCouncil() {
     meetings,
     selectedMeeting,
     selectedEvent,
-    topic,
+    title,
+    goal,
     selectedModels,
     modelTestResults,
     chairMessage,
@@ -973,7 +998,7 @@ export function useCouncil() {
     assignmentUpdateError,
     devMode,
     pendingRoles,
-    meetingIdCopied,
+    meetingInfoCopied,
     chairmanSpeaking,
     showContinueHint,
     // computed
@@ -997,6 +1022,7 @@ export function useCouncil() {
     createNewMeeting,
     clearMeetingCreationError,
     openMeeting,
+    updateSelectedMeetingDetails,
     startSelectedMeeting,
     startOrContinueMeeting,
     cancelSelectedMeeting,
@@ -1013,7 +1039,7 @@ export function useCouncil() {
     requestSelectedRoleResponse,
     requestSelectedRoleSequence,
     retrySelectedStep,
-    copyMeetingId,
+    copyMeetingInfo,
     roleSeatStatus,
     roleSeatLabel,
     roleHistory,

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 import time
+import uuid
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -105,7 +106,7 @@ class MeetingRunner:
         self,
         *,
         meeting_id: str,
-        topic: str,
+        goal: str,
         model_assignments: dict[str, ModelConfig],
         plan: RelayPlan,
         inputs: dict[str, str] | None = None,
@@ -118,7 +119,7 @@ class MeetingRunner:
             return
         self._run_from_step(
             meeting_id=meeting_id,
-            topic=topic,
+            goal=goal,
             model_assignments=model_assignments,
             steps=plan.steps,
             inputs=inputs,
@@ -132,14 +133,25 @@ class MeetingRunner:
         *,
         meeting_id: str,
         step_id: str,
-        topic: str,
+        goal: str,
         model_assignments: dict[str, ModelConfig],
         plan: RelayPlan,
         inputs: dict[str, str] | None = None,
+        role_display_names: dict[str, str] | None = None,
     ) -> None:
         failed_event = self._latest_event_for_step(meeting_id, step_id)
         if not failed_event or failed_event.get("status") != "failed":
             raise ValueError(f"Step is not failed: {step_id}")
+        if failed_event.get("interaction_type") == "directed-role-response":
+            self._retry_failed_directed_response(
+                meeting_id=meeting_id,
+                failed_event=failed_event,
+                goal=goal,
+                model_assignments=model_assignments,
+                inputs=inputs,
+                role_display_names=role_display_names or {},
+            )
+            return
         base_step_id = str(failed_event.get("base_step_id", failed_event.get("step_id")))
         try:
             start_index = next(
@@ -149,7 +161,7 @@ class MeetingRunner:
             raise ValueError(f"Step is not part of this meeting's mode: {base_step_id}") from error
         self._run_from_step(
             meeting_id=meeting_id,
-            topic=topic,
+            goal=goal,
             model_assignments=model_assignments,
             steps=plan.steps,
             inputs=inputs,
@@ -158,36 +170,133 @@ class MeetingRunner:
             round_number=int(failed_event.get("round", 1)),
         )
 
+    def _retry_failed_directed_response(
+        self,
+        *,
+        meeting_id: str,
+        failed_event: dict[str, object],
+        goal: str,
+        model_assignments: dict[str, ModelConfig],
+        inputs: dict[str, str] | None,
+        role_display_names: dict[str, str],
+    ) -> None:
+        role = str(failed_event.get("role", ""))
+        if role not in model_assignments:
+            raise ValueError(f"Missing model assignment for role: {role}")
+        instruction_event_id = str(failed_event.get("in_response_to_event_id", ""))
+        instruction_event = next(
+            (
+                event
+                for event in self.repository.read_events(meeting_id)
+                if event.get("event_id") == instruction_event_id
+            ),
+            None,
+        )
+        if (
+            not instruction_event
+            or instruction_event.get("interaction_type") != "directed-role-instruction"
+        ):
+            raise ValueError("Directed response instruction is unavailable for retry")
+        instruction = str(instruction_event.get("content", "")).strip()
+        if not instruction:
+            raise ValueError("Directed response instruction is unavailable for retry")
+        base_step_id = str(failed_event.get("base_step_id", failed_event.get("step_id")))
+        step = StepDefinition(
+            step_id=base_step_id,
+            role=role,
+            template_name="directed_role_response",
+            output_schema_id=str(
+                failed_event.get("output_schema_id") or DEFAULT_OUTPUT_SCHEMA_ID
+            ),
+        )
+        self._run_step(
+            meeting_id=meeting_id,
+            goal=goal,
+            model_assignments=model_assignments,
+            inputs=self._inputs_for_role(
+                inputs,
+                role,
+                extra={
+                    "instruction": instruction,
+                    "role_display_name": role_display_names.get(role, role),
+                },
+            ),
+            step=step,
+            attempt=int(failed_event.get("attempt", 1)) + 1,
+            round_number=int(failed_event.get("round", 1)),
+            event_step_id=str(failed_event["step_id"]),
+            extra_event_fields={
+                "interaction_type": "directed-role-response",
+                "directed_sequence": int(failed_event.get("directed_sequence", 1)),
+                "in_response_to_event_id": instruction_event_id,
+            },
+            prior_transcript_override=None,
+        )
+
     def respond_as_role(
         self,
         *,
         meeting_id: str,
-        topic: str,
+        goal: str,
         role: str,
+        role_display_name: str,
+        instruction: str,
         model_assignments: dict[str, ModelConfig],
         plan: RelayPlan,
         inputs: dict[str, str] | None = None,
     ) -> None:
         if self._is_terminal(meeting_id):
             return
+        instruction = instruction.strip()
+        if not instruction:
+            raise ValueError("Directed role instruction cannot be blank")
         step = plan.directed_steps.get(role)
         if step is None:
             raise ValueError(f"Unknown role: {role}")
         if role not in model_assignments:
             raise ValueError(f"Missing model assignment for role: {role}")
         directed_sequence = self._next_directed_response_number(meeting_id)
+        instruction_event_id = f"{meeting_id}:human-directed-message:{uuid.uuid4().hex}"
+        self.repository.append_event(
+            meeting_id,
+            {
+                "event_id": instruction_event_id,
+                "meeting_id": meeting_id,
+                "step_id": "human-directed-message",
+                "role": "Human",
+                "attempt": 1,
+                "status": "completed",
+                "interaction_type": "directed-role-instruction",
+                "target_role_id": role,
+                "content": instruction,
+            },
+        )
+        directed_step = StepDefinition(
+            step_id=step.step_id,
+            role=step.role,
+            template_name="directed_role_response",
+            output_schema_id=step.output_schema_id,
+        )
         self._run_step(
             meeting_id=meeting_id,
-            topic=topic,
+            goal=goal,
             model_assignments=model_assignments,
-            inputs=inputs,
-            step=step,
+            inputs=self._inputs_for_role(
+                inputs,
+                role,
+                extra={
+                    "instruction": instruction,
+                    "role_display_name": role_display_name,
+                },
+            ),
+            step=directed_step,
             attempt=1,
             round_number=self._next_round_number(meeting_id, plan),
             event_step_id=f"directed-{directed_sequence}-{role.lower()}-response",
             extra_event_fields={
                 "interaction_type": "directed-role-response",
                 "directed_sequence": directed_sequence,
+                "in_response_to_event_id": instruction_event_id,
             },
             prior_transcript_override=None,
         )
@@ -196,7 +305,7 @@ class MeetingRunner:
         self,
         *,
         meeting_id: str,
-        topic: str,
+        goal: str,
         roles: list[str],
         model_assignments: dict[str, ModelConfig],
         plan: RelayPlan,
@@ -225,7 +334,7 @@ class MeetingRunner:
                 return
             if not self._run_step(
                 meeting_id=meeting_id,
-                topic=topic,
+                goal=goal,
                 model_assignments=model_assignments,
                 inputs=inputs,
                 step=step,
@@ -245,7 +354,7 @@ class MeetingRunner:
         self,
         *,
         meeting_id: str,
-        topic: str,
+        goal: str,
         model_assignments: dict[str, ModelConfig],
         plan: ParallelPlan,
         inputs: dict[str, str] | None = None,
@@ -267,7 +376,7 @@ class MeetingRunner:
         if pending_members:
             self._run_parallel_members(
                 meeting_id=meeting_id,
-                topic=topic,
+                goal=goal,
                 model_assignments=model_assignments,
                 members=pending_members,
                 inputs=inputs,
@@ -276,7 +385,7 @@ class MeetingRunner:
             )
         self._run_parallel_synthesis_if_ready(
             meeting_id=meeting_id,
-            topic=topic,
+            goal=goal,
             model_assignments=model_assignments,
             plan=plan,
             inputs=inputs,
@@ -288,7 +397,7 @@ class MeetingRunner:
         *,
         meeting_id: str,
         step_id: str,
-        topic: str,
+        goal: str,
         model_assignments: dict[str, ModelConfig],
         plan: ParallelPlan,
         inputs: dict[str, str] | None = None,
@@ -304,7 +413,7 @@ class MeetingRunner:
         attempt = int(failed_event.get("attempt", 1)) + 1
         self._run_parallel_members(
             meeting_id=meeting_id,
-            topic=topic,
+            goal=goal,
             model_assignments=model_assignments,
             members=[member],
             inputs=inputs,
@@ -313,7 +422,7 @@ class MeetingRunner:
         )
         self._run_parallel_synthesis_if_ready(
             meeting_id=meeting_id,
-            topic=topic,
+            goal=goal,
             model_assignments=model_assignments,
             plan=plan,
             inputs=inputs,
@@ -358,7 +467,7 @@ class MeetingRunner:
         self,
         *,
         meeting_id: str,
-        topic: str,
+        goal: str,
         model_assignments: dict[str, ModelConfig],
         steps: list[StepDefinition],
         inputs: dict[str, str] | None,
@@ -372,7 +481,7 @@ class MeetingRunner:
             attempt = attempt_override if index == start_index and attempt_override else 1
             if not self._run_step(
                 meeting_id=meeting_id,
-                topic=topic,
+                goal=goal,
                 model_assignments=model_assignments,
                 inputs=inputs,
                 step=step,
@@ -388,7 +497,7 @@ class MeetingRunner:
         self,
         *,
         meeting_id: str,
-        topic: str,
+        goal: str,
         model_assignments: dict[str, ModelConfig],
         inputs: dict[str, str] | None,
         step: StepDefinition,
@@ -409,13 +518,13 @@ class MeetingRunner:
         prompt = self.prompt_renderer.render(
             template_name=step.template_name,
             role=step.role,
-            topic=topic,
+            goal=goal,
             prior_transcript=(
                 prior_transcript_override
                 if prior_transcript_override is not None
                 else self.transcript_projector.project(
                     self.repository.read_events(meeting_id),
-                    title=topic,
+                    title=goal,
                 )
             ),
             required_json_schema=output_schema.schema,
@@ -498,7 +607,7 @@ class MeetingRunner:
             if parse_retries_remaining:
                 return self._run_step(
                     meeting_id=meeting_id,
-                    topic=topic,
+                    goal=goal,
                     model_assignments=model_assignments,
                     inputs=inputs,
                     step=step,
@@ -576,7 +685,7 @@ class MeetingRunner:
         self,
         *,
         meeting_id: str,
-        topic: str,
+        goal: str,
         model_assignments: dict[str, ModelConfig],
         members: list[ParallelMemberStep],
         inputs: dict[str, str] | None,
@@ -590,7 +699,7 @@ class MeetingRunner:
                 executor.submit(
                     self._build_parallel_member_events,
                     meeting_id=meeting_id,
-                    topic=topic,
+                    goal=goal,
                     model_assignments=model_assignments,
                     member=member,
                     inputs=inputs,
@@ -608,7 +717,7 @@ class MeetingRunner:
         self,
         *,
         meeting_id: str,
-        topic: str,
+        goal: str,
         model_assignments: dict[str, ModelConfig],
         member: ParallelMemberStep,
         inputs: dict[str, str] | None,
@@ -622,10 +731,10 @@ class MeetingRunner:
         prompt = self.prompt_renderer.render(
             template_name=member.template_name,
             role=member.role,
-            topic=topic,
+            goal=goal,
             prior_transcript=self.transcript_projector.project(
                 self.repository.read_events(meeting_id),
-                title=topic,
+                title=goal,
             ),
             required_json_schema=output_schema.schema,
             inputs=self._inputs_for_role(
@@ -814,7 +923,7 @@ class MeetingRunner:
         self,
         *,
         meeting_id: str,
-        topic: str,
+        goal: str,
         model_assignments: dict[str, ModelConfig],
         plan: ParallelPlan,
         inputs: dict[str, str] | None,
@@ -827,7 +936,7 @@ class MeetingRunner:
             return
         self._run_step(
             meeting_id=meeting_id,
-            topic=topic,
+            goal=goal,
             model_assignments=model_assignments,
             inputs=self._synthesis_inputs(
                 inputs,
@@ -872,7 +981,13 @@ class MeetingRunner:
             "status": "running",
             **prompt_metadata,
         }
-        for key in ["interaction_type", "directed_sequence", "sequence", "sequence_index"]:
+        for key in [
+            "interaction_type",
+            "directed_sequence",
+            "in_response_to_event_id",
+            "sequence",
+            "sequence_index",
+        ]:
             value = extra_event_fields.get(key)
             if isinstance(value, (str, int)):
                 state[key] = value

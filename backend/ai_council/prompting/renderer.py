@@ -13,7 +13,7 @@ class PromptRenderer:
         *,
         template_name: str,
         role: str,
-        topic: str,
+        goal: str,
         prior_transcript: str,
         required_json_schema: str,
         inputs: dict[str, str] | None = None,
@@ -22,7 +22,7 @@ class PromptRenderer:
         values = {
             **{key: str(value) for key, value in (inputs or {}).items()},
             "role": role,
-            "topic": topic,
+            "goal": goal,
             "prior_transcript": prior_transcript,
             "required_json_schema": required_json_schema,
         }

@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, inject } from 'vue'
 import {
+  activeMode,
   activeModeRoles,
   councilKey,
   councilRoles,
@@ -13,12 +14,20 @@ import {
 import RoleSilhouette from './RoleSilhouette.vue'
 import { resolveSceneSeats, type SceneConfig, type SeatRole, type SeatRosterEntry } from '../scenes'
 import { modelDisplayLabel } from '../providers'
+import { roleDisplayName } from '../presentation'
 
 const props = defineProps<{ scene: SceneConfig }>()
 defineEmits<{ 'seat-click': [role: CouncilRole | 'Chairman'] }>()
 
 const store = inject(councilKey)!
 const { selectedMeeting, pendingRoles, roleSeatStatus, chairmanSpeaking, chairmanEvents, selectedModels, models } = store
+const participantPresentation = computed(() => selectedMeeting.value?.participants ?? [])
+
+function displayRole(role: SeatRole): string {
+  return role === 'Chairman'
+    ? '主席'
+    : roleDisplayName(activeMode.value, participantPresentation.value, role)
+}
 
 function fullModelLabel(role: SeatRole): string {
   const modelId = selectedModels.value[role]
@@ -108,8 +117,8 @@ const latestChairMessage = computed(() => chairmanEvents.value.at(-1)?.content ?
       :data-scene="scene.id"
     >
       <div class="stage-table" :style="topicStyle">
-        <span class="stage-table-topic">{{ selectedMeeting?.topic ?? '尚未選擇會議' }}</span>
-        <span v-if="!selectedMeeting" class="stage-table-hint">從右上角 New Case 建立，或 Past Topics 選擇會議</span>
+        <span class="stage-table-topic">{{ selectedMeeting?.title ?? '尚未選擇會議' }}</span>
+        <span v-if="!selectedMeeting" class="stage-table-hint">從右上角「新增會議」建立，或到「歷史會議」選擇會議</span>
       </div>
 
       <button
@@ -140,11 +149,11 @@ const latestChairMessage = computed(() => chairmanEvents.value.at(-1)?.content ?
                compact avatar card, which also covers the fallback (no-portrait) scene. -->
           <template v-if="hasPortrait(role)">
             <span class="seat-ground-glow" aria-hidden="true"></span>
-            <img :src="portraitSrc(role)" :alt="role === 'Chairman' ? '主席' : role" class="seat-portrait" />
+            <img :src="portraitSrc(role)" :alt="displayRole(role)" class="seat-portrait" />
           </template>
 
           <span class="seat-avatar" :class="{ 'seat-avatar-fallback': hasPortrait(role) }">
-            <img v-if="role !== 'Chairman' && roleIcon(role)" :src="roleIcon(role)" :alt="role" class="seat-avatar-img" />
+            <img v-if="role !== 'Chairman' && roleIcon(role)" :src="roleIcon(role)" :alt="displayRole(role)" class="seat-avatar-img" />
             <RoleSilhouette v-else :color="role === 'Chairman' ? 'currentColor' : roleColor(role)" :size="28" />
           </span>
 
@@ -167,7 +176,7 @@ const latestChairMessage = computed(() => chairmanEvents.value.at(-1)?.content ?
         </span>
         <span class="seat-below-anchor">
           <span class="seat-nameplate" :class="{ 'has-model-label': role !== 'Chairman' }">
-            <span class="seat-nameplate-role">{{ role === 'Chairman' ? '主席' : role }}</span>
+            <span class="seat-nameplate-role">{{ displayRole(role) }}</span>
             <span
               v-if="role !== 'Chairman'"
               class="seat-model-label"

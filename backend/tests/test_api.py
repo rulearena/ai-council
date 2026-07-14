@@ -18,7 +18,7 @@ from ai_council.models.adapters import AdapterError, MockModelAdapter, ModelRequ
 from ai_council.models.config import ModelConfigRepository
 from ai_council.meetings.repository import MeetingRepository
 
-TEST_BLUE_PROPOSE_TEMPLATE_HASH = "ea9d0dea0781c59af0e7a45d382fed40bfc3d4f90510011eb0d316f5746f89b8"
+TEST_BLUE_PROPOSE_TEMPLATE_HASH = "28f2086e8a3af020b64aa6f2b3e3abda9046507388e535b194eb1b9fec80fe7d"
 TEST_OUTPUT_SCHEMA_HASH = "15a45919652be5c70d3fd1690a10d37f876f19a14b2a76cc0f21765def281377"
 
 
@@ -268,7 +268,7 @@ def test_delete_model_returns_warning_when_referenced_by_open_meeting(tmp_path: 
     app = create_test_app(tmp_path)
     client = TestClient(app)
 
-    meeting_id = client.post("/meetings", json={"topic": "先做後端？"}).json()["meeting_id"]
+    meeting_id = client.post("/meetings", json={"title": "先做後端？", "goal": "先做後端？"}).json()["meeting_id"]
     client.post(
         f"/meetings/{meeting_id}/start",
         json={"models": {"Blue": "mock-fast", "Red": "mock-fast", "Judge": "mock-fast"}},
@@ -289,7 +289,7 @@ def test_delete_model_no_warning_when_meeting_closed(tmp_path: Path) -> None:
     app = create_test_app(tmp_path)
     client = TestClient(app)
 
-    meeting_id = client.post("/meetings", json={"topic": "先做後端？"}).json()["meeting_id"]
+    meeting_id = client.post("/meetings", json={"title": "先做後端？", "goal": "先做後端？"}).json()["meeting_id"]
     client.post(
         f"/meetings/{meeting_id}/start",
         json={"models": {"Blue": "mock-fast", "Red": "mock-fast", "Judge": "mock-fast"}},
@@ -1204,13 +1204,100 @@ def test_test_model_endpoint_drops_stale_check_when_save_races_after_begin(
     assert listed["status"] == "unknown"
 
 
+def test_meeting_title_goal_contract_and_explicit_legacy_migration(tmp_path: Path) -> None:
+    client = TestClient(create_test_app(tmp_path))
+
+    legacy_contract = client.post("/meetings", json={"topic": "舊主題"})
+    blank_title = client.post("/meetings", json={"title": "   ", "goal": "判斷責任"})
+    blank_goal = client.post("/meetings", json={"title": "土地糾紛案", "goal": "  "})
+
+    assert legacy_contract.status_code == 422
+    assert blank_title.status_code == 422
+    assert blank_goal.status_code == 422
+
+    created = client.post(
+        "/meetings",
+        json={"title": "土地糾紛案", "goal": "判斷被告是否構成無權占有"},
+    )
+
+    assert created.status_code == 200
+    assert created.json()["title"] == "土地糾紛案"
+    assert created.json()["goal"] == "判斷被告是否構成無權占有"
+    assert created.json()["requires_goal"] is False
+    assert "topic" not in created.json()
+    metadata_path = (
+        tmp_path / "data" / "meetings" / created.json()["meeting_id"] / "metadata.json"
+    )
+    assert json.loads(metadata_path.read_text(encoding="utf-8"))["goal"] == "判斷被告是否構成無權占有"
+
+    legacy_id = "meeting-legacy-goal-gate"
+    legacy_dir = tmp_path / "data" / "meetings" / legacy_id
+    legacy_dir.mkdir(parents=True)
+    (legacy_dir / "metadata.json").write_text(
+        json.dumps(
+            {
+                "meeting_id": legacy_id,
+                "topic": "舊土地案",
+                "created_at": "2026-07-14T00:00:00+00:00",
+                "tags": [],
+                "pinned": False,
+                "mode_id": "red-blue",
+                "participants": [],
+                "inputs": {},
+                "case_files": [],
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    events_path = legacy_dir / "events.jsonl"
+    original_events = '{"event_id":"historical","role":"Human","content":"保留"}\n'
+    events_path.write_text(original_events, encoding="utf-8")
+
+    fetched = client.get(f"/meetings/{legacy_id}")
+    assert fetched.status_code == 200
+    assert fetched.json()["title"] == "舊土地案"
+    assert fetched.json()["goal"] is None
+    assert fetched.json()["requires_goal"] is True
+
+    for method, path, body in [
+        ("post", f"/meetings/{legacy_id}/start", {}),
+        (
+            "post",
+            f"/meetings/{legacy_id}/roles/Blue/respond",
+            {"instruction": "請回答目前爭點"},
+        ),
+        ("post", f"/meetings/{legacy_id}/sequences", {"roles": ["Blue"]}),
+        ("post", f"/meetings/{legacy_id}/steps/blue-propose/retry", {}),
+    ]:
+        response = getattr(client, method)(path, json=body)
+        assert response.status_code == 409
+        assert response.json()["detail"] == "Meeting goal must be set before execution"
+    assert events_path.read_text(encoding="utf-8") == original_events
+
+    migrated = client.put(
+        f"/meetings/{legacy_id}/details",
+        json={"title": "土地返還案", "goal": "判斷是否應返還土地"},
+    )
+    assert migrated.status_code == 200
+    assert migrated.json()["title"] == "土地返還案"
+    assert migrated.json()["goal"] == "判斷是否應返還土地"
+    assert migrated.json()["requires_goal"] is False
+    stored = json.loads((legacy_dir / "metadata.json").read_text(encoding="utf-8"))
+    assert stored["title"] == "土地返還案"
+    assert stored["goal"] == "判斷是否應返還土地"
+    assert "topic" not in stored
+    assert events_path.read_text(encoding="utf-8") == original_events
+
+
 def test_meeting_create_list_get_start_and_transcript(tmp_path: Path) -> None:
     app = create_test_app(tmp_path)
     client = TestClient(app)
 
-    created = client.post("/meetings", json={"topic": "先做後端？"}).json()
+    created = client.post("/meetings", json={"title": "先做後端？", "goal": "先做後端？"}).json()
 
-    assert created["topic"] == "先做後端？"
+    assert created["title"] == "先做後端？"
+    assert created["goal"] == "先做後端？"
     assert created["status"] == "open"
     assert created["activity_status"] == "idle"
     assert created["created_at"]
@@ -1270,7 +1357,7 @@ def test_meeting_create_list_get_start_and_transcript(tmp_path: Path) -> None:
     transcript = client.get(f"/meetings/{meeting_id}/transcript.md")
     assert transcript.status_code == 200
     assert transcript.text.startswith("# 先做後端？\n")
-    assert "## Blue - blue-propose" in transcript.text
+    assert "## 藍軍 - 藍軍提案" in transcript.text
 
 
 def test_legacy_event_without_schema_id_projects_as_role_output_v1_without_rewrite(
@@ -1278,7 +1365,7 @@ def test_legacy_event_without_schema_id_projects_as_role_output_v1_without_rewri
 ) -> None:
     app = create_test_app(tmp_path)
     client = TestClient(app)
-    meeting_id = client.post("/meetings", json={"topic": "legacy event"}).json()["meeting_id"]
+    meeting_id = client.post("/meetings", json={"title": "legacy event", "goal": "legacy event"}).json()["meeting_id"]
     repository = MeetingRepository(tmp_path / "data")
     repository.append_event(
         meeting_id,
@@ -1323,7 +1410,7 @@ def test_meeting_read_models_include_total_token_usage(
     monkeypatch.setattr(MockModelAdapter, "complete", complete_with_usage)
     app = create_test_app(tmp_path)
     client = TestClient(app)
-    meeting_id = client.post("/meetings", json={"topic": "usage test"}).json()["meeting_id"]
+    meeting_id = client.post("/meetings", json={"title": "usage test", "goal": "usage test"}).json()["meeting_id"]
 
     client.post(
         f"/meetings/{meeting_id}/start",
@@ -1372,7 +1459,7 @@ models:
 """.strip(),
     )
     client = TestClient(app)
-    meeting_id = client.post("/meetings", json={"topic": "cost test"}).json()["meeting_id"]
+    meeting_id = client.post("/meetings", json={"title": "cost test", "goal": "cost test"}).json()["meeting_id"]
 
     client.post(
         f"/meetings/{meeting_id}/start",
@@ -1406,7 +1493,7 @@ def test_start_returns_while_model_execution_continues_in_background(
     monkeypatch.setattr(MockModelAdapter, "complete", slow_complete)
     app = create_test_app(tmp_path)
     client = TestClient(app)
-    meeting_id = client.post("/meetings", json={"topic": "背景執行"}).json()["meeting_id"]
+    meeting_id = client.post("/meetings", json={"title": "背景執行", "goal": "背景執行"}).json()["meeting_id"]
 
     try:
         response = client.post(
@@ -1460,7 +1547,7 @@ def test_running_step_persists_and_clears_recovery_state(
     monkeypatch.setattr(MockModelAdapter, "complete", slow_complete)
     app = create_test_app(tmp_path)
     client = TestClient(app)
-    meeting_id = client.post("/meetings", json={"topic": "恢復狀態"}).json()["meeting_id"]
+    meeting_id = client.post("/meetings", json={"title": "恢復狀態", "goal": "恢復狀態"}).json()["meeting_id"]
     execution_state_path = tmp_path / "data" / "meetings" / meeting_id / "execution.json"
 
     try:
@@ -1496,7 +1583,7 @@ def test_running_step_persists_and_clears_recovery_state(
 def test_app_startup_marks_leftover_execution_state_failed(tmp_path: Path) -> None:
     first_app = create_test_app(tmp_path)
     first_client = TestClient(first_app)
-    meeting_id = first_client.post("/meetings", json={"topic": "重啟恢復"}).json()["meeting_id"]
+    meeting_id = first_client.post("/meetings", json={"title": "重啟恢復", "goal": "重啟恢復"}).json()["meeting_id"]
     execution_state_path = tmp_path / "data" / "meetings" / meeting_id / "execution.json"
     execution_state_path.write_text(
         json.dumps(
@@ -1547,7 +1634,7 @@ def test_app_startup_marks_leftover_execution_state_failed(tmp_path: Path) -> No
 def test_start_ignores_incomplete_legacy_request_model_assignments(tmp_path: Path) -> None:
     app = create_test_app(tmp_path)
     client = TestClient(app)
-    meeting_id = client.post("/meetings", json={"topic": "缺少角色"}).json()["meeting_id"]
+    meeting_id = client.post("/meetings", json={"title": "缺少角色", "goal": "缺少角色"}).json()["meeting_id"]
 
     response = client.post(
         f"/meetings/{meeting_id}/start",
@@ -1562,8 +1649,8 @@ def test_start_ignores_incomplete_legacy_request_model_assignments(tmp_path: Pat
 def test_list_meetings_filters_by_transcript_content(tmp_path: Path) -> None:
     app = create_test_app(tmp_path)
     client = TestClient(app)
-    matching_id = client.post("/meetings", json={"topic": "後端優先"}).json()["meeting_id"]
-    other_id = client.post("/meetings", json={"topic": "前端優先"}).json()["meeting_id"]
+    matching_id = client.post("/meetings", json={"title": "後端優先", "goal": "後端優先"}).json()["meeting_id"]
+    other_id = client.post("/meetings", json={"title": "前端優先", "goal": "前端優先"}).json()["meeting_id"]
     client.post(
         f"/meetings/{matching_id}/messages",
         json={"content": "請鎖定在一週內完成 postgres 遷移的獨特關鍵字 xyzzy123。"},
@@ -1580,8 +1667,8 @@ def test_list_meetings_filters_by_transcript_content(tmp_path: Path) -> None:
 def test_list_meetings_query_matches_tags(tmp_path: Path) -> None:
     app = create_test_app(tmp_path)
     client = TestClient(app)
-    tagged_id = client.post("/meetings", json={"topic": "會議 A"}).json()["meeting_id"]
-    other_id = client.post("/meetings", json={"topic": "會議 B"}).json()["meeting_id"]
+    tagged_id = client.post("/meetings", json={"title": "會議 A", "goal": "會議 A"}).json()["meeting_id"]
+    other_id = client.post("/meetings", json={"title": "會議 B", "goal": "會議 B"}).json()["meeting_id"]
     client.put(f"/meetings/{tagged_id}/tags", json={"tags": ["needs-review"]})
 
     response = client.get("/meetings", params={"q": "needs-review"})
@@ -1594,8 +1681,8 @@ def test_list_meetings_query_matches_tags(tmp_path: Path) -> None:
 def test_list_meetings_without_query_returns_everything(tmp_path: Path) -> None:
     app = create_test_app(tmp_path)
     client = TestClient(app)
-    client.post("/meetings", json={"topic": "會議 A"})
-    client.post("/meetings", json={"topic": "會議 B"})
+    client.post("/meetings", json={"title": "會議 A", "goal": "會議 A"})
+    client.post("/meetings", json={"title": "會議 B", "goal": "會議 B"})
 
     response = client.get("/meetings")
 
@@ -1612,7 +1699,7 @@ models:
 """.strip(),
     )
     client = TestClient(app)
-    meeting_id = client.post("/meetings", json={"topic": "失敗測試"}).json()["meeting_id"]
+    meeting_id = client.post("/meetings", json={"title": "失敗測試", "goal": "失敗測試"}).json()["meeting_id"]
 
     response = client.post(
         f"/meetings/{meeting_id}/start",
@@ -1635,7 +1722,7 @@ models:
 def test_meeting_cancel_endpoint_records_cancellation(tmp_path: Path) -> None:
     app = create_test_app(tmp_path)
     client = TestClient(app)
-    meeting_id = client.post("/meetings", json={"topic": "取消測試"}).json()["meeting_id"]
+    meeting_id = client.post("/meetings", json={"title": "取消測試", "goal": "取消測試"}).json()["meeting_id"]
 
     response = client.post(f"/meetings/{meeting_id}/cancel")
 
@@ -1661,7 +1748,7 @@ def test_cancelling_background_run_stays_cancelled_when_model_returns(
     monkeypatch.setattr(MockModelAdapter, "complete", slow_complete)
     app = create_test_app(tmp_path)
     client = TestClient(app)
-    meeting_id = client.post("/meetings", json={"topic": "背景取消"}).json()["meeting_id"]
+    meeting_id = client.post("/meetings", json={"title": "背景取消", "goal": "背景取消"}).json()["meeting_id"]
     client.post(
         f"/meetings/{meeting_id}/start",
         json={
@@ -1717,7 +1804,7 @@ def test_cancel_terminates_running_subscription_cli_process(tmp_path: Path) -> N
     )
     app = create_test_app(tmp_path, models_yaml=models_yaml)
     client = TestClient(app)
-    meeting_id = client.post("/meetings", json={"topic": "CLI 取消測試"}).json()["meeting_id"]
+    meeting_id = client.post("/meetings", json={"title": "CLI 取消測試", "goal": "CLI 取消測試"}).json()["meeting_id"]
 
     client.post(
         f"/meetings/{meeting_id}/start",
@@ -1746,7 +1833,7 @@ def test_meeting_close_endpoint_records_closure_and_projects_transcript(
 ) -> None:
     app = create_test_app(tmp_path)
     client = TestClient(app)
-    meeting_id = client.post("/meetings", json={"topic": "結案測試"}).json()["meeting_id"]
+    meeting_id = client.post("/meetings", json={"title": "結案測試", "goal": "結案測試"}).json()["meeting_id"]
 
     response = client.post(f"/meetings/{meeting_id}/close")
 
@@ -1756,14 +1843,14 @@ def test_meeting_close_endpoint_records_closure_and_projects_transcript(
     assert client.get(f"/meetings/{meeting_id}").json()["status"] == "closed"
     assert client.get("/meetings").json()[0]["status"] == "closed"
     transcript = client.get(f"/meetings/{meeting_id}/transcript.md").text
-    assert "## System - meeting" in transcript
-    assert "**Status:** closed" in transcript
+    assert "## 系統 - 會議結案" in transcript
+    assert "**狀態：** 已結案" in transcript
 
 
 def test_reopen_endpoint_restores_terminal_meeting_to_open_state(tmp_path: Path) -> None:
     app = create_test_app(tmp_path)
     client = TestClient(app)
-    meeting_id = client.post("/meetings", json={"topic": "誤按結案"}).json()["meeting_id"]
+    meeting_id = client.post("/meetings", json={"title": "誤按結案", "goal": "誤按結案"}).json()["meeting_id"]
     client.post(f"/meetings/{meeting_id}/close")
 
     response = client.post(f"/meetings/{meeting_id}/reopen")
@@ -1787,7 +1874,7 @@ def test_reopen_endpoint_restores_terminal_meeting_to_open_state(tmp_path: Path)
 def test_update_meeting_tags_replaces_tag_list(tmp_path: Path) -> None:
     app = create_test_app(tmp_path)
     client = TestClient(app)
-    meeting_id = client.post("/meetings", json={"topic": "標籤測試"}).json()["meeting_id"]
+    meeting_id = client.post("/meetings", json={"title": "標籤測試", "goal": "標籤測試"}).json()["meeting_id"]
 
     response = client.put(f"/meetings/{meeting_id}/tags", json={"tags": ["urgent", "backend"]})
 
@@ -1814,7 +1901,7 @@ def test_update_meeting_tags_returns_404_for_unknown_meeting(tmp_path: Path) -> 
 def test_update_meeting_tags_allowed_on_terminal_meeting(tmp_path: Path) -> None:
     app = create_test_app(tmp_path)
     client = TestClient(app)
-    meeting_id = client.post("/meetings", json={"topic": "已結案"}).json()["meeting_id"]
+    meeting_id = client.post("/meetings", json={"title": "已結案", "goal": "已結案"}).json()["meeting_id"]
     client.post(f"/meetings/{meeting_id}/close")
 
     response = client.put(f"/meetings/{meeting_id}/tags", json={"tags": ["archived"]})
@@ -1826,7 +1913,7 @@ def test_update_meeting_tags_allowed_on_terminal_meeting(tmp_path: Path) -> None
 def test_update_meeting_pinned_toggles_and_persists(tmp_path: Path) -> None:
     app = create_test_app(tmp_path)
     client = TestClient(app)
-    meeting_id = client.post("/meetings", json={"topic": "釘選測試"}).json()["meeting_id"]
+    meeting_id = client.post("/meetings", json={"title": "釘選測試", "goal": "釘選測試"}).json()["meeting_id"]
     assert client.get(f"/meetings/{meeting_id}").json()["pinned"] is False
 
     response = client.put(f"/meetings/{meeting_id}/pinned", json={"pinned": True})
@@ -1852,7 +1939,7 @@ def test_update_meeting_pinned_returns_404_for_unknown_meeting(tmp_path: Path) -
 def test_update_meeting_pinned_allowed_on_terminal_meeting(tmp_path: Path) -> None:
     app = create_test_app(tmp_path)
     client = TestClient(app)
-    meeting_id = client.post("/meetings", json={"topic": "已結案"}).json()["meeting_id"]
+    meeting_id = client.post("/meetings", json={"title": "已結案", "goal": "已結案"}).json()["meeting_id"]
     client.post(f"/meetings/{meeting_id}/close")
 
     response = client.put(f"/meetings/{meeting_id}/pinned", json={"pinned": True})
@@ -1864,7 +1951,7 @@ def test_update_meeting_pinned_allowed_on_terminal_meeting(tmp_path: Path) -> No
 def test_meeting_delete_removes_meeting_and_derived_transcript(tmp_path: Path) -> None:
     app = create_test_app(tmp_path)
     client = TestClient(app)
-    meeting_id = client.post("/meetings", json={"topic": "刪除測試"}).json()["meeting_id"]
+    meeting_id = client.post("/meetings", json={"title": "刪除測試", "goal": "刪除測試"}).json()["meeting_id"]
     client.post(
         f"/meetings/{meeting_id}/start",
         json={
@@ -1888,7 +1975,7 @@ def test_meeting_delete_removes_meeting_and_derived_transcript(tmp_path: Path) -
 def test_terminal_meeting_rejects_event_creating_api_calls(tmp_path: Path) -> None:
     app = create_test_app(tmp_path)
     client = TestClient(app)
-    meeting_id = client.post("/meetings", json={"topic": "已結案"}).json()["meeting_id"]
+    meeting_id = client.post("/meetings", json={"title": "已結案", "goal": "已結案"}).json()["meeting_id"]
     client.post(f"/meetings/{meeting_id}/close")
 
     start_response = client.post(
@@ -1907,13 +1994,7 @@ def test_terminal_meeting_rejects_event_creating_api_calls(tmp_path: Path) -> No
     )
     role_response = client.post(
         f"/meetings/{meeting_id}/roles/Blue/respond",
-        json={
-            "models": {
-                "Blue": "mock-fast",
-                "Red": "mock-fast",
-                "Judge": "mock-fast",
-            }
-        },
+        json={"instruction": "請回答"},
     )
     sequence_response = client.post(
         f"/meetings/{meeting_id}/sequences",
@@ -1942,7 +2023,7 @@ def test_terminal_meeting_rejects_event_creating_api_calls(tmp_path: Path) -> No
 def test_human_chair_message_is_persisted_and_projected(tmp_path: Path) -> None:
     app = create_test_app(tmp_path)
     client = TestClient(app)
-    meeting_id = client.post("/meetings", json={"topic": "互動會議"}).json()["meeting_id"]
+    meeting_id = client.post("/meetings", json={"title": "互動會議", "goal": "互動會議"}).json()["meeting_id"]
 
     response = client.post(
         f"/meetings/{meeting_id}/messages",
@@ -1958,14 +2039,14 @@ def test_human_chair_message_is_persisted_and_projected(tmp_path: Path) -> None:
     events = client.get(f"/meetings/{meeting_id}").json()["events"]
     assert events[-1]["event_id"] == event["event_id"]
     transcript = client.get(f"/meetings/{meeting_id}/transcript.md").text
-    assert "## Human - human-message" in transcript
+    assert "## 主席 - 主席發言" in transcript
     assert "我先補充限制：只能花一週做 MVP。" in transcript
 
 
 def test_chair_can_correct_a_human_message(tmp_path: Path) -> None:
     app = create_test_app(tmp_path)
     client = TestClient(app)
-    meeting_id = client.post("/meetings", json={"topic": "互動會議"}).json()["meeting_id"]
+    meeting_id = client.post("/meetings", json={"title": "互動會議", "goal": "互動會議"}).json()["meeting_id"]
     original = client.post(
         f"/meetings/{meeting_id}/messages",
         json={"content": "只能花一週做 MVP。"},
@@ -1998,7 +2079,7 @@ def test_chair_can_correct_a_human_message(tmp_path: Path) -> None:
 def test_correct_human_message_returns_404_for_unknown_event(tmp_path: Path) -> None:
     app = create_test_app(tmp_path)
     client = TestClient(app)
-    meeting_id = client.post("/meetings", json={"topic": "互動會議"}).json()["meeting_id"]
+    meeting_id = client.post("/meetings", json={"title": "互動會議", "goal": "互動會議"}).json()["meeting_id"]
 
     response = client.post(
         f"/meetings/{meeting_id}/messages/does-not-exist/correct",
@@ -2011,7 +2092,7 @@ def test_correct_human_message_returns_404_for_unknown_event(tmp_path: Path) -> 
 def test_correct_human_message_rejects_non_human_message_event(tmp_path: Path) -> None:
     app = create_test_app(tmp_path)
     client = TestClient(app)
-    meeting_id = client.post("/meetings", json={"topic": "互動會議"}).json()["meeting_id"]
+    meeting_id = client.post("/meetings", json={"title": "互動會議", "goal": "互動會議"}).json()["meeting_id"]
     client.post(
         f"/meetings/{meeting_id}/start",
         json={
@@ -2036,7 +2117,7 @@ def test_correct_human_message_rejects_non_human_message_event(tmp_path: Path) -
 def test_correct_human_message_rejects_on_terminal_meeting(tmp_path: Path) -> None:
     app = create_test_app(tmp_path)
     client = TestClient(app)
-    meeting_id = client.post("/meetings", json={"topic": "已結案"}).json()["meeting_id"]
+    meeting_id = client.post("/meetings", json={"title": "已結案", "goal": "已結案"}).json()["meeting_id"]
     original = client.post(
         f"/meetings/{meeting_id}/messages",
         json={"content": "結案前的補充。"},
@@ -2055,14 +2136,85 @@ def test_correct_human_message_rejects_on_terminal_meeting(tmp_path: Path) -> No
 def test_chair_can_request_single_role_response(tmp_path: Path) -> None:
     app = create_test_app(tmp_path)
     client = TestClient(app)
-    meeting_id = client.post("/meetings", json={"topic": "互動會議"}).json()["meeting_id"]
-    client.post(
-        f"/meetings/{meeting_id}/messages",
-        json={"content": "請 Blue 先回答最小可行方案。"},
+    meeting_id = client.post("/meetings", json={"title": "互動會議", "goal": "互動會議"}).json()["meeting_id"]
+    response = client.post(
+        f"/meetings/{meeting_id}/roles/Blue/respond",
+        json={"instruction": "請先回答最小可行方案。"},
     )
+
+    assert response.status_code == 200
+    events = client.get(f"/meetings/{meeting_id}").json()["events"]
+    assert events[-2]["step_id"] == "human-directed-message"
+    assert events[-2]["interaction_type"] == "directed-role-instruction"
+    assert events[-2]["target_role_id"] == "Blue"
+    assert events[-2]["content"] == "請先回答最小可行方案。"
+    assert events[-1]["step_id"] == "directed-1-blue-response"
+    assert events[-1]["role"] == "Blue"
+    assert events[-1]["interaction_type"] == "directed-role-response"
+    assert events[-1]["in_response_to_event_id"] == events[-2]["event_id"]
+    transcript = client.get(f"/meetings/{meeting_id}/transcript.md").text
+    assert "## 藍軍 - 藍軍回應主席追問" in transcript
+
+
+def test_directed_role_response_rejects_blank_instruction(tmp_path: Path) -> None:
+    client = TestClient(create_test_app(tmp_path))
+    meeting_id = client.post(
+        "/meetings",
+        json={"title": "互動會議", "goal": "找出可行方案"},
+    ).json()["meeting_id"]
 
     response = client.post(
         f"/meetings/{meeting_id}/roles/Blue/respond",
+        json={"instruction": "   "},
+    )
+
+    assert response.status_code == 422
+    missing = client.post(
+        f"/meetings/{meeting_id}/roles/Blue/respond",
+        json={"models": {"Blue": "mock-fast"}},
+    )
+    assert missing.status_code == 422
+    assert client.get(f"/meetings/{meeting_id}").json()["events"] == []
+
+
+def test_retry_failed_directed_response_keeps_the_original_instruction_and_linkage(
+    tmp_path: Path,
+) -> None:
+    client = TestClient(
+        create_test_app(
+            tmp_path,
+            models_yaml="""
+models:
+  - id: mock-fast
+    adapter: mock
+  - id: mock-broken
+    adapter: openai-compatible-http
+""".strip(),
+        )
+    )
+    meeting_id = client.post(
+        "/meetings",
+        json={
+            "title": "定向追問重試",
+            "goal": "找出最小可行方案",
+            "participants": [
+                {"role_id": "Blue", "model_config_id": "mock-broken"},
+                {"role_id": "Red", "model_config_id": "mock-fast"},
+                {"role_id": "Judge", "model_config_id": "mock-fast"},
+            ],
+        },
+    ).json()["meeting_id"]
+
+    client.post(
+        f"/meetings/{meeting_id}/roles/Blue/respond",
+        json={"instruction": "請針對一週內交付補充說明"},
+    )
+    failed_events = client.get(f"/meetings/{meeting_id}").json()["events"]
+    instruction, failed = failed_events
+    assert failed["status"] == "failed"
+
+    client.put(
+        f"/meetings/{meeting_id}/participant-models",
         json={
             "models": {
                 "Blue": "mock-fast",
@@ -2071,20 +2223,102 @@ def test_chair_can_request_single_role_response(tmp_path: Path) -> None:
             }
         },
     )
+    retried = client.post(
+        f"/meetings/{meeting_id}/steps/{failed['step_id']}/retry",
+        json={},
+    )
 
-    assert response.status_code == 200
+    assert retried.status_code == 200
     events = client.get(f"/meetings/{meeting_id}").json()["events"]
-    assert events[-1]["step_id"] == "directed-1-blue-response"
-    assert events[-1]["role"] == "Blue"
-    assert events[-1]["interaction_type"] == "directed-role-response"
+    assert len([event for event in events if event["role"] == "Human"]) == 1
+    completed = events[-1]
+    assert completed["status"] == "completed"
+    assert completed["attempt"] == 2
+    assert completed["in_response_to_event_id"] == instruction["event_id"]
+    assert "請針對一週內交付補充說明" in completed["prompt_messages"][0]["content"]
+    assert "藍軍" in completed["prompt_messages"][0]["content"]
+
+
+def test_transcript_uses_event_local_labels_for_directed_and_sequence_interactions(
+    tmp_path: Path,
+) -> None:
+    client = TestClient(create_test_app(tmp_path))
+    meeting_id = client.post(
+        "/meetings",
+        json={"title": "互動標籤", "goal": "確認每筆互動語意"},
+    ).json()["meeting_id"]
+    repository = MeetingRepository(tmp_path / "data")
+    events = [
+        {
+            "event_id": "instruction-defense",
+            "meeting_id": meeting_id,
+            "step_id": "human-directed-message",
+            "role": "Human",
+            "attempt": 1,
+            "status": "completed",
+            "interaction_type": "directed-role-instruction",
+            "target_role_id": "Blue",
+            "content": "請藍軍回答",
+        },
+        {
+            "event_id": "directed-blue",
+            "meeting_id": meeting_id,
+            "step_id": "directed-1-blue-response",
+            "base_step_id": "blue-response",
+            "role": "Blue",
+            "attempt": 1,
+            "status": "completed",
+            "interaction_type": "directed-role-response",
+            "parsed_output": {
+                "summary": "藍軍定向回答",
+                "arguments": [],
+                "risks": [],
+                "recommendation": "繼續",
+            },
+        },
+        {
+            "event_id": "sequence-blue",
+            "meeting_id": meeting_id,
+            "step_id": "sequence-1-blue-response",
+            "base_step_id": "blue-response",
+            "role": "Blue",
+            "attempt": 1,
+            "status": "completed",
+            "interaction_type": "role-sequence-response",
+            "parsed_output": {
+                "summary": "藍軍依序回答",
+                "arguments": [],
+                "risks": [],
+                "recommendation": "繼續",
+            },
+        },
+        {
+            "event_id": "instruction-judge",
+            "meeting_id": meeting_id,
+            "step_id": "human-directed-message",
+            "role": "Human",
+            "attempt": 1,
+            "status": "completed",
+            "interaction_type": "directed-role-instruction",
+            "target_role_id": "Judge",
+            "content": "請裁判回答",
+        },
+    ]
+    for event in events:
+        repository.append_event(meeting_id, event)
+
     transcript = client.get(f"/meetings/{meeting_id}/transcript.md").text
-    assert "## Blue - directed-1-blue-response" in transcript
+
+    assert "## 主席 - 主席追問藍軍" in transcript
+    assert "## 藍軍 - 藍軍回應主席追問" in transcript
+    assert "## 藍軍 - 藍軍依序回應" in transcript
+    assert "## 主席 - 主席追問裁判" in transcript
 
 
 def test_chair_can_request_role_sequence_response(tmp_path: Path) -> None:
     app = create_test_app(tmp_path)
     client = TestClient(app)
-    meeting_id = client.post("/meetings", json={"topic": "互動會議"}).json()["meeting_id"]
+    meeting_id = client.post("/meetings", json={"title": "互動會議", "goal": "互動會議"}).json()["meeting_id"]
     client.post(
         f"/meetings/{meeting_id}/messages",
         json={"content": "請 Red 挑戰、Blue 修正、Judge 裁決。"},
@@ -2113,8 +2347,8 @@ def test_chair_can_request_role_sequence_response(tmp_path: Path) -> None:
     assert {event["interaction_type"] for event in ai_events} == {"role-sequence-response"}
     assert [event["sequence_index"] for event in ai_events] == [1, 2, 3]
     transcript = client.get(f"/meetings/{meeting_id}/transcript.md").text
-    assert "## Red - sequence-1-red-response" in transcript
-    assert "## Judge - sequence-1-judge-response" in transcript
+    assert "## 紅軍 - 紅軍依序回應" in transcript
+    assert "## 裁判 - 裁判依序回應" in transcript
 
 
 def test_directed_and_sequence_responses_use_persisted_assignments(
@@ -2137,7 +2371,8 @@ models:
         return client.post(
             "/meetings",
             json={
-                "topic": topic,
+                "title": topic,
+                "goal": topic,
                 "participants": [
                     {"role_id": role, "model_config_id": "persisted-model"}
                     for role in ["Blue", "Red", "Judge"]
@@ -2148,7 +2383,7 @@ models:
     directed_id = create_meeting("Directed assignment")
     directed = client.post(
         f"/meetings/{directed_id}/roles/Blue/respond",
-        json={"models": {"Blue": "request-model"}},
+        json={"instruction": "請回答目前方案"},
     )
     sequence_id = create_meeting("Sequence assignment")
     sequence = client.post(
@@ -2175,7 +2410,7 @@ models:
 def test_chair_role_sequence_rejects_unknown_role(tmp_path: Path) -> None:
     app = create_test_app(tmp_path)
     client = TestClient(app)
-    meeting_id = client.post("/meetings", json={"topic": "互動會議"}).json()["meeting_id"]
+    meeting_id = client.post("/meetings", json={"title": "互動會議", "goal": "互動會議"}).json()["meeting_id"]
 
     response = client.post(
         f"/meetings/{meeting_id}/sequences",
@@ -2192,7 +2427,7 @@ def test_chair_role_sequence_rejects_unknown_role(tmp_path: Path) -> None:
 def test_chair_role_sequence_rejects_duplicate_roles(tmp_path: Path) -> None:
     app = create_test_app(tmp_path)
     client = TestClient(app)
-    meeting_id = client.post("/meetings", json={"topic": "互動會議"}).json()["meeting_id"]
+    meeting_id = client.post("/meetings", json={"title": "互動會議", "goal": "互動會議"}).json()["meeting_id"]
 
     response = client.post(
         f"/meetings/{meeting_id}/sequences",
@@ -2209,11 +2444,11 @@ def test_chair_role_sequence_rejects_duplicate_roles(tmp_path: Path) -> None:
 def test_chair_role_response_ignores_incomplete_legacy_request_models(tmp_path: Path) -> None:
     app = create_test_app(tmp_path)
     client = TestClient(app)
-    meeting_id = client.post("/meetings", json={"topic": "互動會議"}).json()["meeting_id"]
+    meeting_id = client.post("/meetings", json={"title": "互動會議", "goal": "互動會議"}).json()["meeting_id"]
 
     response = client.post(
         f"/meetings/{meeting_id}/roles/Blue/respond",
-        json={"models": {"Red": "mock-fast", "Judge": "mock-fast"}},
+        json={"instruction": "請回答目前方案"},
     )
 
     assert response.status_code == 200
@@ -2225,7 +2460,7 @@ def test_chair_role_response_ignores_incomplete_legacy_request_models(tmp_path: 
 def test_retry_step_returns_bad_request_when_step_is_not_failed(tmp_path: Path) -> None:
     app = create_test_app(tmp_path)
     client = TestClient(app)
-    meeting_id = client.post("/meetings", json={"topic": "retry 邊界"}).json()["meeting_id"]
+    meeting_id = client.post("/meetings", json={"title": "retry 邊界", "goal": "retry 邊界"}).json()["meeting_id"]
 
     response = client.post(
         f"/meetings/{meeting_id}/steps/blue-propose/retry",
@@ -2277,7 +2512,7 @@ def test_create_meeting_defaults_to_red_blue(tmp_path: Path) -> None:
     app = create_test_app(tmp_path)
     client = TestClient(app)
 
-    response = client.post("/meetings", json={"topic": "舊版建立會議"})
+    response = client.post("/meetings", json={"title": "舊版建立會議", "goal": "舊版建立會議"})
 
     assert response.status_code == 200
     created = response.json()
@@ -2313,7 +2548,7 @@ def test_create_parallel_without_participants_materializes_default_model_roster(
 
     created = client.post(
         "/meetings",
-        json={"topic": "Default brainstorm", "mode_id": "brainstorm"},
+        json={"title": "Default brainstorm", "goal": "Default brainstorm", "mode_id": "brainstorm"},
     ).json()
 
     metadata = json.loads(
@@ -2347,12 +2582,13 @@ def test_create_fixed_parallel_materializes_and_accepts_canonical_six_hats_roste
 
     defaulted = client.post(
         "/meetings",
-        json={"topic": "Default six hats", "mode_id": "six-hats"},
+        json={"title": "Default six hats", "goal": "Default six hats", "mode_id": "six-hats"},
     )
     explicit = client.post(
         "/meetings",
         json={
-            "topic": "Explicit six hats",
+            "title": "Explicit six hats",
+            "goal": "Explicit six hats",
             "mode_id": "six-hats",
             "participants": [
                 {"role_id": role_id, "model_config_id": "mock-fast"}
@@ -2389,7 +2625,8 @@ def test_create_parallel_validates_fixed_roster_and_preserves_dynamic_persona_sh
     missing_role = client.post(
         "/meetings",
         json={
-            "topic": "Missing green hat",
+            "title": "Missing green hat",
+            "goal": "Missing green hat",
             "mode_id": "six-hats",
             "participants": [
                 {"role_id": role_id, "model_config_id": "mock-fast"}
@@ -2401,7 +2638,8 @@ def test_create_parallel_validates_fixed_roster_and_preserves_dynamic_persona_sh
     unknown_role = client.post(
         "/meetings",
         json={
-            "topic": "Unknown hat",
+            "title": "Unknown hat",
+            "goal": "Unknown hat",
             "mode_id": "six-hats",
             "participants": [
                 {"role_id": role_id, "model_config_id": "mock-fast"}
@@ -2412,7 +2650,8 @@ def test_create_parallel_validates_fixed_roster_and_preserves_dynamic_persona_sh
     missing_model = client.post(
         "/meetings",
         json={
-            "topic": "Missing hat model",
+            "title": "Missing hat model",
+            "goal": "Missing hat model",
             "mode_id": "six-hats",
             "participants": [
                 {
@@ -2426,7 +2665,8 @@ def test_create_parallel_validates_fixed_roster_and_preserves_dynamic_persona_sh
     unknown_model = client.post(
         "/meetings",
         json={
-            "topic": "Unknown hat model",
+            "title": "Unknown hat model",
+            "goal": "Unknown hat model",
             "mode_id": "six-hats",
             "participants": [
                 {
@@ -2439,7 +2679,7 @@ def test_create_parallel_validates_fixed_roster_and_preserves_dynamic_persona_sh
     )
     persona = client.post(
         "/meetings",
-        json={"topic": "Default personas", "mode_id": "persona-testing"},
+        json={"title": "Default personas", "goal": "Default personas", "mode_id": "persona-testing"},
     )
 
     assert missing_role.status_code == 400
@@ -2460,7 +2700,7 @@ def test_create_meeting_with_courtroom_mode(tmp_path: Path) -> None:
 
     response = client.post(
         "/meetings",
-        json={"topic": "法庭審理案例", "mode_id": "courtroom"},
+        json={"title": "法庭審理案例", "goal": "法庭審理案例", "mode_id": "courtroom"},
     )
 
     assert response.status_code == 200
@@ -2475,7 +2715,8 @@ def test_create_meeting_stores_and_returns_case_files(tmp_path: Path) -> None:
     response = client.post(
         "/meetings",
         json={
-            "topic": "事故覆盤",
+            "title": "事故覆盤",
+            "goal": "事故覆盤",
             "mode_id": "courtroom",
             "case_files": [
                 {
@@ -2538,7 +2779,8 @@ def test_get_meeting_derives_evidence_anchors_for_legacy_case_files_without_rewr
     meeting_id = client.post(
         "/meetings",
         json={
-            "topic": "舊案卷",
+            "title": "舊案卷",
+            "goal": "舊案卷",
             "mode_id": "courtroom",
             "case_files": [
                 {
@@ -2585,7 +2827,8 @@ def test_create_meeting_rejects_case_files_for_unknown_roles(tmp_path: Path) -> 
     response = client.post(
         "/meetings",
         json={
-            "topic": "事故覆盤",
+            "title": "事故覆盤",
+            "goal": "事故覆盤",
             "mode_id": "courtroom",
             "case_files": [
                 {
@@ -2608,7 +2851,8 @@ def test_create_meeting_uses_reported_per_file_limit(tmp_path: Path) -> None:
     accepted = client.post(
         "/meetings",
         json={
-            "topic": "事故覆盤",
+            "title": "事故覆盤",
+            "goal": "事故覆盤",
             "case_files": [
                 {
                     "title": "at limit",
@@ -2621,7 +2865,8 @@ def test_create_meeting_uses_reported_per_file_limit(tmp_path: Path) -> None:
     rejected = client.post(
         "/meetings",
         json={
-            "topic": "事故覆盤",
+            "title": "事故覆盤",
+            "goal": "事故覆盤",
             "case_files": [
                 {
                     "title": "too large",
@@ -2643,7 +2888,8 @@ def test_create_meeting_uses_reported_total_case_file_limit(tmp_path: Path) -> N
     response = client.post(
         "/meetings",
         json={
-            "topic": "事故覆盤",
+            "title": "事故覆盤",
+            "goal": "事故覆盤",
             "case_files": [
                 {
                     "title": f"part {index}",
@@ -2670,7 +2916,8 @@ def test_case_file_limits_count_unicode_code_points_like_python_len(
     accepted = client.post(
         "/meetings",
         json={
-            "topic": "emoji boundary",
+            "title": "emoji boundary",
+            "goal": "emoji boundary",
             "case_files": [
                 {"title": "two", "content": "😀😀", "visible_roles": ["Blue"]}
             ],
@@ -2679,7 +2926,8 @@ def test_case_file_limits_count_unicode_code_points_like_python_len(
     rejected = client.post(
         "/meetings",
         json={
-            "topic": "emoji overflow",
+            "title": "emoji overflow",
+            "goal": "emoji overflow",
             "case_files": [
                 {"title": "three", "content": "😀😀😀", "visible_roles": ["Blue"]}
             ],
@@ -2699,7 +2947,10 @@ def test_create_meeting_rejects_unknown_mode(tmp_path: Path) -> None:
     app = create_test_app(tmp_path)
     client = TestClient(app)
 
-    response = client.post("/meetings", json={"topic": "T", "mode_id": "does-not-exist"})
+    response = client.post(
+        "/meetings",
+        json={"title": "T", "goal": "T", "mode_id": "does-not-exist"},
+    )
 
     assert response.status_code == 404
     assert response.json()["detail"] == "Unknown mode: does-not-exist"
@@ -2712,7 +2963,8 @@ def test_create_brainstorm_meeting_accepts_member_instances(tmp_path: Path) -> N
     response = client.post(
         "/meetings",
         json={
-            "topic": "T",
+            "title": "T",
+            "goal": "T",
             "mode_id": "brainstorm",
             "participants": [
                 {
@@ -2746,7 +2998,8 @@ def test_create_brainstorm_rejects_member_count_outside_fanout_range(tmp_path: P
     response = client.post(
         "/meetings",
         json={
-            "topic": "T",
+            "title": "T",
+            "goal": "T",
             "mode_id": "brainstorm",
             "participants": [
                 {"role_id": "Member-1", "model_config_id": "mock-fast"},
@@ -2763,14 +3016,18 @@ def test_create_meeting_requires_debate_positions(tmp_path: Path) -> None:
     app = create_test_app(tmp_path)
     client = TestClient(app)
 
-    missing_both = client.post("/meetings", json={"topic": "辯論", "mode_id": "debate"})
+    missing_both = client.post(
+        "/meetings",
+        json={"title": "辯論", "goal": "辯論", "mode_id": "debate"},
+    )
     assert missing_both.status_code == 400
     assert missing_both.json()["detail"] == "Missing required input: position_a"
 
     missing_one = client.post(
         "/meetings",
         json={
-            "topic": "辯論",
+            "title": "辯論",
+            "goal": "辯論",
             "mode_id": "debate",
             "inputs": {"position_a": "先做後端"},
         },
@@ -2781,7 +3038,8 @@ def test_create_meeting_requires_debate_positions(tmp_path: Path) -> None:
     ok = client.post(
         "/meetings",
         json={
-            "topic": "辯論",
+            "title": "辯論",
+            "goal": "辯論",
             "mode_id": "debate",
             "inputs": {"position_a": "先做後端", "position_b": "先做前端"},
         },
@@ -2794,7 +3052,10 @@ def test_create_meeting_rejects_unknown_input_keys(tmp_path: Path) -> None:
     app = create_test_app(tmp_path)
     client = TestClient(app)
 
-    response = client.post("/meetings", json={"topic": "T", "inputs": {"x": "y"}})
+    response = client.post(
+        "/meetings",
+        json={"title": "T", "goal": "T", "inputs": {"x": "y"}},
+    )
 
     assert response.status_code == 400
     assert response.json()["detail"] == "Unknown input for mode red-blue: x"
@@ -2807,7 +3068,8 @@ def test_create_meeting_rejects_participant_role_not_in_mode(tmp_path: Path) -> 
     response = client.post(
         "/meetings",
         json={
-            "topic": "T",
+            "title": "T",
+            "goal": "T",
             "mode_id": "courtroom",
             "participants": [{"role_id": "Blue", "model_config_id": "mock-fast"}],
         },
@@ -2824,7 +3086,8 @@ def test_create_meeting_stores_participant_models(tmp_path: Path) -> None:
     created = client.post(
         "/meetings",
         json={
-            "topic": "T",
+            "title": "T",
+            "goal": "T",
             "mode_id": "courtroom",
             "participants": [
                 {"role_id": "Prosecutor", "model_config_id": "mock-fast"},
@@ -2847,7 +3110,8 @@ def test_create_relay_meeting_requires_and_persists_complete_model_roster(
     incomplete = client.post(
         "/meetings",
         json={
-            "topic": "Incomplete assignment",
+            "title": "Incomplete assignment",
+            "goal": "Incomplete assignment",
             "participants": [
                 {"role_id": "Blue", "model_config_id": "mock-fast"},
                 {"role_id": "Red", "model_config_id": "mock-fast"},
@@ -2861,7 +3125,8 @@ def test_create_relay_meeting_requires_and_persists_complete_model_roster(
     created = client.post(
         "/meetings",
         json={
-            "topic": "Complete assignment",
+            "title": "Complete assignment",
+            "goal": "Complete assignment",
             "participants": [
                 {"role_id": "Blue", "model_config_id": "mock-fast"},
                 {"role_id": "Red", "model_config_id": "mock-fast"},
@@ -2899,7 +3164,8 @@ models:
     created = client.post(
         "/meetings",
         json={
-            "topic": "Persistent roster",
+            "title": "Persistent roster",
+            "goal": "Persistent roster",
             "participants": [
                 {
                     "role_id": "Blue",
@@ -2960,7 +3226,7 @@ def test_concurrent_metadata_updates_do_not_clobber_assignment_tags_or_pinned(
     tmp_path: Path,
 ) -> None:
     client = TestClient(create_test_app(tmp_path))
-    meeting_id = client.post("/meetings", json={"topic": "Concurrent metadata"}).json()[
+    meeting_id = client.post("/meetings", json={"title": "Concurrent metadata", "goal": "Concurrent metadata"}).json()[
         "meeting_id"
     ]
 
@@ -3007,7 +3273,8 @@ def test_create_meeting_rejects_unknown_participant_model(tmp_path: Path) -> Non
     response = client.post(
         "/meetings",
         json={
-            "topic": "T",
+            "title": "T",
+            "goal": "T",
             "mode_id": "courtroom",
             "participants": [{"role_id": "Prosecutor", "model_config_id": "nope"}],
         },
@@ -3027,7 +3294,8 @@ def test_legacy_meeting_projects_red_blue_participants(tmp_path: Path) -> None:
         json.dumps(
             {
                 "meeting_id": meeting_id,
-                "topic": "舊資料",
+                "title": "舊資料",
+                "goal": "舊資料",
                 "created_at": "2026-01-01T00:00:00+00:00",
                 "tags": [],
                 "pinned": False,
@@ -3065,7 +3333,8 @@ models:
         json.dumps(
             {
                 "meeting_id": meeting_id,
-                "topic": "Legacy assignments",
+                "title": "Legacy assignments",
+                "goal": "Legacy assignments",
                 "created_at": "2026-01-01T00:00:00+00:00",
                 "participants": [
                     {"role_id": "Blue"},
@@ -3144,7 +3413,8 @@ def test_meeting_list_tolerates_removed_mode_id_metadata(tmp_path: Path) -> None
         json.dumps(
             {
                 "meeting_id": meeting_id,
-                "topic": "髒資料模式",
+                "title": "髒資料模式",
+                "goal": "髒資料模式",
                 "created_at": "2026-01-01T00:00:00+00:00",
                 "tags": [],
                 "pinned": False,
@@ -3168,7 +3438,7 @@ def test_start_courtroom_meeting_runs_courtroom_steps(tmp_path: Path) -> None:
     client = TestClient(app)
     meeting_id = client.post(
         "/meetings",
-        json={"topic": "法庭審理", "mode_id": "courtroom"},
+        json={"title": "法庭審理", "goal": "法庭審理", "mode_id": "courtroom"},
     ).json()["meeting_id"]
 
     response = client.post(
@@ -3216,7 +3486,8 @@ models:
     meeting_id = client.post(
         "/meetings",
         json={
-            "topic": "Authoritative assignment",
+            "title": "Authoritative assignment",
+            "goal": "Authoritative assignment",
             "participants": [
                 {"role_id": role, "model_config_id": "persisted-model"}
                 for role in ["Blue", "Red", "Judge"]
@@ -3262,7 +3533,8 @@ models:
     meeting_id = client.post(
         "/meetings",
         json={
-            "topic": "Deleted assignment",
+            "title": "Deleted assignment",
+            "goal": "Deleted assignment",
             "participants": [
                 {"role_id": role, "model_config_id": "deleted-model"}
                 for role in ["Blue", "Red", "Judge"]
@@ -3285,7 +3557,7 @@ def test_courtroom_start_ignores_incomplete_legacy_request_models(tmp_path: Path
     client = TestClient(app)
     meeting_id = client.post(
         "/meetings",
-        json={"topic": "法庭審理", "mode_id": "courtroom"},
+        json={"title": "法庭審理", "goal": "法庭審理", "mode_id": "courtroom"},
     ).json()["meeting_id"]
 
     response = client.post(
@@ -3304,7 +3576,8 @@ def test_debate_inputs_reach_prompts(tmp_path: Path) -> None:
     meeting_id = client.post(
         "/meetings",
         json={
-            "topic": "辯論",
+            "title": "辯論",
+            "goal": "辯論",
             "mode_id": "debate",
             "inputs": {"position_a": "先做後端", "position_b": "先做前端"},
         },
@@ -3336,7 +3609,8 @@ def test_case_files_reach_only_visible_role_prompts(tmp_path: Path) -> None:
     meeting_id = client.post(
         "/meetings",
         json={
-            "topic": "事故覆盤",
+            "title": "事故覆盤",
+            "goal": "事故覆盤",
             "mode_id": "courtroom",
             "case_files": [
                 {
@@ -3395,7 +3669,8 @@ def test_roles_without_visible_case_files_receive_citation_rules_without_evidenc
     meeting_id = client.post(
         "/meetings",
         json={
-            "topic": "限制案卷可見範圍",
+            "title": "限制案卷可見範圍",
+            "goal": "限制案卷可見範圍",
             "mode_id": "courtroom",
             "case_files": [
                 {
@@ -3437,7 +3712,8 @@ def test_case_files_reach_parallel_member_instance_prompts(tmp_path: Path) -> No
     meeting_id = client.post(
         "/meetings",
         json={
-            "topic": "腦力激盪",
+            "title": "腦力激盪",
+            "goal": "腦力激盪",
             "mode_id": "brainstorm",
             "participants": [
                 {"role_id": "Member-1", "model_config_id": "mock-fast"},
@@ -3490,7 +3766,8 @@ def test_start_brainstorm_meeting_runs_parallel_steps(tmp_path: Path) -> None:
     meeting_id = client.post(
         "/meetings",
         json={
-            "topic": "腦力激盪",
+            "title": "腦力激盪",
+            "goal": "腦力激盪",
             "mode_id": "brainstorm",
             "participants": [
                 {"role_id": "Member-1", "model_config_id": "mock-fast"},
@@ -3551,7 +3828,8 @@ models:
     meeting_id = client.post(
         "/meetings",
         json={
-            "topic": "腦力激盪",
+            "title": "腦力激盪",
+            "goal": "腦力激盪",
             "mode_id": "brainstorm",
             "participants": [
                 {"role_id": "Member-1", "model_config_id": "mock-member-1"},
@@ -3596,18 +3874,12 @@ def test_respond_as_role_accepts_mode_roles(tmp_path: Path) -> None:
     client = TestClient(app)
     meeting_id = client.post(
         "/meetings",
-        json={"topic": "法庭審理", "mode_id": "courtroom"},
+        json={"title": "法庭審理", "goal": "法庭審理", "mode_id": "courtroom"},
     ).json()["meeting_id"]
 
     response = client.post(
         f"/meetings/{meeting_id}/roles/Prosecutor/respond",
-        json={
-            "models": {
-                "Prosecutor": "mock-fast",
-                "Defense": "mock-fast",
-                "Judge": "mock-fast",
-            }
-        },
+        json={"instruction": "請整理目前控方主張"},
     )
     assert response.status_code == 200
     events = client.get(f"/meetings/{meeting_id}").json()["events"]
@@ -3615,7 +3887,7 @@ def test_respond_as_role_accepts_mode_roles(tmp_path: Path) -> None:
 
     rejected = client.post(
         f"/meetings/{meeting_id}/roles/Blue/respond",
-        json={"models": {"Blue": "mock-fast"}},
+        json={"instruction": "請回答"},
     )
     assert rejected.status_code == 400
 
@@ -3678,6 +3950,7 @@ RELAY_PROMPT_TEMPLATES = [
     "hat_blue_synthesis",
     "persona_member",
     "persona_synthesis",
+    "directed_role_response",
 ]
 
 DEBATE_PROMPT_TEMPLATES = {
@@ -3707,7 +3980,7 @@ models:
     prompt_dir.mkdir(exist_ok=True)
     for template in RELAY_PROMPT_TEMPLATES:
         content = (
-            f"{template} {{{{ role }}}} {{{{ topic }}}} "
+            f"{template} {{{{ role }}}} {{{{ goal }}}} "
             "{{ prior_transcript }} {{ case_files }} {{ required_json_schema }}"
         )
         if template in DEBATE_PROMPT_TEMPLATES:
@@ -3716,6 +3989,8 @@ models:
             content += " {{ instance_prompt }}"
         if template in {"brainstorm_synthesis", "hat_blue_synthesis", "persona_synthesis"}:
             content += " {{ fanout_outputs }}"
+        if template == "directed_role_response":
+            content += " {{ role_display_name }} {{ instruction }}"
         (prompt_dir / f"{template}.md").write_text(content, encoding="utf-8")
     return create_app(
         data_dir=tmp_path / "data",

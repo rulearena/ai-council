@@ -1,10 +1,11 @@
 <script setup lang="ts">
-import { inject, ref } from 'vue'
-import { councilKey, formatDateTime, roleClass, roleColor, roleColorVars, roleIcon } from '../composables/useCouncil'
+import { computed, inject, ref } from 'vue'
+import { activeMode, councilKey, formatDateTime, roleClass, roleColor, roleColorVars, roleIcon } from '../composables/useCouncil'
 import Drawer from './Drawer.vue'
 import RoleSilhouette from './RoleSilhouette.vue'
 import { transcriptDownloadUrl } from '../api'
 import type { MeetingEvent } from '../api'
+import { roleDisplayName, statusDisplayLabel, stepDisplayLabel } from '../presentation'
 
 defineProps<{ show: boolean }>()
 defineEmits<{ close: [] }>()
@@ -27,6 +28,9 @@ type RecordsTab = 'timeline' | 'transcript' | 'debug'
 const activeTab = ref<RecordsTab>('timeline')
 const copiedDiagnosticEventId = ref<string | null>(null)
 const copyDiagnosticErrorEventId = ref<string | null>(null)
+const participants = computed(() => selectedMeeting.value?.participants ?? [])
+const displayRole = (role: string) => roleDisplayName(activeMode.value, participants.value, role)
+const displayStep = (event: MeetingEvent) => stepDisplayLabel(activeMode.value, participants.value, event)
 
 const diagnosticKeys = [
   'event_id',
@@ -98,7 +102,7 @@ function copyDiagnosticStatus(event: MeetingEvent) {
         data-testid="records-tab-timeline"
         @click="activeTab = 'timeline'"
       >
-        Timeline
+        時間軸
       </button>
       <button
         type="button"
@@ -107,7 +111,7 @@ function copyDiagnosticStatus(event: MeetingEvent) {
         data-testid="records-tab-transcript"
         @click="activeTab = 'transcript'"
       >
-        Transcript
+        逐字稿
       </button>
       <button
         v-if="devMode"
@@ -117,18 +121,18 @@ function copyDiagnosticStatus(event: MeetingEvent) {
         data-testid="records-tab-debug"
         @click="activeTab = 'debug'"
       >
-        Debug
+        開發診斷
       </button>
     </div>
 
     <section v-if="activeTab === 'timeline'" class="timeline" data-testid="step-timeline">
       <div class="section-title">
-        <h2>{{ selectedMeeting?.topic ?? '尚未選擇會議' }}</h2>
-        <em v-if="selectedMeeting" class="status-badge" :data-status="selectedMeeting.status">{{ selectedMeeting.status }}</em>
-        <em v-if="selectedMeeting" class="status-badge" :data-status="selectedMeeting.activity_status">{{ selectedMeeting.activity_status }}</em>
+        <h2>{{ selectedMeeting?.title ?? '尚未選擇會議' }}</h2>
+        <em v-if="selectedMeeting" class="status-badge" :data-status="selectedMeeting.status">{{ statusDisplayLabel(selectedMeeting.status) }}</em>
+        <em v-if="selectedMeeting" class="status-badge" :data-status="selectedMeeting.activity_status">{{ statusDisplayLabel(selectedMeeting.activity_status) }}</em>
       </div>
       <div v-if="!selectedMeeting" class="empty-state">
-        <p>從左上角 Past Topics 選擇或建立一場新會議</p>
+        <p>請從右上角「歷史會議」選擇，或建立一場新會議</p>
       </div>
       <div
         v-for="event in events"
@@ -139,13 +143,14 @@ function copyDiagnosticStatus(event: MeetingEvent) {
       >
         <button type="button" class="timeline-main" @click="selectedEvent = event">
           <span class="role-badge" :class="roleClass(event.role)" :style="roleColorVars(event.role)" data-testid="role-badge">
-            <img v-if="roleIcon(event.role)" :src="roleIcon(event.role)" class="role-icon" :alt="event.role" />
+            <img v-if="roleIcon(event.role)" :src="roleIcon(event.role)" class="role-icon" :alt="displayRole(event.role)" />
             <RoleSilhouette v-else-if="roleClass(event.role)" :color="roleColor(event.role)" :size="16" />
-            {{ event.role }}
+            {{ displayRole(event.role) }}
           </span>
-          <strong>{{ event.step_id }}</strong>
-          <em class="status-badge" :data-status="event.status">{{ event.status }}</em>
+          <strong>{{ displayStep(event) }}</strong>
+          <em class="status-badge" :data-status="event.status">{{ statusDisplayLabel(event.status) }}</em>
           <small>{{ formatDateTime(event.created_at) }}</small>
+          <p v-if="event.role === 'Human' && event.content" class="timeline-content">{{ event.content }}</p>
         </button>
         <button
           v-if="event.status === 'failed'"
@@ -155,7 +160,7 @@ function copyDiagnosticStatus(event: MeetingEvent) {
           @click="retrySelectedStep(event)"
           :disabled="loading || !canRun"
         >
-          Retry
+          重試
         </button>
         <button
           v-if="event.role === 'Human' && event.step_id === 'human-message' && !event.corrects_event_id"
@@ -174,6 +179,7 @@ function copyDiagnosticStatus(event: MeetingEvent) {
         >
           <summary>LLM attempt 診斷</summary>
           <dl class="attempt-diagnostics-fields">
+            <div><dt>內部步驟代碼</dt><dd>{{ event.step_id }}</dd></div>
             <div><dt>分類</dt><dd>{{ event.failure_kind ?? 'completed' }}</dd></div>
             <div><dt>模型</dt><dd>{{ event.model_config_id ?? '—' }}</dd></div>
             <div><dt>Adapter</dt><dd>{{ event.adapter ?? '—' }}</dd></div>
@@ -224,7 +230,7 @@ function copyDiagnosticStatus(event: MeetingEvent) {
 
     <section v-else-if="activeTab === 'transcript'" class="transcript" data-testid="transcript-preview">
       <div class="transcript-header">
-        <h2>Transcript</h2>
+        <h2>逐字稿</h2>
         <a
           v-if="selectedMeeting"
           class="btn btn-secondary btn-sm"
@@ -236,14 +242,14 @@ function copyDiagnosticStatus(event: MeetingEvent) {
         </a>
       </div>
       <div v-if="!transcript" class="empty-state">
-        <p>No transcript yet</p>
+        <p>尚無逐字稿</p>
       </div>
       <pre v-else>{{ transcript }}</pre>
     </section>
 
     <section v-else-if="activeTab === 'debug'" class="debug" data-testid="debug-panel">
-      <h2>Debug</h2>
-      <pre>{{ selectedEvent ? JSON.stringify(selectedEvent, null, 2) : 'No event selected' }}</pre>
+      <h2>開發診斷</h2>
+      <pre>{{ selectedEvent ? JSON.stringify(selectedEvent, null, 2) : '尚未選擇事件' }}</pre>
     </section>
   </Drawer>
 </template>

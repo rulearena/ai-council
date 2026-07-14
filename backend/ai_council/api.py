@@ -17,7 +17,7 @@ from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconn
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, PlainTextResponse, Response
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from ai_council.meetings.execution_state import (
     ActiveExecutionState,
@@ -125,15 +125,49 @@ class CaseFileRequest(BaseModel):
 
 
 class CreateMeetingRequest(BaseModel):
-    topic: str
+    title: str
+    goal: str
     mode_id: str = DEFAULT_MODE_ID
     participants: list[MeetingParticipantRequest] = Field(default_factory=list)
     inputs: dict[str, str] = Field(default_factory=dict)
     case_files: list[CaseFileRequest] = Field(default_factory=list)
 
+    @field_validator("title", "goal")
+    @classmethod
+    def require_non_blank(cls, value: str) -> str:
+        stripped = value.strip()
+        if not stripped:
+            raise ValueError("must not be blank")
+        return stripped
+
+
+class UpdateMeetingDetailsRequest(BaseModel):
+    title: str
+    goal: str
+
+    @field_validator("title", "goal")
+    @classmethod
+    def require_non_blank(cls, value: str) -> str:
+        stripped = value.strip()
+        if not stripped:
+            raise ValueError("must not be blank")
+        return stripped
+
 
 class StartMeetingRequest(BaseModel):
     models: dict[str, str] = Field(default_factory=dict)
+
+
+class DirectedRoleResponseRequest(BaseModel):
+    instruction: str
+
+    @field_validator("instruction")
+    @classmethod
+    def require_non_blank(cls, value: str) -> str:
+        stripped = value.strip()
+        if not stripped:
+            raise ValueError("must not be blank")
+        return stripped
 
 
 class RunRoleSequenceRequest(BaseModel):
@@ -232,7 +266,15 @@ def create_app(
                 for error in exc.errors()
             ]
             return JSONResponse(status_code=422, content={"detail": detail})
-        return JSONResponse(status_code=422, content={"detail": exc.errors()})
+        return JSONResponse(
+            status_code=422,
+            content={
+                "detail": [
+                    {key: value for key, value in error.items() if key != "ctx"}
+                    for error in exc.errors()
+                ]
+            },
+        )
 
     data_path = Path(data_dir)
     metadata_store = MeetingMetadataStore(data_path)
@@ -443,7 +485,8 @@ def create_app(
         created_at = now_iso()
         metadata = {
             "meeting_id": meeting_id,
-            "topic": request.topic,
+            "title": request.title,
+            "goal": request.goal,
             "created_at": created_at,
             "tags": [],
             "pinned": False,
@@ -513,6 +556,28 @@ def create_app(
             "events": project_events(events),
             "case_files": project_case_files(repository.read_case_files(meeting_id)),
         }
+
+    @app.put("/meetings/{meeting_id}/details")
+    def update_meeting_details(
+        meeting_id: str,
+        request: UpdateMeetingDetailsRequest,
+    ) -> dict[str, Any]:
+        def replace_details(current: dict[str, Any]) -> dict[str, Any]:
+            updated = {**current, "title": request.title, "goal": request.goal}
+            updated.pop("topic", None)
+            return updated
+
+        metadata = metadata_store.update(meeting_id, replace_details)
+        events = repository.read_events(meeting_id)
+        mode = meeting_mode(mode_catalog, metadata)
+        return project_meeting_summary(
+            metadata,
+            events,
+            mode=mode,
+            model_pricing=model_pricing_by_id(model_repository),
+            meeting_assignments=meeting_assignments,
+            activity_status=live_activity_status(events, jobs.is_running(meeting_id), mode),
+        )
 
     @app.put("/meetings/{meeting_id}/tags")
     def update_meeting_tags(meeting_id: str, request: UpdateMeetingTagsRequest) -> dict[str, Any]:
@@ -586,6 +651,7 @@ def create_app(
     @app.post("/meetings/{meeting_id}/start", status_code=202)
     def start_meeting(meeting_id: str, request: StartMeetingRequest) -> dict[str, str]:
         metadata = metadata_store.get(meeting_id)
+        require_meeting_goal(metadata)
         reject_terminal_meeting(repository, meeting_id)
         mode = meeting_mode(mode_catalog, metadata)
         model_assignments = resolved_meeting_models(
@@ -696,18 +762,32 @@ def create_app(
     def respond_as_role(
         meeting_id: str,
         role: str,
-        request: StartMeetingRequest,
+        request: DirectedRoleResponseRequest,
     ) -> dict[str, str]:
         metadata = metadata_store.get(meeting_id)
+        require_meeting_goal(metadata)
         reject_terminal_meeting(repository, meeting_id)
         mode = meeting_mode(mode_catalog, metadata)
         if mode.category != "relay":
             raise HTTPException(status_code=400, detail=f"Mode does not support directed responses: {mode.id}")
+        participants = project_participants(mode, metadata)
+        participant = next(
+            (item for item in participants if item["role_id"] == role),
+            None,
+        )
+        role_definition = next((item for item in mode.roles if item.id == role), None)
+        role_display_name = str(
+            (participant or {}).get("display_name")
+            or (participant or {}).get("name")
+            or (role_definition.name if role_definition is not None else role)
+        )
         try:
             runner.respond_as_role(
                 meeting_id=meeting_id,
-                topic=metadata["topic"],
+                goal=metadata["goal"],
                 role=role,
+                role_display_name=role_display_name,
+                instruction=request.instruction,
                 model_assignments=resolved_meeting_models(
                     meeting_assignments,
                     metadata,
@@ -726,6 +806,7 @@ def create_app(
         request: RunRoleSequenceRequest,
     ) -> dict[str, str]:
         metadata = metadata_store.get(meeting_id)
+        require_meeting_goal(metadata)
         reject_terminal_meeting(repository, meeting_id)
         mode = meeting_mode(mode_catalog, metadata)
         if mode.category != "relay":
@@ -733,7 +814,7 @@ def create_app(
         try:
             runner.respond_as_sequence(
                 meeting_id=meeting_id,
-                topic=metadata["topic"],
+                goal=metadata["goal"],
                 roles=request.roles,
                 model_assignments=resolved_meeting_models(
                     meeting_assignments,
@@ -754,6 +835,7 @@ def create_app(
         request: StartMeetingRequest,
     ) -> dict[str, str]:
         metadata = metadata_store.get(meeting_id)
+        require_meeting_goal(metadata)
         reject_terminal_meeting(repository, meeting_id)
         mode = meeting_mode(mode_catalog, metadata)
         model_assignments = resolved_meeting_models(
@@ -761,21 +843,31 @@ def create_app(
             metadata,
             mode,
         )
+        participants = project_participants(mode, metadata)
+        role_display_names = {
+            str(participant["role_id"]): str(
+                participant.get("display_name")
+                or participant.get("name")
+                or participant["role_id"]
+            )
+            for participant in participants
+        }
         try:
             if mode.category == "relay":
                 runner.retry_failed_step(
                     meeting_id=meeting_id,
                     step_id=step_id,
-                    topic=metadata["topic"],
+                    goal=metadata["goal"],
                     model_assignments=model_assignments,
                     plan=relay_plan(mode),
                     inputs=meeting_inputs_for_runner(metadata, repository.read_case_files(meeting_id)),
+                    role_display_names=role_display_names,
                 )
             else:
                 runner.retry_failed_parallel_step(
                     meeting_id=meeting_id,
                     step_id=step_id,
-                    topic=metadata["topic"],
+                    goal=metadata["goal"],
                     model_assignments=model_assignments,
                     plan=parallel_plan(mode, project_participants(mode, metadata)),
                     inputs=meeting_inputs_for_runner(metadata, repository.read_case_files(meeting_id)),
@@ -787,9 +879,18 @@ def create_app(
     @app.get("/meetings/{meeting_id}/transcript.md")
     def get_transcript(meeting_id: str) -> PlainTextResponse:
         metadata = metadata_store.get(meeting_id)
+        mode = meeting_mode(mode_catalog, metadata)
+        events = repository.read_events(meeting_id)
+        role_labels, step_labels = transcript_presentation_labels(
+            mode,
+            project_participants(mode, metadata),
+            events,
+        )
         transcript = projector.project(
-            repository.read_events(meeting_id),
-            title=metadata["topic"],
+            events,
+            title=meeting_title(metadata),
+            role_labels=role_labels,
+            step_labels=step_labels,
         )
         return PlainTextResponse(transcript, media_type="text/markdown")
 
@@ -1297,7 +1398,7 @@ def start_runner_for_mode(
     if mode.category == "relay":
         runner.start(
             meeting_id=metadata["meeting_id"],
-            topic=metadata["topic"],
+            goal=metadata["goal"],
             model_assignments=model_assignments,
             plan=relay_plan(mode),
             inputs=inputs,
@@ -1305,7 +1406,7 @@ def start_runner_for_mode(
         return
     runner.start_parallel(
         meeting_id=metadata["meeting_id"],
-        topic=metadata["topic"],
+        goal=metadata["goal"],
         model_assignments=model_assignments,
         plan=parallel_plan(mode, project_participants(mode, metadata)),
         inputs=inputs,
@@ -1448,7 +1549,7 @@ def _meeting_matches_query(
     events: list[dict[str, Any]],
     query: str,
 ) -> bool:
-    transcript = projector.project(events, title=str(metadata.get("topic", "")))
+    transcript = projector.project(events, title=meeting_title(metadata))
     tags = " ".join(metadata.get("tags") or [])
     haystack = f"{transcript}\n{metadata.get('meeting_id', '')}\n{tags}".lower()
     return query in haystack
@@ -1458,6 +1559,76 @@ def reject_terminal_meeting(repository: MeetingRepository, meeting_id: str) -> N
     status = latest_lifecycle_status(repository.read_events(meeting_id))
     if status in {"closed", "cancelled"}:
         raise HTTPException(status_code=409, detail=f"Meeting is terminal: {status}")
+
+
+def meeting_title(metadata: dict[str, Any]) -> str:
+    title = metadata.get("title")
+    if isinstance(title, str) and title.strip():
+        return title
+    legacy_topic = metadata.get("topic")
+    return legacy_topic if isinstance(legacy_topic, str) else ""
+
+
+def transcript_presentation_labels(
+    mode: ModeDefinition,
+    participants: list[dict[str, Any]],
+    events: list[dict[str, Any]],
+) -> tuple[dict[str, str], dict[str, str]]:
+    role_labels = {role.id: role.name for role in mode.roles}
+    role_labels.update(
+        {
+            str(participant["role_id"]): str(
+                participant.get("display_name") or role_labels.get(str(participant["role_id"]))
+                or participant["role_id"]
+            )
+            for participant in participants
+        }
+    )
+    role_labels["Human"] = "主席"
+    role_labels["System"] = "系統"
+
+    step_labels = {
+        step.template.replace("_", "-"): step.label
+        for step in mode.steps
+    }
+    if mode.synthesis is not None:
+        step_labels["synthesis"] = mode.synthesis.label
+
+    human_steps = {
+        "human-message": "主席發言",
+        "human-correction": "主席訂正",
+        "meeting-closed": "會議結案",
+        "meeting-cancelled": "會議取消",
+        "meeting-reopened": "重新開啟會議",
+    }
+    step_labels.update(human_steps)
+    for event in events:
+        event_id = str(event.get("event_id", ""))
+        step_id = str(event.get("step_id", ""))
+        base_step_id = str(event.get("base_step_id") or step_id)
+        event_label_key = event_id or step_id
+        role_label = role_labels.get(str(event.get("role")), str(event.get("role", "")))
+        interaction_type = event.get("interaction_type")
+        if interaction_type == "directed-role-instruction":
+            target_role = str(event.get("target_role_id", ""))
+            step_labels[event_label_key] = f"主席追問{role_labels.get(target_role, target_role)}"
+        elif interaction_type == "directed-role-response":
+            step_labels[event_label_key] = f"{role_label}回應主席追問"
+        elif interaction_type == "role-sequence-response":
+            step_labels[event_label_key] = f"{role_label}依序回應"
+        elif base_step_id.startswith("member-"):
+            step_labels[event_label_key] = f"{role_label}發想"
+    return role_labels, step_labels
+
+
+def require_meeting_goal(metadata: dict[str, Any]) -> str:
+    goal = metadata.get("goal")
+    if not isinstance(goal, str) or not goal.strip():
+        raise HTTPException(
+            status_code=409,
+            detail="Meeting goal must be set before execution",
+        )
+    return goal
 
 
 def recover_interrupted_executions(
@@ -1595,8 +1766,14 @@ def project_meeting_summary(
     created_at = metadata.get("created_at", "")
     updated_at = str(events[-1].get("created_at", created_at)) if events else created_at
     latest_event = events[-1] if events else None
+    projected_metadata = {key: value for key, value in metadata.items() if key != "topic"}
+    goal = metadata.get("goal")
+    has_goal = isinstance(goal, str) and bool(goal.strip())
     return {
-        **metadata,
+        **projected_metadata,
+        "title": meeting_title(metadata),
+        "goal": goal if has_goal else None,
+        "requires_goal": not has_goal,
         "created_at": created_at,
         "updated_at": updated_at,
         "status": project_meeting_status(events),

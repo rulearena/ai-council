@@ -1,6 +1,8 @@
 <script setup lang="ts">
-import { computed, inject, ref } from 'vue'
+import { computed, inject, ref, watch } from 'vue'
 import { activeMode, councilKey, formatDateTime, sequencePresets } from '../composables/useCouncil'
+import { nextMeetingMigrationDraft } from '../meetingMigration'
+import { roleDisplayName, statusDisplayLabel, stepDisplayLabel } from '../presentation'
 
 const store = inject(councilKey)!
 const {
@@ -23,31 +25,93 @@ const {
   closeSelectedMeeting,
   reopenSelectedMeeting,
   requestSelectedRoleSequence,
+  updateSelectedMeetingDetails,
 } = store
 
 const advancedOpen = ref(false)
+const migrationTitle = ref('')
+const migrationGoal = ref('')
+
+watch(
+  [
+    () => selectedMeeting.value?.meeting_id,
+    () => selectedMeeting.value?.requires_goal,
+  ],
+  ([meetingId, requiresGoal], [previousMeetingId, previousRequiresGoal]) => {
+    const meeting = selectedMeeting.value
+    const next = nextMeetingMigrationDraft(
+      { title: migrationTitle.value, goal: migrationGoal.value },
+      { meetingId: previousMeetingId, requiresGoal: previousRequiresGoal },
+      meeting
+        ? {
+            meetingId: meeting.meeting_id,
+            requiresGoal: meeting.requires_goal,
+            title: meeting.title,
+            goal: meeting.goal,
+          }
+        : null,
+    )
+    migrationTitle.value = next.title
+    migrationGoal.value = next.goal
+  },
+  { immediate: true },
+)
 
 function onKeydown(event: KeyboardEvent) {
   if (event.key === 'Escape') advancedOpen.value = false
 }
 
-const failedStepTitle = computed(() =>
-  failedRole.value ? `${failedRole.value} 的回應失敗了，請點擊席位重試該步驟` : undefined,
-)
-
 // "開始新回合" runs the active mode's full step list from the top - describe it with
 // that mode's own step labels (spec.md 16.2) instead of a hardcoded red-blue sequence, so
 // this stays accurate for courtroom/debate/any future mode.
 const roundStepsSummary = computed(() => (activeMode.value.steps ?? []).map((step) => step.label).join(' → '))
+const participants = computed(() => selectedMeeting.value?.participants ?? [])
+const failedRoleName = computed(() =>
+  failedRole.value ? roleDisplayName(activeMode.value, participants.value, failedRole.value) : '',
+)
+const failedStepTitle = computed(() =>
+  failedRole.value ? `${failedRoleName.value}的回應失敗了，請點擊席位重試該步驟` : undefined,
+)
+const lastStepLabel = computed(() => {
+  const meeting = selectedMeeting.value
+  const event = meeting?.events?.at(-1)
+  return event ? stepDisplayLabel(activeMode.value, participants.value, event) : ''
+})
 </script>
 
 <template>
   <footer class="action-bar" @keydown="onKeydown">
     <p v-if="error" class="error" data-testid="app-error">{{ error }}</p>
 
+    <section
+      v-if="selectedMeeting?.requires_goal"
+      class="meeting-goal-migration"
+      data-testid="meeting-goal-migration"
+    >
+      <strong>請先設定會議名稱與目標</strong>
+      <p>舊會議不會把原主題自動當成 AI 目標；保存後才能繼續執行。</p>
+      <label>
+        會議名稱
+        <input v-model="migrationTitle" aria-label="舊會議名稱" />
+      </label>
+      <label>
+        目標
+        <textarea v-model="migrationGoal" aria-label="舊會議目標" />
+      </label>
+      <button
+        type="button"
+        class="btn btn-primary"
+        data-testid="save-meeting-goal-button"
+        :disabled="loading || !migrationTitle.trim() || !migrationGoal.trim()"
+        @click="updateSelectedMeetingDetails(migrationTitle, migrationGoal)"
+      >
+        保存並啟用
+      </button>
+    </section>
+
     <div class="action-bar-status" data-testid="operation-status">
-      <span><i class="status-dot" :data-status="operationStatus" aria-hidden="true"></i>狀態：{{ operationStatus }}</span>
-      <span v-if="selectedMeeting?.last_step_id">最後步驟：{{ selectedMeeting.last_step_id }}</span>
+      <span><i class="status-dot" :data-status="operationStatus" aria-hidden="true"></i>狀態：{{ statusDisplayLabel(operationStatus) }}</span>
+      <span v-if="lastStepLabel">最後步驟：{{ lastStepLabel }}</span>
       <span v-if="selectedMeeting">更新：{{ formatDateTime(selectedMeeting.updated_at) }}</span>
     </div>
 
@@ -61,7 +125,7 @@ const roundStepsSummary = computed(() => (activeMode.value.steps ?? []).map((ste
         <line x1="12" y1="9" x2="12" y2="13" />
         <line x1="12" y1="17" x2="12.01" y2="17" />
       </svg>
-      {{ failedRole }} 的回應失敗了，點擊席位可重試
+      {{ failedRoleName }}的回應失敗了，點擊席位可重試
     </p>
 
     <div class="action-bar-row">

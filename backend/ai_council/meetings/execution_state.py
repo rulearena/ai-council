@@ -27,6 +27,7 @@ class ActiveExecutionState(TypedDict):
     output_schema_hash: NotRequired[str]
     interaction_type: NotRequired[str]
     directed_sequence: NotRequired[int]
+    in_response_to_event_id: NotRequired[str]
     sequence: NotRequired[int]
     sequence_index: NotRequired[int]
 
@@ -108,6 +109,7 @@ def interrupted_execution_event(state: ActiveExecutionState) -> dict[str, object
         "output_schema_hash",
         "interaction_type",
         "directed_sequence",
+        "in_response_to_event_id",
         "sequence",
         "sequence_index",
         "adapter",
