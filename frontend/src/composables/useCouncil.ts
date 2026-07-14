@@ -243,6 +243,7 @@ export function useCouncil() {
   const assignmentUpdateError = ref('')
   const devMode = ref(false)
   let closeEventStream: (() => void) | null = null
+  let assignmentSaveGeneration = 0
 
   // event_ids this session has already processed for the currently-open meeting - lets
   // the WS handler tell a genuinely new event apart from one merely being resent (every
@@ -762,6 +763,8 @@ export function useCouncil() {
       selectedModels.value = { ...selectedModels.value, [role]: modelId }
       return
     }
+    const meetingId = selectedMeeting.value.meeting_id
+    const requestGeneration = ++assignmentSaveGeneration
     const previous = { ...selectedModels.value }
     const next = { ...previous, [role]: modelId }
     selectedModels.value = next
@@ -769,9 +772,21 @@ export function useCouncil() {
     loading.value = true
     try {
       const meeting = await updateMeetingParticipantModels(
-        selectedMeeting.value.meeting_id,
+        meetingId,
         next,
       )
+      if (requestGeneration !== assignmentSaveGeneration) return
+      meetings.value = meetings.value.map((candidate) =>
+        candidate.meeting_id === meetingId
+          ? {
+              ...candidate,
+              ...meeting,
+              events: candidate.events,
+              case_files: candidate.case_files,
+            }
+          : candidate,
+      )
+      if (selectedMeeting.value?.meeting_id !== meetingId) return
       selectedMeeting.value = {
         ...selectedMeeting.value,
         ...meeting,
@@ -785,6 +800,12 @@ export function useCouncil() {
         ]),
       )
     } catch (caught) {
+      if (
+        requestGeneration !== assignmentSaveGeneration ||
+        selectedMeeting.value?.meeting_id !== meetingId
+      ) {
+        return
+      }
       selectedModels.value = previous
       assignmentUpdateError.value =
         caught instanceof ApiError && typeof caught.detail === 'string'
@@ -793,7 +814,7 @@ export function useCouncil() {
             ? caught.message
             : String(caught)
     } finally {
-      loading.value = false
+      if (requestGeneration === assignmentSaveGeneration) loading.value = false
     }
   }
 

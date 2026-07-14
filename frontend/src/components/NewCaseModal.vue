@@ -89,9 +89,21 @@ const estimatedCaseFileTokens = computed(() => {
 function codePointLength(value: string) {
   return Array.from(value).length
 }
+
+function hasFixedParallelRoster(mode: ModeDefinition) {
+  return mode.category === 'parallel' && mode.roles.some((role) => role.kind === 'member')
+}
+
 const selectedModeParticipants = computed(() => {
   const mode = selectedMode.value
-  if (mode.category !== 'parallel' || !mode.fanout || !mode.synthesis) return mode.roles
+  if (
+    mode.category !== 'parallel' ||
+    !mode.fanout ||
+    !mode.synthesis ||
+    hasFixedParallelRoster(mode)
+  ) {
+    return mode.roles
+  }
   const members = Array.from({ length: parallelMemberCount.value }, (_, index) => ({
     id: `${mode.fanout!.role}-${index + 1}`,
     name: parallelMembers.value[index]?.displayName || `委員 ${index + 1}`,
@@ -293,7 +305,12 @@ function buildCaseFiles() {
 
 function buildParticipants() {
   const mode = selectedMode.value
-  if (mode.category !== 'parallel' || !mode.fanout || !mode.synthesis) {
+  if (
+    mode.category !== 'parallel' ||
+    !mode.fanout ||
+    !mode.synthesis ||
+    hasFixedParallelRoster(mode)
+  ) {
     return mode.roles.map((role) => ({
       role_id: role.id,
       model_config_id: draftModelAssignments.value[role.id],
@@ -384,7 +401,11 @@ function buildParticipants() {
         />
       </label>
 
-      <section v-if="selectedMode.category === 'parallel' && selectedMode.fanout" class="parallel-member-editor" data-testid="parallel-member-editor">
+      <section
+        v-if="selectedMode.category === 'parallel' && selectedMode.fanout && !hasFixedParallelRoster(selectedMode)"
+        class="parallel-member-editor"
+        data-testid="parallel-member-editor"
+      >
         <div class="parallel-member-count-row">
           <span>成員數</span>
           <button

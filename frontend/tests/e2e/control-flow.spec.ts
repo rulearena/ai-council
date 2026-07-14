@@ -150,6 +150,80 @@ test('Settings rolls back a rejected participant assignment and shows the server
   await expect(page.getByTestId('seat-model-label-blue')).toHaveText('Mock · mock-fast')
 })
 
+test('a delayed assignment save cannot overwrite a meeting selected while it was pending', async ({
+  page,
+}) => {
+  await page.goto('/')
+  const topicA = `E2E delayed assignment A ${Date.now()}`
+  const topicB = `E2E delayed assignment B ${Date.now()}`
+  await createMeetingViaNewCase(page, topicA)
+  const meetingAId = await page.getByTestId('meeting-id-display').innerText()
+  await createMeetingViaNewCase(page, topicB, {
+    modelAssignments: { Blue: 'mock-broken' },
+  })
+  const meetingBId = await page.getByTestId('meeting-id-display').innerText()
+
+  const openTopic = async (topic: string) => {
+    await page.getByTestId('past-topics-button').click()
+    await page.getByTestId('meeting-list-item').filter({ hasText: topic }).locator('.meeting-item').click()
+  }
+  const assignmentUrl = new RegExp(`/meetings/${meetingAId}/participant-models$`)
+
+  await openTopic(topicA)
+  let releaseSuccess!: () => void
+  const successGate = new Promise<void>((resolve) => {
+    releaseSuccess = resolve
+  })
+  let successIntercepted = false
+  await page.route(assignmentUrl, async (route) => {
+    successIntercepted = true
+    await successGate
+    const response = await route.fetch()
+    await route.fulfill({ response })
+  })
+  await page.getByTestId('settings-button').click()
+  const successResponse = page.waitForResponse(assignmentUrl)
+  await page.getByTestId('blue-model-select').selectOption('mock-slow')
+  await expect.poll(() => successIntercepted).toBe(true)
+  await closeSettings(page)
+  await openTopic(topicB)
+  releaseSuccess()
+  await successResponse
+
+  await expect(page.getByTestId('meeting-id-display')).toHaveText(meetingBId)
+  await expect(page.getByTestId('seat-model-label-blue')).toContainText('mock-broken')
+
+  await page.unroute(assignmentUrl)
+  await openTopic(topicA)
+  let releaseFailure!: () => void
+  const failureGate = new Promise<void>((resolve) => {
+    releaseFailure = resolve
+  })
+  let failureIntercepted = false
+  await page.route(assignmentUrl, async (route) => {
+    failureIntercepted = true
+    await failureGate
+    await route.fulfill({
+      status: 500,
+      contentType: 'application/json',
+      body: JSON.stringify({ detail: 'Delayed A save failed' }),
+    })
+  })
+  await page.getByTestId('settings-button').click()
+  const failureResponse = page.waitForResponse(assignmentUrl)
+  await page.getByTestId('blue-model-select').selectOption('mock-broken')
+  await expect.poll(() => failureIntercepted).toBe(true)
+  await closeSettings(page)
+  await openTopic(topicB)
+  releaseFailure()
+  await failureResponse
+
+  await expect(page.getByTestId('meeting-id-display')).toHaveText(meetingBId)
+  await expect(page.getByTestId('seat-model-label-blue')).toContainText('mock-broken')
+  await page.getByTestId('settings-button').click()
+  await expect(page.getByTestId('assignment-update-error')).toHaveCount(0)
+})
+
 test('a deleted assigned model shows the backend fallback warning without persisting it', async ({
   page,
 }) => {
@@ -1903,6 +1977,55 @@ test('brainstorm mode creates member instances and runs fanout plus synthesis', 
     .filter({ hasText: topic })
     .getByTestId('delete-meeting-button')
     .click()
+})
+
+test('six-hats New Case persists its fixed catalog roster and reloads every assignment', async ({
+  page,
+}) => {
+  await page.goto('/')
+  const topic = `E2E fixed six hats roster ${Date.now()}`
+  await page.getByTestId('new-case-button').click()
+  await page
+    .getByTestId('mode-select-card-six-hats')
+    .getByRole('button', { name: '選擇此模式' })
+    .click()
+  await page.getByLabel('會議主題').fill(topic)
+  await expect(page.getByTestId('parallel-member-editor')).toHaveCount(0)
+
+  const assignments: Record<string, string> = {
+    HatWhite: 'mock-slow',
+    HatRed: 'mock-fast',
+    HatBlack: 'mock-slow',
+    HatYellow: 'mock-fast',
+    HatGreen: 'mock-slow',
+    HatBlue: 'mock-fast',
+  }
+  for (const [role, modelId] of Object.entries(assignments)) {
+    await page.getByTestId(`new-case-${role.toLowerCase()}-model-select`).selectOption(modelId)
+  }
+  const createdResponsePromise = page.waitForResponse(
+    (response) => response.request().method() === 'POST' && response.url().endsWith('/meetings'),
+  )
+  await page.getByTestId('create-meeting-button').click()
+  const createdResponse = await createdResponsePromise
+  expect(createdResponse.ok()).toBeTruthy()
+  await expect(page.getByTestId('new-case-modal')).not.toBeVisible()
+  const created = await createdResponse.json()
+  expect(
+    created.participants.map((participant: { role_id: string; model_config_id: string }) => [
+      participant.role_id,
+      participant.model_config_id,
+    ]),
+  ).toEqual(Object.entries(assignments))
+
+  await page.reload()
+  await page.getByTestId('past-topics-button').click()
+  await page.getByTestId('meeting-list-item').filter({ hasText: topic }).locator('.meeting-item').click()
+  for (const [role, modelId] of Object.entries(assignments)) {
+    await expect(page.getByTestId(`role-seat-${role.toLowerCase()}`)).toBeVisible()
+    await expect(page.getByTestId(`seat-model-label-${role.toLowerCase()}`)).toContainText(modelId)
+  }
+  await expect(page.locator('[data-testid^="role-seat-hat-"]')).toHaveCount(0)
 })
 
 test('debate mode gates creation on both position inputs, then builds a Pro/Con/Arbiter meeting', async ({
