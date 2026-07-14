@@ -27,6 +27,7 @@ import {
   providerIdForModel,
   type ProviderId,
 } from '../providers'
+import { LatestDiscoveryRequest, type DiscoveryEvent } from '../modelDiscovery'
 
 const store = inject(councilKey)!
 const { models, refreshModels } = store
@@ -110,6 +111,7 @@ const discoveryModels = ref<string[]>([])
 const discoveryLoading = ref(false)
 const discoveryMessage = ref('')
 const manualModelEntry = ref(true)
+const discoveryRequest = new LatestDiscoveryRequest()
 
 const providerDefinition = computed(() => getProvider(formProvider.value))
 const formAdapter = computed(() => providerDefinition.value.adapter)
@@ -131,7 +133,9 @@ function resetFormErrors() {
 }
 
 function resetDiscovery() {
+  discoveryRequest.invalidate()
   discoveryModels.value = []
+  discoveryLoading.value = false
   discoveryMessage.value = ''
   manualModelEntry.value = true
 }
@@ -180,6 +184,7 @@ function openEditForm(model: ModelConfig) {
 }
 
 function closeForm() {
+  resetDiscovery()
   showForm.value = false
 }
 
@@ -200,34 +205,54 @@ function buildPayload(): ModelConfigPayload {
 }
 
 async function discoverModels() {
-  discoveryLoading.value = true
-  discoveryMessage.value = ''
-  try {
-    const result = formMode.value === 'edit'
-      ? await getAvailableModels(formId.value)
-      : await previewAvailableModels({
-          adapter: formAdapter.value,
-          base_url: formBaseUrl.value.trim() || null,
-          api_key_env: formApiKeyEnv.value.trim() || null,
-        })
-    discoveryModels.value = result.models
-    if (result.models.length) {
-      formModel.value = result.models.includes(formModel.value) ? formModel.value : result.models[0]
+  const snapshot = {
+    mode: formMode.value,
+    id: formId.value,
+    provider: formProvider.value,
+    adapter: formAdapter.value,
+    baseUrl: formBaseUrl.value.trim() || null,
+    apiKeyEnv: formApiKeyEnv.value.trim() || null,
+  }
+  const identity = JSON.stringify(snapshot)
+  const load = snapshot.mode === 'edit'
+    ? () => getAvailableModels(snapshot.id)
+    : () => previewAvailableModels({
+        adapter: snapshot.adapter,
+        base_url: snapshot.baseUrl,
+        api_key_env: snapshot.apiKeyEnv,
+      })
+  await discoveryRequest.run(identity, load, applyDiscoveryEvent)
+}
+
+function applyDiscoveryEvent(event: DiscoveryEvent) {
+  if (event.type === 'started') {
+    discoveryLoading.value = true
+    discoveryMessage.value = ''
+    return
+  }
+  if (event.type === 'succeeded') {
+    discoveryModels.value = event.models
+    if (event.models.length) {
+      formModel.value = event.models.includes(formModel.value) ? formModel.value : event.models[0]
       manualModelEntry.value = false
     } else {
       discoveryMessage.value = 'Provider 沒有回傳可用模型，請手動輸入 exact model ID。'
       manualModelEntry.value = true
     }
-  } catch (caught) {
+    return
+  }
+  if (event.type === 'failed') {
     discoveryModels.value = []
-    const reason = caught instanceof ApiError && typeof caught.detail === 'string'
-      ? caught.detail
-      : caught instanceof Error
-        ? caught.message
-        : String(caught)
+    const reason = event.error instanceof ApiError && typeof event.error.detail === 'string'
+      ? event.error.detail
+      : event.error instanceof Error
+        ? event.error.message
+        : String(event.error)
     discoveryMessage.value = `${reason}；請手動輸入 exact model ID。`
     manualModelEntry.value = true
-  } finally {
+    return
+  }
+  if (event.type === 'settled') {
     discoveryLoading.value = false
   }
 }
@@ -363,12 +388,12 @@ async function saveForm() {
       <template v-if="isHttpAdapter(formAdapter)">
         <label class="topic-input-row">
           base_url
-          <input v-model="formBaseUrl" data-testid="model-form-base-url-input" aria-label="base_url" />
+          <input v-model="formBaseUrl" data-testid="model-form-base-url-input" aria-label="base_url" @input="resetDiscovery" />
           <em v-if="fieldError('base_url')" class="model-form-field-error" data-testid="model-form-error-base_url">{{ fieldError('base_url') }}</em>
         </label>
         <label class="topic-input-row">
           Credential 環境變數名稱
-          <input v-model="formApiKeyEnv" data-testid="model-form-api-key-env-input" aria-label="api_key_env" />
+          <input v-model="formApiKeyEnv" data-testid="model-form-api-key-env-input" aria-label="api_key_env" @input="resetDiscovery" />
         </label>
         <p class="model-form-hint" data-testid="model-form-credential-hint">
           此欄位填<strong>環境變數名稱</strong>（如 <code>OPENAI_API_KEY</code>），不是 API 金鑰本身。金鑰請設在後端環境變數中，勿貼在此處。
