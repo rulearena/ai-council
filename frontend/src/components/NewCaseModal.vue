@@ -12,6 +12,7 @@ import { DEFAULT_MODE_ID, modeCatalog, type ModeDefinition } from '../modes'
 import Modal from './Modal.vue'
 import ModeCard from './ModeCard.vue'
 import RoleSilhouette from './RoleSilhouette.vue'
+import { modelDisplayLabel } from '../providers'
 
 const props = defineProps<{ show: boolean }>()
 const emit = defineEmits<{ close: [] }>()
@@ -581,7 +582,7 @@ function buildParticipants() {
             v-model="draftModelAssignments[participant.id]"
             :data-testid="`new-case-${participant.id.toLowerCase()}-model-select`"
           >
-            <option v-for="model in models" :key="model.id" :value="model.id">{{ model.id }}</option>
+            <option v-for="model in models" :key="model.id" :value="model.id">{{ modelDisplayLabel(model) }}</option>
           </select>
         </label>
       </section>

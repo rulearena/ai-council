@@ -85,16 +85,16 @@ test('New Case persists the complete relay model roster and reload hydrates that
       { role_id: 'Judge', model_config_id: 'mock-broken' },
     ],
   })
-  await expect(page.getByTestId('seat-model-label-blue')).toHaveText('mock-slow')
-  await expect(page.getByTestId('seat-model-label-red')).toHaveText('mock-fast')
-  await expect(page.getByTestId('seat-model-label-judge')).toHaveText('mock-broken')
+  await expect(page.getByTestId('seat-model-label-blue')).toHaveText('Mock · mock-slow')
+  await expect(page.getByTestId('seat-model-label-red')).toHaveText('Mock · mock-fast')
+  await expect(page.getByTestId('seat-model-label-judge')).toHaveText('Custom OpenAI-compatible · mock-broken')
 
   await page.reload()
   await page.getByTestId('past-topics-button').click()
   await page.getByTestId('meeting-list-item').filter({ hasText: topic }).locator('.meeting-item').click()
-  await expect(page.getByTestId('seat-model-label-blue')).toHaveText('mock-slow')
-  await expect(page.getByTestId('seat-model-label-red')).toHaveText('mock-fast')
-  await expect(page.getByTestId('seat-model-label-judge')).toHaveText('mock-broken')
+  await expect(page.getByTestId('seat-model-label-blue')).toHaveText('Mock · mock-slow')
+  await expect(page.getByTestId('seat-model-label-red')).toHaveText('Mock · mock-fast')
+  await expect(page.getByTestId('seat-model-label-judge')).toHaveText('Custom OpenAI-compatible · mock-broken')
 })
 
 test('Settings persists complete participant assignments across reload', async ({ page }) => {
@@ -122,9 +122,9 @@ test('Settings persists complete participant assignments across reload', async (
   await page.reload()
   await page.getByTestId('past-topics-button').click()
   await page.getByTestId('meeting-list-item').filter({ hasText: topic }).locator('.meeting-item').click()
-  await expect(page.getByTestId('seat-model-label-blue')).toHaveText('mock-slow')
-  await expect(page.getByTestId('seat-model-label-red')).toHaveText('mock-fast')
-  await expect(page.getByTestId('seat-model-label-judge')).toHaveText('mock-broken')
+  await expect(page.getByTestId('seat-model-label-blue')).toHaveText('Mock · mock-slow')
+  await expect(page.getByTestId('seat-model-label-red')).toHaveText('Mock · mock-fast')
+  await expect(page.getByTestId('seat-model-label-judge')).toHaveText('Custom OpenAI-compatible · mock-broken')
 })
 
 test('Settings rolls back a rejected participant assignment and shows the server error', async ({
@@ -147,7 +147,7 @@ test('Settings rolls back a rejected participant assignment and shows the server
   await expect(page.getByTestId('assignment-update-error')).toHaveText('Assignment save failed')
   await expect(page.getByTestId('blue-model-select')).toHaveValue('mock-fast')
   await closeSettings(page)
-  await expect(page.getByTestId('seat-model-label-blue')).toHaveText('mock-fast')
+  await expect(page.getByTestId('seat-model-label-blue')).toHaveText('Mock · mock-fast')
 })
 
 test('a deleted assigned model shows the backend fallback warning without persisting it', async ({
@@ -231,14 +231,14 @@ test('meeting switches hydrate isolated assignments and New Case keeps local def
     modelAssignments: { Blue: 'mock-slow' },
   })
   await createMeetingViaNewCase(page, topicB)
-  await expect(page.getByTestId('seat-model-label-blue')).toHaveText('mock-fast')
+  await expect(page.getByTestId('seat-model-label-blue')).toHaveText('Mock · mock-fast')
 
   await page.getByTestId('past-topics-button').click()
   await page.getByTestId('meeting-list-item').filter({ hasText: topicA }).locator('.meeting-item').click()
-  await expect(page.getByTestId('seat-model-label-blue')).toHaveText('mock-slow')
+  await expect(page.getByTestId('seat-model-label-blue')).toHaveText('Mock · mock-slow')
   await page.getByTestId('past-topics-button').click()
   await page.getByTestId('meeting-list-item').filter({ hasText: topicB }).locator('.meeting-item').click()
-  await expect(page.getByTestId('seat-model-label-blue')).toHaveText('mock-fast')
+  await expect(page.getByTestId('seat-model-label-blue')).toHaveText('Mock · mock-fast')
 
   await page.getByTestId('new-case-button').click()
   await page
@@ -284,7 +284,7 @@ test('legacy recovery hydration trusts the participant projection instead of eve
   await page.getByTestId('past-topics-button').click()
   await page.getByTestId('meeting-list-item').filter({ hasText: topic }).locator('.meeting-item').click()
 
-  await expect(page.getByTestId('seat-model-label-blue')).toHaveText('mock-slow')
+  await expect(page.getByTestId('seat-model-label-blue')).toHaveText('Mock · mock-slow')
 })
 
 // Generalized model-assignment helper (mode-system slice B task 9 made the model-select
@@ -1745,10 +1745,10 @@ test('New Case blocks an empty model catalog and seat nameplates follow persiste
   await setModelsInSettings(page, { blue: 'mock-slow', red: 'mock-fast', judge: 'mock-broken' })
   await closeSettings(page)
 
-  await expect(page.getByTestId('seat-model-label-blue')).toHaveText('mock-slow')
-  await expect(page.getByTestId('seat-model-label-red')).toHaveText('mock-fast')
-  await expect(page.getByTestId('seat-model-label-judge')).toHaveText('mock-broken')
-  await expect(page.getByTestId('seat-model-label-blue')).toHaveAttribute('title', 'mock-slow')
+  await expect(page.getByTestId('seat-model-label-blue')).toHaveText('Mock · mock-slow')
+  await expect(page.getByTestId('seat-model-label-red')).toHaveText('Mock · mock-fast')
+  await expect(page.getByTestId('seat-model-label-judge')).toHaveText('Custom OpenAI-compatible · mock-broken')
+  await expect(page.getByTestId('seat-model-label-blue')).toHaveAttribute('title', 'Mock · mock-slow')
 
   // Changing the model again in Settings must update the seat immediately -
   // and persist through the explicit participant-model replacement endpoint.
@@ -1759,7 +1759,7 @@ test('New Case blocks an empty model catalog and seat nameplates follow persiste
   await page.getByTestId('blue-model-select').selectOption('mock-fast')
   await saved
   await page.getByTestId('settings-close-button').click()
-  await expect(page.getByTestId('seat-model-label-blue')).toHaveText('mock-fast')
+  await expect(page.getByTestId('seat-model-label-blue')).toHaveText('Mock · mock-fast')
 
   await page.getByTestId('past-topics-button').click()
   page.once('dialog', (dialog) => dialog.accept())
@@ -2013,7 +2013,7 @@ test('model manager tab supports create, test, edit, and delete for a model conf
 
   await page.getByTestId('add-model-button').click()
   await page.getByTestId('model-form-id-input').fill(modelId)
-  // adapter select defaults to 'mock' (ModelManagerPanel's openCreateForm) - leave it, so
+  // Provider defaults to Mock - leave it, so
   // the Test step below resolves deterministically to "available" with no real network
   // call (check_model_health's mock branch just calls adapter.complete() locally).
   await page.getByTestId('model-form-save').click()
@@ -2032,14 +2032,13 @@ test('model manager tab supports create, test, edit, and delete for a model conf
     'available',
   )
 
-  // Editing: timeout_seconds only renders for http/cli adapters (ModelManagerPanel.vue's
-  // isHttpAdapter/isCliAdapter template branches) - a mock model has no editable field
-  // besides its (readonly) id, so exercising a real edit means switching the adapter as
-  // part of the edit, same as an operator converting a placeholder mock entry into a real
+  // A mock model has no editable connection field besides its (readonly) id, so
+  // exercising a real edit means switching the Provider as part of the edit, like an
+  // operator converting a placeholder mock entry into a real
   // one would.
   await page.getByTestId(`edit-model-button-${modelId}`).click()
   await expect(page.getByTestId('model-form-id-input')).toHaveValue(modelId)
-  await page.getByTestId('model-form-adapter-select').selectOption('openai-compatible-http')
+  await page.getByTestId('model-form-provider-select').selectOption('custom-openai-compatible')
   await page.getByTestId('model-form-base-url-input').fill('http://127.0.0.1:9/v1')
   await page.getByTestId('model-form-model-input').fill('dummy-model')
   await page.getByTestId('model-form-timeout-input').fill('60')
@@ -2063,6 +2062,204 @@ test('model manager tab supports create, test, edit, and delete for a model conf
   await closeSettings(page)
 })
 
+test('model manager creates an OpenAI config through provider-guided preview discovery', async ({
+  page,
+}) => {
+  let previewPayload: Record<string, unknown> | null = null
+  await page.route('**/models/available-models', async (route) => {
+    if (route.request().method() !== 'POST') return route.continue()
+    previewPayload = route.request().postDataJSON() as Record<string, unknown>
+    await route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify({ models: ['gpt-5.4', 'gpt-5.4-mini'] }),
+    })
+  })
+  await page.goto('/')
+  await page.getByTestId('settings-button').click()
+  await page.getByTestId('model-manager-tab').click()
+  await page.getByTestId('add-model-button').click()
+
+  await expect(page.getByTestId('model-form-adapter-select')).toHaveCount(0)
+  await page.getByTestId('model-form-provider-select').selectOption('openai')
+  await expect(page.getByTestId('model-form-base-url-input')).toHaveValue('https://api.openai.com/v1')
+  await expect(page.getByTestId('model-form-api-key-env-input')).toHaveValue('OPENAI_API_KEY')
+  await expect(page.getByTestId('model-form-credential-hint')).toContainText('環境變數名稱')
+
+  await page.getByTestId('model-form-discover-button').click()
+  expect(previewPayload).toEqual({
+    adapter: 'openai-compatible-http',
+    base_url: 'https://api.openai.com/v1',
+    api_key_env: 'OPENAI_API_KEY',
+  })
+  await expect(page.getByTestId('model-form-discovered-model-select')).toHaveValue('gpt-5.4')
+  await page.getByTestId('model-form-discovered-model-select').selectOption('gpt-5.4-mini')
+
+  const modelId = `e2e-provider-openai-${Date.now()}`
+  await page.getByTestId('model-form-id-input').fill(modelId)
+  await page.getByTestId('model-form-save').click()
+  await expect(modelManagerRow(page, modelId)).toContainText('OpenAI · gpt-5.4-mini')
+
+  page.once('dialog', (dialog) => dialog.accept())
+  await page.getByTestId(`delete-model-button-${modelId}`).click()
+  await closeSettings(page)
+})
+
+test('model labels show Provider and exact model across model list and role selectors', async ({
+  page,
+}) => {
+  await page.goto('/')
+  await page.getByTestId('settings-button').click()
+  await expect(page.getByTestId('blue-model-select').locator('option[value="claude-api"]')).toHaveText(
+    'Anthropic · claude-sonnet-4-5',
+  )
+  await page.getByTestId('model-manager-tab').click()
+  await expect(modelManagerRow(page, 'qwen27')).toContainText(
+    'Custom OpenAI-compatible · bartowski/Qwen_Qwen3.6-27B-GGUF',
+  )
+  await expect(modelManagerRow(page, 'claude-subscription')).toContainText(
+    'Subscription CLI · 由 command 決定（claude-subscription）',
+  )
+  await closeSettings(page)
+
+  await page.getByTestId('new-case-button').click()
+  await page
+    .getByTestId('mode-select-card-red-blue')
+    .getByRole('button', { name: '選擇此模式' })
+    .click()
+  await expect(
+    page.getByTestId('new-case-blue-model-select').locator('option[value="gemini-api"]'),
+  ).toHaveText('Gemini · gemini-2.5-pro')
+  await page.getByTestId('new-case-close-button').click()
+})
+
+test('model discovery failure, empty results, and unsupported providers retain manual entry', async ({
+  page,
+}) => {
+  let discoveryAttempt = 0
+  await page.route('**/models/available-models', async (route) => {
+    if (route.request().method() !== 'POST') return route.continue()
+    discoveryAttempt += 1
+    if (discoveryAttempt === 1) {
+      return route.fulfill({
+        status: 502,
+        contentType: 'application/json',
+        body: JSON.stringify({ detail: 'Provider unavailable' }),
+      })
+    }
+    await route.fulfill({ json: { models: [] } })
+  })
+  await page.goto('/')
+  await page.getByTestId('settings-button').click()
+  await page.getByTestId('model-manager-tab').click()
+  await page.getByTestId('add-model-button').click()
+
+  await page.getByTestId('model-form-provider-select').selectOption('anthropic')
+  await expect(page.getByTestId('model-form-discovery-unsupported')).toContainText(
+    'Anthropic 暫不支援自動載入模型',
+  )
+  await expect(page.getByTestId('model-form-model-input')).toBeVisible()
+
+  await page.getByTestId('model-form-provider-select').selectOption('subscription-cli')
+  await expect(page.getByTestId('model-form-cli-discovery-unsupported')).toContainText(
+    '不支援自動載入模型；執行型號由 command 決定',
+  )
+
+  await page.getByTestId('model-form-provider-select').selectOption('custom-openai-compatible')
+  await page.getByTestId('model-form-base-url-input').fill('http://provider.example.test/v1')
+  await page.getByTestId('model-form-discover-button').click()
+  await expect(page.getByTestId('model-form-discovery-message')).toContainText('Provider unavailable')
+  await expect(page.getByTestId('model-form-model-input')).toBeVisible()
+
+  await page.getByTestId('model-form-provider-select').selectOption('openai')
+  await page.getByTestId('model-form-discover-button').click()
+  await expect(page.getByTestId('model-form-discovery-message')).toContainText('沒有回傳可用模型')
+  await expect(page.getByTestId('model-form-model-input')).toBeVisible()
+  await page.getByTestId('model-form-cancel').click()
+  await closeSettings(page)
+})
+
+test('editing an existing config refreshes discovery through its saved-config endpoint', async ({
+  page,
+}) => {
+  let existingDiscoveryRequests = 0
+  await page.route('**/models/qwen27/available-models', async (route) => {
+    existingDiscoveryRequests += 1
+    await route.fulfill({ json: { models: ['qwen/existing', 'qwen/new'] } })
+  })
+  await page.goto('/')
+  await page.getByTestId('settings-button').click()
+  await page.getByTestId('model-manager-tab').click()
+  await page.getByTestId('edit-model-button-qwen27').click()
+
+  await expect(page.getByTestId('model-form-provider-select')).toHaveValue('custom-openai-compatible')
+  await page.getByTestId('model-form-discover-button').click()
+  await expect.poll(() => existingDiscoveryRequests).toBe(1)
+  await expect(page.getByTestId('model-form-discovered-model-select')).toHaveValue('qwen/existing')
+  await page.getByTestId('model-form-cancel').click()
+  await closeSettings(page)
+})
+
+test('provider-guided edits preserve legacy extra body, pricing, and CLI command fields', async ({
+  page,
+}) => {
+  const modelsResponsePromise = page.waitForResponse(
+    (response) => response.request().method() === 'GET' && response.url().endsWith('/models'),
+  )
+  await page.goto('/')
+  const apiOrigin = new URL((await modelsResponsePromise).url()).origin
+  const modelId = `e2e-legacy-roundtrip-${Date.now()}`
+  const pricing = { currency: 'USD', input_per_1m_tokens: 1.25, output_per_1m_tokens: 5 }
+  expect((await page.request.post(`${apiOrigin}/models`, {
+    data: {
+      id: modelId,
+      adapter: 'openai-compatible-http',
+      base_url: 'http://legacy.example.test/v1',
+      model: 'legacy/exact-id',
+      api_key_env: 'LEGACY_API_KEY',
+      extra_body: { chat_template_kwargs: { enable_thinking: false } },
+      pricing,
+    },
+  })).ok()).toBeTruthy()
+  await page.reload()
+  await page.getByTestId('settings-button').click()
+  await page.getByTestId('model-manager-tab').click()
+
+  let httpUpdate: Record<string, unknown> | null = null
+  await page.route(`**/models/${modelId}`, async (route) => {
+    if (route.request().method() === 'PUT') {
+      httpUpdate = route.request().postDataJSON() as Record<string, unknown>
+    }
+    await route.continue()
+  })
+  await page.getByTestId(`edit-model-button-${modelId}`).click()
+  await expect(page.getByTestId('model-form-provider-select')).toHaveValue('custom-openai-compatible')
+  await page.getByTestId('model-form-save').click()
+  await expect(page.getByTestId('model-form')).not.toBeVisible()
+  expect(httpUpdate).toMatchObject({
+    extra_body: { chat_template_kwargs: { enable_thinking: false } },
+    pricing,
+  })
+
+  let cliUpdate: Record<string, unknown> | null = null
+  await page.route('**/models/codex-subscription', async (route) => {
+    if (route.request().method() === 'PUT') {
+      cliUpdate = route.request().postDataJSON() as Record<string, unknown>
+    }
+    await route.continue()
+  })
+  await page.getByTestId('edit-model-button-codex-subscription').click()
+  await expect(page.getByTestId('model-form-provider-select')).toHaveValue('subscription-cli')
+  await page.getByTestId('model-form-save').click()
+  expect(cliUpdate).toMatchObject({
+    command: ['codex', 'exec', '{prompt}'],
+    extra_body: { cli_provider: 'codex' },
+  })
+
+  page.once('dialog', (dialog) => dialog.accept())
+  await page.getByTestId(`delete-model-button-${modelId}`).click()
+  await closeSettings(page)
+})
+
 test('model manager form shows per-field validation errors and does not create the model', async ({
   page,
 }) => {
@@ -2074,7 +2271,7 @@ test('model manager form shows per-field validation errors and does not create t
 
   await page.getByTestId('add-model-button').click()
   await page.getByTestId('model-form-id-input').fill(modelId)
-  await page.getByTestId('model-form-adapter-select').selectOption('openai-compatible-http')
+  await page.getByTestId('model-form-provider-select').selectOption('custom-openai-compatible')
   // base_url/model left empty on purpose - validate_model_config_fields (backend) requires
   // both for the http-family adapters.
   await page.getByTestId('model-form-save').click()

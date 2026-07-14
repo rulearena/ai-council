@@ -12,25 +12,27 @@ import {
 } from '../composables/useCouncil'
 import RoleSilhouette from './RoleSilhouette.vue'
 import { resolveSceneSeats, type SceneConfig, type SeatRole, type SeatRosterEntry } from '../scenes'
+import { modelDisplayLabel } from '../providers'
 
 const props = defineProps<{ scene: SceneConfig }>()
 defineEmits<{ 'seat-click': [role: CouncilRole | 'Chairman'] }>()
 
 const store = inject(councilKey)!
-const { selectedMeeting, pendingRoles, roleSeatStatus, chairmanSpeaking, chairmanEvents, selectedModels } = store
+const { selectedMeeting, pendingRoles, roleSeatStatus, chairmanSpeaking, chairmanEvents, selectedModels, models } = store
 
-// Truncated so a long local-model id (e.g. a full HF repo path) never blows out the
-// nameplate's width - the full id always survives in the title attribute for hover.
-const MODEL_LABEL_MAX_CHARS = 14
-
-function modelLabelText(role: SeatRole): string {
+function fullModelLabel(role: SeatRole): string {
   const modelId = selectedModels.value[role]
   if (!modelId) return '未選模型'
-  return modelId.length > MODEL_LABEL_MAX_CHARS ? `${modelId.slice(0, MODEL_LABEL_MAX_CHARS - 1)}…` : modelId
+  const model = models.value.find((candidate) => candidate.id === modelId)
+  return model ? modelDisplayLabel(model) : modelId
+}
+
+function modelLabelText(role: SeatRole): string {
+  return fullModelLabel(role)
 }
 
 function modelLabelTitle(role: SeatRole): string {
-  return selectedModels.value[role] || '未選模型'
+  return fullModelLabel(role)
 }
 
 // Chairman first (a fixed seat, not a mode role) then every AI role in the active

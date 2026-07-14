@@ -148,6 +148,9 @@ export function modelConfigPayloadForProvider(
 
 export function modelDisplayLabel(model: ProviderModelProjection & { id: string }): string {
   const providerId = providerIdForModel(model)
+  if (providerId === 'subscription-cli' && trimNullable(model.model) === null) {
+    return `Subscription CLI · 由 command 決定（${model.id}）`
+  }
   const exactModelId = trimNullable(model.model) ?? model.id
   if (providerId === null) return exactModelId
   return `${getProvider(providerId).name} · ${exactModelId}`

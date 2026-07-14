@@ -171,7 +171,7 @@ test('model labels use provider and exact model id without exposing adapters', (
   )
   assert.equal(
     modelDisplayLabel({ id: 'claude-subscription', adapter: 'subscription-cli', base_url: null, model: null }),
-    'Subscription CLI · claude-subscription',
+    'Subscription CLI · 由 command 決定（claude-subscription）',
   )
   assert.equal(
     modelDisplayLabel({ id: 'mock-fast', adapter: 'mock', base_url: null, model: null }),

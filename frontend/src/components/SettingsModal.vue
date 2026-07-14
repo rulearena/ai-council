@@ -6,6 +6,7 @@ import RoleSilhouette from './RoleSilhouette.vue'
 import { useScenePreference } from '../scenes'
 import Modal from './Modal.vue'
 import ModelManagerPanel from './ModelManagerPanel.vue'
+import { modelDisplayLabel } from '../providers'
 
 const props = defineProps<{ show: boolean }>()
 defineEmits<{ close: [] }>()
@@ -105,7 +106,7 @@ watch(
             :disabled="loading"
             @change="updateSelectedModel(role, ($event.target as HTMLSelectElement).value)"
           >
-            <option v-for="model in models" :key="model.id" :value="model.id">{{ model.id }}</option>
+            <option v-for="model in models" :key="model.id" :value="model.id">{{ modelDisplayLabel(model) }}</option>
           </select>
           <button
             type="button"

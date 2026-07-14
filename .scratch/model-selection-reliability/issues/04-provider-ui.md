@@ -1,6 +1,6 @@
 # Provider 導引式模型管理 UI
 
-Status: ready-for-agent
+Status: implemented / awaiting review
 Blocked by: 02, 03
 
 ## Goal
@@ -24,3 +24,10 @@ Blocked by: 02, 03
 ## Acceptance
 
 - Targeted Chromium、frontend build、backend full、full Chromium 綠；真瀏覽器 smoke 完成。
+
+## Comments
+
+- 2026-07-14：Executor 完成 Provider-first Model Manager。Create 使用 preview discovery，edit 使用既有 saved-config discovery；成功可選 exact model ID，失敗、空清單、unsupported 皆保留 manual entry。Anthropic、Gemini、Subscription CLI 與 Mock 明示不支援自動 discovery；credential 欄位只接受環境變數名稱並顯示安全說明。
+- 2026-07-14：模型列表、Settings、New Case、stage 共用 Provider label；CLI 無 model 時顯示「由 command 決定（config id）」。Provider payload mapping 保留 legacy base URL、extra_body、pricing 與 CLI command round-trip。
+- 2026-07-14：TDD red 證據包括 adapter select 仍存在、CLI label 未誠實表達 command、CLI 缺少 unsupported discovery 提示、discovery failure detail 被泛化；均已轉綠。Frontend unit 5 passed、build 通過、backend discovery targeted 10 passed；targeted Chromium 通過。完整 Chromium 首輪 50 passed / 1 test-race timeout，加入等待前一個 save 完成後該情境 targeted 綠；乾淨 fixture 完整重跑 51 passed。
+- 2026-07-14：工具沒有 gpt-5.6-luna selector，Executor 使用 assigned runtime。
