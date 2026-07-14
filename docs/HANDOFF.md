@@ -17,8 +17,9 @@
 | Mode system slice D | `e7237c9` | parallel synthesis anonymization hook：per-mode `synthesis.anonymize_inputs` 啟用後，彙整 prompt 僅看匿名委員代稱與過濾後輸出（實作計畫：`docs/plans/2026-07-13-mode-system-slice-d.md`） |
 | Evidence to Verdict | `96cd1d9`–`c597e32` | 證物引用錨點、versioned per-role output schema、adjudicator rich structured verdict、parse-only auto retry 與新舊輸出呈現（實作計畫：`docs/plans/2026-07-13-evidence-to-verdict.md`） |
 | Configurable Case File Limits | `2c3f069`–`b51052a` | 案卷單份/總量限制環境變數化（預設 50,000/120,000）、公開實際限制、建立前字元/token/context 提示、超限阻擋與 413 detail 保留（實作計畫：`docs/plans/2026-07-13-configurable-case-file-limits.md`） |
+| LLM Attempt Diagnostics | `9d5adae`–`b5ff417` | 每場 meeting 保存成功、parse、timeout、adapter、interrupted attempts 的完整可取得診斷；Records Drawer 可安全查看／複製（實作計畫：`docs/plans/2026-07-14-llm-attempt-diagnostics.md`） |
 
-**驗收基線（任何改動後不得低於此）**：後端 `pytest` **249 passed**；前端 `npm run build` 綠；e2e **37 passed**。
+**驗收基線（任何改動後不得低於此）**：後端 `pytest` **262 passed**；前端 `npm run build` 綠；e2e **39 passed**。
 
 ## 2. Agent 開發佇列與目前核准批次
 
@@ -26,7 +27,7 @@ Evidence to Verdict 批次已實作並等待 Human Owner acceptance。
 
 Backlog 81「案卷容量限制設定化與建立前提示」已實作並通過雙軸 review 與完整驗收，等待 Human Owner acceptance。預設單份/總量為 50,000/120,000 字元，環境變數可覆寫；前端僅在取得後端實際限制後允許建立，並顯示 token/context 風險、inline 錯誤與後端 413 detail。執行計畫：`docs/plans/2026-07-13-configurable-case-file-limits.md`；ticket：`.scratch/configurable-case-file-limits/`。
 
-Human Owner 於 2026-07-14 核准 backlog 82「每場會議的 LLM attempt 診斷紀錄與檢視器」：補齊失敗 attempt 的 raw output、模型、prompt、時間、錯誤分類與安全的 adapter output excerpt，並在 Records Drawer 提供預設摺疊的查看／複製功能；不改 retry 或 timeout 政策。執行計畫：`docs/plans/2026-07-14-llm-attempt-diagnostics.md`；ticket：`.scratch/llm-attempt-diagnostics/`。
+Backlog 82「每場會議的 LLM attempt 診斷紀錄與檢視器」已實作並通過雙軸 review 與完整驗收，等待 Human Owner acceptance。失敗 attempt 現在保留 raw/parsed output、模型、prompt、時間、token、錯誤分類與安全的 adapter excerpts；Records Drawer 可查看／複製。取消中的 in-flight attempt 會留下 `interrupted/result_discarded` 診斷，但不進 transcript，且不會在 terminal 後啟動 retry 或 synthesis。執行計畫：`docs/plans/2026-07-14-llm-attempt-diagnostics.md`；ticket：`.scratch/llm-attempt-diagnostics/`。
 
 已完成的 Evidence to Verdict 範圍：
 
@@ -78,4 +79,5 @@ Human Owner 於 2026-07-14 核准 backlog 82「每場會議的 LLM attempt 診�
 - Mode system slice A–D、§17、Backlog 75–78 均已完成並驗證。
 - Evidence to Verdict 批次（backlog 80、63–65）已實作、雙軸 review 與完整驗收通過，等待 Human Owner acceptance。
 - Backlog 81 已實作、雙軸 review 與完整驗收通過，等待 Human Owner acceptance。
+- Backlog 82 已實作、雙軸 review 與完整驗收通過，等待 Human Owner acceptance。
 - 使用者已裁定：個人版不做多人/帳號（backlog 有註記）；案卷 Phase 2/RAG 仍延後到 backlog 79。

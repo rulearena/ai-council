@@ -1,6 +1,6 @@
 # 每場會議的 LLM attempt 診斷紀錄與檢視器
 
-Status: ready-for-agent
+Status: implemented / awaiting acceptance
 Blocked by: none
 
 ## Goal
@@ -28,3 +28,5 @@ Blocked by: none
 - 回報 commits、red/green 證據、完整 gates、未驗證範圍與模型 runtime。
 
 ## Comments
+
+- 2026-07-14：完成於 `9d5adae`–`b5ff417`。Parse/timeout/adapter/interrupted 診斷、safe excerpts、Records 查看／複製與 terminal race regressions 均完成；雙軸 review pass。最終 gates：backend 262 passed、build 綠、Chromium 39 passed。
