@@ -6,6 +6,7 @@ import sys
 import threading
 import time
 import urllib.error
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import pytest
@@ -1054,7 +1055,7 @@ def test_app_startup_marks_leftover_execution_state_failed(tmp_path: Path) -> No
     assert not execution_state_path.exists()
 
 
-def test_start_rejects_missing_fixed_flow_model_assignments(tmp_path: Path) -> None:
+def test_start_ignores_incomplete_legacy_request_model_assignments(tmp_path: Path) -> None:
     app = create_test_app(tmp_path)
     client = TestClient(app)
     meeting_id = client.post("/meetings", json={"topic": "缺少角色"}).json()["meeting_id"]
@@ -1064,9 +1065,9 @@ def test_start_rejects_missing_fixed_flow_model_assignments(tmp_path: Path) -> N
         json={"models": {"Blue": "mock-fast", "Red": "mock-fast"}},
     )
 
-    assert response.status_code == 400
-    assert response.json()["detail"] == "Missing model assignments: Judge"
-    assert client.get(f"/meetings/{meeting_id}").json()["activity_status"] == "idle"
+    assert response.status_code == 202
+    meeting = wait_for_activity(client, meeting_id, "completed")
+    assert {event["model_config_id"] for event in meeting["events"]} == {"mock-fast"}
 
 
 def test_list_meetings_filters_by_transcript_content(tmp_path: Path) -> None:
@@ -1627,6 +1628,61 @@ def test_chair_can_request_role_sequence_response(tmp_path: Path) -> None:
     assert "## Judge - sequence-1-judge-response" in transcript
 
 
+def test_directed_and_sequence_responses_use_persisted_assignments(
+    tmp_path: Path,
+) -> None:
+    client = TestClient(
+        create_test_app(
+            tmp_path,
+            models_yaml="""
+models:
+  - id: persisted-model
+    adapter: mock
+  - id: request-model
+    adapter: mock
+""".strip(),
+        )
+    )
+
+    def create_meeting(topic: str) -> str:
+        return client.post(
+            "/meetings",
+            json={
+                "topic": topic,
+                "participants": [
+                    {"role_id": role, "model_config_id": "persisted-model"}
+                    for role in ["Blue", "Red", "Judge"]
+                ],
+            },
+        ).json()["meeting_id"]
+
+    directed_id = create_meeting("Directed assignment")
+    directed = client.post(
+        f"/meetings/{directed_id}/roles/Blue/respond",
+        json={"models": {"Blue": "request-model"}},
+    )
+    sequence_id = create_meeting("Sequence assignment")
+    sequence = client.post(
+        f"/meetings/{sequence_id}/sequences",
+        json={
+            "roles": ["Red", "Blue", "Judge"],
+            "models": {
+                "Blue": "request-model",
+                "Red": "request-model",
+                "Judge": "request-model",
+            },
+        },
+    )
+
+    assert directed.status_code == 200
+    assert sequence.status_code == 200
+    assert client.get(f"/meetings/{directed_id}").json()["events"][-1]["model_config_id"] == "persisted-model"
+    assert {
+        event["model_config_id"]
+        for event in client.get(f"/meetings/{sequence_id}").json()["events"]
+    } == {"persisted-model"}
+
+
 def test_chair_role_sequence_rejects_unknown_role(tmp_path: Path) -> None:
     app = create_test_app(tmp_path)
     client = TestClient(app)
@@ -1661,7 +1717,7 @@ def test_chair_role_sequence_rejects_duplicate_roles(tmp_path: Path) -> None:
     assert response.json()["detail"] == "Role sequence cannot contain duplicate roles"
 
 
-def test_chair_role_response_requires_model_for_requested_role(tmp_path: Path) -> None:
+def test_chair_role_response_ignores_incomplete_legacy_request_models(tmp_path: Path) -> None:
     app = create_test_app(tmp_path)
     client = TestClient(app)
     meeting_id = client.post("/meetings", json={"topic": "互動會議"}).json()["meeting_id"]
@@ -1671,8 +1727,10 @@ def test_chair_role_response_requires_model_for_requested_role(tmp_path: Path) -
         json={"models": {"Red": "mock-fast", "Judge": "mock-fast"}},
     )
 
-    assert response.status_code == 400
-    assert response.json()["detail"] == "Missing model assignment for role: Blue"
+    assert response.status_code == 200
+    event = client.get(f"/meetings/{meeting_id}").json()["events"][-1]
+    assert event["role"] == "Blue"
+    assert event["model_config_id"] == "mock-fast"
 
 
 def test_retry_step_returns_bad_request_when_step_is_not_failed(tmp_path: Path) -> None:
@@ -1735,37 +1793,53 @@ def test_create_meeting_defaults_to_red_blue(tmp_path: Path) -> None:
     assert response.status_code == 200
     created = response.json()
     assert created["mode_id"] == "red-blue"
-    assert created["participants"] == [
-        {
-            "role_id": "Blue",
-            "name": "藍軍",
-            "color": "#4d8dff",
-            "kind": "member",
-            "portrait": "blue",
-            "model_config_id": None,
-            "display_name": "藍軍",
-            "instance_prompt": None,
-        },
-        {
-            "role_id": "Red",
-            "name": "紅軍",
-            "color": "#ff6b5e",
-            "kind": "member",
-            "portrait": "red",
-            "model_config_id": None,
-            "display_name": "紅軍",
-            "instance_prompt": None,
-        },
-        {
-            "role_id": "Judge",
-            "name": "裁判",
-            "color": "#e8b44c",
-            "kind": "adjudicator",
-            "portrait": "judge",
-            "model_config_id": None,
-            "display_name": "裁判",
-            "instance_prompt": None,
-        },
+    assert [
+        (item["role_id"], item["model_config_id"], item["model_assignment_source"])
+        for item in created["participants"]
+    ] == [
+        ("Blue", "mock-fast", "metadata"),
+        ("Red", "mock-fast", "metadata"),
+        ("Judge", "mock-fast", "metadata"),
+    ]
+    metadata = json.loads(
+        (
+            tmp_path
+            / "data"
+            / "meetings"
+            / created["meeting_id"]
+            / "metadata.json"
+        ).read_text(encoding="utf-8")
+    )
+    assert metadata["participants"] == [
+        {"role_id": "Blue", "model_config_id": "mock-fast"},
+        {"role_id": "Red", "model_config_id": "mock-fast"},
+        {"role_id": "Judge", "model_config_id": "mock-fast"},
+    ]
+
+
+def test_create_parallel_without_participants_materializes_default_model_roster(
+    tmp_path: Path,
+) -> None:
+    client = TestClient(create_test_app(tmp_path))
+
+    created = client.post(
+        "/meetings",
+        json={"topic": "Default brainstorm", "mode_id": "brainstorm"},
+    ).json()
+
+    metadata = json.loads(
+        (
+            tmp_path
+            / "data"
+            / "meetings"
+            / created["meeting_id"]
+            / "metadata.json"
+        ).read_text(encoding="utf-8")
+    )
+    assert metadata["participants"] == [
+        {"role_id": "Member-1", "model_config_id": "mock-fast"},
+        {"role_id": "Member-2", "model_config_id": "mock-fast"},
+        {"role_id": "Moderator", "model_config_id": "mock-fast"},
     ]
 
 
@@ -2141,13 +2215,178 @@ def test_create_meeting_stores_participant_models(tmp_path: Path) -> None:
         json={
             "topic": "T",
             "mode_id": "courtroom",
-            "participants": [{"role_id": "Prosecutor", "model_config_id": "mock-fast"}],
+            "participants": [
+                {"role_id": "Prosecutor", "model_config_id": "mock-fast"},
+                {"role_id": "Defense", "model_config_id": "mock-fast"},
+                {"role_id": "Judge", "model_config_id": "mock-fast"},
+            ],
         },
     ).json()
 
     fetched = client.get(f"/meetings/{created['meeting_id']}").json()
     prosecutor = next(p for p in fetched["participants"] if p["role_id"] == "Prosecutor")
     assert prosecutor["model_config_id"] == "mock-fast"
+
+
+def test_create_relay_meeting_requires_and_persists_complete_model_roster(
+    tmp_path: Path,
+) -> None:
+    client = TestClient(create_test_app(tmp_path))
+
+    incomplete = client.post(
+        "/meetings",
+        json={
+            "topic": "Incomplete assignment",
+            "participants": [
+                {"role_id": "Blue", "model_config_id": "mock-fast"},
+                {"role_id": "Red", "model_config_id": "mock-fast"},
+            ],
+        },
+    )
+
+    assert incomplete.status_code == 400
+    assert incomplete.json()["detail"] == "Missing participant roles: Judge"
+
+    created = client.post(
+        "/meetings",
+        json={
+            "topic": "Complete assignment",
+            "participants": [
+                {"role_id": "Blue", "model_config_id": "mock-fast"},
+                {"role_id": "Red", "model_config_id": "mock-fast"},
+                {"role_id": "Judge", "model_config_id": "mock-fast"},
+            ],
+        },
+    )
+
+    assert created.status_code == 200
+    assert [
+        (participant["role_id"], participant["model_config_id"], participant["model_assignment_source"])
+        for participant in created.json()["participants"]
+    ] == [
+        ("Blue", "mock-fast", "metadata"),
+        ("Red", "mock-fast", "metadata"),
+        ("Judge", "mock-fast", "metadata"),
+    ]
+
+
+def test_replace_participant_models_requires_complete_roster_and_preserves_metadata(
+    tmp_path: Path,
+) -> None:
+    client = TestClient(
+        create_test_app(
+            tmp_path,
+            models_yaml="""
+models:
+  - id: mock-fast
+    adapter: mock
+  - id: mock-careful
+    adapter: mock
+""".strip(),
+        )
+    )
+    created = client.post(
+        "/meetings",
+        json={
+            "topic": "Persistent roster",
+            "participants": [
+                {
+                    "role_id": "Blue",
+                    "model_config_id": "mock-fast",
+                    "display_name": "Proposal owner",
+                    "instance_prompt": "Protect the budget",
+                },
+                {"role_id": "Red", "model_config_id": "mock-fast"},
+                {"role_id": "Judge", "model_config_id": "mock-fast"},
+            ],
+        },
+    ).json()
+    meeting_id = created["meeting_id"]
+
+    incomplete = client.put(
+        f"/meetings/{meeting_id}/participant-models",
+        json={"models": {"Blue": "mock-careful", "Red": "mock-fast"}},
+    )
+
+    assert incomplete.status_code == 400
+    assert incomplete.json()["detail"] == "Participant model roster mismatch; missing roles: Judge"
+
+    unknown = client.put(
+        f"/meetings/{meeting_id}/participant-models",
+        json={
+            "models": {
+                "Blue": "missing-model",
+                "Red": "mock-fast",
+                "Judge": "mock-fast",
+            }
+        },
+    )
+
+    assert unknown.status_code == 404
+    assert unknown.json()["detail"] == "Unknown model: missing-model"
+
+    updated = client.put(
+        f"/meetings/{meeting_id}/participant-models",
+        json={
+            "models": {
+                "Blue": "mock-careful",
+                "Red": "mock-fast",
+                "Judge": "mock-careful",
+            }
+        },
+    )
+
+    assert updated.status_code == 200
+    participants = {item["role_id"]: item for item in updated.json()["participants"]}
+    assert participants["Blue"]["model_config_id"] == "mock-careful"
+    assert participants["Blue"]["display_name"] == "Proposal owner"
+    assert participants["Blue"]["instance_prompt"] == "Protect the budget"
+    assert participants["Judge"]["model_config_id"] == "mock-careful"
+    assert all(item["model_assignment_source"] == "metadata" for item in participants.values())
+
+
+def test_concurrent_metadata_updates_do_not_clobber_assignment_tags_or_pinned(
+    tmp_path: Path,
+) -> None:
+    client = TestClient(create_test_app(tmp_path))
+    meeting_id = client.post("/meetings", json={"topic": "Concurrent metadata"}).json()[
+        "meeting_id"
+    ]
+
+    def update_models() -> None:
+        response = client.put(
+            f"/meetings/{meeting_id}/participant-models",
+            json={
+                "models": {
+                    "Blue": "mock-fast",
+                    "Red": "mock-fast",
+                    "Judge": "mock-fast",
+                }
+            },
+        )
+        assert response.status_code == 200
+
+    def update_tags() -> None:
+        assert client.put(
+            f"/meetings/{meeting_id}/tags",
+            json={"tags": ["concurrent"]},
+        ).status_code == 200
+
+    def update_pinned() -> None:
+        assert client.put(
+            f"/meetings/{meeting_id}/pinned",
+            json={"pinned": True},
+        ).status_code == 200
+
+    with ThreadPoolExecutor(max_workers=3) as executor:
+        futures = [executor.submit(operation) for operation in (update_models, update_tags, update_pinned)]
+        for future in futures:
+            future.result()
+
+    fetched = client.get(f"/meetings/{meeting_id}").json()
+    assert fetched["tags"] == ["concurrent"]
+    assert fetched["pinned"] is True
+    assert {item["model_config_id"] for item in fetched["participants"]} == {"mock-fast"}
 
 
 def test_create_meeting_rejects_unknown_participant_model(tmp_path: Path) -> None:
@@ -2190,6 +2429,98 @@ def test_legacy_meeting_projects_red_blue_participants(tmp_path: Path) -> None:
 
     assert fetched["mode_id"] == "red-blue"
     assert [p["role_id"] for p in fetched["participants"]] == ["Blue", "Red", "Judge"]
+
+
+def test_legacy_assignment_recovery_and_deleted_model_fallback_are_read_only(
+    tmp_path: Path,
+) -> None:
+    client = TestClient(
+        create_test_app(
+            tmp_path,
+            models_yaml="""
+models:
+  - id: mock-default
+    adapter: mock
+  - id: mock-event
+    adapter: mock
+""".strip(),
+        )
+    )
+    meeting_id = "meeting-legacy-assignment"
+    meeting_dir = tmp_path / "data" / "meetings" / meeting_id
+    meeting_dir.mkdir(parents=True)
+    metadata_path = meeting_dir / "metadata.json"
+    metadata_path.write_text(
+        json.dumps(
+            {
+                "meeting_id": meeting_id,
+                "topic": "Legacy assignments",
+                "created_at": "2026-01-01T00:00:00+00:00",
+                "participants": [
+                    {"role_id": "Blue"},
+                    {"role_id": "Red"},
+                    {"role_id": "Judge", "model_config_id": "deleted-model"},
+                ],
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    events = [
+        {
+            "event_id": "blue-old",
+            "meeting_id": meeting_id,
+            "step_id": "blue-propose",
+            "role": "Blue",
+            "status": "completed",
+            "model_config_id": "mock-default",
+        },
+        {
+            "event_id": "judge-event",
+            "meeting_id": meeting_id,
+            "step_id": "judge-decide",
+            "role": "Judge",
+            "status": "completed",
+            "model_config_id": "mock-event",
+        },
+        {
+            "event_id": "blue-latest",
+            "meeting_id": meeting_id,
+            "step_id": "blue-revise",
+            "role": "Blue",
+            "status": "completed",
+            "model_config_id": "mock-event",
+        },
+    ]
+    events_path = meeting_dir / "events.jsonl"
+    events_path.write_text(
+        "".join(json.dumps(event) + "\n" for event in events),
+        encoding="utf-8",
+    )
+    metadata_before = metadata_path.read_bytes()
+    events_before = events_path.read_bytes()
+
+    fetched = client.get(f"/meetings/{meeting_id}")
+    listed = client.get("/meetings")
+
+    assert fetched.status_code == 200
+    assert listed.status_code == 200
+    participants = {item["role_id"]: item for item in fetched.json()["participants"]}
+    assert (participants["Blue"]["model_config_id"], participants["Blue"]["model_assignment_source"]) == (
+        "mock-event",
+        "latest-event",
+    )
+    assert (participants["Red"]["model_config_id"], participants["Red"]["model_assignment_source"]) == (
+        "mock-default",
+        "default",
+    )
+    assert (participants["Judge"]["model_config_id"], participants["Judge"]["model_assignment_source"]) == (
+        "mock-default",
+        "default",
+    )
+    assert "deleted-model" in participants["Judge"]["model_assignment_warning"]
+    assert metadata_path.read_bytes() == metadata_before
+    assert events_path.read_bytes() == events_before
 
 
 def test_meeting_list_tolerates_removed_mode_id_metadata(tmp_path: Path) -> None:
@@ -2256,7 +2587,89 @@ def test_start_courtroom_meeting_runs_courtroom_steps(tmp_path: Path) -> None:
     assert verdict["parsed_output"]["decision"] == "approve-with-conditions"
 
 
-def test_start_rejects_missing_roles_for_mode(tmp_path: Path) -> None:
+def test_start_uses_persisted_assignment_and_ignores_legacy_request_models(
+    tmp_path: Path,
+) -> None:
+    client = TestClient(
+        create_test_app(
+            tmp_path,
+            models_yaml="""
+models:
+  - id: persisted-model
+    adapter: mock
+  - id: request-model
+    adapter: mock
+""".strip(),
+        )
+    )
+    meeting_id = client.post(
+        "/meetings",
+        json={
+            "topic": "Authoritative assignment",
+            "participants": [
+                {"role_id": role, "model_config_id": "persisted-model"}
+                for role in ["Blue", "Red", "Judge"]
+            ],
+        },
+    ).json()["meeting_id"]
+
+    response = client.post(
+        f"/meetings/{meeting_id}/start",
+        json={
+            "models": {
+                "Blue": "request-model",
+                "Red": "request-model",
+                "Judge": "request-model",
+            }
+        },
+    )
+
+    assert response.status_code == 202
+    meeting = wait_for_activity(client, meeting_id, "completed")
+    assert {
+        event["model_config_id"]
+        for event in meeting["events"]
+        if event["status"] == "completed"
+    } == {"persisted-model"}
+
+
+def test_start_uses_default_fallback_after_persisted_model_is_deleted(
+    tmp_path: Path,
+) -> None:
+    client = TestClient(
+        create_test_app(
+            tmp_path,
+            models_yaml="""
+models:
+  - id: fallback-model
+    adapter: mock
+  - id: deleted-model
+    adapter: mock
+""".strip(),
+        )
+    )
+    meeting_id = client.post(
+        "/meetings",
+        json={
+            "topic": "Deleted assignment",
+            "participants": [
+                {"role_id": role, "model_config_id": "deleted-model"}
+                for role in ["Blue", "Red", "Judge"]
+            ],
+        },
+    ).json()["meeting_id"]
+    assert client.delete("/models/deleted-model").status_code == 200
+
+    projected = client.get(f"/meetings/{meeting_id}").json()
+    response = client.post(f"/meetings/{meeting_id}/start", json={})
+
+    assert {item["model_assignment_source"] for item in projected["participants"]} == {"default"}
+    assert response.status_code == 202
+    meeting = wait_for_activity(client, meeting_id, "completed")
+    assert {event["model_config_id"] for event in meeting["events"]} == {"fallback-model"}
+
+
+def test_courtroom_start_ignores_incomplete_legacy_request_models(tmp_path: Path) -> None:
     app = create_test_app(tmp_path)
     client = TestClient(app)
     meeting_id = client.post(
@@ -2269,8 +2682,9 @@ def test_start_rejects_missing_roles_for_mode(tmp_path: Path) -> None:
         json={"models": {"Judge": "mock-fast"}},
     )
 
-    assert response.status_code == 400
-    assert response.json()["detail"] == "Missing model assignments: Defense, Prosecutor"
+    assert response.status_code == 202
+    meeting = wait_for_activity(client, meeting_id, "completed")
+    assert {event["model_config_id"] for event in meeting["events"]} == {"mock-fast"}
 
 
 def test_debate_inputs_reach_prompts(tmp_path: Path) -> None:
@@ -2509,6 +2923,8 @@ models:
     adapter: mock
   - id: mock-moderator
     adapter: mock
+  - id: request-model
+    adapter: mock
 """.strip(),
     )
     client = TestClient(app)
@@ -2533,13 +2949,13 @@ models:
             ],
         },
     ).json()["meeting_id"]
-    models = {
-        "Member-1": "mock-member-1",
-        "Member-2": "mock-member-2",
-        "Moderator": "mock-moderator",
+    request_models = {
+        "Member-1": "request-model",
+        "Member-2": "request-model",
+        "Moderator": "request-model",
     }
 
-    client.post(f"/meetings/{meeting_id}/start", json={"models": models})
+    client.post(f"/meetings/{meeting_id}/start", json={"models": request_models})
     meeting = wait_for_activity(client, meeting_id, "waiting")
     assert [event["step_id"] for event in meeting["events"]] == [
         "fanout-1-member-1",
@@ -2550,7 +2966,7 @@ models:
     failing_model_ids.clear()
     retry = client.post(
         f"/meetings/{meeting_id}/steps/fanout-1-member-2/retry",
-        json={"models": models},
+        json={"models": request_models},
     )
     assert retry.status_code == 200
     meeting = wait_for_activity(client, meeting_id, "completed")
@@ -2560,6 +2976,8 @@ models:
         "fanout-1-member-2",
         "synthesis-1",
     ]
+    assert meeting["events"][-2]["model_config_id"] == "mock-member-2"
+    assert meeting["events"][-1]["model_config_id"] == "mock-moderator"
 
 
 def test_respond_as_role_accepts_mode_roles(tmp_path: Path) -> None:
