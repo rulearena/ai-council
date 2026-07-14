@@ -6,6 +6,8 @@ from dataclasses import asdict, dataclass, is_dataclass
 from typing import Any, Protocol
 
 from ai_council.prompting.parser import (
+    CourtroomIssueDraftParser,
+    CourtroomRulingParser,
     OutputParseError,
     RoleOutputParser,
     StructuredVerdictParser,
@@ -13,6 +15,8 @@ from ai_council.prompting.parser import (
 
 DEFAULT_OUTPUT_SCHEMA_ID = "role-output/v1"
 STRUCTURED_VERDICT_V1_ID = "structured-verdict/v1"
+COURTROOM_ISSUE_DRAFT_V1_ID = "courtroom-issue-draft/v1"
+COURTROOM_RULING_V1_ID = "courtroom-ruling/v1"
 ROLE_OUTPUT_V1_SCHEMA = (
     '{"summary":"string","arguments":[{"title":"string","detail":"string"}],'
     '"risks":[{"title":"string","detail":"string"}],"recommendation":"string"}'
@@ -22,6 +26,12 @@ STRUCTURED_VERDICT_V1_SCHEMA = (
     'insufficient-evidence","findings":[{"title":"string","detail":"string",'
     '"evidence_refs":["[證物一]"]}],"risks":[{"title":"string","detail":"string",'
     '"evidence_refs":["[證物一]"]}],"recommendation":"string","conditions":["string"],'
+    '"unresolved_questions":["string"]}'
+)
+COURTROOM_ISSUE_DRAFT_V1_SCHEMA = '{"issues":[{"title":"string"}]}'
+COURTROOM_RULING_V1_SCHEMA = (
+    '{"outcome":"proponent-wins | respondent-wins | partially-upheld | '
+    'insufficient-evidence","reasoning":"string","evidence_refs":["[證物一]"],'
     '"unresolved_questions":["string"]}'
 )
 
@@ -87,6 +97,16 @@ DEFAULT_OUTPUT_SCHEMA_REGISTRY = OutputSchemaRegistry(
             id=STRUCTURED_VERDICT_V1_ID,
             schema=STRUCTURED_VERDICT_V1_SCHEMA,
             parser=StructuredVerdictParser(),
+        ),
+        OutputSchemaCodec(
+            id=COURTROOM_ISSUE_DRAFT_V1_ID,
+            schema=COURTROOM_ISSUE_DRAFT_V1_SCHEMA,
+            parser=CourtroomIssueDraftParser(),
+        ),
+        OutputSchemaCodec(
+            id=COURTROOM_RULING_V1_ID,
+            schema=COURTROOM_RULING_V1_SCHEMA,
+            parser=CourtroomRulingParser(),
         ),
     ]
 )

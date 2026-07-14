@@ -3433,7 +3433,7 @@ def test_meeting_list_tolerates_removed_mode_id_metadata(tmp_path: Path) -> None
     assert [p["role_id"] for p in meeting["participants"]] == ["Blue", "Red", "Judge"]
 
 
-def test_start_courtroom_meeting_runs_courtroom_steps(tmp_path: Path) -> None:
+def test_generic_start_cannot_bypass_courtroom_issue_workflow(tmp_path: Path) -> None:
     app = create_test_app(tmp_path)
     client = TestClient(app)
     meeting_id = client.post(
@@ -3452,20 +3452,8 @@ def test_start_courtroom_meeting_runs_courtroom_steps(tmp_path: Path) -> None:
         },
     )
 
-    assert response.status_code == 202
-    meeting = wait_for_activity(client, meeting_id, "completed")
-    completed_steps = [
-        event["step_id"] for event in meeting["events"] if event["status"] == "completed"
-    ]
-    assert completed_steps == [
-        "courtroom-charge",
-        "courtroom-defense",
-        "courtroom-rebuttal",
-        "courtroom-verdict",
-    ]
-    verdict = meeting["events"][-1]
-    assert verdict["output_schema_id"] == "structured-verdict/v1"
-    assert verdict["parsed_output"]["decision"] == "approve-with-conditions"
+    assert response.status_code == 409
+    assert client.get(f"/meetings/{meeting_id}").json()["events"] == []
 
 
 def test_start_uses_persisted_assignment_and_ignores_legacy_request_models(
@@ -3552,7 +3540,7 @@ models:
     assert {event["model_config_id"] for event in meeting["events"]} == {"fallback-model"}
 
 
-def test_courtroom_start_ignores_incomplete_legacy_request_models(tmp_path: Path) -> None:
+def test_courtroom_start_request_models_cannot_bypass_issue_workflow(tmp_path: Path) -> None:
     app = create_test_app(tmp_path)
     client = TestClient(app)
     meeting_id = client.post(
@@ -3565,9 +3553,8 @@ def test_courtroom_start_ignores_incomplete_legacy_request_models(tmp_path: Path
         json={"models": {"Judge": "mock-fast"}},
     )
 
-    assert response.status_code == 202
-    meeting = wait_for_activity(client, meeting_id, "completed")
-    assert {event["model_config_id"] for event in meeting["events"]} == {"mock-fast"}
+    assert response.status_code == 409
+    assert client.get(f"/meetings/{meeting_id}").json()["events"] == []
 
 
 def test_debate_inputs_reach_prompts(tmp_path: Path) -> None:
@@ -3627,17 +3614,8 @@ def test_case_files_reach_only_visible_role_prompts(tmp_path: Path) -> None:
         },
     ).json()["meeting_id"]
 
-    client.post(
-        f"/meetings/{meeting_id}/start",
-        json={
-            "models": {
-                "Prosecutor": "mock-fast",
-                "Defense": "mock-fast",
-                "Judge": "mock-fast",
-            }
-        },
-    )
-    meeting = wait_for_activity(client, meeting_id, "completed")
+    run_single_courtroom_issue(client, meeting_id, "事故責任")
+    meeting = client.get(f"/meetings/{meeting_id}").json()
 
     prompts_by_role = {
         event["role"]: event["prompt_messages"][0]["content"]
@@ -3682,17 +3660,8 @@ def test_roles_without_visible_case_files_receive_citation_rules_without_evidenc
         },
     ).json()["meeting_id"]
 
-    client.post(
-        f"/meetings/{meeting_id}/start",
-        json={
-            "models": {
-                "Prosecutor": "mock-fast",
-                "Defense": "mock-fast",
-                "Judge": "mock-fast",
-            }
-        },
-    )
-    meeting = wait_for_activity(client, meeting_id, "completed")
+    run_single_courtroom_issue(client, meeting_id, "密件主張")
+    meeting = client.get(f"/meetings/{meeting_id}").json()
 
     prosecutor_prompt = next(
         event["prompt_messages"][0]["content"]
@@ -3935,6 +3904,12 @@ RELAY_PROMPT_TEMPLATES = [
     "courtroom_defense",
     "courtroom_rebuttal",
     "courtroom_verdict",
+    "courtroom_issue_draft",
+    "courtroom_issue_charge",
+    "courtroom_issue_defense",
+    "courtroom_issue_rebuttal",
+    "courtroom_issue_ruling",
+    "courtroom_final_verdict",
     "debate_statement_pro",
     "debate_statement_con",
     "debate_cross_pro",
@@ -3991,6 +3966,10 @@ models:
             content += " {{ fanout_outputs }}"
         if template == "directed_role_response":
             content += " {{ role_display_name }} {{ instruction }}"
+        if template.startswith("courtroom_issue_"):
+            content += " {{ current_issue }}"
+        if template == "courtroom_final_verdict":
+            content += " {{ issue_rulings }}"
         (prompt_dir / f"{template}.md").write_text(content, encoding="utf-8")
     return create_app(
         data_dir=tmp_path / "data",
@@ -4028,6 +4007,42 @@ def wait_for_activity(
             return meeting
         time.sleep(0.01)
     raise AssertionError(f"Meeting did not reach activity status: {expected_status}")
+
+
+def run_single_courtroom_issue(
+    client: TestClient,
+    meeting_id: str,
+    title: str,
+) -> None:
+    assert client.put(
+        f"/meetings/{meeting_id}/courtroom/issues",
+        json={"revision": 0, "issues": [{"title": title}]},
+    ).status_code == 200
+    assert client.post(
+        f"/meetings/{meeting_id}/courtroom/issues/confirm",
+        json={"revision": 1},
+    ).status_code == 200
+    assert client.post(
+        f"/meetings/{meeting_id}/courtroom/issues/issue-1/arguments"
+    ).status_code == 202
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline:
+        meeting = client.get(f"/meetings/{meeting_id}").json()
+        if meeting["courtroom"]["issues"][0]["status"] == "awaiting-ruling":
+            break
+        time.sleep(0.01)
+    else:
+        raise AssertionError("Courtroom issue arguments did not complete")
+    assert client.post(
+        f"/meetings/{meeting_id}/courtroom/issues/issue-1/ruling"
+    ).status_code == 202
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline:
+        meeting = client.get(f"/meetings/{meeting_id}").json()
+        if meeting["courtroom"]["issues"][0]["status"] == "ruled":
+            return
+        time.sleep(0.01)
+    raise AssertionError("Courtroom issue ruling did not complete")
 
 
 def wait_for_model_status(

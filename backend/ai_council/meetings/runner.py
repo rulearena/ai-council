@@ -102,6 +102,36 @@ class MeetingRunner:
         self.output_schemas = output_schemas or DEFAULT_OUTPUT_SCHEMA_REGISTRY
         self.transcript_projector = TranscriptProjector()
 
+    def run_workflow_step(
+        self,
+        *,
+        meeting_id: str,
+        goal: str,
+        model_assignments: dict[str, ModelConfig],
+        step: StepDefinition,
+        event_step_id: str,
+        inputs: dict[str, Any] | None = None,
+        extra_event_fields: dict[str, object] | None = None,
+        attempt: int = 1,
+    ) -> bool:
+        """Run one explicitly identified domain-workflow step.
+
+        The caller owns transition legality; the runner owns prompt, attempt,
+        diagnostics, execution reservation, parsing, and append-only output.
+        """
+        return self._run_step(
+            meeting_id=meeting_id,
+            goal=goal,
+            model_assignments=model_assignments,
+            inputs=inputs,
+            step=step,
+            attempt=attempt,
+            round_number=1,
+            event_step_id=event_step_id,
+            extra_event_fields=extra_event_fields,
+            prior_transcript_override=None,
+        )
+
     def start(
         self,
         *,

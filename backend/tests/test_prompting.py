@@ -25,6 +25,34 @@ STRUCTURED_VERDICT_LITERAL = (
 )
 
 
+def test_courtroom_output_schemas_parse_drafts_and_issue_rulings() -> None:
+    draft = DEFAULT_OUTPUT_SCHEMA_REGISTRY.get("courtroom-issue-draft/v1")
+    ruling = DEFAULT_OUTPUT_SCHEMA_REGISTRY.get("courtroom-ruling/v1")
+
+    assert draft.parse('{"issues":[{"title":"是否具有占有權源"}]}') == {
+        "issues": [{"title": "是否具有占有權源"}]
+    }
+    assert ruling.parse(
+        '{"outcome":"respondent-wins","reasoning":"檢方舉證不足",'
+        '"evidence_refs":["[證物一]"],"unresolved_questions":[]}'
+    ) == {
+        "outcome": "respondent-wins",
+        "reasoning": "檢方舉證不足",
+        "evidence_refs": ["[證物一]"],
+        "unresolved_questions": [],
+    }
+
+
+def test_courtroom_ruling_rejects_an_unknown_outcome() -> None:
+    codec = DEFAULT_OUTPUT_SCHEMA_REGISTRY.get("courtroom-ruling/v1")
+
+    with pytest.raises(OutputParseError):
+        codec.parse(
+            '{"outcome":"draw","reasoning":"無",'
+            '"evidence_refs":[],"unresolved_questions":[]}'
+        )
+
+
 def test_structured_verdict_v1_registry_accepts_a_known_verdict_literal() -> None:
     codec = DEFAULT_OUTPUT_SCHEMA_REGISTRY.get("structured-verdict/v1")
 
