@@ -408,6 +408,49 @@ def test_non_string_model_output_uses_parse_failure_retry_flow(tmp_path: Path) -
     assert "Model output must be a string" in events[0]["error"]
 
 
+def test_parse_failure_attempt_persists_complete_diagnostics_before_retry(
+    tmp_path: Path,
+) -> None:
+    malformed = '{"summary":"missing delimiter" "arguments":[]}'
+    runner = build_runner(
+        tmp_path,
+        adapter=FakeAdapter(
+            [malformed, VALID_OUTPUT],
+            token_usage={"prompt_tokens": 21, "completion_tokens": 7, "total_tokens": 28},
+        ),
+    )
+
+    runner.respond_as_role(
+        plan=RED_BLUE_PLAN,
+        meeting_id="meeting-1",
+        topic="診斷格式錯誤",
+        role="Blue",
+        model_assignments={"Blue": ModelConfig(id="mock-blue", adapter="mock")},
+    )
+
+    failed, completed = runner.repository.read_events("meeting-1")
+    assert (failed["attempt"], failed["status"], failed["retry_scheduled"]) == (
+        1,
+        "failed",
+        True,
+    )
+    assert (completed["attempt"], completed["status"]) == (2, "completed")
+    assert failed["failure_kind"] == "parse_error"
+    assert failed["model_config_id"] == "mock-blue"
+    assert failed["adapter"] == "mock"
+    assert failed["prompt_messages"][0]["role"] == "user"
+    assert "診斷格式錯誤" in failed["prompt_messages"][0]["content"]
+    assert failed["raw_output"] == malformed
+    assert failed["token_usage"] == {
+        "prompt_tokens": 21,
+        "completion_tokens": 7,
+        "total_tokens": 28,
+    }
+    assert failed["started_at"] <= failed["completed_at"]
+    assert isinstance(failed["duration_ms"], int)
+    assert failed["duration_ms"] >= 0
+
+
 def test_injected_registry_is_shared_from_catalog_through_plan_and_runner(
     tmp_path: Path,
 ) -> None:

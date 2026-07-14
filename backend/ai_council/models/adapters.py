@@ -22,7 +22,18 @@ ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
 
 
 class AdapterError(RuntimeError):
-    pass
+    def __init__(
+        self,
+        message: str,
+        *,
+        failure_kind: str = "adapter_error",
+        stdout_excerpt: str | None = None,
+        stderr_excerpt: str | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.failure_kind = failure_kind
+        self.stdout_excerpt = stdout_excerpt
+        self.stderr_excerpt = stderr_excerpt
 
 
 @dataclass(frozen=True)

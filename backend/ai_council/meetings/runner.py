@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import re
+import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from typing import Any, Callable, Literal, Protocol, TypedDict
 
 from ai_council.meetings.execution_state import ActiveExecutionState, MeetingExecutionStateStore
@@ -445,6 +447,9 @@ class MeetingRunner:
             prompt_metadata=prompt_metadata,
             extra_event_fields=extra_event_fields,
         )
+        started_at = datetime.now(UTC).isoformat()
+        started_clock = time.monotonic()
+        response: ModelResponse | None = None
         try:
             response = self.adapters.by_name[config.adapter].complete(
                 ModelRequest(
@@ -460,9 +465,7 @@ class MeetingRunner:
             self._clear_active_execution(meeting_id)
             if self._is_terminal(meeting_id):
                 return False
-            self.repository.append_event(
-                meeting_id,
-                {
+            failed_event: dict[str, object] = {
                     "event_id": f"{meeting_id}:{event_step_id}:attempt-{attempt}:failed",
                     "meeting_id": meeting_id,
                     "step_id": event_step_id,
@@ -470,12 +473,21 @@ class MeetingRunner:
                     "round": round_number,
                     "role": step.role,
                     "attempt": attempt,
+                    "model_config_id": config.id,
+                    "adapter": config.adapter,
+                    "prompt_messages": [{"role": "user", "content": prompt}],
+                    "raw_output": error.raw_output,
                     "status": "failed",
+                    "failure_kind": "parse_error",
                     "error": str(error),
+                    "retry_scheduled": bool(parse_retries_remaining),
+                    **self._timing_fields(started_at, started_clock),
                     **prompt_metadata,
                     **extra_event_fields,
-                },
-            )
+                }
+            if response is not None and response.token_usage is not None:
+                failed_event["token_usage"] = response.token_usage
+            self.repository.append_event(meeting_id, failed_event)
             if parse_retries_remaining:
                 return self._run_step(
                     meeting_id=meeting_id,
@@ -495,9 +507,7 @@ class MeetingRunner:
             self._clear_active_execution(meeting_id)
             if self._is_terminal(meeting_id):
                 return False
-            self.repository.append_event(
-                meeting_id,
-                {
+            failed_event = {
                     "event_id": f"{meeting_id}:{event_step_id}:attempt-{attempt}:failed",
                     "meeting_id": meeting_id,
                     "step_id": event_step_id,
@@ -505,12 +515,19 @@ class MeetingRunner:
                     "round": round_number,
                     "role": step.role,
                     "attempt": attempt,
+                    "model_config_id": config.id,
+                    "adapter": config.adapter,
+                    "prompt_messages": [{"role": "user", "content": prompt}],
                     "status": "failed",
+                    "failure_kind": self._failure_kind(error),
                     "error": str(error),
+                    "retry_scheduled": False,
+                    **self._timing_fields(started_at, started_clock),
                     **prompt_metadata,
                     **extra_event_fields,
-                },
-            )
+                }
+            self._add_adapter_excerpts(failed_event, error)
+            self.repository.append_event(meeting_id, failed_event)
             return False
 
         self._clear_active_execution(meeting_id)
@@ -525,11 +542,13 @@ class MeetingRunner:
             "role": step.role,
             "attempt": attempt,
             "model_config_id": config.id,
+            "adapter": config.adapter,
             **prompt_metadata,
             "prompt_messages": [{"role": "user", "content": prompt}],
             "raw_output": response.raw_output,
             "parsed_output": parsed_output,
             "status": "completed",
+            **self._timing_fields(started_at, started_clock),
             **extra_event_fields,
         }
         if response.token_usage is not None:
@@ -611,6 +630,9 @@ class MeetingRunner:
         for current_attempt in (attempt, attempt + 1):
             if current_attempt != attempt and self._is_terminal(meeting_id):
                 return events
+            started_at = datetime.now(UTC).isoformat()
+            started_clock = time.monotonic()
+            response: ModelResponse | None = None
             try:
                 response = self.adapters.by_name[config.adapter].complete(
                     ModelRequest(
@@ -630,6 +652,12 @@ class MeetingRunner:
                         round_number=round_number,
                         attempt=current_attempt,
                         error=error,
+                        config=config,
+                        prompt=prompt,
+                        response=response,
+                        retry_scheduled=current_attempt == attempt,
+                        started_at=started_at,
+                        started_clock=started_clock,
                         prompt_metadata=prompt_metadata,
                     )
                 )
@@ -643,6 +671,12 @@ class MeetingRunner:
                         round_number=round_number,
                         attempt=current_attempt,
                         error=error,
+                        config=config,
+                        prompt=prompt,
+                        response=None,
+                        retry_scheduled=False,
+                        started_at=started_at,
+                        started_clock=started_clock,
                         prompt_metadata=prompt_metadata,
                     )
                 )
@@ -659,11 +693,13 @@ class MeetingRunner:
                 "role": member.role,
                 "attempt": current_attempt,
                 "model_config_id": config.id,
+                "adapter": config.adapter,
                 **prompt_metadata,
                 "prompt_messages": [{"role": "user", "content": prompt}],
                 "raw_output": response.raw_output,
                 "parsed_output": parsed_output,
                 "status": "completed",
+                **self._timing_fields(started_at, started_clock),
             }
             if response.token_usage is not None:
                 completed_event["token_usage"] = response.token_usage
@@ -671,8 +707,9 @@ class MeetingRunner:
             return events
         return events
 
-    @staticmethod
+    @classmethod
     def _parallel_member_failure_event(
+        cls,
         *,
         meeting_id: str,
         event_step_id: str,
@@ -680,9 +717,15 @@ class MeetingRunner:
         round_number: int,
         attempt: int,
         error: Exception,
+        config: ModelConfig,
+        prompt: str,
+        response: ModelResponse | None,
+        retry_scheduled: bool,
+        started_at: str,
+        started_clock: float,
         prompt_metadata: dict[str, object],
     ) -> dict[str, object]:
-        return {
+        event: dict[str, object] = {
             "event_id": f"{meeting_id}:{event_step_id}:attempt-{attempt}:failed",
             "meeting_id": meeting_id,
             "step_id": event_step_id,
@@ -690,10 +733,47 @@ class MeetingRunner:
             "round": round_number,
             "role": member.role,
             "attempt": attempt,
+            "model_config_id": config.id,
+            "adapter": config.adapter,
+            "prompt_messages": [{"role": "user", "content": prompt}],
             "status": "failed",
+            "failure_kind": cls._failure_kind(error),
             "error": str(error),
+            "retry_scheduled": retry_scheduled,
+            **cls._timing_fields(started_at, started_clock),
             **prompt_metadata,
         }
+        if isinstance(error, OutputParseError):
+            event["raw_output"] = error.raw_output
+        if response is not None and response.token_usage is not None:
+            event["token_usage"] = response.token_usage
+        cls._add_adapter_excerpts(event, error)
+        return event
+
+    @staticmethod
+    def _timing_fields(started_at: str, started_clock: float) -> dict[str, object]:
+        return {
+            "started_at": started_at,
+            "completed_at": datetime.now(UTC).isoformat(),
+            "duration_ms": max(0, round((time.monotonic() - started_clock) * 1000)),
+        }
+
+    @staticmethod
+    def _failure_kind(error: Exception) -> str:
+        if isinstance(error, OutputParseError):
+            return "parse_error"
+        if isinstance(error, AdapterError):
+            return error.failure_kind
+        return "configuration_error"
+
+    @staticmethod
+    def _add_adapter_excerpts(event: dict[str, object], error: Exception) -> None:
+        if not isinstance(error, AdapterError):
+            return
+        if error.stdout_excerpt is not None:
+            event["adapter_stdout_excerpt"] = error.stdout_excerpt
+        if error.stderr_excerpt is not None:
+            event["adapter_stderr_excerpt"] = error.stderr_excerpt
 
     def _run_parallel_synthesis_if_ready(
         self,
