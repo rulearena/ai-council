@@ -1,6 +1,6 @@
 # 03 — Courtroom 爭點 workspace 與端到端整合
 
-Status: ready-for-agent
+Status: implemented / awaiting acceptance
 
 Blocked by: 01, 02
 

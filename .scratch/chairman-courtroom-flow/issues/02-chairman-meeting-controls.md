@@ -1,6 +1,6 @@
 # 02 — 主席 composer、會議資訊與流程操作
 
-Status: ready-for-agent
+Status: implemented / awaiting acceptance
 
 Blocked by: 01（需使用後端 projected action/state）
 

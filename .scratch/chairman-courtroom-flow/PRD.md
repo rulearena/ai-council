@@ -1,6 +1,6 @@
 # 主席操作與逐一爭點法院流程
 
-Status: approved / implementing
+Status: implemented / awaiting acceptance
 
 Canonical backlog: `spec.md` §15 #87
 
@@ -49,3 +49,10 @@ Canonical backlog: `spec.md` §15 #87
 - Standards 與 Spec 兩軸獨立 review 均通過。
 - Backend full suite、frontend unit、build、完整 Chromium e2e 與 direct browser smoke 通過。
 - merge main 後標記 `implemented / awaiting acceptance` 並清理 worktree/branch/runtime。
+
+## 實作結果（2026-07-15）
+
+- Standards 與 Spec 雙軸獨立 review 最終均 PASS；前幾輪發現的 transition race、retry false-success、final retry UX 與 stale E2E 均已關閉。
+- 最終 gates：backend 345 passed、frontend unit 35 passed、production build 通過、Chromium 77 passed。
+- 非 test runner 的 direct Chromium smoke 完整走過兩爭點、主席定向追問、title/goal 規則、逐點裁定、final verdict 與 reload recovery。
+- 所有 test/runtime 均使用 worktree `.scratch/` 並已清理；未呼叫外部 provider。

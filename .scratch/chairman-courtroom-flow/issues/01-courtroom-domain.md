@@ -1,6 +1,6 @@
 # 01 — Courtroom issue domain、HTTP 與 Runner
 
-Status: ready-for-agent
+Status: implemented / awaiting acceptance
 
 Blocked by: none
 
