@@ -174,10 +174,10 @@ def test_civil_final_compares_traditional_chinese_money_values_to_visible_eviden
         ("100萬元", "新臺幣1,000,000元"),
         ("新臺幣100元", "100元"),
         ("新臺幣100萬元", "一百萬元"),
-        ("100萬", "新臺幣100萬元"),
+        ("TWD 100萬", "新臺幣100萬元"),
         ("一百元", "１００元"),
         ("一百萬元", "1,000,000元"),
-        ("十萬", "新臺幣100,000元"),
+        ("十萬元", "新臺幣100,000元"),
         ("１，０００元", "新臺幣1,000元"),
         ("1萬5千元", "新臺幣15,000元"),
         ("1萬5000元", "一萬五千元"),
@@ -187,6 +187,7 @@ def test_civil_final_compares_traditional_chinese_money_values_to_visible_eviden
         ("2千萬元", "20,000,000元"),
         ("1百萬元", "1,000,000元"),
         ("1億2千3百萬元", "123,000,000元"),
+        ("2兆元", "2,000,000,000,000元"),
         ("100美元", "USD 100"),
         ("100萬美元", "USD 1,000,000"),
         ("100萬新臺幣", "新臺幣1,000,000元"),
@@ -221,6 +222,8 @@ def test_civil_money_tokenizer_normalizes_complete_equivalent_amounts(
         ("1億2,000萬元", "2億3,000萬元"),
         ("2千萬元", "2,000元"),
         ("人民幣100", "新臺幣100元"),
+        ("2兆元", "2元"),
+        ("100萬股", "100萬元"),
     ],
 )
 def test_civil_money_tokenizer_never_truncates_or_changes_magnitude(
@@ -249,6 +252,14 @@ def test_civil_money_tokenizer_rejects_bare_magnitude_without_visible_evidence()
                 "claims": [{"evidence_refs": []}],
             },
             {"__case_files_by_role": {"Judge": ""}},
+        )
+
+
+def test_civil_verdict_bare_amount_is_checked_but_bare_evidence_quantity_is_not_money() -> None:
+    with pytest.raises(ValueError, match="not supported"):
+        CourtroomCaseProfile.for_type("civil").validate_final_semantics(
+            {"summary": "應返還100萬", "claims": [{"evidence_refs": ["[證物一]"]}]},
+            {"__case_files_by_role": {"Judge": "[證物一] 持有100萬股"}},
         )
 
 

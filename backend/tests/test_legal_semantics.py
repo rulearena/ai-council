@@ -25,6 +25,7 @@ from ai_council.meetings.legal_semantics import (
         ("1百萬", "1000000"),
         ("1億2千萬", "120000000"),
         ("1億2千3百萬", "123000000"),
+        ("2兆", "2000000000000"),
     ],
 )
 def test_amount_expression_evaluator_handles_mixed_numeric_sections(
@@ -57,6 +58,12 @@ def test_amount_expression_evaluator_handles_mixed_numeric_sections(
         ("港幣100", "HKD", "100"),
         ("100韓元", "KRW", "100"),
         ("CAD 100", "UNKNOWN:CAD", "100"),
+        ("瑞士法郎100", "UNKNOWN:瑞士法郎", "100"),
+        ("100加元", "UNKNOWN:加元", "100"),
+        ("澳元100", "UNKNOWN:澳元", "100"),
+        ("100新加坡元", "UNKNOWN:新加坡元", "100"),
+        ("USD 100元", "USD", "100"),
+        ("2兆元", "TWD", "2000000000000"),
     ],
 )
 def test_money_values_preserves_prefix_and_suffix_currency(
@@ -67,7 +74,7 @@ def test_money_values_preserves_prefix_and_suffix_currency(
     assert money_values(text) == {(currency, Decimal(value))}
 
 
-@pytest.mark.parametrize("text", ["USD 100新臺幣", "新臺幣100美元", "美元100元"])
+@pytest.mark.parametrize("text", ["USD 100新臺幣", "新臺幣100美元"])
 def test_money_values_rejects_conflicting_currency_markers(text: str) -> None:
     with pytest.raises(ValueError, match="Conflicting currency"):
         money_values(text)
@@ -78,6 +85,24 @@ def test_money_values_requires_complete_expression_boundaries() -> None:
     assert money_values("100萬元") == {("TWD", Decimal("1000000"))}
     assert ("TWD", Decimal("100")) not in money_values("100萬元")
     assert evaluate_amount_expression("2千萬") != Decimal("2000")
+    assert money_values("2兆元") != money_values("2元")
+
+
+@pytest.mark.parametrize("text", ["100萬股", "100萬人", "100萬平方公尺", " bare 100萬 "])
+def test_general_text_does_not_treat_unmarked_quantities_as_money(text: str) -> None:
+    assert money_values(text) == set()
+
+
+def test_assume_money_context_keeps_bare_verdict_amounts_verifiable() -> None:
+    assert money_values("100萬", assume_money=True) == {("TWD", Decimal("1000000"))}
+    assert money_values("100萬股", assume_money=True) == set()
+    assert money_values("100萬人", assume_money=True) == set()
+    assert money_values("100萬平方公尺", assume_money=True) == set()
+
+
+def test_unsupported_magnitude_fails_closed_without_partial_truncation() -> None:
+    with pytest.raises(ValueError, match="Unsupported magnitude"):
+        money_values("2京元")
 
 
 def test_different_currency_markers_never_collide_at_the_same_value() -> None:
@@ -141,3 +166,26 @@ def test_penalty_guard_does_not_cartesian_join_unrelated_fragments(text: str) ->
 )
 def test_penalty_guard_matches_permanent_terms_around_incarceration(text: str) -> None:
     assert contains_concrete_penalty(text)
+
+
+@pytest.mark.parametrize(
+    "visible",
+    [
+        {"summary": "建議判刑", "sentencing_factors": ["三年"]},
+        ["科處", "新臺幣十萬元"],
+    ],
+)
+def test_penalty_guard_links_only_pure_cross_field_penalty_values(visible: object) -> None:
+    assert contains_concrete_penalty(visible)
+
+
+@pytest.mark.parametrize(
+    "visible",
+    [
+        ["刑期另行審酌", "案發至今三年"],
+        ["罰金可能性", "犯罪所得100萬"],
+        ["可能緩刑", "照顧家人五年"],
+    ],
+)
+def test_penalty_guard_does_not_link_contextual_cross_field_values(visible: object) -> None:
+    assert not contains_concrete_penalty(visible)

@@ -5,9 +5,9 @@ import re
 import unicodedata
 
 
-_CHINESE_NUMBER = "零〇一二兩三四五六七八九十百千萬億壹貳參肆伍陸柒捌玖拾佰仟"
+_CHINESE_NUMBER = "零〇一二兩三四五六七八九十百千萬億兆壹貳參肆伍陸柒捌玖拾佰仟"
 _ARABIC_NUMBER = r"[0-9]+(?:,[0-9]{3})*(?:\.[0-9]+)?"
-_ARABIC_UNIT = "十拾百佰千仟萬億"
+_ARABIC_UNIT = "十拾百佰千仟萬億兆"
 _AMOUNT_ATOM = rf"(?:{_ARABIC_NUMBER}\s*[{_ARABIC_UNIT}]?|[{_CHINESE_NUMBER}]+)"
 _AMOUNT_EXPRESSION = rf"{_AMOUNT_ATOM}(?:\s*{_AMOUNT_ATOM})*"
 _CURRENCY_ALIASES = {
@@ -19,6 +19,10 @@ _CURRENCY_ALIASES = {
     "GBP": ("英鎊", "GBP"),
     "HKD": ("港幣", "HKD"),
     "KRW": ("韓元", "韓圜", "KRW"),
+    "UNKNOWN:瑞士法郎": ("瑞士法郎",),
+    "UNKNOWN:加元": ("加元",),
+    "UNKNOWN:澳元": ("澳元",),
+    "UNKNOWN:新加坡元": ("新加坡元",),
 }
 _ALIAS_TO_CURRENCY = {
     alias.upper(): currency
@@ -35,7 +39,7 @@ _MONEY_TOKEN = re.compile(
     rf"(?<![{_TOKEN_BOUNDARY}])"
     rf"(?P<prefix>{_CURRENCY_MARKER})?\s*"
     rf"(?P<expression>{_AMOUNT_EXPRESSION})\s*"
-    rf"(?P<suffix>{_CURRENCY_MARKER}|元)?"
+    rf"(?P<suffix>{_CURRENCY_MARKER}|元|圓)?"
     rf"(?![{_TOKEN_BOUNDARY}])",
     re.IGNORECASE,
 )
@@ -58,7 +62,12 @@ _INHERENT_CONCRETE_PENALTY = re.compile(
     r"(?:(?:永久|終身|無限期).{0,8}(?:監禁|徒刑|褫奪公權|拘禁|入監)|"
     r"(?:監禁|徒刑|褫奪公權|拘禁|入監).{0,8}(?:永久|終身|無限期))"
 )
-_VISIBLE_FRAGMENT_SEPARATOR = re.compile(r"[。；;\n\r！？!?]+")
+_VISIBLE_FRAGMENT_SEPARATOR = re.compile(r"[，,。.;；;\n\r！？!?]+")
+_UNSUPPORTED_MAGNITUDE = re.compile(
+    rf"(?<![{_TOKEN_BOUNDARY}])(?:{_ARABIC_NUMBER}|[{_CHINESE_NUMBER}]+)\s*"
+    r"(?P<magnitude>[京垓秭穰溝澗正載])"
+)
+_NON_MONEY_QUANTITY_SUFFIX = re.compile(r"(?:股|人|平方公尺)")
 
 _DIGITS = {
     "零": 0, "〇": 0, "一": 1, "壹": 1, "二": 2, "兩": 2, "貳": 2,
@@ -69,7 +78,7 @@ _DIGITS = {
 _SMALL_UNITS = {
     "十": 10, "拾": 10, "百": 100, "佰": 100, "千": 1000, "仟": 1000,
 }
-_LARGE_UNITS = {"萬": 10_000, "億": 100_000_000}
+_LARGE_UNITS = {"萬": 10_000, "億": 100_000_000, "兆": 1_000_000_000_000}
 
 
 def evaluate_amount_expression(expression: str) -> Decimal:
@@ -106,6 +115,11 @@ def evaluate_amount_expression(expression: str) -> Decimal:
                 group += section * _LARGE_UNITS[unit]
                 section = Decimal(0)
                 number = None
+            elif unit == "億":
+                section += number or Decimal(0)
+                total += (group + section) * _LARGE_UNITS[unit]
+                group = section = Decimal(0)
+                number = None
             else:
                 section += number or Decimal(0)
                 total += (group + section) * _LARGE_UNITS[unit]
@@ -117,32 +131,68 @@ def evaluate_amount_expression(expression: str) -> Decimal:
     return total + group + section + (number or Decimal(0))
 
 
-def money_values(text: str) -> set[tuple[str, Decimal]]:
+def money_values(
+    text: str,
+    *,
+    assume_money: bool = False,
+) -> set[tuple[str, Decimal]]:
     """Extract complete amount expressions normalized as ``(currency, value)``."""
     normalized = unicodedata.normalize("NFKC", text)
+    unsupported = _UNSUPPORTED_MAGNITUDE.search(normalized)
+    if unsupported:
+        raise ValueError(f"Unsupported magnitude: {unsupported.group('magnitude')}")
     values: set[tuple[str, Decimal]] = set()
     for match in _MONEY_TOKEN.finditer(normalized):
         prefix = _currency_code(match.group("prefix"))
-        suffix = _currency_code(match.group("suffix"))
+        suffix_marker = match.group("suffix")
+        suffix = (
+            prefix or "TWD"
+            if suffix_marker in {"元", "圓"}
+            else _currency_code(suffix_marker)
+        )
         if prefix and suffix and prefix != suffix:
             raise ValueError("Conflicting currency markers in amount expression")
         expression = match.group("expression")
-        if not prefix and not suffix and not re.search(r"[萬億]", expression):
-            continue
+        if not prefix and not suffix:
+            if not assume_money:
+                continue
+            if _NON_MONEY_QUANTITY_SUFFIX.match(normalized, match.end()):
+                continue
+            if not re.search(rf"[0-9{_ARABIC_UNIT}]", expression):
+                continue
         values.add((prefix or suffix or "TWD", evaluate_amount_expression(expression)))
     return values
 
 
-def contains_concrete_penalty(text: str) -> bool:
-    """Detect a concrete penalty within each visible field or sentence."""
-    normalized = unicodedata.normalize("NFKC", text)
-    for fragment in _VISIBLE_FRAGMENT_SEPARATOR.split(normalized):
-        if _INHERENT_CONCRETE_PENALTY.search(fragment):
-            return True
-        if _PUNISHMENT_SEMANTIC.search(fragment) and _PENALTY_DURATION.search(fragment):
-            return True
-        if _MONEY_PENALTY_SEMANTIC.search(fragment) and money_values(fragment):
-            return True
+def contains_concrete_penalty(visible: object) -> bool:
+    """Validate clauses locally, with narrow cross-field value completion."""
+    fields = [_visible_fragments(field) for field in _visible_fields(visible)]
+    duration_semantic_fields: set[int] = set()
+    money_semantic_fields: set[int] = set()
+    pure_duration_fields: set[int] = set()
+    pure_money_fields: set[int] = set()
+    for field_index, fragments in enumerate(fields):
+        for fragment in fragments:
+            if _INHERENT_CONCRETE_PENALTY.search(fragment):
+                return True
+            has_duration_semantic = bool(_PUNISHMENT_SEMANTIC.search(fragment))
+            has_money_semantic = bool(_MONEY_PENALTY_SEMANTIC.search(fragment))
+            if has_duration_semantic:
+                duration_semantic_fields.add(field_index)
+            if has_money_semantic:
+                money_semantic_fields.add(field_index)
+            if has_duration_semantic and _PENALTY_DURATION.search(fragment):
+                return True
+            if has_money_semantic and money_values(fragment, assume_money=True):
+                return True
+            if _is_pure_duration(fragment):
+                pure_duration_fields.add(field_index)
+            if _is_pure_money(fragment):
+                pure_money_fields.add(field_index)
+    if any(left != right for left in duration_semantic_fields for right in pure_duration_fields):
+        return True
+    if any(left != right for left in money_semantic_fields for right in pure_money_fields):
+        return True
     return False
 
 
@@ -150,6 +200,31 @@ def _currency_code(marker: str | None) -> str | None:
     if marker is None:
         return None
     normalized = marker.upper()
-    if normalized == "元":
+    if normalized in {"元", "圓"}:
         return "TWD"
     return _ALIAS_TO_CURRENCY.get(normalized, f"UNKNOWN:{normalized}")
+
+
+def _visible_fields(value: object) -> list[str]:
+    if isinstance(value, str):
+        return [value]
+    if isinstance(value, dict):
+        return [field for item in value.values() for field in _visible_fields(item)]
+    if isinstance(value, list):
+        return [field for item in value for field in _visible_fields(item)]
+    return []
+
+
+def _visible_fragments(field: str) -> list[str]:
+    normalized = unicodedata.normalize("NFKC", field)
+    return [fragment.strip() for fragment in _VISIBLE_FRAGMENT_SEPARATOR.split(normalized) if fragment.strip()]
+
+
+def _is_pure_duration(fragment: str) -> bool:
+    return _PENALTY_DURATION.fullmatch(fragment) is not None
+
+
+def _is_pure_money(fragment: str) -> bool:
+    return _MONEY_TOKEN.fullmatch(fragment) is not None and bool(
+        money_values(fragment, assume_money=True)
+    )

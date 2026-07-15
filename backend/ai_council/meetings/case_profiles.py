@@ -105,7 +105,7 @@ class CourtroomCaseProfile:
     ) -> None:
         visible_text = "\n".join(_visible_strings(parsed))
         if self.case_type == "criminal":
-            if contains_concrete_penalty(visible_text):
+            if contains_concrete_penalty(parsed):
                 raise ValueError("Criminal verdict must not state a concrete penalty")
             return
         by_role = (inputs or {}).get("__case_files_by_role")
@@ -121,7 +121,7 @@ class CourtroomCaseProfile:
             refs = claim.get("evidence_refs")
             if isinstance(refs, list) and any(str(ref) not in visible_anchors for ref in refs):
                 raise ValueError("Civil verdict cites unknown or invisible evidence")
-        if not money_values(visible_text).issubset(money_values(judge_evidence)):
+        if not money_values(visible_text, assume_money=True).issubset(money_values(judge_evidence)):
             raise ValueError("Civil verdict monetary amount is not supported by visible evidence")
 
 
