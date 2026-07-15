@@ -15,6 +15,7 @@ from fastapi.testclient import TestClient
 
 from ai_council.api import (
     MeetingJobManager,
+    MeetingMetadataStore,
     ModelHealthCheckResult,
     ModelHealthCheckStore,
     create_app,
@@ -22,6 +23,7 @@ from ai_council.api import (
 from ai_council.models.adapters import AdapterError, MockModelAdapter, ModelRequest, ModelResponse
 from ai_council.models.config import ModelConfigRepository
 from ai_council.meetings.repository import MeetingRepository
+from ai_council.meetings.deliberation import DeliberationEpochs, RestartCommand
 
 TEST_BLUE_PROPOSE_TEMPLATE_HASH = "28f2086e8a3af020b64aa6f2b3e3abda9046507388e535b194eb1b9fec80fe7d"
 TEST_OUTPUT_SCHEMA_HASH = "15a45919652be5c70d3fd1690a10d37f876f19a14b2a76cc0f21765def281377"
@@ -1762,6 +1764,57 @@ def test_app_startup_marks_leftover_execution_state_failed(tmp_path: Path) -> No
     assert meeting["events"][-1]["retry_scheduled"] is False
     assert "interrupted" in meeting["events"][-1]["error"].lower()
     assert not execution_state_path.exists()
+
+
+def test_crash_recovery_matches_completion_within_execution_epoch(tmp_path: Path) -> None:
+    first_client = TestClient(create_test_app(tmp_path))
+    meeting_id = first_client.post(
+        "/meetings", json={"title": "Epoch crash", "goal": "recover current epoch"}
+    ).json()["meeting_id"]
+    repository = MeetingRepository(tmp_path / "data")
+    repository.append_event(
+        meeting_id,
+        {
+            "event_id": f"{meeting_id}:blue-propose:attempt-1:completed",
+            "meeting_id": meeting_id,
+            "step_id": "blue-propose",
+            "base_step_id": "blue-propose",
+            "round": 1,
+            "role": "Blue",
+            "attempt": 1,
+            "status": "completed",
+        },
+    )
+    marker = DeliberationEpochs.restart_marker(
+        meeting_id=meeting_id,
+        events=repository.read_events(meeting_id),
+        command=RestartCommand(scope="all_deliberation", reason="new epoch"),
+    )
+    repository.append_event(meeting_id, marker)
+    execution_state_path = tmp_path / "data" / "meetings" / meeting_id / "execution.json"
+    execution_state_path.write_text(
+        json.dumps(
+            {
+                "meeting_id": meeting_id,
+                "step_id": "blue-propose",
+                "base_step_id": "blue-propose",
+                "round": 1,
+                "role": "Blue",
+                "attempt": 1,
+                "model_config_id": "mock-fast",
+                "status": "running",
+                "deliberation_epoch_id": marker["epoch_id"],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    restarted_client = TestClient(create_test_app(tmp_path))
+    meeting = restarted_client.get(f"/meetings/{meeting_id}").json()
+
+    assert meeting["events"][-1]["failure_kind"] == "interrupted"
+    assert meeting["events"][-1]["deliberation_epoch_id"] == marker["epoch_id"]
+    assert meeting["events"][-1]["event_id"].startswith(f"{marker['epoch_id']}:")
 
 
 def test_start_ignores_incomplete_legacy_request_model_assignments(tmp_path: Path) -> None:
@@ -4450,9 +4503,10 @@ def test_restart_event_write_failure_leaves_execution_safely_blocked(
         "/meetings", json={"title": "Fault ordering", "goal": "never run half reset"}
     ).json()["meeting_id"]
     original_append = MeetingRepository.append_event
+    fail_append = True
 
     def fail_marker(self, target_meeting_id, event):
-        if event.get("interaction_type") == "deliberation-epoch-start":
+        if fail_append and event.get("interaction_type") == "deliberation-epoch-start":
             raise OSError("simulated journal failure")
         return original_append(self, target_meeting_id, event)
 
@@ -4462,11 +4516,206 @@ def test_restart_event_write_failure_leaves_execution_safely_blocked(
         json={"scope": "all_deliberation", "reason": "fault test"},
     )
     blocked = client.post(f"/meetings/{meeting_id}/start", json={})
+    mutation = client.put(
+        f"/meetings/{meeting_id}/details",
+        json={"title": "must not change", "goal": "must not change"},
+    )
+    fail_append = False
+    recovered = client.post(
+        f"/meetings/{meeting_id}/deliberations/restart",
+        json={"scope": "all_deliberation", "reason": "fault retry"},
+    )
 
     assert failed.status_code == 500
     assert blocked.status_code == 409
-    assert "recover" in blocked.json()["detail"].lower()
-    assert MeetingRepository(tmp_path / "data").read_events(meeting_id) == []
+    assert mutation.status_code == 409
+    assert recovered.status_code == 200
+    assert recovered.json()["deliberation"]["active_epoch_number"] == 2
+    assert recovered.json()["title"] == "Fault ordering"
+    assert "retried" in blocked.json()["detail"].lower()
+    raw_events = MeetingRepository(tmp_path / "data").read_events(meeting_id)
+    assert len(raw_events) == 1
+    assert raw_events[0]["restart_reason"] == "fault retry"
+
+
+def test_pending_completed_restart_reconciles_before_mutation_and_rebuild_is_not_lost(
+    tmp_path: Path, monkeypatch
+) -> None:
+    app = create_test_app(tmp_path)
+    client = TestClient(app, raise_server_exceptions=False)
+    meeting_id = client.post(
+        "/meetings",
+        json={"title": "Pending rebuild", "goal": "rebuild", "mode_id": "courtroom"},
+    ).json()["meeting_id"]
+    assert client.put(
+        f"/meetings/{meeting_id}/courtroom/issues",
+        json={"revision": 0, "issues": [{"title": "old issue"}]},
+    ).status_code == 200
+    original_update = MeetingMetadataStore.update
+    fail_finalize = True
+
+    def fail_final_metadata_write(self, target_meeting_id, transform):
+        nonlocal fail_finalize
+        current = self.get(target_meeting_id)
+        projected = transform(current)
+        if (
+            fail_finalize
+            and current.get("pending_deliberation_restart")
+            and not projected.get("pending_deliberation_restart")
+        ):
+            raise OSError("simulated metadata finalize failure")
+        return original_update(self, target_meeting_id, transform)
+
+    monkeypatch.setattr(MeetingMetadataStore, "update", fail_final_metadata_write)
+    failed = client.post(
+        f"/meetings/{meeting_id}/deliberations/restart",
+        json={"scope": "rebuild_issues", "reason": "fault after marker"},
+    )
+    fail_finalize = False
+
+    stale_docket_mutation = client.put(
+        f"/meetings/{meeting_id}/courtroom/issues",
+        json={"revision": 1, "issues": [{"title": "must not silently survive"}]},
+    )
+    meeting = client.get(f"/meetings/{meeting_id}").json()
+
+    assert failed.status_code == 500
+    assert stale_docket_mutation.status_code == 409
+    assert meeting["courtroom"]["status"] == "not-configured"
+    assert "pending_deliberation_restart" not in meeting
+
+
+def test_restart_rejects_a_truly_inflight_meeting(
+    tmp_path: Path, monkeypatch
+) -> None:
+    release = threading.Event()
+    started = threading.Event()
+    original_complete = MockModelAdapter.complete
+
+    def pause_first_argument(self, request):
+        started.set()
+        release.wait(timeout=3)
+        return original_complete(self, request)
+
+    monkeypatch.setattr(MockModelAdapter, "complete", pause_first_argument)
+    client = TestClient(create_test_app(tmp_path))
+    meeting_id = client.post(
+        "/meetings",
+        json={"title": "Active issue", "goal": "one at a time", "mode_id": "courtroom"},
+    ).json()["meeting_id"]
+    assert client.put(
+        f"/meetings/{meeting_id}/courtroom/issues",
+        json={"revision": 0, "issues": [{"title": "one"}, {"title": "two"}]},
+    ).status_code == 200
+    assert client.post(
+        f"/meetings/{meeting_id}/courtroom/issues/confirm", json={"revision": 1}
+    ).status_code == 200
+    assert client.post(
+        f"/meetings/{meeting_id}/courtroom/issues/issue-1/arguments"
+    ).status_code == 202
+    assert started.wait(timeout=2)
+
+    wrong = client.post(
+        f"/meetings/{meeting_id}/deliberations/restart",
+        json={"scope": "all_deliberation", "reason": "must wait"},
+    )
+    release.set()
+    wait_for_activity(client, meeting_id, "completed")
+
+    assert wrong.status_code == 409
+    assert "running" in wrong.json()["detail"].lower()
+
+
+def test_restart_rejects_non_active_issue_after_an_issue_has_started(tmp_path: Path) -> None:
+    client = TestClient(create_test_app(tmp_path))
+    meeting_id = client.post(
+        "/meetings",
+        json={"title": "Issue identity", "goal": "one at a time", "mode_id": "courtroom"},
+    ).json()["meeting_id"]
+    assert client.put(
+        f"/meetings/{meeting_id}/courtroom/issues",
+        json={"revision": 0, "issues": [{"title": "one"}, {"title": "two"}]},
+    ).status_code == 200
+    assert client.post(
+        f"/meetings/{meeting_id}/courtroom/issues/confirm", json={"revision": 1}
+    ).status_code == 200
+    assert client.post(
+        f"/meetings/{meeting_id}/courtroom/issues/issue-1/arguments"
+    ).status_code == 202
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline:
+        meeting = client.get(f"/meetings/{meeting_id}").json()
+        if meeting["courtroom"]["current_issue_id"] == "issue-1":
+            break
+        time.sleep(0.01)
+
+    wrong = client.post(
+        f"/meetings/{meeting_id}/deliberations/restart",
+        json={"scope": "current_issue", "reason": "wrong issue", "issue_id": "issue-2"},
+    )
+
+    assert wrong.status_code == 409
+    assert "active courtroom issue" in wrong.json()["detail"].lower()
+
+
+def test_every_non_courtroom_mode_can_restart_without_changing_case_files(
+    tmp_path: Path,
+) -> None:
+    client = TestClient(create_test_app(tmp_path))
+    modes = [mode for mode in client.get("/modes").json() if mode["id"] != "courtroom"]
+    assert {mode["category"] for mode in modes} == {"relay", "parallel"}
+
+    for mode in modes:
+        meeting = client.post(
+            "/meetings",
+            json={
+                "title": f"restart {mode['id']}",
+                "goal": "restart safely",
+                "mode_id": mode["id"],
+                "inputs": {item["id"]: "test" for item in mode["inputs"]},
+            },
+        ).json()
+        meeting_id = meeting["meeting_id"]
+
+        restarted = client.post(
+            f"/meetings/{meeting_id}/deliberations/restart",
+            json={"scope": "all_deliberation", "reason": "mode coverage"},
+        )
+
+        assert restarted.status_code == 200, mode["id"]
+
+    evidence_meeting = client.post(
+        "/meetings",
+        json={
+            "title": "same evidence",
+            "goal": "preserve evidence",
+            "mode_id": "red-blue",
+            "case_files": [
+                {
+                    "title": "same evidence",
+                    "content": "byte-for-byte",
+                    "visible_roles": ["Blue"],
+                }
+            ],
+        },
+    ).json()
+    evidence_meeting_id = evidence_meeting["meeting_id"]
+    case_file_path = (
+        tmp_path / "data" / "meetings" / evidence_meeting_id / "case_files.json"
+    )
+    before_bytes = case_file_path.read_bytes()
+    before_manifest = client.get(
+        f"/meetings/{evidence_meeting_id}"
+    ).json()["case_files"]
+
+    restarted = client.post(
+        f"/meetings/{evidence_meeting_id}/deliberations/restart",
+        json={"scope": "all_deliberation", "reason": "evidence identity"},
+    )
+
+    assert restarted.status_code == 200
+    assert restarted.json()["case_files"] == before_manifest
+    assert case_file_path.read_bytes() == before_bytes
 
 
 def test_alternate_local_frontend_origin_can_call_api(tmp_path: Path) -> None:

@@ -355,6 +355,32 @@ def create_app(
     projector = TranscriptProjector()
     jobs = MeetingJobManager()
     meeting_transitions = MeetingTransitionCoordinator()
+
+    def reconcile_pending_restart(meeting_id: str, operation: str | None) -> None:
+        metadata = metadata_store.get(meeting_id)
+        pending = metadata.get("pending_deliberation_restart")
+        if not isinstance(pending, dict) or operation == "restart_deliberation":
+            return
+        marker = next(
+            (
+                event
+                for event in reversed(repository.read_events(meeting_id))
+                if event.get("interaction_type") == "deliberation-epoch-start"
+                and event.get("epoch_id") == pending.get("epoch_id")
+            ),
+            None,
+        )
+        if marker is None:
+            raise HTTPException(
+                status_code=409,
+                detail="Deliberation restart must be retried before changing the meeting",
+            )
+        metadata_store.update(
+            meeting_id,
+            lambda current: finalize_deliberation_restart_metadata(current, marker),
+        )
+
+    meeting_transitions.set_before_transition(reconcile_pending_restart)
     model_health = ModelHealthCheckStore()
     model_health_checker = ModelHealthChecker(model_repository, model_adapters, model_health)
     model_write_lock = threading.Lock()
@@ -681,6 +707,8 @@ def create_app(
             )
         except ValueError as error:
             raise HTTPException(status_code=400, detail=str(error)) from error
+        all_events = repository.read_events(meeting_id)
+        deliberation = DeliberationEpochs.view(all_events)
         if mode.id != "courtroom" and command.scope != "all_deliberation":
             raise HTTPException(
                 status_code=400,
@@ -700,7 +728,18 @@ def create_app(
                     status_code=400,
                     detail=f"Unknown courtroom issue: {command.issue_id}",
                 )
-        all_events = repository.read_events(meeting_id)
+            courtroom = project_courtroom(
+                metadata, deliberation.workflow_events
+            )
+            active_issue_id = courtroom.get("current_issue_id") if courtroom else None
+            if active_issue_id is not None and command.issue_id != active_issue_id:
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        f"Restart target must match the active courtroom issue: "
+                        f"{active_issue_id}"
+                    ),
+                )
         snapshot = {
             "goal": metadata.get("goal"),
             "mode_id": mode.id,
@@ -2530,9 +2569,19 @@ def _step_has_finished(
     events: list[dict[str, Any]],
     state: ActiveExecutionState,
 ) -> bool:
+    execution_epoch_id = state.get("deliberation_epoch_id")
+    if execution_epoch_id:
+        view = DeliberationEpochs.view(events)
+        execution_epoch = next(
+            (epoch for epoch in view.epochs if epoch.id == execution_epoch_id),
+            None,
+        )
+        candidate_events = execution_epoch.events if execution_epoch is not None else []
+    else:
+        candidate_events = events
     matching_events = [
         event
-        for event in events
+        for event in candidate_events
         if event.get("step_id") == state["step_id"]
         and event.get("attempt") == state["attempt"]
         and event.get("status") in {"completed", "failed"}
