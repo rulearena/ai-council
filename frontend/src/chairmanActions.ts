@@ -13,6 +13,7 @@ export type CourtroomIssueProjection = {
 }
 
 export type CourtroomProjection = {
+  case_type?: 'civil' | 'criminal' | null
   status?: string
   available_actions: string[]
   current_issue_id: string | null
@@ -91,10 +92,14 @@ export function projectCourtroomPrimaryAction(
   const actions = new Set(courtroom.available_actions)
   const issue = pendingCourtroomIssue(courtroom)
   if (actions.has('start-issue') && issue) {
+    const proponent = courtroom.case_type === 'civil' ? '原告代理人' : '檢察官'
+    const hasRuled = courtroom.issues.some((candidate) => candidate.status === 'ruled')
     return {
       kind: 'courtroom-arguments',
       issueId: issue.id,
-      label: `開始爭點攻防：${issue.title}（下一位是檢察官）`,
+      label: hasRuled
+        ? `進入下一爭點：${issue.title}（下一位是${proponent}）`
+        : `開始此爭點：${issue.title}（下一位是${proponent}）`,
       disabled: false,
     }
   }

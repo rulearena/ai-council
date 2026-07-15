@@ -5,7 +5,6 @@ import {
   courtroomFailedPhaseLabel,
   courtroomFinalOutcomeLabel,
   courtroomIssueStatusLabel,
-  courtroomNextProponentLabel,
   courtroomOutcomeLabel,
   nextLegacyCaseTypeSelection,
   nextCourtroomDraft,
@@ -41,8 +40,6 @@ test('courtroom presentation uses understandable Chinese status and outcome labe
   assert.equal(courtroomOutcomeLabel('respondent-wins'), '答辯方勝')
   assert.equal(courtroomOutcomeLabel('partially-upheld'), '部分成立')
   assert.equal(courtroomOutcomeLabel('insufficient-evidence'), '證據不足／無法判定')
-  assert.equal(courtroomNextProponentLabel('civil'), '原告代理人')
-  assert.equal(courtroomNextProponentLabel('criminal'), '檢察官')
   assert.equal(courtroomFinalOutcomeLabel('upheld', 'civil'), '請求成立')
   assert.equal(courtroomFinalOutcomeLabel('guilty', 'criminal'), '有罪')
   assert.equal(courtroomFinalOutcomeLabel('not-guilty', 'criminal'), '無罪')

@@ -16,7 +16,6 @@ import {
   courtroomFailedPhaseLabel,
   courtroomFinalOutcomeLabel,
   courtroomIssueStatusLabel,
-  courtroomNextProponentLabel,
   courtroomOutcomeLabel,
   nextLegacyCaseTypeSelection,
   nextCourtroomDraft,
@@ -80,18 +79,7 @@ const currentIssue = computed(() => courtroom.value?.issues.find(
 const failedIssue = computed(() => courtroom.value?.issues.find(
   (issue) => issue.status === 'failed',
 ) ?? null)
-const primaryLabel = computed(() => {
-  const projection = courtroom.value
-  const issue = currentIssue.value
-  if (!projection || !issue) return primaryAction.value.label
-  if (primaryAction.value.kind === 'courtroom-arguments') {
-    const hasRuled = projection.issues.some((candidate) => candidate.status === 'ruled')
-    return hasRuled
-      ? `進入下一爭點：${issue.title}（下一位是${courtroomNextProponentLabel(projection.case_type)}）`
-      : `開始此爭點：${issue.title}（下一位是${courtroomNextProponentLabel(projection.case_type)}）`
-  }
-  return primaryAction.value.label
-})
+const primaryLabel = computed(() => primaryAction.value.label)
 
 watch(
   meetingId,

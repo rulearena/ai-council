@@ -89,6 +89,12 @@ def test_criminal_final_allows_factors_but_rejects_concrete_penalty() -> None:
     with pytest.raises(OutputParseError, match="concrete penalty"):
         codec.parse(json.dumps(valid, ensure_ascii=False))
 
+    valid["sentencing_factors"] = ["罰金可能性", "可能適用緩刑"]
+    assert codec.parse(json.dumps(valid, ensure_ascii=False))["sentencing_factors"] == [
+        "罰金可能性",
+        "可能適用緩刑",
+    ]
+
 
 def test_courtroom_ruling_rejects_an_unknown_outcome() -> None:
     codec = DEFAULT_OUTPUT_SCHEMA_REGISTRY.get("courtroom-ruling/v1")

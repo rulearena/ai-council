@@ -165,3 +165,113 @@ def test_civil_final_compares_traditional_chinese_money_values_to_visible_eviden
                 },
                 inputs,
             )
+
+
+@pytest.mark.parametrize(
+    ("evidence_amount", "verdict_amount"),
+    [
+        ("100元", "新臺幣100元"),
+        ("100萬元", "新臺幣1,000,000元"),
+        ("新臺幣100元", "100元"),
+        ("新臺幣100萬元", "一百萬元"),
+        ("100萬", "新臺幣100萬元"),
+        ("一百元", "１００元"),
+        ("一百萬元", "1,000,000元"),
+        ("十萬", "新臺幣100,000元"),
+        ("１，０００元", "新臺幣1,000元"),
+    ],
+)
+def test_civil_money_tokenizer_normalizes_complete_equivalent_amounts(
+    evidence_amount: str,
+    verdict_amount: str,
+) -> None:
+    CourtroomCaseProfile.for_type("civil").validate_final_semantics(
+        {
+            "summary": f"應返還{verdict_amount}",
+            "claims": [{"evidence_refs": ["[證物一]"]}],
+        },
+        {
+            "__case_files_by_role": {
+                "Judge": f"### [證物一] 金額\n案卷記載{evidence_amount}"
+            }
+        },
+    )
+
+
+@pytest.mark.parametrize(
+    ("evidence_amount", "unsupported_amount"),
+    [
+        ("100元", "100萬元"),
+        ("100萬元", "100元"),
+        ("十萬", "一百萬元"),
+        ("１，０００元", "１，０００萬元"),
+    ],
+)
+def test_civil_money_tokenizer_never_truncates_or_changes_magnitude(
+    evidence_amount: str,
+    unsupported_amount: str,
+) -> None:
+    with pytest.raises(ValueError, match="not supported"):
+        CourtroomCaseProfile.for_type("civil").validate_final_semantics(
+            {
+                "summary": f"應返還{unsupported_amount}",
+                "claims": [{"evidence_refs": ["[證物一]"]}],
+            },
+            {
+                "__case_files_by_role": {
+                    "Judge": f"### [證物一] 金額\n案卷記載{evidence_amount}"
+                }
+            },
+        )
+
+
+def test_civil_money_tokenizer_rejects_bare_magnitude_without_visible_evidence() -> None:
+    with pytest.raises(ValueError, match="not supported"):
+        CourtroomCaseProfile.for_type("civil").validate_final_semantics(
+            {
+                "summary": "應返還100萬元",
+                "claims": [{"evidence_refs": []}],
+            },
+            {"__case_files_by_role": {"Judge": ""}},
+        )
+
+
+@pytest.mark.parametrize(
+    "penalty_text",
+    [
+        "判刑五年",
+        "入監五年",
+        "監禁三年",
+        "科刑二年",
+        "褫奪公權三年",
+        "科處新臺幣十萬元",
+        "判處一年",
+        "判處徒刑五年",
+        "緩刑三年",
+    ],
+)
+def test_criminal_penalty_guard_rejects_structured_concrete_penalties_in_any_field(
+    penalty_text: str,
+) -> None:
+    with pytest.raises(ValueError, match="concrete penalty"):
+        CourtroomCaseProfile.for_type("criminal").validate_final_semantics(
+            {
+                "summary": "罪責判斷",
+                "charges": [{"reasoning": penalty_text}],
+                "sentencing_factors": ["犯後態度"],
+            },
+            None,
+        )
+
+
+@pytest.mark.parametrize(
+    "factor",
+    ["犯後態度", "是否坦承犯行", "家庭支持與再犯風險", "可能適用緩刑", "罰金可能性"],
+)
+def test_criminal_penalty_guard_allows_non_concrete_sentencing_factors(
+    factor: str,
+) -> None:
+    CourtroomCaseProfile.for_type("criminal").validate_final_semantics(
+        {"summary": "罪責判斷", "sentencing_factors": [factor]},
+        None,
+    )

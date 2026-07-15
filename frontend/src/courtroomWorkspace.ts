@@ -65,10 +65,6 @@ export function courtroomOutcomeLabel(
   return typed[outcome as keyof typeof typed] ?? OUTCOME_LABELS[outcome] ?? outcome
 }
 
-export function courtroomNextProponentLabel(caseType?: 'civil' | 'criminal' | null): string {
-  return caseType === 'civil' ? '原告代理人' : '檢察官'
-}
-
 export function courtroomFinalOutcomeLabel(
   outcome: string,
   caseType: 'civil' | 'criminal',

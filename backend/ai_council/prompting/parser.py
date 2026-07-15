@@ -5,6 +5,8 @@ import re
 from dataclasses import dataclass
 from typing import Any, Literal
 
+from ai_council.meetings.legal_semantics import contains_concrete_penalty
+
 
 @dataclass(frozen=True)
 class OutputItem:
@@ -271,10 +273,7 @@ class CourtroomCriminalFinalParser:
                     "evidence_refs": _validated_evidence_refs(charge),
                 })
             sentencing_factors = parse_strings(payload, "sentencing_factors")
-            concrete_penalty = re.compile(
-                r"有期徒刑|無期徒刑|死刑|拘役|罰金|處以|宣告刑|應執行"
-            )
-            if any(concrete_penalty.search(factor) for factor in sentencing_factors):
+            if any(contains_concrete_penalty(factor) for factor in sentencing_factors):
                 raise ValueError("sentencing_factors must not state a concrete penalty")
             return {
                 "summary": require_string(payload, "summary"),

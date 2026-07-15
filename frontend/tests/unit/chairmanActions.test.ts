@@ -9,9 +9,27 @@ import {
   runWithPendingRoles,
   meetingEditPolicy,
   projectFixedRoundFailedRole,
+  projectCourtroomPrimaryAction,
   projectPrimaryAction,
   requestRoleSequenceWithFailureGuard,
 } from '../../src/chairmanActions.ts'
+
+test('courtroom primary action derives the proponent from the shared case profile projection', () => {
+  const base = {
+    available_actions: ['start-issue'],
+    current_issue_id: null,
+    issues: [{ id: 'issue-1', title: '責任是否成立', status: 'pending' }],
+  }
+
+  assert.equal(
+    projectCourtroomPrimaryAction({ ...base, case_type: 'civil' }).label,
+    '開始此爭點：責任是否成立（下一位是原告代理人）',
+  )
+  assert.equal(
+    projectCourtroomPrimaryAction({ ...base, case_type: 'criminal' }).label,
+    '開始此爭點：責任是否成立（下一位是檢察官）',
+  )
+})
 
 const roles = [
   { role_id: 'Prosecutor', display_name: '檢察官' },
