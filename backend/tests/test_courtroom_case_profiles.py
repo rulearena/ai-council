@@ -287,6 +287,35 @@ def test_civil_general_prose_numbers_are_not_treated_as_monetary_relief() -> Non
     )
 
 
+@pytest.mark.parametrize("field", ["summary", "reasoning"])
+def test_civil_general_prose_bare_magnitude_requires_evidence(field: str) -> None:
+    parsed: dict[str, object] = {
+        "summary": "請求返還",
+        "claims": [{"reasoning": "請求返還", "evidence_refs": []}],
+    }
+    if field == "summary":
+        parsed["summary"] = "請求返還100萬"
+    else:
+        claims = parsed["claims"]
+        assert isinstance(claims, list) and isinstance(claims[0], dict)
+        claims[0]["reasoning"] = "請求返還100萬"
+    with pytest.raises(ValueError, match="not supported"):
+        CourtroomCaseProfile.for_type("civil").validate_final_semantics(
+            parsed,
+            {"__case_files_by_role": {"Judge": ""}},
+        )
+
+
+def test_civil_general_prose_bare_magnitude_accepts_equal_evidence_money() -> None:
+    CourtroomCaseProfile.for_type("civil").validate_final_semantics(
+        {
+            "summary": "應返還100萬",
+            "claims": [{"reasoning": "持有100萬股不另計價", "evidence_refs": ["[證物一]"]}],
+        },
+        {"__case_files_by_role": {"Judge": "[證物一] 價款100萬"}},
+    )
+
+
 def test_civil_monetary_amount_must_be_a_complete_money_expression() -> None:
     with pytest.raises(ValueError, match="complete monetary expression"):
         CourtroomCaseProfile.for_type("civil").validate_final_semantics(

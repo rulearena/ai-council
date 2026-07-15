@@ -67,7 +67,9 @@ _UNSUPPORTED_MAGNITUDE = re.compile(
     rf"(?<![{_TOKEN_BOUNDARY}])(?:{_ARABIC_NUMBER}|[{_CHINESE_NUMBER}]+)\s*"
     r"(?P<magnitude>[京垓秭穰溝澗正載])"
 )
-_NON_MONEY_QUANTITY_SUFFIX = re.compile(r"(?:股|人|平方公尺)")
+_NON_MONEY_QUANTITY_SUFFIX = re.compile(
+    r"(?:股|人|份|件|戶|坪|平方公尺|公尺|平方公里|公斤|噸|筆)"
+)
 
 _DIGITS = {
     "零": 0, "〇": 0, "一": 1, "壹": 1, "二": 2, "兩": 2, "貳": 2,
@@ -180,6 +182,8 @@ def contains_concrete_penalty(visible: object) -> bool:
     for field_index, fragments in enumerate(fields):
         previous_duration_semantic = False
         previous_money_semantic = False
+        previous_pure_duration = False
+        previous_pure_money = False
         for fragment in fragments:
             if _INHERENT_CONCRETE_PENALTY.search(fragment):
                 return True
@@ -189,6 +193,10 @@ def contains_concrete_penalty(visible: object) -> bool:
                 return True
             if previous_money_semantic and _is_pure_money(fragment):
                 return True
+            if previous_pure_duration and has_duration_semantic:
+                return True
+            if previous_pure_money and has_money_semantic:
+                return True
             if has_duration_semantic:
                 duration_semantic_fields.add(field_index)
             if has_money_semantic:
@@ -197,12 +205,16 @@ def contains_concrete_penalty(visible: object) -> bool:
                 return True
             if has_money_semantic and money_values(fragment, assume_money=True):
                 return True
-            if _is_pure_duration(fragment):
+            is_pure_duration = _is_pure_duration(fragment)
+            is_pure_money = _is_pure_money(fragment)
+            if is_pure_duration:
                 pure_duration_fields.add(field_index)
-            if _is_pure_money(fragment):
+            if is_pure_money:
                 pure_money_fields.add(field_index)
             previous_duration_semantic = has_duration_semantic
             previous_money_semantic = has_money_semantic
+            previous_pure_duration = is_pure_duration
+            previous_pure_money = is_pure_money
     if any(left != right for left in duration_semantic_fields for right in pure_duration_fields):
         return True
     if any(left != right for left in money_semantic_fields for right in pure_money_fields):
@@ -235,7 +247,10 @@ def _money_value_from_match(
         raise ValueError("Conflicting currency markers in amount expression")
     expression = match.group("expression")
     if not prefix and not suffix:
-        if not assume_money or not re.search(rf"[0-9{_ARABIC_UNIT}]", expression):
+        has_monetary_magnitude = re.search(r"[萬億兆]", expression) is not None
+        if not assume_money and not has_monetary_magnitude:
+            return None
+        if assume_money and not re.search(rf"[0-9{_ARABIC_UNIT}]", expression):
             return None
     return prefix or suffix or "TWD", evaluate_amount_expression(expression)
 

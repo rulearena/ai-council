@@ -89,8 +89,21 @@ def test_money_values_requires_complete_expression_boundaries() -> None:
     assert money_values("2兆元") != money_values("2元")
 
 
-@pytest.mark.parametrize("text", ["100萬股", "100萬人", "100萬平方公尺", " bare 100萬 "])
+@pytest.mark.parametrize(
+    "text",
+    ["100萬股", "100萬人", "100萬坪", "100萬平方公尺", "100萬公尺", "100萬份"],
+)
 def test_general_text_does_not_treat_unmarked_quantities_as_money(text: str) -> None:
+    assert money_values(text) == set()
+
+
+@pytest.mark.parametrize("text", ["100萬", "2億", "3兆"])
+def test_general_text_treats_bare_monetary_magnitudes_as_twd(text: str) -> None:
+    assert money_values(text)
+
+
+@pytest.mark.parametrize("text", ["184", "2025", "3"])
+def test_general_text_ignores_bare_numbers_without_monetary_magnitude(text: str) -> None:
     assert money_values(text) == set()
 
 
@@ -180,9 +193,25 @@ def test_penalty_guard_links_adjacent_pure_values_in_the_same_field(text: str) -
 
 @pytest.mark.parametrize(
     "text",
+    ["三年，作為宣告刑", "新臺幣十萬元；予以科處"],
+)
+def test_penalty_guard_links_reverse_adjacent_pure_values_in_the_same_field(text: str) -> None:
+    assert contains_concrete_penalty(text)
+
+
+@pytest.mark.parametrize(
+    "text",
     ["刑期另行審酌，案發三年前", "罰金可能性；犯罪所得100萬", "可能緩刑\n照顧家人五年"],
 )
 def test_penalty_guard_keeps_contextual_adjacent_fragments_independent(text: str) -> None:
+    assert not contains_concrete_penalty(text)
+
+
+@pytest.mark.parametrize(
+    "text",
+    ["案發至今三年，刑期另行審酌", "犯罪所得100萬；罰金可能性", "照顧家人五年，可能緩刑"],
+)
+def test_penalty_guard_keeps_reverse_contextual_fragments_independent(text: str) -> None:
     assert not contains_concrete_penalty(text)
 
 
