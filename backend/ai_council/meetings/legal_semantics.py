@@ -143,25 +143,31 @@ def money_values(
         raise ValueError(f"Unsupported magnitude: {unsupported.group('magnitude')}")
     values: set[tuple[str, Decimal]] = set()
     for match in _MONEY_TOKEN.finditer(normalized):
-        prefix = _currency_code(match.group("prefix"))
-        suffix_marker = match.group("suffix")
-        suffix = (
-            prefix or "TWD"
-            if suffix_marker in {"元", "圓"}
-            else _currency_code(suffix_marker)
-        )
-        if prefix and suffix and prefix != suffix:
-            raise ValueError("Conflicting currency markers in amount expression")
-        expression = match.group("expression")
-        if not prefix and not suffix:
-            if not assume_money:
-                continue
-            if _NON_MONEY_QUANTITY_SUFFIX.match(normalized, match.end()):
-                continue
-            if not re.search(rf"[0-9{_ARABIC_UNIT}]", expression):
-                continue
-        values.add((prefix or suffix or "TWD", evaluate_amount_expression(expression)))
+        if _NON_MONEY_QUANTITY_SUFFIX.match(normalized, match.end()):
+            continue
+        value = _money_value_from_match(match, assume_money=assume_money)
+        if value is not None:
+            values.add(value)
     return values
+
+
+def parse_money_expression(
+    text: str,
+    *,
+    assume_money: bool = False,
+) -> tuple[str, Decimal]:
+    """Parse one complete monetary field without accepting surrounding prose."""
+    normalized = unicodedata.normalize("NFKC", text).strip()
+    unsupported = _UNSUPPORTED_MAGNITUDE.search(normalized)
+    if unsupported:
+        raise ValueError(f"Unsupported magnitude: {unsupported.group('magnitude')}")
+    match = _MONEY_TOKEN.fullmatch(normalized)
+    if match is None:
+        raise ValueError("Field must be one complete monetary expression")
+    value = _money_value_from_match(match, assume_money=assume_money)
+    if value is None:
+        raise ValueError("Field must be one complete monetary expression")
+    return value
 
 
 def contains_concrete_penalty(visible: object) -> bool:
@@ -172,11 +178,17 @@ def contains_concrete_penalty(visible: object) -> bool:
     pure_duration_fields: set[int] = set()
     pure_money_fields: set[int] = set()
     for field_index, fragments in enumerate(fields):
+        previous_duration_semantic = False
+        previous_money_semantic = False
         for fragment in fragments:
             if _INHERENT_CONCRETE_PENALTY.search(fragment):
                 return True
             has_duration_semantic = bool(_PUNISHMENT_SEMANTIC.search(fragment))
             has_money_semantic = bool(_MONEY_PENALTY_SEMANTIC.search(fragment))
+            if previous_duration_semantic and _is_pure_duration(fragment):
+                return True
+            if previous_money_semantic and _is_pure_money(fragment):
+                return True
             if has_duration_semantic:
                 duration_semantic_fields.add(field_index)
             if has_money_semantic:
@@ -189,6 +201,8 @@ def contains_concrete_penalty(visible: object) -> bool:
                 pure_duration_fields.add(field_index)
             if _is_pure_money(fragment):
                 pure_money_fields.add(field_index)
+            previous_duration_semantic = has_duration_semantic
+            previous_money_semantic = has_money_semantic
     if any(left != right for left in duration_semantic_fields for right in pure_duration_fields):
         return True
     if any(left != right for left in money_semantic_fields for right in pure_money_fields):
@@ -203,6 +217,27 @@ def _currency_code(marker: str | None) -> str | None:
     if normalized in {"元", "圓"}:
         return "TWD"
     return _ALIAS_TO_CURRENCY.get(normalized, f"UNKNOWN:{normalized}")
+
+
+def _money_value_from_match(
+    match: re.Match[str],
+    *,
+    assume_money: bool,
+) -> tuple[str, Decimal] | None:
+    prefix = _currency_code(match.group("prefix"))
+    suffix_marker = match.group("suffix")
+    suffix = (
+        prefix or "TWD"
+        if suffix_marker in {"元", "圓"}
+        else _currency_code(suffix_marker)
+    )
+    if prefix and suffix and prefix != suffix:
+        raise ValueError("Conflicting currency markers in amount expression")
+    expression = match.group("expression")
+    if not prefix and not suffix:
+        if not assume_money or not re.search(rf"[0-9{_ARABIC_UNIT}]", expression):
+            return None
+    return prefix or suffix or "TWD", evaluate_amount_expression(expression)
 
 
 def _visible_fields(value: object) -> list[str]:

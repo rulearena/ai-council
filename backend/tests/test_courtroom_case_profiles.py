@@ -258,9 +258,63 @@ def test_civil_money_tokenizer_rejects_bare_magnitude_without_visible_evidence()
 def test_civil_verdict_bare_amount_is_checked_but_bare_evidence_quantity_is_not_money() -> None:
     with pytest.raises(ValueError, match="not supported"):
         CourtroomCaseProfile.for_type("civil").validate_final_semantics(
-            {"summary": "應返還100萬", "claims": [{"evidence_refs": ["[證物一]"]}]},
+            {
+                "summary": "應返還款項",
+                "claims": [{
+                    "evidence_refs": ["[證物一]"],
+                    "relief": {"monetary_amount": "100萬"},
+                }],
+            },
             {"__case_files_by_role": {"Judge": "[證物一] 持有100萬股"}},
         )
+
+
+def test_civil_general_prose_numbers_are_not_treated_as_monetary_relief() -> None:
+    CourtroomCaseProfile.for_type("civil").validate_final_semantics(
+        {
+            "summary": "依民法第184條及2025年資料判斷第3項責任",
+            "claims": [{
+                "reasoning": "原告提出3份文件，主張50%持分及100萬坪土地",
+                "evidence_refs": [],
+                "relief": {
+                    "obligation": "返還3份文件並移轉100平方公尺土地",
+                    "monetary_amount": None,
+                    "calculation_basis": "依持分百分比計算",
+                },
+            }],
+        },
+        {"__case_files_by_role": {"Judge": ""}},
+    )
+
+
+def test_civil_monetary_amount_must_be_a_complete_money_expression() -> None:
+    with pytest.raises(ValueError, match="complete monetary expression"):
+        CourtroomCaseProfile.for_type("civil").validate_final_semantics(
+            {
+                "summary": "返還土地",
+                "claims": [{
+                    "evidence_refs": [],
+                    "relief": {"monetary_amount": "100萬坪"},
+                }],
+            },
+            {"__case_files_by_role": {"Judge": "100萬元"}},
+        )
+
+
+@pytest.mark.parametrize("monetary_amount", ["100萬", "一百萬元"])
+def test_civil_bare_monetary_amount_is_validated_against_strict_evidence(
+    monetary_amount: str,
+) -> None:
+    CourtroomCaseProfile.for_type("civil").validate_final_semantics(
+        {
+            "summary": "請求給付",
+            "claims": [{
+                "evidence_refs": ["[證物一]"],
+                "relief": {"monetary_amount": monetary_amount},
+            }],
+        },
+        {"__case_files_by_role": {"Judge": "[證物一] 價金一百萬元"}},
+    )
 
 
 @pytest.mark.parametrize(

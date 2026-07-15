@@ -6,6 +6,7 @@ from ai_council.meetings.legal_semantics import (
     contains_concrete_penalty,
     evaluate_amount_expression,
     money_values,
+    parse_money_expression,
 )
 
 
@@ -100,6 +101,23 @@ def test_assume_money_context_keeps_bare_verdict_amounts_verifiable() -> None:
     assert money_values("100萬平方公尺", assume_money=True) == set()
 
 
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [("100萬", ("TWD", Decimal("1000000"))), ("一百萬元", ("TWD", Decimal("1000000")))],
+)
+def test_exact_money_parser_accepts_only_a_complete_monetary_field(
+    text: str,
+    expected: tuple[str, Decimal],
+) -> None:
+    assert parse_money_expression(text, assume_money=True) == expected
+
+
+@pytest.mark.parametrize("text", ["100萬坪", "100萬股", "約100萬", "100萬公尺"])
+def test_exact_money_parser_rejects_non_money_or_partial_fields(text: str) -> None:
+    with pytest.raises(ValueError, match="complete monetary expression"):
+        parse_money_expression(text, assume_money=True)
+
+
 def test_unsupported_magnitude_fails_closed_without_partial_truncation() -> None:
     with pytest.raises(ValueError, match="Unsupported magnitude"):
         money_values("2京元")
@@ -143,13 +161,28 @@ def test_penalty_guard_allows_non_concrete_factors(text: str) -> None:
 @pytest.mark.parametrize(
     "text",
     [
-        "建議判刑\n三年",
         "刑期另行審酌\n案發三年前",
         "罰金可能性\n犯罪所得100萬",
         "可能緩刑\n照顧家人五年",
     ],
 )
 def test_penalty_guard_does_not_cartesian_join_unrelated_fragments(text: str) -> None:
+    assert not contains_concrete_penalty(text)
+
+
+@pytest.mark.parametrize(
+    "text",
+    ["建議判刑，三年", "建議判刑\n三年", "科處；新臺幣十萬元"],
+)
+def test_penalty_guard_links_adjacent_pure_values_in_the_same_field(text: str) -> None:
+    assert contains_concrete_penalty(text)
+
+
+@pytest.mark.parametrize(
+    "text",
+    ["刑期另行審酌，案發三年前", "罰金可能性；犯罪所得100萬", "可能緩刑\n照顧家人五年"],
+)
+def test_penalty_guard_keeps_contextual_adjacent_fragments_independent(text: str) -> None:
     assert not contains_concrete_penalty(text)
 
 

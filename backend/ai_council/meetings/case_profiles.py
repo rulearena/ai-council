@@ -4,7 +4,11 @@ from dataclasses import dataclass
 import re
 from typing import Mapping
 
-from ai_council.meetings.legal_semantics import contains_concrete_penalty, money_values
+from ai_council.meetings.legal_semantics import (
+    contains_concrete_penalty,
+    money_values,
+    parse_money_expression,
+)
 
 
 class CourtroomCaseProfileError(ValueError):
@@ -121,7 +125,12 @@ class CourtroomCaseProfile:
             refs = claim.get("evidence_refs")
             if isinstance(refs, list) and any(str(ref) not in visible_anchors for ref in refs):
                 raise ValueError("Civil verdict cites unknown or invisible evidence")
-        if not money_values(visible_text, assume_money=True).issubset(money_values(judge_evidence)):
+        verdict_money = money_values("\n".join(_visible_strings_without_monetary_amount(parsed)))
+        verdict_money.update(
+            parse_money_expression(amount, assume_money=True)
+            for amount in _civil_monetary_amounts(parsed)
+        )
+        if not verdict_money.issubset(money_values(judge_evidence)):
             raise ValueError("Civil verdict monetary amount is not supported by visible evidence")
 
 
@@ -132,6 +141,37 @@ def _visible_strings(value: object) -> list[str]:
         return [text for item in value.values() for text in _visible_strings(item)]
     if isinstance(value, list):
         return [text for item in value for text in _visible_strings(item)]
+    return []
+
+
+def _visible_strings_without_monetary_amount(value: object) -> list[str]:
+    if isinstance(value, str):
+        return [value]
+    if isinstance(value, dict):
+        return [
+            text
+            for key, item in value.items()
+            if key != "monetary_amount"
+            for text in _visible_strings_without_monetary_amount(item)
+        ]
+    if isinstance(value, list):
+        return [text for item in value for text in _visible_strings_without_monetary_amount(item)]
+    return []
+
+
+def _civil_monetary_amounts(value: object) -> list[str]:
+    if isinstance(value, dict):
+        amounts: list[str] = []
+        for key, item in value.items():
+            if key == "monetary_amount" and item is not None:
+                if not isinstance(item, str):
+                    raise ValueError("monetary_amount must be a string or null")
+                amounts.append(item)
+            else:
+                amounts.extend(_civil_monetary_amounts(item))
+        return amounts
+    if isinstance(value, list):
+        return [amount for item in value for amount in _civil_monetary_amounts(item)]
     return []
 
 def _civil_final_outcome(value: str) -> str:
