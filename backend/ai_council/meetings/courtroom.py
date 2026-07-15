@@ -6,14 +6,14 @@ from dataclasses import dataclass
 from typing import Any, Protocol
 
 from ai_council.meetings.repository import MeetingRepository
+from ai_council.meetings.case_profiles import (
+    CourtroomCaseProfile,
+    CourtroomCaseProfileError,
+    CourtroomStepProfile,
+)
 from ai_council.meetings.deliberation import DeliberationEpochs
 from ai_council.meetings.runner import MeetingRunner, StepDefinition
 from ai_council.models.config import ModelConfig
-from ai_council.prompting.schemas import (
-    COURTROOM_ISSUE_DRAFT_V1_ID,
-    COURTROOM_RULING_V1_ID,
-    STRUCTURED_VERDICT_V1_ID,
-)
 
 
 DOCKET_SCHEMA_VERSION = 1
@@ -25,6 +25,10 @@ def project_courtroom(
 ) -> dict[str, Any] | None:
     if metadata.get("mode_id") != "courtroom":
         return None
+    try:
+        profile = CourtroomCaseProfile.for_metadata(metadata)
+    except CourtroomCaseProfileError:
+        profile = None
     docket = metadata.get("courtroom_docket")
     if not isinstance(docket, dict):
         return {
@@ -35,6 +39,8 @@ def project_courtroom(
             "current_issue_id": None,
             "final_status": "not-ready",
             "available_actions": ["draft-issues", "edit-issues"],
+            "case_type": profile.case_type if profile else None,
+            "requires_case_type": profile is None,
         }
     confirmed = bool(docket.get("confirmed"))
     revision = int(docket.get("revision", 0))
@@ -121,6 +127,8 @@ def project_courtroom(
         "current_issue_id": current_issue_id,
         "final_status": final_status,
         "available_actions": available_actions,
+        "case_type": profile.case_type if profile else None,
+        "requires_case_type": profile is None,
     }
     if final_status == "failed" and final_event is not None:
         projection["failed_step_id"] = str(final_event.get("step_id", ""))
@@ -318,6 +326,7 @@ class CourtroomWorkflowService:
     ) -> None:
         with self._meeting_lock(meeting_id):
             metadata = self._require_courtroom(meeting_id)
+            profile = self._profile(metadata)
             self.validate_draft(metadata, expected_revision)
             event_step_id = f"courtroom-draft-r{expected_revision + 1}"
             self._append_reservation(meeting_id, "draft", expected_revision)
@@ -327,13 +336,13 @@ class CourtroomWorkflowService:
                 model_assignments=model_assignments,
                 step=StepDefinition(
                     "courtroom-issue-draft",
-                    "Judge",
-                    "courtroom_issue_draft",
-                    COURTROOM_ISSUE_DRAFT_V1_ID,
+                    profile.draft.role_id,
+                    profile.draft.prompt_template,
+                    profile.draft.output_schema_id,
                 ),
                 event_step_id=event_step_id,
                 inputs=inputs,
-                extra_event_fields={
+                extra_event_fields={**self._event_snapshot(profile, profile.draft),
                     "interaction_type": "courtroom-issue-draft",
                     "docket_revision": expected_revision,
                 },
@@ -363,29 +372,30 @@ class CourtroomWorkflowService:
     ) -> None:
         with self._meeting_lock(meeting_id):
             metadata = self._require_courtroom(meeting_id)
+            profile = self._profile(metadata)
             docket = self.require_confirmed(metadata)
             revision = int(docket["revision"])
             issue = self._require_issue(docket, issue_id)
             self.validate_arguments(metadata, self._workflow_events(meeting_id), issue_id)
             self._append_reservation(meeting_id, "arguments", revision, issue_id)
-            workflow_steps = [
-                ("charge", "Prosecutor", "courtroom_issue_charge"),
-                ("defense", "Defense", "courtroom_issue_defense"),
-                ("rebuttal", "Prosecutor", "courtroom_issue_rebuttal"),
-            ]
-            for phase, role, template in workflow_steps:
+            for phase in profile.argument_phases:
                 completed = runner.run_workflow_step(
                     meeting_id=meeting_id,
                     goal=goal,
                     model_assignments=model_assignments,
-                    step=StepDefinition(f"courtroom-issue-{phase}", role, template),
-                    event_step_id=f"courtroom-r{revision}-{issue_id}-{phase}",
+                    step=StepDefinition(
+                        f"courtroom-issue-{phase.id}",
+                        phase.role_id,
+                        phase.prompt_template,
+                        phase.output_schema_id,
+                    ),
+                    event_step_id=f"courtroom-r{revision}-{issue_id}-{phase.id}",
                     inputs={**inputs, "current_issue": issue["title"]},
-                    extra_event_fields={
+                    extra_event_fields={**self._event_snapshot(profile, phase),
                         "interaction_type": "courtroom-issue-phase",
                         "docket_revision": revision,
                         "issue_id": issue_id,
-                        "issue_phase": phase,
+                        "issue_phase": phase.id,
                     },
                 )
                 if not completed:
@@ -403,6 +413,7 @@ class CourtroomWorkflowService:
     ) -> None:
         with self._meeting_lock(meeting_id):
             metadata = self._require_courtroom(meeting_id)
+            profile = self._profile(metadata)
             docket = self.require_confirmed(metadata)
             revision = int(docket["revision"])
             issue = self._require_issue(docket, issue_id)
@@ -414,13 +425,13 @@ class CourtroomWorkflowService:
                 model_assignments=model_assignments,
                 step=StepDefinition(
                     "courtroom-issue-ruling",
-                    "Judge",
-                    "courtroom_issue_ruling",
-                    COURTROOM_RULING_V1_ID,
+                    profile.ruling.role_id,
+                    profile.ruling.prompt_template,
+                    profile.ruling.output_schema_id,
                 ),
                 event_step_id=f"courtroom-r{revision}-{issue_id}-ruling",
                 inputs={**inputs, "current_issue": issue["title"]},
-                extra_event_fields={
+                extra_event_fields={**self._event_snapshot(profile, profile.ruling),
                     "interaction_type": "courtroom-issue-phase",
                     "docket_revision": revision,
                     "issue_id": issue_id,
@@ -439,6 +450,7 @@ class CourtroomWorkflowService:
     ) -> None:
         with self._meeting_lock(meeting_id):
             metadata = self._require_courtroom(meeting_id)
+            profile = self._profile(metadata)
             docket = self.require_confirmed(metadata)
             revision = int(docket["revision"])
             events = self._workflow_events(meeting_id)
@@ -457,13 +469,13 @@ class CourtroomWorkflowService:
                 model_assignments=model_assignments,
                 step=StepDefinition(
                     "courtroom-final-verdict",
-                    "Judge",
-                    "courtroom_final_verdict",
-                    STRUCTURED_VERDICT_V1_ID,
+                    profile.final.role_id,
+                    profile.final.prompt_template,
+                    profile.final.output_schema_id,
                 ),
                 event_step_id=f"courtroom-r{revision}-final-verdict",
                 inputs={**inputs, "issue_rulings": "\n".join(issue_rulings)},
-                extra_event_fields={
+                extra_event_fields={**self._event_snapshot(profile, profile.final),
                     "interaction_type": "courtroom-final-verdict",
                     "docket_revision": revision,
                 },
@@ -481,6 +493,7 @@ class CourtroomWorkflowService:
     ) -> None:
         with self._meeting_lock(meeting_id):
             metadata = self._require_courtroom(meeting_id)
+            profile = self._profile(metadata)
             docket = self._docket(metadata)
             events = self._workflow_events(meeting_id)
             matching = [event for event in events if event.get("step_id") == step_id]
@@ -500,13 +513,13 @@ class CourtroomWorkflowService:
                     model_assignments=model_assignments,
                     step=StepDefinition(
                         "courtroom-issue-draft",
-                        "Judge",
-                        "courtroom_issue_draft",
-                        COURTROOM_ISSUE_DRAFT_V1_ID,
+                        profile.draft.role_id,
+                        profile.draft.prompt_template,
+                        profile.draft.output_schema_id,
                     ),
                     event_step_id=step_id,
                     inputs=inputs,
-                    extra_event_fields={
+                    extra_event_fields={**self._event_snapshot(profile, profile.draft),
                         "interaction_type": "courtroom-issue-draft",
                         "docket_revision": revision,
                     },
@@ -530,13 +543,13 @@ class CourtroomWorkflowService:
                     model_assignments=model_assignments,
                     step=StepDefinition(
                         "courtroom-final-verdict",
-                        "Judge",
-                        "courtroom_final_verdict",
-                        STRUCTURED_VERDICT_V1_ID,
+                        profile.final.role_id,
+                        profile.final.prompt_template,
+                        profile.final.output_schema_id,
                     ),
                     event_step_id=step_id,
                     inputs={**inputs, "issue_rulings": self._issue_rulings_text(metadata, events)},
-                    extra_event_fields={
+                    extra_event_fields={**self._event_snapshot(profile, profile.final),
                         "interaction_type": "courtroom-final-verdict",
                         "docket_revision": revision,
                     },
@@ -548,31 +561,27 @@ class CourtroomWorkflowService:
             issue_id = str(failed.get("issue_id", ""))
             issue = self._require_issue(docket, issue_id)
             phase = str(failed.get("issue_phase", ""))
-            definitions = [
-                ("charge", "Prosecutor", "courtroom_issue_charge", None),
-                ("defense", "Defense", "courtroom_issue_defense", None),
-                ("rebuttal", "Prosecutor", "courtroom_issue_rebuttal", None),
-                ("ruling", "Judge", "courtroom_issue_ruling", COURTROOM_RULING_V1_ID),
-            ]
+            definitions = [*profile.argument_phases, profile.ruling]
             try:
                 start_index = next(
-                    index for index, definition in enumerate(definitions) if definition[0] == phase
+                    index for index, definition in enumerate(definitions) if definition.id == phase
                 )
             except StopIteration as error:
                 raise CourtroomWorkflowError("Unknown courtroom issue phase", 400) from error
             end_index = 3 if phase != "ruling" else start_index + 1
-            for index, (next_phase, role, template, schema_id) in enumerate(
+            for index, definition in enumerate(
                 definitions[start_index:end_index], start=start_index
             ):
+                next_phase = definition.id
                 completed = runner.run_workflow_step(
                     meeting_id=meeting_id,
                     goal=goal,
                     model_assignments=model_assignments,
                     step=StepDefinition(
                         f"courtroom-issue-{next_phase}",
-                        role,
-                        template,
-                        schema_id or "role-output/v1",
+                        definition.role_id,
+                        definition.prompt_template,
+                        definition.output_schema_id,
                     ),
                     event_step_id=(
                         step_id
@@ -580,7 +589,7 @@ class CourtroomWorkflowService:
                         else f"courtroom-r{revision}-{issue_id}-{next_phase}"
                     ),
                     inputs={**inputs, "current_issue": issue["title"]},
-                    extra_event_fields={
+                    extra_event_fields={**self._event_snapshot(profile, definition),
                         "interaction_type": "courtroom-issue-phase",
                         "docket_revision": revision,
                         "issue_id": issue_id,
@@ -650,6 +659,24 @@ class CourtroomWorkflowService:
                 400,
             )
         return metadata
+
+    @staticmethod
+    def _profile(metadata: dict[str, Any]) -> CourtroomCaseProfile:
+        try:
+            return CourtroomCaseProfile.for_metadata(metadata)
+        except CourtroomCaseProfileError as error:
+            raise CourtroomWorkflowError(str(error)) from error
+
+    @staticmethod
+    def _event_snapshot(
+        profile: CourtroomCaseProfile,
+        step: CourtroomStepProfile,
+    ) -> dict[str, str]:
+        return {
+            "case_type": profile.case_type,
+            "role_display": profile.role_display(step.role_id),
+            "phase_display": step.display,
+        }
 
     @staticmethod
     def _docket(metadata: dict[str, Any]) -> dict[str, Any]:

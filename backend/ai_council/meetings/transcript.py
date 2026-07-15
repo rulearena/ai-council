@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from ai_council.meetings.case_profiles import CourtroomCaseProfile, CourtroomCaseProfileError
+
 
 class TranscriptProjector:
     def project(
@@ -40,7 +42,10 @@ class TranscriptProjector:
         step_id = event.get("step_id", "unknown-step")
         status = event.get("status", "unknown")
         base_step_id = str(event.get("base_step_id") or step_id)
-        role_label = role_labels.get(str(role), "主席" if role == "Human" else str(role))
+        role_label = str(
+            event.get("role_display")
+            or role_labels.get(str(role), "主席" if role == "Human" else str(role))
+        )
         built_in_step_labels = {
             "human-message": "主席發言",
             "human-directed-message": "主席追問",
@@ -56,13 +61,13 @@ class TranscriptProjector:
                 "cancelled": "會議取消",
                 "reopened": "重新開啟會議",
             }.get(str(status), "會議狀態更新")
-        step_label = step_labels.get(
+        step_label = str(event.get("phase_display") or step_labels.get(
             str(event.get("event_id", "")),
             step_labels.get(
                 str(step_id),
                 step_labels.get(base_step_id, built_in_step_labels.get(base_step_id, str(step_id))),
             ),
-        )
+        ))
         heading = f"## {role_label} - {step_label}"
         if event.get("corrects_event_id"):
             heading += "（訂正）"
@@ -85,6 +90,18 @@ class TranscriptProjector:
         parsed_output = event.get("parsed_output") or {}
         if event.get("output_schema_id") == "structured-verdict/v1":
             lines.extend(self._render_structured_verdict(parsed_output))
+            return lines
+        if event.get("output_schema_id") in {
+            "courtroom-civil-final/v1",
+            "courtroom-criminal-final/v1",
+        }:
+            try:
+                rendered = CourtroomCaseProfile.for_type(str(event.get("case_type"))).render_final(
+                    parsed_output
+                )
+            except CourtroomCaseProfileError:
+                rendered = str(parsed_output)
+            lines.extend(["", "### 全案最終判決", "", rendered])
             return lines
         lines.extend(
             [

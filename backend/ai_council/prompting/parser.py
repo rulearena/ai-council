@@ -166,6 +166,122 @@ class CourtroomRulingParser:
             raise OutputParseError(str(error), raw_output=raw_output) from error
 
 
+def _validated_evidence_refs(payload: dict[str, Any]) -> list[str]:
+    evidence_refs = parse_strings(payload, "evidence_refs")
+    for evidence_ref in evidence_refs:
+        if EVIDENCE_REF_PATTERN.fullmatch(evidence_ref) is None:
+            raise ValueError(f"Invalid evidence ref: {evidence_ref}")
+    return evidence_refs
+
+
+class CourtroomCivilFinalParser:
+    def parse(self, raw_output: str) -> dict[str, Any]:
+        try:
+            payload = json.loads(extract_first_json_object(raw_output))
+            if not isinstance(payload, dict):
+                raise TypeError("civil final verdict must be an object")
+            require_exact_keys(
+                payload, {"summary", "claims", "unresolved_questions"}, "civil final verdict"
+            )
+            claims = payload["claims"]
+            if not isinstance(claims, list):
+                raise TypeError("claims must be a list")
+            normalized = []
+            for claim in claims:
+                if not isinstance(claim, dict):
+                    raise TypeError("civil claim must be an object")
+                require_exact_keys(
+                    claim,
+                    {"claim", "outcome", "reasoning", "evidence_refs", "relief"},
+                    "civil claim",
+                )
+                outcome = require_string(claim, "outcome")
+                if outcome not in {"upheld", "partially-upheld", "rejected", "insufficient-evidence"}:
+                    raise ValueError(f"Unknown civil outcome: {outcome}")
+                refs = _validated_evidence_refs(claim)
+                relief = claim["relief"]
+                if not isinstance(relief, dict):
+                    raise TypeError("relief must be an object")
+                require_exact_keys(
+                    relief, {"obligation", "monetary_amount", "calculation_basis"}, "civil relief"
+                )
+                amount = relief["monetary_amount"]
+                basis = relief["calculation_basis"]
+                if amount is not None and not isinstance(amount, str):
+                    raise TypeError("monetary_amount must be a string or null")
+                if basis is not None and not isinstance(basis, str):
+                    raise TypeError("calculation_basis must be a string or null")
+                if isinstance(amount, str) and amount.strip():
+                    if not refs:
+                        raise ValueError("monetary relief requires evidence refs")
+                    if not isinstance(basis, str) or not basis.strip():
+                        raise ValueError("monetary relief requires a calculation basis")
+                normalized.append({
+                    "claim": require_string(claim, "claim"),
+                    "outcome": outcome,
+                    "reasoning": require_string(claim, "reasoning"),
+                    "evidence_refs": refs,
+                    "relief": {
+                        "obligation": require_string(relief, "obligation"),
+                        "monetary_amount": amount,
+                        "calculation_basis": basis,
+                    },
+                })
+            return {
+                "summary": require_string(payload, "summary"),
+                "claims": normalized,
+                "unresolved_questions": parse_strings(payload, "unresolved_questions"),
+            }
+        except (json.JSONDecodeError, TypeError, KeyError, ValueError) as error:
+            raise OutputParseError(str(error), raw_output=raw_output) from error
+
+
+class CourtroomCriminalFinalParser:
+    def parse(self, raw_output: str) -> dict[str, Any]:
+        try:
+            payload = json.loads(extract_first_json_object(raw_output))
+            if not isinstance(payload, dict):
+                raise TypeError("criminal final verdict must be an object")
+            require_exact_keys(
+                payload,
+                {"summary", "charges", "sentencing_factors", "unresolved_questions"},
+                "criminal final verdict",
+            )
+            charges = payload["charges"]
+            if not isinstance(charges, list):
+                raise TypeError("charges must be a list")
+            normalized = []
+            for charge in charges:
+                if not isinstance(charge, dict):
+                    raise TypeError("criminal charge must be an object")
+                require_exact_keys(
+                    charge, {"charge", "decision", "reasoning", "evidence_refs"}, "criminal charge"
+                )
+                decision = require_string(charge, "decision")
+                if decision not in {"guilty", "not-guilty", "insufficient-evidence"}:
+                    raise ValueError(f"Unknown criminal decision: {decision}")
+                normalized.append({
+                    "charge": require_string(charge, "charge"),
+                    "decision": decision,
+                    "reasoning": require_string(charge, "reasoning"),
+                    "evidence_refs": _validated_evidence_refs(charge),
+                })
+            sentencing_factors = parse_strings(payload, "sentencing_factors")
+            concrete_penalty = re.compile(
+                r"有期徒刑|無期徒刑|死刑|拘役|罰金|處以|宣告刑|應執行"
+            )
+            if any(concrete_penalty.search(factor) for factor in sentencing_factors):
+                raise ValueError("sentencing_factors must not state a concrete penalty")
+            return {
+                "summary": require_string(payload, "summary"),
+                "charges": normalized,
+                "sentencing_factors": sentencing_factors,
+                "unresolved_questions": parse_strings(payload, "unresolved_questions"),
+            }
+        except (json.JSONDecodeError, TypeError, KeyError, ValueError) as error:
+            raise OutputParseError(str(error), raw_output=raw_output) from error
+
+
 def extract_first_json_object(raw_output: str) -> str:
     start = raw_output.find("{")
     if start == -1:

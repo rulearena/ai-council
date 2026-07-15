@@ -15,6 +15,8 @@ from typing import Callable, TypedDict
 from ai_council.models.config import ModelConfig
 from ai_council.prompting.schemas import (
     COURTROOM_ISSUE_DRAFT_V1_ID,
+    COURTROOM_CIVIL_FINAL_V1_ID,
+    COURTROOM_CRIMINAL_FINAL_V1_ID,
     COURTROOM_RULING_V1_ID,
     DEFAULT_OUTPUT_SCHEMA_ID,
     STRUCTURED_VERDICT_V1_ID,
@@ -81,6 +83,34 @@ class MockModelAdapter:
                 "outcome": "partially-upheld",
                 "reasoning": "Mock issue ruling",
                 "evidence_refs": _visible_case_file_anchors(request.prompt)[:1],
+                "unresolved_questions": [],
+            }
+        elif request.output_schema_id == COURTROOM_CIVIL_FINAL_V1_ID:
+            payload = {
+                "summary": "Mock verdict",
+                "claims": [{
+                    "claim": "Mock claim",
+                    "outcome": "upheld",
+                    "reasoning": "Mock civil reasoning",
+                    "evidence_refs": _visible_case_file_anchors(request.prompt)[:1],
+                    "relief": {
+                        "obligation": "Mock obligation",
+                        "monetary_amount": None,
+                        "calculation_basis": None,
+                    },
+                }],
+                "unresolved_questions": [],
+            }
+        elif request.output_schema_id == COURTROOM_CRIMINAL_FINAL_V1_ID:
+            payload = {
+                "summary": "Mock verdict",
+                "charges": [{
+                    "charge": "Mock charge",
+                    "decision": "guilty",
+                    "reasoning": "Mock criminal reasoning",
+                    "evidence_refs": _visible_case_file_anchors(request.prompt)[:1],
+                }],
+                "sentencing_factors": ["Mock factor"],
                 "unresolved_questions": [],
             }
         else:

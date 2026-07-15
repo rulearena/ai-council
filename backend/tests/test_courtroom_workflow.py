@@ -40,10 +40,123 @@ def create_client(
 def create_courtroom(client: TestClient) -> str:
     response = client.post(
         "/meetings",
-        json={"title": "土地糾紛案", "goal": "被告是否應返還土地？", "mode_id": "courtroom"},
+        json={
+            "title": "土地糾紛案",
+            "goal": "被告是否應返還土地？",
+            "mode_id": "courtroom",
+            "case_type": "civil",
+        },
     )
     assert response.status_code == 200
     return response.json()["meeting_id"]
+
+
+def test_new_courtroom_requires_explicit_case_type(tmp_path: Path) -> None:
+    client = create_client(tmp_path)
+
+    missing = client.post(
+        "/meetings",
+        json={"title": "案件", "goal": "作成判決", "mode_id": "courtroom"},
+    )
+    assert missing.status_code == 422
+    assert "case type" in missing.json()["detail"].lower()
+
+    created = client.post(
+        "/meetings",
+        json={
+            "title": "案件",
+            "goal": "作成判決",
+            "mode_id": "courtroom",
+            "case_type": "criminal",
+        },
+    )
+    assert created.status_code == 200
+    assert created.json()["case_type"] == "criminal"
+
+
+def test_non_courtroom_rejects_case_type(tmp_path: Path) -> None:
+    client = create_client(tmp_path)
+    response = client.post(
+        "/meetings",
+        json={
+            "title": "一般會議",
+            "goal": "形成共識",
+            "mode_id": "red-blue",
+            "case_type": "civil",
+        },
+    )
+    assert response.status_code == 400
+
+
+def test_case_type_switch_clears_unconfirmed_draft_and_locks_after_confirmation(
+    tmp_path: Path,
+) -> None:
+    client = create_client(tmp_path)
+    meeting_id = create_courtroom(client)
+    client.put(
+        f"/meetings/{meeting_id}/courtroom/issues",
+        json={"revision": 0, "issues": [{"title": "草稿爭點"}]},
+    )
+
+    switched = client.put(
+        f"/meetings/{meeting_id}/courtroom/case-type",
+        json={"case_type": "criminal"},
+    )
+    assert switched.status_code == 200
+    assert switched.json()["case_type"] == "criminal"
+    assert switched.json()["courtroom"]["status"] == "not-configured"
+
+    client.put(
+        f"/meetings/{meeting_id}/courtroom/issues",
+        json={"revision": 0, "issues": [{"title": "犯罪爭點"}]},
+    )
+    client.post(
+        f"/meetings/{meeting_id}/courtroom/issues/confirm",
+        json={"revision": 1},
+    )
+    locked = client.put(
+        f"/meetings/{meeting_id}/courtroom/case-type",
+        json={"case_type": "civil"},
+    )
+    assert locked.status_code == 409
+
+
+def test_confirmed_legacy_courtroom_can_select_type_once_without_rewriting_docket(
+    tmp_path: Path,
+) -> None:
+    client = create_client(tmp_path)
+    meeting_id = create_courtroom(client)
+    client.put(
+        f"/meetings/{meeting_id}/courtroom/issues",
+        json={"revision": 0, "issues": [{"title": "既有爭點"}]},
+    )
+    client.post(
+        f"/meetings/{meeting_id}/courtroom/issues/confirm",
+        json={"revision": 1},
+    )
+    metadata_path = tmp_path / "data" / "meetings" / meeting_id / "metadata.json"
+    legacy = json.loads(metadata_path.read_text(encoding="utf-8"))
+    legacy.pop("case_type")
+    metadata_path.write_text(json.dumps(legacy, ensure_ascii=False), encoding="utf-8")
+
+    viewed = client.get(f"/meetings/{meeting_id}")
+    assert viewed.status_code == 200
+    assert viewed.json()["courtroom"]["requires_case_type"] is True
+    gated = client.post(
+        f"/meetings/{meeting_id}/courtroom/issues/issue-1/arguments"
+    )
+    assert gated.status_code == 409
+
+    selected = client.put(
+        f"/meetings/{meeting_id}/courtroom/case-type",
+        json={"case_type": "civil"},
+    )
+    assert selected.status_code == 200
+    assert selected.json()["courtroom"]["issues"][0]["title"] == "既有爭點"
+    assert client.put(
+        f"/meetings/{meeting_id}/courtroom/case-type",
+        json={"case_type": "criminal"},
+    ).status_code == 409
 
 
 def test_chairman_can_edit_reorder_and_confirm_a_persistent_courtroom_docket(
@@ -74,8 +187,10 @@ def test_chairman_can_edit_reorder_and_confirm_a_persistent_courtroom_docket(
         ],
         "current_issue_id": None,
         "final_status": "not-ready",
-        "available_actions": ["draft-issues", "edit-issues", "confirm-issues"],
-    }
+            "available_actions": ["draft-issues", "edit-issues", "confirm-issues"],
+            "case_type": "civil",
+            "requires_case_type": False,
+        }
 
     reordered = client.put(
         f"/meetings/{meeting_id}/courtroom/issues",
@@ -193,6 +308,14 @@ def test_ai_draft_remains_editable_and_does_not_confirm_itself(tmp_path: Path) -
     )
     assert draft_event["role"] == "Judge"
     assert draft_event["output_schema_id"] == "courtroom-issue-draft/v1"
+    assert {
+        key: draft_event[key]
+        for key in ("case_type", "role_display", "phase_display")
+    } == {
+        "case_type": "civil",
+        "role_display": "法官",
+        "phase_display": "爭點草稿",
+    }
 
 
 def test_each_courtroom_issue_stops_for_ruling_and_final_waits_for_all_rulings(
@@ -287,6 +410,9 @@ def test_each_courtroom_issue_stops_for_ruling_and_final_waits_for_all_rulings(
         and event["status"] == "completed"
     ]
     assert len(final_events) == 1
+    assert final_events[0]["output_schema_id"] == "courtroom-civil-final/v1"
+    assert final_events[0]["case_type"] == "civil"
+    assert final_events[0]["phase_display"] == "全案最終判決"
     final_prompt = final_events[0]["prompt_messages"][0]["content"]
     assert "占有權源" in final_prompt
     assert "返還及孳息" in final_prompt
@@ -798,7 +924,7 @@ def test_directed_courtroom_response_is_only_available_during_ruling_pause(
 
     before = client.get(f"/meetings/{meeting_id}").json()["events"]
     unconfigured = client.post(
-        f"/meetings/{meeting_id}/roles/Prosecutor/respond",
+        f"/meetings/{meeting_id}/roles/Defense/respond",
         json={"instruction": "請釐清占有權源"},
     )
     assert unconfigured.status_code == 409

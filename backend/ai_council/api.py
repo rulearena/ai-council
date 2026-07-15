@@ -41,6 +41,10 @@ from ai_council.meetings.courtroom import (
     CourtroomWorkflowService,
     project_courtroom,
 )
+from ai_council.meetings.case_profiles import (
+    CourtroomCaseProfile,
+    CourtroomCaseProfileError,
+)
 from ai_council.meetings.coordination import MeetingTransitionCoordinator
 from ai_council.meetings.assignments import (
     AssignmentValidationError,
@@ -153,6 +157,7 @@ class CreateMeetingRequest(BaseModel):
     participants: list[MeetingParticipantRequest] = Field(default_factory=list)
     inputs: dict[str, str] = Field(default_factory=dict)
     case_files: list[CaseFileRequest] = Field(default_factory=list)
+    case_type: Literal["civil", "criminal"] | None = None
 
     @field_validator("title", "goal")
     @classmethod
@@ -188,6 +193,10 @@ class ReplaceCourtroomIssuesRequest(BaseModel):
 
 class CourtroomRevisionRequest(BaseModel):
     revision: int = Field(ge=0)
+
+
+class CourtroomCaseTypeRequest(BaseModel):
+    case_type: Literal["civil", "criminal"]
 
 
 class RestartDeliberationRequest(BaseModel):
@@ -560,6 +569,16 @@ def create_app(
                 status_code=400,
                 detail=f"Mode is not yet supported: {mode.id}",
             )
+        if mode.id == "courtroom" and request.case_type is None:
+            raise HTTPException(
+                status_code=422,
+                detail="Courtroom case type must be explicitly selected",
+            )
+        if mode.id != "courtroom" and request.case_type is not None:
+            raise HTTPException(
+                status_code=400,
+                detail="Case type is only available for courtroom meetings",
+            )
         participants = normalize_participants(mode, request.participants, model_repository)
         case_files = normalize_case_files(mode, participants, request.case_files, limits)
 
@@ -590,6 +609,8 @@ def create_app(
             "participants": participants,
             "inputs": request.inputs,
         }
+        if request.case_type is not None:
+            metadata["case_type"] = request.case_type
         metadata_store.save(metadata)
         if case_files:
             repository.save_case_files(meeting_id, case_files)
@@ -1079,6 +1100,43 @@ def create_app(
         )
         return get_meeting(meeting_id)
 
+    @app.put("/meetings/{meeting_id}/courtroom/case-type")
+    @meeting_transitions.synchronized
+    def update_courtroom_case_type(
+        meeting_id: str,
+        request: CourtroomCaseTypeRequest,
+    ) -> dict[str, Any]:
+        reject_running_meeting(jobs, meeting_id)
+        reject_terminal_meeting(repository, meeting_id)
+        metadata = metadata_store.get(meeting_id)
+        if metadata.get("mode_id") != "courtroom":
+            raise HTTPException(status_code=400, detail="Case type is only available for courtroom meetings")
+        docket = metadata.get("courtroom_docket")
+        confirmed = isinstance(docket, dict) and bool(docket.get("confirmed"))
+        current = metadata.get("case_type")
+        if confirmed and current is not None:
+            raise HTTPException(status_code=409, detail="Confirmed courtroom case type is read-only")
+
+        def apply_case_type(existing: dict[str, Any]) -> dict[str, Any]:
+            updated = {**existing, "case_type": request.case_type}
+            existing_docket = existing.get("courtroom_docket")
+            if (
+                current != request.case_type
+                and isinstance(existing_docket, dict)
+                and not bool(existing_docket.get("confirmed"))
+            ):
+                updated.pop("courtroom_docket", None)
+            return updated
+
+        updated = metadata_store.update(meeting_id, apply_case_type)
+        return project_meeting_summary(
+            updated,
+            repository.read_events(meeting_id),
+            mode=meeting_mode(mode_catalog, updated),
+            model_pricing=model_pricing_by_id(model_repository),
+            meeting_assignments=meeting_assignments,
+        )
+
     @app.put("/meetings/{meeting_id}/courtroom/issues")
     @meeting_transitions.synchronized
     def replace_courtroom_issues(
@@ -1413,6 +1471,10 @@ def create_app(
         )
         mode = meeting_mode(mode_catalog, metadata)
         if mode.id == "courtroom":
+            try:
+                CourtroomCaseProfile.for_metadata(metadata)
+            except CourtroomCaseProfileError as error:
+                raise HTTPException(status_code=409, detail=str(error)) from error
             raise HTTPException(
                 status_code=409,
                 detail="Use the courtroom issue workflow to start arguments",
@@ -1562,6 +1624,10 @@ def create_app(
         events = workflow_meeting_events(repository, meeting_id)
         directed_context: dict[str, object] = {}
         if mode.id == "courtroom":
+            try:
+                profile = CourtroomCaseProfile.for_metadata(metadata)
+            except CourtroomCaseProfileError as error:
+                raise HTTPException(status_code=409, detail=str(error)) from error
             courtroom = courtroom_workflow.project(metadata, events)
             if (
                 courtroom is None
@@ -1575,6 +1641,11 @@ def create_app(
                         "Directed courtroom responses are only available after the current "
                         "issue arguments complete and before its ruling"
                     ),
+                )
+            if role != "Defense":
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Directed courtroom supplements are only available for {profile.role_display('Defense')}",
                 )
             directed_context = {
                 "docket_revision": int(courtroom["revision"]),
@@ -1717,6 +1788,10 @@ def create_app(
         )
         mode = meeting_mode(mode_catalog, metadata)
         if mode.id == "courtroom":
+            try:
+                CourtroomCaseProfile.for_metadata(metadata)
+            except CourtroomCaseProfileError as error:
+                raise HTTPException(status_code=409, detail=str(error)) from error
             raise HTTPException(
                 status_code=409,
                 detail="Role sequences cannot bypass the courtroom issue workflow",
@@ -1869,6 +1944,10 @@ def create_app(
                 )
         try:
             if mode.id == "courtroom":
+                try:
+                    CourtroomCaseProfile.for_metadata(metadata)
+                except CourtroomCaseProfileError as error:
+                    raise CourtroomWorkflowError(str(error)) from error
                 events = workflow_meeting_events(repository, meeting_id)
                 matching = [event for event in events if event.get("step_id") == step_id]
                 failed = matching[-1] if matching else None
@@ -2783,6 +2862,10 @@ def courtroom_operation_context(
             status_code=400,
             detail="Courtroom workflow is only available for courtroom meetings",
         )
+    try:
+        CourtroomCaseProfile.for_metadata(metadata)
+    except CourtroomCaseProfileError as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
     return (
         metadata,
         mode,

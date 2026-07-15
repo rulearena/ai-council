@@ -547,6 +547,7 @@ export function useCouncil() {
       content: string
       visible_roles: string[]
     }> = [],
+    caseType?: 'civil' | 'criminal',
   ) {
     loading.value = true
     error.value = ''
@@ -557,6 +558,7 @@ export function useCouncil() {
         inputs,
         participants,
         caseFiles,
+        caseType,
       })
       meetings.value = await getMeetings()
       await openMeeting(meeting.meeting_id)

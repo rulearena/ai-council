@@ -28,6 +28,9 @@ export type PresentationEvent = {
     | 'meeting-goal-changed'
   target_role_id?: string
   issue_phase?: 'charge' | 'defense' | 'rebuttal' | 'ruling'
+  case_type?: 'civil' | 'criminal'
+  role_display?: string
+  phase_display?: string
   status?: string
 }
 
@@ -70,7 +73,7 @@ export function interactionDisplayLabel(
   participants: PresentationParticipant[],
   event: PresentationEvent,
 ): string | null {
-  const roleName = roleDisplayName(mode, participants, event.role)
+  const roleName = event.role_display || roleDisplayName(mode, participants, event.role)
   if (event.interaction_type === 'directed-role-instruction' && event.target_role_id) {
     return `主席追問${roleDisplayName(mode, participants, event.target_role_id)}`
   }
@@ -95,6 +98,7 @@ export function stepDisplayLabel(
   participants: PresentationParticipant[],
   event: PresentationEvent,
 ): string {
+  if (event.phase_display) return event.phase_display
   const interactionLabel = interactionDisplayLabel(mode, participants, event)
   if (interactionLabel) return interactionLabel
   if (event.role === 'Human') return event.step_id === 'human-correction' ? '主席訂正' : '主席發言'

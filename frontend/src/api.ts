@@ -52,6 +52,7 @@ export type Meeting = {
   tags: string[]
   pinned: boolean
   mode_id: string
+  case_type?: 'civil' | 'criminal' | null
   participants: MeetingParticipant[]
   case_files?: CaseFile[]
   events?: MeetingEvent[]
@@ -173,6 +174,9 @@ export type MeetingEvent = {
   docket_revision?: number
   issue_id?: string
   issue_phase?: 'charge' | 'defense' | 'rebuttal' | 'ruling'
+  case_type?: 'civil' | 'criminal'
+  role_display?: string
+  phase_display?: string
   target_role_id?: string
   in_response_to_event_id?: string
   directed_sequence?: number
@@ -342,6 +346,7 @@ export async function createMeeting(
   goal: string,
   options?: {
     modeId?: string
+    caseType?: 'civil' | 'criminal'
     inputs?: Record<string, string>
     participants?: Array<{
       role_id: string
@@ -360,6 +365,7 @@ export async function createMeeting(
     title,
     goal,
     mode_id: options?.modeId ?? DEFAULT_MODE_ID,
+    case_type: options?.caseType,
     inputs: options?.inputs ?? {},
     participants: options?.participants ?? [],
     case_files: options?.caseFiles ?? [],

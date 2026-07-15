@@ -3086,7 +3086,7 @@ def test_create_meeting_with_courtroom_mode(tmp_path: Path) -> None:
 
     response = client.post(
         "/meetings",
-        json={"title": "法庭審理案例", "goal": "法庭審理案例", "mode_id": "courtroom"},
+        json={"title": "法庭審理案例", "goal": "法庭審理案例", "mode_id": "courtroom", "case_type": "civil"},
     )
 
     assert response.status_code == 200
@@ -3104,6 +3104,7 @@ def test_create_meeting_stores_and_returns_case_files(tmp_path: Path) -> None:
             "title": "事故覆盤",
             "goal": "事故覆盤",
             "mode_id": "courtroom",
+                "case_type": "civil",
             "case_files": [
                 {
                     "title": "事故時間線",
@@ -3174,6 +3175,7 @@ def test_get_meeting_derives_evidence_anchors_for_legacy_case_files_without_rewr
             "title": "舊案卷",
             "goal": "舊案卷",
             "mode_id": "courtroom",
+                "case_type": "civil",
             "case_files": [
                 {
                     "title": "事故時間線",
@@ -3223,6 +3225,7 @@ def test_create_meeting_rejects_case_files_for_unknown_roles(tmp_path: Path) -> 
             "title": "事故覆盤",
             "goal": "事故覆盤",
             "mode_id": "courtroom",
+                "case_type": "civil",
             "case_files": [
                 {
                     "title": "藍軍不屬於法庭",
@@ -3464,6 +3467,7 @@ def test_create_meeting_rejects_participant_role_not_in_mode(tmp_path: Path) -> 
             "title": "T",
             "goal": "T",
             "mode_id": "courtroom",
+                "case_type": "civil",
             "participants": [{"role_id": "Blue", "model_config_id": "mock-fast"}],
         },
     )
@@ -3482,6 +3486,7 @@ def test_create_meeting_stores_participant_models(tmp_path: Path) -> None:
             "title": "T",
             "goal": "T",
             "mode_id": "courtroom",
+                "case_type": "civil",
             "participants": [
                 {"role_id": "Prosecutor", "model_config_id": "mock-fast"},
                 {"role_id": "Defense", "model_config_id": "mock-fast"},
@@ -3669,6 +3674,7 @@ def test_create_meeting_rejects_unknown_participant_model(tmp_path: Path) -> Non
             "title": "T",
             "goal": "T",
             "mode_id": "courtroom",
+                "case_type": "civil",
             "participants": [{"role_id": "Prosecutor", "model_config_id": "nope"}],
         },
     )
@@ -3831,7 +3837,7 @@ def test_generic_start_cannot_bypass_courtroom_issue_workflow(tmp_path: Path) ->
     client = TestClient(app)
     meeting_id = client.post(
         "/meetings",
-        json={"title": "法庭審理", "goal": "法庭審理", "mode_id": "courtroom"},
+        json={"title": "法庭審理", "goal": "法庭審理", "mode_id": "courtroom", "case_type": "civil"},
     ).json()["meeting_id"]
 
     response = client.post(
@@ -3938,7 +3944,7 @@ def test_courtroom_start_request_models_cannot_bypass_issue_workflow(tmp_path: P
     client = TestClient(app)
     meeting_id = client.post(
         "/meetings",
-        json={"title": "法庭審理", "goal": "法庭審理", "mode_id": "courtroom"},
+        json={"title": "法庭審理", "goal": "法庭審理", "mode_id": "courtroom", "case_type": "civil"},
     ).json()["meeting_id"]
 
     response = client.post(
@@ -3992,6 +3998,7 @@ def test_case_files_reach_only_visible_role_prompts(tmp_path: Path) -> None:
             "title": "事故覆盤",
             "goal": "事故覆盤",
             "mode_id": "courtroom",
+                "case_type": "civil",
             "case_files": [
                 {
                     "title": "檢方事故時間線",
@@ -4043,6 +4050,7 @@ def test_roles_without_visible_case_files_receive_citation_rules_without_evidenc
             "title": "限制案卷可見範圍",
             "goal": "限制案卷可見範圍",
             "mode_id": "courtroom",
+                "case_type": "civil",
             "case_files": [
                 {
                     "title": "裁判密件",
@@ -4236,7 +4244,7 @@ def test_respond_as_role_accepts_mode_roles(tmp_path: Path) -> None:
     client = TestClient(app)
     meeting_id = client.post(
         "/meetings",
-        json={"title": "法庭審理", "goal": "法庭審理", "mode_id": "courtroom"},
+        json={"title": "法庭審理", "goal": "法庭審理", "mode_id": "courtroom", "case_type": "civil"},
     ).json()["meeting_id"]
     assert client.put(
         f"/meetings/{meeting_id}/courtroom/issues",
@@ -4259,8 +4267,8 @@ def test_respond_as_role_accepts_mode_roles(tmp_path: Path) -> None:
         raise AssertionError("Courtroom issue arguments did not complete")
 
     response = client.post(
-        f"/meetings/{meeting_id}/roles/Prosecutor/respond",
-        json={"instruction": "請整理目前控方主張"},
+        f"/meetings/{meeting_id}/roles/Defense/respond",
+        json={"instruction": "請補充目前答辯"},
     )
     assert response.status_code == 202
     deadline = time.monotonic() + 5
@@ -4271,7 +4279,7 @@ def test_respond_as_role_accepts_mode_roles(tmp_path: Path) -> None:
         time.sleep(0.01)
     else:
         raise AssertionError("Directed response did not complete")
-    assert events[-1]["step_id"] == "directed-1-prosecutor-response"
+    assert events[-1]["step_id"] == "directed-1-defense-response"
 
     rejected = client.post(
         f"/meetings/{meeting_id}/roles/Blue/respond",
@@ -4436,7 +4444,7 @@ def test_courtroom_restart_scopes_preserve_only_the_promised_state(tmp_path: Pat
     client = TestClient(create_test_app(tmp_path))
     meeting_id = client.post(
         "/meetings",
-        json={"title": "法院重審", "goal": "逐點判斷", "mode_id": "courtroom"},
+        json={"title": "法院重審", "goal": "逐點判斷", "mode_id": "courtroom", "case_type": "civil"},
     ).json()["meeting_id"]
     assert client.put(
         f"/meetings/{meeting_id}/courtroom/issues",
@@ -4580,7 +4588,7 @@ def test_pending_completed_restart_reconciles_before_mutation_and_rebuild_is_not
     client = TestClient(app, raise_server_exceptions=False)
     meeting_id = client.post(
         "/meetings",
-        json={"title": "Pending rebuild", "goal": "rebuild", "mode_id": "courtroom"},
+        json={"title": "Pending rebuild", "goal": "rebuild", "mode_id": "courtroom", "case_type": "civil"},
     ).json()["meeting_id"]
     assert client.put(
         f"/meetings/{meeting_id}/courtroom/issues",
@@ -4636,7 +4644,7 @@ def test_restart_rejects_a_truly_inflight_meeting(
     client = TestClient(create_test_app(tmp_path))
     meeting_id = client.post(
         "/meetings",
-        json={"title": "Active issue", "goal": "one at a time", "mode_id": "courtroom"},
+        json={"title": "Active issue", "goal": "one at a time", "mode_id": "courtroom", "case_type": "civil"},
     ).json()["meeting_id"]
     assert client.put(
         f"/meetings/{meeting_id}/courtroom/issues",
@@ -4665,7 +4673,7 @@ def test_restart_rejects_non_active_issue_after_an_issue_has_started(tmp_path: P
     client = TestClient(create_test_app(tmp_path))
     meeting_id = client.post(
         "/meetings",
-        json={"title": "Issue identity", "goal": "one at a time", "mode_id": "courtroom"},
+        json={"title": "Issue identity", "goal": "one at a time", "mode_id": "courtroom", "case_type": "civil"},
     ).json()["meeting_id"]
     assert client.put(
         f"/meetings/{meeting_id}/courtroom/issues",
@@ -4763,6 +4771,7 @@ def test_case_material_http_mutations_upgrade_legacy_and_preserve_versions(
             "title": "Versioned evidence",
             "goal": "inspect evidence",
             "mode_id": "courtroom",
+                "case_type": "civil",
             "case_files": [
                 {
                     "title": "Legacy exhibit",
@@ -4998,7 +5007,7 @@ def test_pending_material_impact_blocks_every_courtroom_ai_entrypoint(tmp_path: 
     client = TestClient(create_test_app(tmp_path))
     meeting_id = client.post(
         "/meetings",
-        json={"title": "Court material gate", "goal": "block all", "mode_id": "courtroom"},
+        json={"title": "Court material gate", "goal": "block all", "mode_id": "courtroom", "case_type": "civil"},
     ).json()["meeting_id"]
     MeetingRepository(tmp_path / "data").append_event(
         meeting_id,
@@ -5094,7 +5103,7 @@ def test_carried_ruling_counts_as_active_ai_output_and_keeps_material_references
     client = TestClient(create_test_app(tmp_path))
     meeting_id = client.post(
         "/meetings",
-        json={"title": "carried ruling", "goal": "preserve ruling", "mode_id": "courtroom"},
+        json={"title": "carried ruling", "goal": "preserve ruling", "mode_id": "courtroom", "case_type": "civil"},
     ).json()["meeting_id"]
     repository = MeetingRepository(tmp_path / "data")
     repository.append_event(
@@ -5179,6 +5188,18 @@ RELAY_PROMPT_TEMPLATES = [
     "courtroom_issue_rebuttal",
     "courtroom_issue_ruling",
     "courtroom_final_verdict",
+    "courtroom_civil_issue_draft",
+    "courtroom_civil_proponent_statement",
+    "courtroom_civil_respondent_defense",
+    "courtroom_civil_limited_rebuttal",
+    "courtroom_civil_issue_ruling",
+    "courtroom_civil_final_verdict",
+    "courtroom_criminal_issue_draft",
+    "courtroom_criminal_proponent_statement",
+    "courtroom_criminal_respondent_defense",
+    "courtroom_criminal_limited_rebuttal",
+    "courtroom_criminal_issue_ruling",
+    "courtroom_criminal_final_verdict",
     "debate_statement_pro",
     "debate_statement_con",
     "debate_cross_pro",
@@ -5235,9 +5256,12 @@ models:
             content += " {{ fanout_outputs }}"
         if template == "directed_role_response":
             content += " {{ role_display_name }} {{ instruction }}"
-        if template.startswith("courtroom_issue_"):
+        if template.startswith("courtroom_issue_") or (
+            template.startswith(("courtroom_civil_", "courtroom_criminal_"))
+            and not template.endswith(("issue_draft", "final_verdict"))
+        ):
             content += " {{ current_issue }}"
-        if template == "courtroom_final_verdict":
+        if template == "courtroom_final_verdict" or template.endswith(("civil_final_verdict", "criminal_final_verdict")):
             content += " {{ issue_rulings }}"
         (prompt_dir / f"{template}.md").write_text(content, encoding="utf-8")
     return create_app(

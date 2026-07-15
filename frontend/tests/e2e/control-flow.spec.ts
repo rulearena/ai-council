@@ -12,6 +12,7 @@ async function createMeetingViaNewCase(
   options: {
     goal?: string
     modeId?: string
+    caseType?: 'civil' | 'criminal'
     inputs?: Record<string, string>
     caseFiles?: Array<{ title: string; content: string; visibleRoles: string[] }>
     modelAssignments?: Record<string, string>
@@ -28,6 +29,9 @@ async function createMeetingViaNewCase(
     .click()
   await page.getByLabel('會議名稱', { exact: true }).fill(title)
   await page.getByLabel('目標', { exact: true }).fill(options?.goal ?? title)
+  if (modeId === 'courtroom') {
+    await page.getByTestId('courtroom-case-type-select').selectOption(options.caseType ?? 'civil')
+  }
   // debate's position_a/position_b (or any future mode's `kind: 'text'` inputs) render as
   // one labeled field per input id - see NewCaseModal.vue's textInputs.
   for (const [inputId, value] of Object.entries(options.inputs ?? {})) {
