@@ -10,7 +10,26 @@ _ARABIC_NUMBER = r"[0-9]+(?:,[0-9]{3})*(?:\.[0-9]+)?"
 _ARABIC_UNIT = "十拾百佰千仟萬億"
 _AMOUNT_ATOM = rf"(?:{_ARABIC_NUMBER}\s*[{_ARABIC_UNIT}]?|[{_CHINESE_NUMBER}]+)"
 _AMOUNT_EXPRESSION = rf"{_AMOUNT_ATOM}(?:\s*{_AMOUNT_ATOM})*"
-_CURRENCY_MARKER = r"(?:新臺幣|臺幣|TWD|NT\$|美元|美金|USD|\$)"
+_CURRENCY_ALIASES = {
+    "TWD": ("新臺幣", "臺幣", "TWD", "NT$"),
+    "USD": ("美元", "美金", "USD", "$"),
+    "CNY": ("人民幣", "RMB", "CNY"),
+    "JPY": ("日圓", "日元", "JPY"),
+    "EUR": ("歐元", "EUR"),
+    "GBP": ("英鎊", "GBP"),
+    "HKD": ("港幣", "HKD"),
+    "KRW": ("韓元", "韓圜", "KRW"),
+}
+_ALIAS_TO_CURRENCY = {
+    alias.upper(): currency
+    for currency, aliases in _CURRENCY_ALIASES.items()
+    for alias in aliases
+}
+_KNOWN_CURRENCY_MARKERS = "|".join(
+    re.escape(alias)
+    for alias in sorted(_ALIAS_TO_CURRENCY, key=len, reverse=True)
+)
+_CURRENCY_MARKER = rf"(?:{_KNOWN_CURRENCY_MARKERS}|[A-Z]{{3}})"
 _TOKEN_BOUNDARY = rf"A-Za-z0-9_{_CHINESE_NUMBER}"
 _MONEY_TOKEN = re.compile(
     rf"(?<![{_TOKEN_BOUNDARY}])"
@@ -21,8 +40,9 @@ _MONEY_TOKEN = re.compile(
     re.IGNORECASE,
 )
 _AMOUNT_ATOM_TOKEN = re.compile(
-    rf"(?P<arabic>{_ARABIC_NUMBER})\s*(?P<unit>[{_ARABIC_UNIT}])?|"
-    rf"(?P<chinese>[{_CHINESE_NUMBER}]+)"
+    rf"(?P<arabic>{_ARABIC_NUMBER})|"
+    rf"(?P<digit>[零〇一二兩三四五六七八九壹貳參肆伍陸柒捌玖])|"
+    rf"(?P<unit>[{_ARABIC_UNIT}])"
 )
 _PUNISHMENT_SEMANTIC = re.compile(
     r"判刑|判處|科刑|刑期|徒刑|拘役|緩刑|監禁|入監|褫奪公權|"
@@ -34,8 +54,11 @@ _PENALTY_DURATION = re.compile(
     rf"(?:年|個月|月|日)(?![{_TOKEN_BOUNDARY}])"
 )
 _INHERENT_CONCRETE_PENALTY = re.compile(
-    r"死刑|無期徒刑|終身監禁|終身徒刑|永久褫奪公權"
+    r"死刑|無期徒刑|"
+    r"(?:(?:永久|終身|無限期).{0,8}(?:監禁|徒刑|褫奪公權|拘禁|入監)|"
+    r"(?:監禁|徒刑|褫奪公權|拘禁|入監).{0,8}(?:永久|終身|無限期))"
 )
+_VISIBLE_FRAGMENT_SEPARATOR = re.compile(r"[。；;\n\r！？!?]+")
 
 _DIGITS = {
     "零": 0, "〇": 0, "一": 1, "壹": 1, "二": 2, "兩": 2, "貳": 2,
@@ -47,7 +70,6 @@ _SMALL_UNITS = {
     "十": 10, "拾": 10, "百": 100, "佰": 100, "千": 1000, "仟": 1000,
 }
 _LARGE_UNITS = {"萬": 10_000, "億": 100_000_000}
-_UNITS = {**_SMALL_UNITS, **_LARGE_UNITS}
 
 
 def evaluate_amount_expression(expression: str) -> Decimal:
@@ -56,20 +78,43 @@ def evaluate_amount_expression(expression: str) -> Decimal:
     if not normalized:
         raise ValueError("Amount expression is empty")
     total = Decimal(0)
+    group = Decimal(0)
+    section = Decimal(0)
+    number: Decimal | None = None
+    previous_was_chinese_digit = False
     cursor = 0
     for match in _AMOUNT_ATOM_TOKEN.finditer(normalized):
         if normalized[cursor:match.start()].strip():
             raise ValueError(f"Invalid amount expression: {expression}")
         if match.group("arabic") is not None:
-            value = Decimal(match.group("arabic").replace(",", ""))
-            unit = match.group("unit")
-            total += value * Decimal(_UNITS.get(unit, 1))
+            if number is not None:
+                raise ValueError(f"Invalid adjacent numbers in amount expression: {expression}")
+            number = Decimal(match.group("arabic").replace(",", ""))
+            previous_was_chinese_digit = False
+        elif match.group("digit") is not None:
+            digit = Decimal(_DIGITS[match.group("digit")])
+            number = number * 10 + digit if previous_was_chinese_digit else digit
+            previous_was_chinese_digit = True
         else:
-            total += Decimal(_chinese_integer(match.group("chinese")))
+            unit = match.group("unit")
+            previous_was_chinese_digit = False
+            if unit in _SMALL_UNITS:
+                section += (number if number is not None else Decimal(1)) * _SMALL_UNITS[unit]
+                number = None
+            elif unit == "萬":
+                section += number or Decimal(0)
+                group += section * _LARGE_UNITS[unit]
+                section = Decimal(0)
+                number = None
+            else:
+                section += number or Decimal(0)
+                total += (group + section) * _LARGE_UNITS[unit]
+                group = section = Decimal(0)
+                number = None
         cursor = match.end()
     if cursor == 0 or normalized[cursor:].strip():
         raise ValueError(f"Invalid amount expression: {expression}")
-    return total
+    return total + group + section + (number or Decimal(0))
 
 
 def money_values(text: str) -> set[tuple[str, Decimal]]:
@@ -89,33 +134,22 @@ def money_values(text: str) -> set[tuple[str, Decimal]]:
 
 
 def contains_concrete_penalty(text: str) -> bool:
-    """Detect a concrete penalty across the complete visible structured output."""
+    """Detect a concrete penalty within each visible field or sentence."""
     normalized = unicodedata.normalize("NFKC", text)
-    if _INHERENT_CONCRETE_PENALTY.search(normalized):
-        return True
-    if _PUNISHMENT_SEMANTIC.search(normalized) and _PENALTY_DURATION.search(normalized):
-        return True
-    return bool(_MONEY_PENALTY_SEMANTIC.search(normalized) and money_values(normalized))
+    for fragment in _VISIBLE_FRAGMENT_SEPARATOR.split(normalized):
+        if _INHERENT_CONCRETE_PENALTY.search(fragment):
+            return True
+        if _PUNISHMENT_SEMANTIC.search(fragment) and _PENALTY_DURATION.search(fragment):
+            return True
+        if _MONEY_PENALTY_SEMANTIC.search(fragment) and money_values(fragment):
+            return True
+    return False
 
 
 def _currency_code(marker: str | None) -> str | None:
     if marker is None:
         return None
     normalized = marker.upper()
-    if normalized in {"美元", "美金", "USD", "$"}:
-        return "USD"
-    return "TWD"
-
-
-def _chinese_integer(value: str) -> int:
-    total = section = number = 0
-    for character in value:
-        if character in _DIGITS:
-            number = _DIGITS[character]
-        elif character in _SMALL_UNITS:
-            section += (number or 1) * _SMALL_UNITS[character]
-            number = 0
-        elif character in _LARGE_UNITS:
-            total += (section + number) * _LARGE_UNITS[character]
-            section = number = 0
-    return total + section + number
+    if normalized == "元":
+        return "TWD"
+    return _ALIAS_TO_CURRENCY.get(normalized, f"UNKNOWN:{normalized}")

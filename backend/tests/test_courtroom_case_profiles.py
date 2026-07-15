@@ -184,6 +184,9 @@ def test_civil_final_compares_traditional_chinese_money_values_to_visible_eviden
         ("9萬9千元", "99,000元"),
         ("1億2,000萬元", "新臺幣120,000,000元"),
         ("2億3,000萬元", "230000000元"),
+        ("2千萬元", "20,000,000元"),
+        ("1百萬元", "1,000,000元"),
+        ("1億2千3百萬元", "123,000,000元"),
         ("100美元", "USD 100"),
         ("100萬美元", "USD 1,000,000"),
         ("100萬新臺幣", "新臺幣1,000,000元"),
@@ -216,6 +219,8 @@ def test_civil_money_tokenizer_normalizes_complete_equivalent_amounts(
         ("100美元", "100元"),
         ("100萬美元", "100萬新臺幣"),
         ("1億2,000萬元", "2億3,000萬元"),
+        ("2千萬元", "2,000元"),
+        ("人民幣100", "新臺幣100元"),
     ],
 )
 def test_civil_money_tokenizer_never_truncates_or_changes_magnitude(
@@ -291,10 +296,9 @@ def test_criminal_penalty_guard_allows_non_concrete_sentencing_factors(
 @pytest.mark.parametrize(
     "parsed",
     [
-        {"summary": "建議判刑", "sentencing_factors": ["三年"]},
         {"summary": "建議判刑", "sentencing_factors": ["刑期三年"]},
-        {"summary": "認定有罪", "charges": [{"reasoning": "入監"}], "sentencing_factors": ["五年"]},
-        {"summary": "認定有罪", "charges": [{"reasoning": "科處"}], "sentencing_factors": ["新臺幣十萬元"]},
+        {"summary": "認定有罪", "charges": [{"reasoning": "入監五年"}]},
+        {"summary": "認定有罪", "sentencing_factors": ["科處新臺幣十萬元"]},
     ],
 )
 def test_criminal_penalty_guard_aggregates_all_visible_structured_fields(
@@ -302,3 +306,14 @@ def test_criminal_penalty_guard_aggregates_all_visible_structured_fields(
 ) -> None:
     with pytest.raises(ValueError, match="concrete penalty"):
         CourtroomCaseProfile.for_type("criminal").validate_final_semantics(parsed, None)
+
+
+def test_criminal_penalty_guard_does_not_join_unrelated_visible_fields() -> None:
+    CourtroomCaseProfile.for_type("criminal").validate_final_semantics(
+        {
+            "summary": "刑期另行審酌",
+            "charges": [{"reasoning": "案發三年前"}],
+            "sentencing_factors": ["罰金可能性", "犯罪所得100萬"],
+        },
+        None,
+    )
