@@ -31,6 +31,7 @@ import {
   requestRoleResponse,
   requestRoleSequence,
   reopenMeeting,
+  restartDeliberation,
   retryStep,
   runCourtroomFinalVerdict,
   runCourtroomIssueArguments,
@@ -327,11 +328,11 @@ export function useCouncil() {
   // matching setScene's "manual pick wins for the rest of this meeting" contract.
   const sceneOverrideKey = computed(() => {
     const meeting = selectedMeeting.value
-    return meeting ? `${meeting.meeting_id}::${resolveActiveMode(meeting).defaultScene}` : null
+    return meeting ? `${meeting.meeting_id}::${meeting.scene || resolveActiveMode(meeting).defaultScene}` : null
   })
   watch(sceneOverrideKey, () => {
     const meeting = selectedMeeting.value
-    applyModeScene(meeting ? resolveActiveMode(meeting).defaultScene : null)
+    applyModeScene(meeting ? meeting.scene || resolveActiveMode(meeting).defaultScene : null)
   })
 
   // The open meeting projection is authoritative. With no meeting selected, seed the
@@ -821,6 +822,22 @@ export function useCouncil() {
     })
   }
 
+  async function restartSelectedDeliberation(
+    scope: 'current_issue' | 'all_deliberation' | 'rebuild_issues',
+    reason: string,
+  ): Promise<boolean> {
+    if (!selectedMeeting.value || !reason.trim() || isMeetingRunning.value || isTerminalMeeting.value) return false
+    const meetingId = selectedMeeting.value.meeting_id
+    const issueId = scope === 'current_issue'
+      ? selectedMeeting.value.courtroom?.current_issue_id ?? undefined
+      : undefined
+    return runAction(async () => {
+      await restartDeliberation(meetingId, scope, reason.trim(), issueId)
+      await openMeeting(meetingId)
+      meetings.value = await getMeetings()
+    })
+  }
+
   async function deleteExistingMeeting(meeting: Meeting) {
     if (!window.confirm(`確定刪除「${meeting.title}」？此操作無法復原。`)) return
     await runAction(async () => {
@@ -1181,6 +1198,7 @@ export function useCouncil() {
     cancelSelectedMeeting,
     closeSelectedMeeting,
     reopenSelectedMeeting,
+    restartSelectedDeliberation,
     deleteExistingMeeting,
     editMeetingTags,
     toggleMeetingPinned,

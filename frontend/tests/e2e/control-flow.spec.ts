@@ -294,14 +294,15 @@ test('editing an established goal confirms and audits old/new values while title
   await page.getByTestId('start-meeting-button').click()
   await expect(page.getByTestId('operation-status')).toContainText('狀態：已完成', { timeout: 15000 })
 
-  await page.getByTestId('edit-meeting-details-button').click()
+  await page.getByTestId('meeting-settings-button').click()
   await page.getByTestId('meeting-goal-input').fill(revisedGoal)
   page.once('dialog', async (dialog) => {
     expect(dialog.type()).toBe('confirm')
     expect(dialog.message()).toContain('既有發言不會重新產生')
     await dialog.accept()
   })
-  await page.getByTestId('save-meeting-details-button').click()
+  await page.getByTestId('save-meeting-settings-button').click()
+  await expect(page.getByTestId('meeting-settings-drawer')).not.toBeVisible()
   await page.getByTestId('records-button').click()
   await expect(page.getByTestId('step-timeline')).toContainText('主席修改會議目標')
   await expect(page.getByTestId('step-timeline')).toContainText(`舊目標：${originalGoal}`)
@@ -314,19 +315,18 @@ test('editing an established goal confirms and audits old/new values while title
 
   const eventsPath = join(dataDir!, 'meetings', meetingId, 'events.jsonl')
   const beforeTitleOnly = readFileSync(eventsPath, 'utf8').trim().split('\n').length
-  await expect(page.getByTestId('edit-meeting-details-button')).toBeEnabled()
-  await page.getByTestId('edit-meeting-details-button').click()
+  await page.getByTestId('meeting-settings-button').click()
   await expect(page.getByTestId('meeting-title-input')).toBeEnabled()
   await page.getByTestId('meeting-title-input').fill(`${title}（改名）`)
-  await page.getByTestId('save-meeting-details-button').click()
+  await page.getByTestId('save-meeting-settings-button').click()
   expect(readFileSync(eventsPath, 'utf8').trim().split('\n')).toHaveLength(beforeTitleOnly)
 
   await page.reload()
   await page.getByTestId('past-topics-button').click()
   await page.getByTestId('meeting-list-item').filter({ hasText: `${title}（改名）` }).locator('.meeting-item').click()
-  await page.getByTestId('edit-meeting-details-button').click()
+  await page.getByTestId('meeting-settings-button').click()
   await expect(page.getByTestId('meeting-goal-input')).toHaveValue(revisedGoal)
-  await page.getByRole('button', { name: '取消', exact: true }).click()
+  await page.getByTestId('meeting-settings-close-button').click()
 
   await page.getByTestId('past-topics-button').click()
   page.once('dialog', (dialog) => dialog.accept())
@@ -641,19 +641,17 @@ test('legacy recovery hydration trusts the participant projection instead of eve
 // testid role-derived - `${role.toLowerCase()}-model-select` - for any mode's roster, not
 // just red-blue's Blue/Red/Judge). Leaves the Settings modal open, same as before.
 async function setRoleModelsInSettings(page: Page, assignments: Record<string, string>) {
-  await page.getByTestId('settings-button').click()
+  await page.getByTestId('meeting-settings-button').click()
   for (const [role, model] of Object.entries(assignments)) {
     const select = page.getByTestId(`${role.toLowerCase()}-model-select`)
     if ((await select.inputValue()) === model) continue
-    const response = page.waitForResponse(
-      (candidate) =>
-        candidate.request().method() === 'PUT' &&
-        candidate.url().includes('/participant-models'),
-    )
     await select.selectOption(model)
-    await response
-    await expect(select).toBeEnabled()
   }
+  const response = page.waitForResponse(
+    (candidate) => candidate.request().method() === 'PUT' && candidate.url().endsWith('/settings'),
+  )
+  await page.getByTestId('save-meeting-settings-button').click()
+  await response
 }
 
 async function setModelsInSettings(
@@ -664,8 +662,13 @@ async function setModelsInSettings(
 }
 
 async function closeSettings(page: Page) {
-  await page.getByTestId('settings-close-button').click()
-  await expect(page.getByTestId('settings-modal')).not.toBeVisible()
+  if (await page.getByTestId('meeting-settings-drawer').isVisible().catch(() => false)) {
+    await page.getByTestId('meeting-settings-close-button').click()
+    await expect(page.getByTestId('meeting-settings-drawer')).not.toBeVisible()
+  } else {
+    await page.getByTestId('settings-close-button').click()
+    await expect(page.getByTestId('settings-modal')).not.toBeVisible()
+  }
 }
 
 async function openRoleDrawer(page: Page, role: 'blue' | 'red' | 'judge' | 'chairman') {
@@ -2168,10 +2171,10 @@ test('courtroom handles two confirmed issues one at a time before the final verd
   await expect(page.getByText('回合流程：')).toHaveCount(0)
   await page.getByTestId('advanced-options-button').click()
 
-  await page.getByTestId('edit-meeting-details-button').click()
+  await page.getByTestId('meeting-settings-button').click()
   await page.getByTestId('meeting-title-input').fill(`${topic}（修訂）`)
   await page.getByTestId('meeting-goal-input').fill('判斷被告是否應返還土地及孳息？')
-  await page.getByTestId('save-meeting-details-button').click()
+  await page.getByTestId('save-meeting-settings-button').click()
   await expect(page.getByTestId('meeting-title-display')).toHaveText(`${topic}（修訂）`)
 
   await page.getByTestId('add-courtroom-issue-button').click()
@@ -2191,10 +2194,10 @@ test('courtroom handles two confirmed issues one at a time before the final verd
   await page.getByTestId('confirm-courtroom-issues-button').click()
   await expect(page.getByTestId('courtroom-docket-status')).toHaveText('已確認')
 
-  await page.getByTestId('edit-meeting-details-button').click()
+  await page.getByTestId('meeting-settings-button').click()
   await expect(page.getByTestId('meeting-goal-input')).toHaveAttribute('readonly', '')
-  await expect(page.getByTestId('meeting-details-editor')).toContainText('目標已設為唯讀')
-  await page.getByRole('button', { name: '取消', exact: true }).click()
+  await expect(page.getByTestId('meeting-settings-drawer')).toContainText('爭點已確認')
+  await page.getByTestId('meeting-settings-close-button').click()
 
   const primary = page.getByTestId('courtroom-primary-action')
   await expect(primary).toContainText('開始此爭點')

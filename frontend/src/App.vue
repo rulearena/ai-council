@@ -12,6 +12,8 @@ import RoleDrawer from './components/RoleDrawer.vue'
 import RecordsDrawer from './components/RecordsDrawer.vue'
 import ModeHelpDrawer from './components/ModeHelpDrawer.vue'
 import CourtroomDocketPanel from './components/CourtroomDocketPanel.vue'
+import MeetingSettingsDrawer from './components/MeetingSettingsDrawer.vue'
+import CaseMaterialsDrawer from './components/CaseMaterialsDrawer.vue'
 
 const store = useCouncil()
 provide(councilKey, store)
@@ -23,6 +25,8 @@ const openModal = ref<ModalName | null>(null)
 const openRole = ref<CouncilRole | 'Chairman' | null>(null)
 const recordsOpen = ref(false)
 const modeHelpOpen = ref(false)
+const meetingSettingsOpen = ref(false)
+const materialsOpen = ref(false)
 
 function closeModal() {
   openModal.value = null
@@ -38,6 +42,8 @@ function onSeatClick(role: CouncilRole | 'Chairman') {
   <main class="app-shell">
     <TopBar
       @open-settings="openModal = 'settings'"
+      @open-meeting-settings="meetingSettingsOpen = true"
+      @open-materials="materialsOpen = true"
       @open-past-topics="openModal = 'past-topics'"
       @open-new-case="openModal = 'new-case'"
       @open-records="recordsOpen = true"
@@ -55,6 +61,8 @@ function onSeatClick(role: CouncilRole | 'Chairman') {
     <NewCaseModal :show="openModal === 'new-case'" @close="closeModal" />
     <RoleDrawer :role="openRole" @close="openRole = null" />
     <RecordsDrawer :show="recordsOpen" @close="recordsOpen = false" />
+    <MeetingSettingsDrawer :show="meetingSettingsOpen" @close="meetingSettingsOpen = false" />
+    <CaseMaterialsDrawer :show="materialsOpen" @close="materialsOpen = false" />
     <ModeHelpDrawer :show="modeHelpOpen" @close="modeHelpOpen = false" />
   </main>
 </template>

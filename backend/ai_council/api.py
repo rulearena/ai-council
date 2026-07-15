@@ -181,6 +181,23 @@ class UpdateMeetingDetailsRequest(BaseModel):
         return stripped
 
 
+class UpdateMeetingSettingsRequest(BaseModel):
+    expected_revision: int = Field(ge=0)
+    title: str
+    goal: str
+    case_type: Literal["civil", "criminal"] | None = None
+    scene: Literal["meeting-room", "courtroom", "default-chamber"]
+    participant_models: dict[str, str]
+
+    @field_validator("title", "goal")
+    @classmethod
+    def require_non_blank(cls, value: str) -> str:
+        stripped = value.strip()
+        if not stripped:
+            raise ValueError("must not be blank")
+        return stripped
+
+
 class CourtroomIssueRequest(BaseModel):
     id: str | None = None
     title: str
@@ -617,6 +634,8 @@ def create_app(
             "mode_id": mode.id,
             "participants": participants,
             "inputs": request.inputs,
+            "settings_revision": 0,
+            "scene": mode.default_scene,
         }
         if request.case_type is not None:
             metadata["case_type"] = request.case_type
@@ -1470,6 +1489,146 @@ def create_app(
             )
         events = repository.read_events(meeting_id)
         mode = meeting_mode(mode_catalog, metadata)
+        return project_meeting_summary(
+            metadata,
+            events,
+            mode=mode,
+            model_pricing=model_pricing_by_id(model_repository),
+            meeting_assignments=meeting_assignments,
+            activity_status=live_activity_status(
+                DeliberationEpochs.view(events).active_events,
+                jobs.is_running(meeting_id),
+                mode,
+            ),
+        )
+
+    @app.put("/meetings/{meeting_id}/settings")
+    @meeting_transitions.synchronized
+    def update_meeting_settings(
+        meeting_id: str,
+        request: UpdateMeetingSettingsRequest,
+    ) -> dict[str, Any]:
+        """Replace every meeting-scoped setting in one metadata commit."""
+        reject_running_meeting(jobs, meeting_id)
+        current = metadata_store.get(meeting_id)
+        mode = meeting_mode(mode_catalog, current)
+        role_ids = [
+            str(participant["role_id"])
+            for participant in project_participants(mode, current)
+        ]
+        requested_roles = set(request.participant_models)
+        expected_roles = set(role_ids)
+        if requested_roles != expected_roles:
+            missing = sorted(expected_roles - requested_roles)
+            extra = sorted(requested_roles - expected_roles)
+            details = []
+            if missing:
+                details.append(f"missing roles: {', '.join(missing)}")
+            if extra:
+                details.append(f"unknown roles: {', '.join(extra)}")
+            raise HTTPException(
+                status_code=400,
+                detail="Participant model roster mismatch; " + "; ".join(details),
+            )
+        known_models = {model.id for model in model_repository.list_models()}
+        unknown_models = sorted(set(request.participant_models.values()) - known_models)
+        if unknown_models:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Unknown model: {unknown_models[0]}",
+            )
+        if mode.id == "courtroom" and request.case_type is None:
+            raise HTTPException(
+                status_code=400,
+                detail="Courtroom case type must be explicitly selected",
+            )
+        if mode.id != "courtroom" and request.case_type is not None:
+            raise HTTPException(
+                status_code=400,
+                detail="Case type is only available for courtroom meetings",
+            )
+        docket = current.get("courtroom_docket")
+        confirmed = isinstance(docket, dict) and bool(docket.get("confirmed"))
+        if confirmed and request.goal != current.get("goal"):
+            raise HTTPException(
+                status_code=409,
+                detail="Courtroom goal is read-only after issues are confirmed",
+            )
+        if confirmed and request.case_type != current.get("case_type"):
+            raise HTTPException(
+                status_code=409,
+                detail="Confirmed courtroom case type is read-only",
+            )
+
+        def replace_settings(metadata: dict[str, Any]) -> dict[str, Any]:
+            revision = int(metadata.get("settings_revision", 0))
+            if revision != request.expected_revision:
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        "Stale meeting settings revision: "
+                        f"expected {revision}, got {request.expected_revision}"
+                    ),
+                )
+            stored = {
+                str(item.get("role_id")): item
+                for item in (metadata.get("participants") or [])
+                if isinstance(item, dict)
+            }
+            updated = {
+                **metadata,
+                "title": request.title,
+                "goal": request.goal,
+                "scene": request.scene,
+                "participants": [
+                    {
+                        **stored.get(role_id, {"role_id": role_id}),
+                        "model_config_id": request.participant_models[role_id],
+                    }
+                    for role_id in role_ids
+                ],
+                "settings_revision": revision + 1,
+            }
+            updated.pop("topic", None)
+            if mode.id == "courtroom":
+                previous_case_type = metadata.get("case_type")
+                updated["case_type"] = request.case_type
+                if (
+                    previous_case_type != request.case_type
+                    and isinstance(metadata.get("courtroom_docket"), dict)
+                    and not confirmed
+                ):
+                    updated.pop("courtroom_docket", None)
+            else:
+                updated.pop("case_type", None)
+            return updated
+
+        metadata = metadata_store.update(meeting_id, replace_settings)
+        if request.goal != current.get("goal") and any(
+            event.get("role") not in {"Human", "System"}
+            and event.get("status") == "completed"
+            for event in active_meeting_events(repository, meeting_id)
+        ):
+            repository.append_event(
+                meeting_id,
+                {
+                    "event_id": f"{meeting_id}:goal-changed:{uuid.uuid4().hex}",
+                    "meeting_id": meeting_id,
+                    "step_id": "meeting-goal-changed",
+                    "role": "Human",
+                    "attempt": 1,
+                    "status": "completed",
+                    "interaction_type": "meeting-goal-changed",
+                    "previous_goal": current.get("goal"),
+                    "goal": request.goal,
+                    "content": (
+                        "主席修改會議目標\n"
+                        f"舊目標：{current.get('goal')}\n"
+                        f"新目標：{request.goal}"
+                    ),
+                },
+            )
+        events = repository.read_events(meeting_id)
         return project_meeting_summary(
             metadata,
             events,
@@ -3402,6 +3561,8 @@ def project_meeting_summary(
         "title": meeting_title(metadata),
         "goal": goal if has_goal else None,
         "requires_goal": not has_goal,
+        "settings_revision": int(metadata.get("settings_revision", 0)),
+        "scene": str(metadata.get("scene") or mode.default_scene),
         "created_at": created_at,
         "updated_at": updated_at,
         "status": project_meeting_status(events),

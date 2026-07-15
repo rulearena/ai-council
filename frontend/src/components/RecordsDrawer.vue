@@ -1,13 +1,14 @@
 <script setup lang="ts">
-import { computed, inject, ref } from 'vue'
+import { computed, inject, ref, watch } from 'vue'
 import { activeMode, councilKey, formatDateTime, roleClass, roleColor, roleColorVars, roleIcon } from '../composables/useCouncil'
 import Drawer from './Drawer.vue'
 import RoleSilhouette from './RoleSilhouette.vue'
-import { transcriptDownloadUrl } from '../api'
-import type { MeetingEvent } from '../api'
+import { getDeliberations, getTranscript, promoteMessageToCaseNote, transcriptDownloadUrl } from '../api'
+import type { Deliberations, MeetingEvent } from '../api'
+import { nextHistorySelection } from '../meetingWorkspace'
 import { eventRoleDisplayName, statusDisplayLabel, stepDisplayLabel } from '../presentation'
 
-defineProps<{ show: boolean }>()
+const props = defineProps<{ show: boolean }>()
 defineEmits<{ close: [] }>()
 
 const store = inject(councilKey)!
@@ -22,12 +23,20 @@ const {
   isTerminalMeeting,
   retrySelectedStep,
   correctSelectedMessage,
+  openMeeting,
+  runAction,
 } = store
 
 type RecordsTab = 'timeline' | 'transcript' | 'debug'
 const activeTab = ref<RecordsTab>('timeline')
 const copiedDiagnosticEventId = ref<string | null>(null)
 const copyDiagnosticErrorEventId = ref<string | null>(null)
+const deliberations = ref<Deliberations | null>(null)
+const selectedEpochId = ref('')
+const historyTranscript = ref('')
+let historyMeetingId: string | null = null
+const browsingCurrent = computed(() => selectedEpochId.value === deliberations.value?.active_epoch_id)
+const shownTranscript = computed(() => browsingCurrent.value ? transcript.value : historyTranscript.value)
 const participants = computed(() => selectedMeeting.value?.participants ?? [])
 const displayRole = (event: MeetingEvent) => eventRoleDisplayName(activeMode.value, participants.value, event)
 const displayStep = (event: MeetingEvent) => stepDisplayLabel(activeMode.value, participants.value, event)
@@ -90,10 +99,56 @@ function copyDiagnosticStatus(event: MeetingEvent) {
   if (copyDiagnosticErrorEventId.value === event.event_id) return '複製失敗'
   return ''
 }
+
+watch([() => props.show, () => selectedMeeting.value?.meeting_id], async ([show, meetingId]) => {
+  if (!show || !meetingId) return
+  const previousMeetingId = historyMeetingId
+  deliberations.value = await getDeliberations(meetingId)
+  selectedEpochId.value = nextHistorySelection(
+    previousMeetingId,
+    meetingId,
+    selectedEpochId.value,
+    deliberations.value.active_epoch_id,
+  )
+  historyMeetingId = meetingId
+}, { immediate: true })
+
+watch(selectedEpochId, async (epochId) => {
+  const meetingId = selectedMeeting.value?.meeting_id
+  if (!meetingId || !epochId || epochId === deliberations.value?.active_epoch_id) {
+    historyTranscript.value = ''
+    return
+  }
+  historyTranscript.value = await getTranscript(meetingId, epochId)
+  activeTab.value = 'transcript'
+})
+
+async function promoteToCaseNote(event: MeetingEvent) {
+  const meeting = selectedMeeting.value
+  if (!meeting) return
+  const title = window.prompt('案件備註標題：', event.content?.slice(0, 24) || '主席備註')
+  if (!title?.trim()) return
+  await runAction(async () => {
+    await promoteMessageToCaseNote(
+      meeting.meeting_id,
+      event.event_id,
+      meeting.case_materials?.revision ?? 0,
+      title.trim(),
+      meeting.participants.map((participant) => participant.role_id),
+    )
+    await openMeeting(meeting.meeting_id)
+  })
+}
 </script>
 
 <template>
   <Drawer :show="show" title="議事紀錄" test-id="records-drawer" close-test-id="records-close-button" @close="$emit('close')">
+    <label v-if="deliberations && deliberations.epochs.length" class="epoch-picker">審議輪次
+      <select v-model="selectedEpochId" data-testid="records-epoch-select">
+        <option v-for="epoch in deliberations.epochs" :key="epoch.id" :value="epoch.id">第 {{ epoch.number }} 輪{{ epoch.id === deliberations.active_epoch_id ? '（目前）' : '（已封存）' }} · {{ epoch.event_count }} 筆</option>
+      </select>
+    </label>
+    <p v-if="!browsingCurrent" class="archive-notice">正在查看封存輪次。這裡只能閱讀或下載，不會替換目前會議，也不能編輯或重試。</p>
     <div class="records-tabs">
       <button
         type="button"
@@ -125,7 +180,7 @@ function copyDiagnosticStatus(event: MeetingEvent) {
       </button>
     </div>
 
-    <section v-if="activeTab === 'timeline'" class="timeline" data-testid="step-timeline">
+    <section v-if="activeTab === 'timeline' && browsingCurrent" class="timeline" data-testid="step-timeline">
       <div class="section-title">
         <h2>{{ selectedMeeting?.title ?? '尚未選擇會議' }}</h2>
         <em v-if="selectedMeeting" class="status-badge" :data-status="selectedMeeting.status">{{ statusDisplayLabel(selectedMeeting.status) }}</em>
@@ -162,6 +217,14 @@ function copyDiagnosticStatus(event: MeetingEvent) {
         >
           重試
         </button>
+        <button
+          v-if="event.role === 'Human' && event.step_id === 'human-message' && !event.corrects_event_id"
+          type="button"
+          class="btn btn-secondary btn-sm"
+          data-testid="promote-case-note-button"
+          :disabled="loading || isTerminalMeeting"
+          @click="promoteToCaseNote(event)"
+        >轉為案件備註</button>
         <button
           v-if="event.role === 'Human' && event.step_id === 'human-message' && !event.corrects_event_id"
           type="button"
@@ -234,17 +297,17 @@ function copyDiagnosticStatus(event: MeetingEvent) {
         <a
           v-if="selectedMeeting"
           class="btn btn-secondary btn-sm"
-          :href="transcriptDownloadUrl(selectedMeeting.meeting_id)"
+          :href="transcriptDownloadUrl(selectedMeeting.meeting_id, selectedEpochId || 'current')"
           target="_blank"
           rel="noreferrer"
         >
           下載 Markdown
         </a>
       </div>
-      <div v-if="!transcript" class="empty-state">
+      <div v-if="!shownTranscript" class="empty-state">
         <p>尚無逐字稿</p>
       </div>
-      <pre v-else>{{ transcript }}</pre>
+      <pre v-else>{{ shownTranscript }}</pre>
     </section>
 
     <section v-else-if="activeTab === 'debug'" class="debug" data-testid="debug-panel">

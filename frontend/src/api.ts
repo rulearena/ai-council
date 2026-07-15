@@ -53,10 +53,80 @@ export type Meeting = {
   pinned: boolean
   mode_id: string
   case_type?: 'civil' | 'criminal' | null
+  settings_revision: number
+  scene: string
+  deliberation: DeliberationSummary
   participants: MeetingParticipant[]
   case_files?: CaseFile[]
   events?: MeetingEvent[]
   courtroom: CourtroomProjection | null
+  case_materials?: CaseMaterials
+}
+
+export type DeliberationSummary = {
+  active_epoch_id: string
+  active_epoch_number: number
+  epoch_count: number
+}
+
+export type DeliberationEpoch = {
+  id: string
+  number: number
+  reason: string | null
+  scope: 'current_issue' | 'all_deliberation' | 'rebuild_issues' | null
+  issue_id: string | null
+  implicit: boolean
+  event_count: number
+}
+
+export type Deliberations = {
+  active_epoch_id: string
+  active_epoch_number: number
+  epochs: DeliberationEpoch[]
+}
+
+export type CaseMaterialVersion = {
+  version: number
+  title: string
+  content: string
+  visible_roles: string[]
+  size: number
+  created_at: string
+  source_event_id: string | null
+}
+
+export type VersionedCaseMaterial = {
+  id: string
+  status: 'active' | 'inactive'
+  active_version: number
+  versions: CaseMaterialVersion[]
+  evidence_index?: number
+  citation_anchor?: string
+}
+
+export type CaseMaterials = {
+  schema_version: number
+  revision: number
+  pending_impact: { deliberation_epoch_id: string; reason: string } | null
+  evidence: VersionedCaseMaterial[]
+  notes: VersionedCaseMaterial[]
+  revision_history: Array<Record<string, unknown>>
+}
+
+export type MeetingSettingsPayload = {
+  expected_revision: number
+  title: string
+  goal: string
+  case_type: 'civil' | 'criminal' | null
+  scene: string
+  participant_models: Record<string, string>
+}
+
+export type CaseMaterialPayload = {
+  revision: number
+  title: string
+  content: string
+  visible_roles: string[]
 }
 
 export type CourtroomIssueProjection = {
@@ -407,8 +477,74 @@ export async function updateMeetingDetails(
   return putJson(`/meetings/${meetingId}/details`, { title, goal })
 }
 
+export async function updateMeetingSettings(
+  meetingId: string,
+  payload: MeetingSettingsPayload,
+): Promise<Meeting> {
+  return putJson(`/meetings/${meetingId}/settings`, payload)
+}
+
 export async function getMeeting(meetingId: string): Promise<Meeting> {
   return getJson(`/meetings/${meetingId}`)
+}
+
+export async function getDeliberations(meetingId: string): Promise<Deliberations> {
+  return getJson(`/meetings/${meetingId}/deliberations`)
+}
+
+export async function restartDeliberation(
+  meetingId: string,
+  scope: 'current_issue' | 'all_deliberation' | 'rebuild_issues',
+  reason: string,
+  issueId?: string,
+): Promise<Meeting> {
+  return postJson(`/meetings/${meetingId}/deliberations/restart`, {
+    scope,
+    reason,
+    issue_id: issueId,
+  })
+}
+
+export async function getCaseMaterials(meetingId: string): Promise<CaseMaterials> {
+  return getJson(`/meetings/${meetingId}/materials`)
+}
+
+export async function addCaseEvidence(meetingId: string, payload: CaseMaterialPayload): Promise<CaseMaterials> {
+  return postJson(`/meetings/${meetingId}/materials/evidence`, payload)
+}
+
+export async function addCaseEvidenceVersion(meetingId: string, evidenceId: string, payload: CaseMaterialPayload): Promise<CaseMaterials> {
+  return postJson(`/meetings/${meetingId}/materials/evidence/${encodeURIComponent(evidenceId)}/versions`, payload)
+}
+
+export async function setCaseEvidenceActive(meetingId: string, evidenceId: string, revision: number, active: boolean): Promise<CaseMaterials> {
+  return postJson(`/meetings/${meetingId}/materials/evidence/${encodeURIComponent(evidenceId)}/${active ? 'reactivate' : 'deactivate'}`, { revision })
+}
+
+export async function addCaseNote(meetingId: string, payload: CaseMaterialPayload): Promise<CaseMaterials> {
+  return postJson(`/meetings/${meetingId}/materials/notes`, payload)
+}
+
+export async function addCaseNoteVersion(meetingId: string, noteId: string, payload: CaseMaterialPayload): Promise<CaseMaterials> {
+  return postJson(`/meetings/${meetingId}/materials/notes/${encodeURIComponent(noteId)}/versions`, payload)
+}
+
+export async function setCaseNoteActive(meetingId: string, noteId: string, revision: number, active: boolean): Promise<CaseMaterials> {
+  return postJson(`/meetings/${meetingId}/materials/notes/${encodeURIComponent(noteId)}/${active ? 'reactivate' : 'deactivate'}`, { revision })
+}
+
+export async function promoteMessageToCaseNote(
+  meetingId: string,
+  eventId: string,
+  revision: number,
+  title: string,
+  visibleRoles: string[],
+): Promise<CaseMaterials> {
+  return postJson(`/meetings/${meetingId}/messages/${encodeURIComponent(eventId)}/promote-to-note`, {
+    revision,
+    title,
+    visible_roles: visibleRoles,
+  })
 }
 
 export async function startMeeting(meetingId: string): Promise<void> {
@@ -519,8 +655,8 @@ export async function retryStep(
   await postJson(`/meetings/${meetingId}/steps/${stepId}/retry`, {})
 }
 
-export async function getTranscript(meetingId: string): Promise<string> {
-  const response = await fetch(`${API_BASE}/meetings/${meetingId}/transcript.md`)
+export async function getTranscript(meetingId: string, epoch = 'current'): Promise<string> {
+  const response = await fetch(`${API_BASE}/meetings/${meetingId}/transcript.md?epoch=${encodeURIComponent(epoch)}`)
   if (!response.ok) throw new Error(`Transcript request failed: ${response.status}`)
   return response.text()
 }
@@ -582,6 +718,6 @@ async function deleteJson<T>(path: string): Promise<T> {
   return response.json()
 }
 
-export function transcriptDownloadUrl(meetingId: string): string {
-  return `${API_BASE}/meetings/${meetingId}/transcript.md`
+export function transcriptDownloadUrl(meetingId: string, epoch = 'current'): string {
+  return `${API_BASE}/meetings/${meetingId}/transcript.md?epoch=${encodeURIComponent(epoch)}`
 }

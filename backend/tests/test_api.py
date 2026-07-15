@@ -65,6 +65,238 @@ def test_case_file_limits_endpoint_reports_default_limits(tmp_path: Path) -> Non
     assert response.json() == {"per_file_chars": 50_000, "total_chars": 120_000}
 
 
+def test_meeting_settings_are_saved_atomically_with_scene_and_complete_model_roster(
+    tmp_path: Path,
+) -> None:
+    client = TestClient(
+        create_test_app(
+            tmp_path,
+            models_yaml="""
+models:
+  - id: mock-fast
+    adapter: mock
+  - id: mock-careful
+    adapter: mock
+""".strip(),
+        )
+    )
+    created = client.post(
+        "/meetings", json={"title": "原名稱", "goal": "原目標"}
+    ).json()
+
+    response = client.put(
+        f"/meetings/{created['meeting_id']}/settings",
+        json={
+            "expected_revision": 0,
+            "title": "新名稱",
+            "goal": "新目標",
+            "case_type": None,
+            "scene": "default-chamber",
+            "participant_models": {
+                "Blue": "mock-careful",
+                "Red": "mock-fast",
+                "Judge": "mock-careful",
+            },
+        },
+    )
+
+    assert response.status_code == 200
+    saved = response.json()
+    assert saved["settings_revision"] == 1
+    assert (saved["title"], saved["goal"], saved["scene"]) == (
+        "新名稱",
+        "新目標",
+        "default-chamber",
+    )
+    assert {
+        participant["role_id"]: participant["model_config_id"]
+        for participant in saved["participants"]
+    } == {
+        "Blue": "mock-careful",
+        "Red": "mock-fast",
+        "Judge": "mock-careful",
+    }
+
+
+def test_invalid_meeting_settings_leave_every_field_unchanged(tmp_path: Path) -> None:
+    client = TestClient(create_test_app(tmp_path))
+    created = client.post(
+        "/meetings", json={"title": "原名稱", "goal": "原目標"}
+    ).json()
+    meeting_id = created["meeting_id"]
+
+    rejected = client.put(
+        f"/meetings/{meeting_id}/settings",
+        json={
+            "expected_revision": 0,
+            "title": "不應保存",
+            "goal": "不應保存",
+            "case_type": None,
+            "scene": "not-a-scene",
+            "participant_models": {
+                "Blue": "missing-model",
+                "Red": "mock-fast",
+                "Judge": "mock-fast",
+            },
+        },
+    )
+
+    assert rejected.status_code == 422
+    unchanged = client.get(f"/meetings/{meeting_id}").json()
+    assert unchanged["settings_revision"] == 0
+    assert unchanged["title"] == "原名稱"
+    assert unchanged["goal"] == "原目標"
+    assert unchanged["scene"] == "meeting-room"
+    assert {participant["model_config_id"] for participant in unchanged["participants"]} == {
+        "mock-fast"
+    }
+
+
+def test_meeting_settings_reject_stale_revision_and_confirmed_courtroom_goal_or_type(
+    tmp_path: Path,
+) -> None:
+    client = TestClient(create_test_app(tmp_path))
+    meeting_id = client.post(
+        "/meetings",
+        json={
+            "title": "土地案",
+            "goal": "是否返還土地",
+            "mode_id": "courtroom",
+            "case_type": "civil",
+        },
+    ).json()["meeting_id"]
+    client.put(
+        f"/meetings/{meeting_id}/courtroom/issues",
+        json={"revision": 0, "issues": [{"title": "占有權源"}]},
+    )
+    client.post(
+        f"/meetings/{meeting_id}/courtroom/issues/confirm", json={"revision": 1}
+    )
+    roster = {"Prosecutor": "mock-fast", "Defense": "mock-fast", "Judge": "mock-fast"}
+
+    locked = client.put(
+        f"/meetings/{meeting_id}/settings",
+        json={
+            "expected_revision": 0,
+            "title": "可改名稱",
+            "goal": "改掉目標",
+            "case_type": "criminal",
+            "scene": "courtroom",
+            "participant_models": roster,
+        },
+    )
+    assert locked.status_code == 409
+
+    saved = client.put(
+        f"/meetings/{meeting_id}/settings",
+        json={
+            "expected_revision": 0,
+            "title": "可改名稱",
+            "goal": "是否返還土地",
+            "case_type": "civil",
+            "scene": "courtroom",
+            "participant_models": roster,
+        },
+    )
+    assert saved.status_code == 200
+    stale = client.put(
+        f"/meetings/{meeting_id}/settings",
+        json={
+            "expected_revision": 0,
+            "title": "過期名稱",
+            "goal": "是否返還土地",
+            "case_type": "civil",
+            "scene": "courtroom",
+            "participant_models": roster,
+        },
+    )
+    assert stale.status_code == 409
+    assert client.get(f"/meetings/{meeting_id}").json()["title"] == "可改名稱"
+
+
+def test_meeting_settings_allow_title_change_but_reject_all_changes_while_running(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    entered = threading.Event()
+    release = threading.Event()
+    original_complete = MockModelAdapter.complete
+
+    def slow_complete(self, request):
+        entered.set()
+        release.wait(timeout=3)
+        return original_complete(self, request)
+
+    monkeypatch.setattr(MockModelAdapter, "complete", slow_complete)
+    client = TestClient(create_test_app(tmp_path))
+    meeting_id = client.post(
+        "/meetings", json={"title": "執行中的會議", "goal": "形成建議"}
+    ).json()["meeting_id"]
+    try:
+        response = client.post(f"/meetings/{meeting_id}/start", json={})
+        assert response.status_code == 202
+        assert entered.wait(timeout=2)
+
+        rejected = client.put(
+            f"/meetings/{meeting_id}/settings",
+            json={
+                "expected_revision": 0,
+                "title": "不應保存",
+                "goal": "形成建議",
+                "case_type": None,
+                "scene": "meeting-room",
+                "participant_models": {
+                    "Blue": "mock-fast",
+                    "Red": "mock-fast",
+                    "Judge": "mock-fast",
+                },
+            },
+        )
+
+        assert rejected.status_code == 409
+        unchanged = client.get(f"/meetings/{meeting_id}").json()
+        assert unchanged["title"] == "執行中的會議"
+        assert unchanged["settings_revision"] == 0
+    finally:
+        release.set()
+
+
+def test_atomic_meeting_settings_keep_the_goal_change_audit_after_ai_output(
+    tmp_path: Path,
+) -> None:
+    client = TestClient(create_test_app(tmp_path))
+    meeting_id = client.post(
+        "/meetings", json={"title": "原名稱", "goal": "原目標"}
+    ).json()["meeting_id"]
+    assert client.post(f"/meetings/{meeting_id}/start", json={}).status_code == 202
+    wait_for_activity(client, meeting_id, "completed")
+
+    response = client.put(
+        f"/meetings/{meeting_id}/settings",
+        json={
+            "expected_revision": 0,
+            "title": "新名稱",
+            "goal": "新目標",
+            "case_type": None,
+            "scene": "meeting-room",
+            "participant_models": {
+                "Blue": "mock-fast",
+                "Red": "mock-fast",
+                "Judge": "mock-fast",
+            },
+        },
+    )
+
+    assert response.status_code == 200
+    audit = [
+        event
+        for event in client.get(f"/meetings/{meeting_id}").json()["events"]
+        if event.get("interaction_type") == "meeting-goal-changed"
+    ]
+    assert len(audit) == 1
+    assert audit[0]["content"] == "主席修改會議目標\n舊目標：原目標\n新目標：新目標"
+
+
 def test_case_file_limits_endpoint_reports_environment_overrides(
     tmp_path: Path,
     monkeypatch,
