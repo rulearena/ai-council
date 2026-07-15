@@ -3,8 +3,11 @@ import test from 'node:test'
 
 import {
   courtroomFailedPhaseLabel,
+  courtroomFinalOutcomeLabel,
   courtroomIssueStatusLabel,
+  courtroomNextProponentLabel,
   courtroomOutcomeLabel,
+  nextLegacyCaseTypeSelection,
   nextCourtroomDraft,
 } from '../../src/courtroomWorkspace.ts'
 
@@ -25,6 +28,11 @@ test('courtroom editor preserves unsaved work for same meeting and isolates meet
   }), { revision: 0, issues: [] })
 })
 
+test('legacy case type selection never leaks across meeting switches', () => {
+  assert.equal(nextLegacyCaseTypeSelection('meeting-a', 'meeting-a', 'civil'), 'civil')
+  assert.equal(nextLegacyCaseTypeSelection('meeting-a', 'meeting-b', 'civil'), '')
+})
+
 test('courtroom presentation uses understandable Chinese status and outcome labels', () => {
   assert.equal(courtroomIssueStatusLabel('awaiting-ruling'), '等待主席送交法官')
   assert.equal(courtroomIssueStatusLabel('failed'), '執行失敗，請重試')
@@ -33,4 +41,9 @@ test('courtroom presentation uses understandable Chinese status and outcome labe
   assert.equal(courtroomOutcomeLabel('respondent-wins'), '答辯方勝')
   assert.equal(courtroomOutcomeLabel('partially-upheld'), '部分成立')
   assert.equal(courtroomOutcomeLabel('insufficient-evidence'), '證據不足／無法判定')
+  assert.equal(courtroomNextProponentLabel('civil'), '原告代理人')
+  assert.equal(courtroomNextProponentLabel('criminal'), '檢察官')
+  assert.equal(courtroomFinalOutcomeLabel('upheld', 'civil'), '請求成立')
+  assert.equal(courtroomFinalOutcomeLabel('guilty', 'criminal'), '有罪')
+  assert.equal(courtroomFinalOutcomeLabel('not-guilty', 'criminal'), '無罪')
 })

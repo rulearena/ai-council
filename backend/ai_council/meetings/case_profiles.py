@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from decimal import Decimal
 import re
 from typing import Mapping
 
@@ -75,7 +76,7 @@ class CourtroomCaseProfile:
                     relief = claim.get("relief") if isinstance(claim.get("relief"), dict) else {}
                     refs = claim.get("evidence_refs") if isinstance(claim.get("evidence_refs"), list) else []
                     lines.extend([
-                        f"{claim.get('claim', '')}：{claim.get('outcome', '')}",
+                        f"{claim.get('claim', '')}：{_civil_final_outcome(str(claim.get('outcome', '')))}",
                         f"理由：{claim.get('reasoning', '')}",
                         f"給付／義務：{relief.get('obligation', '')}",
                         f"金額：{relief.get('monetary_amount') or '無'}",
@@ -87,7 +88,7 @@ class CourtroomCaseProfile:
                 if isinstance(charge, dict):
                     refs = charge.get("evidence_refs") if isinstance(charge.get("evidence_refs"), list) else []
                     lines.extend([
-                        f"{charge.get('charge', '')}：{charge.get('decision', '')}",
+                        f"{charge.get('charge', '')}：{_criminal_final_decision(str(charge.get('decision', '')))}",
                         f"理由：{charge.get('reasoning', '')}",
                         f"證據：{'、'.join(str(ref) for ref in refs) or '未引用證據'}",
                     ])
@@ -124,11 +125,13 @@ class CourtroomCaseProfile:
 
 
 _CONCRETE_PENALTY = re.compile(
-    r"(?:有期徒刑|無期徒刑|死刑|拘役|罰金|處以|宣告刑|應執行)"
+    r"(?:有期徒刑|無期徒刑|死刑|拘役|罰金|處以|宣告刑|應執行)|"
+    r"(?:判處|處|緩刑|徒刑)\s*(?:徒刑\s*)?[0-9零〇一二兩三四五六七八九十百千萬億壹貳參肆伍陸柒捌玖拾佰仟]+\s*(?:年|月|日)"
 )
+_CHINESE_NUMBER = "零〇一二兩三四五六七八九十百千萬億壹貳參肆伍陸柒捌玖拾佰仟"
 _MONEY = re.compile(
-    r"(?:新臺幣|臺幣|美金|美元|NT\$|\$)\s*([0-9][0-9,]*(?:\.[0-9]+)?)|"
-    r"([0-9][0-9,]*(?:\.[0-9]+)?)\s*元"
+    rf"(?:新臺幣|臺幣|美金|美元|NT\$|\$)\s*([0-9][0-9,]*(?:\.[0-9]+)?|[{_CHINESE_NUMBER}]+)\s*元?|"
+    rf"([0-9][0-9,]*(?:\.[0-9]+)?|[{_CHINESE_NUMBER}]+)\s*元"
 )
 
 
@@ -143,10 +146,55 @@ def _visible_strings(value: object) -> list[str]:
 
 
 def _money_values(text: str) -> set[str]:
+    values: set[str] = set()
+    for match in _MONEY.finditer(text):
+        raw = (match.group(1) or match.group(2)).replace(",", "")
+        if re.fullmatch(r"[0-9]+(?:\.[0-9]+)?", raw):
+            values.add(format(Decimal(raw).normalize(), "f"))
+        else:
+            values.add(str(_chinese_integer(raw)))
+    return values
+
+
+_DIGITS = {
+    "零": 0, "〇": 0, "一": 1, "壹": 1, "二": 2, "兩": 2, "貳": 2,
+    "三": 3, "參": 3, "四": 4, "肆": 4, "五": 5, "伍": 5,
+    "六": 6, "陸": 6, "七": 7, "柒": 7, "八": 8, "捌": 8,
+    "九": 9, "玖": 9,
+}
+_SMALL_UNITS = {"十": 10, "拾": 10, "百": 100, "佰": 100, "千": 1000, "仟": 1000}
+_LARGE_UNITS = {"萬": 10_000, "億": 100_000_000}
+
+
+def _chinese_integer(value: str) -> int:
+    total = section = number = 0
+    for character in value:
+        if character in _DIGITS:
+            number = _DIGITS[character]
+        elif character in _SMALL_UNITS:
+            section += (number or 1) * _SMALL_UNITS[character]
+            number = 0
+        elif character in _LARGE_UNITS:
+            total += (section + number) * _LARGE_UNITS[character]
+            section = number = 0
+    return total + section + number
+
+
+def _civil_final_outcome(value: str) -> str:
     return {
-        (match.group(1) or match.group(2)).replace(",", "")
-        for match in _MONEY.finditer(text)
-    }
+        "upheld": "請求成立",
+        "partially-upheld": "部分請求成立",
+        "rejected": "請求不成立",
+        "insufficient-evidence": "證據不足",
+    }.get(value, value)
+
+
+def _criminal_final_decision(value: str) -> str:
+    return {
+        "guilty": "有罪",
+        "not-guilty": "無罪",
+        "insufficient-evidence": "證據不足",
+    }.get(value, value)
 
 
 def _profile(

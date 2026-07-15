@@ -1535,6 +1535,19 @@ h2 {
 
 .courtroom-primary-action {
   margin-top: 14px;
+  position: sticky;
+  bottom: 12px;
+  z-index: 8;
+  padding: 12px;
+  border: 1px solid rgba(74, 144, 226, 0.42);
+  border-radius: 10px;
+  background: rgba(12, 18, 31, 0.96);
+  box-shadow: 0 -8px 24px rgba(5, 7, 11, 0.32);
+}
+
+.awaiting-ruling-explanation {
+  margin: 10px 0 0;
+  color: #b8d8ff;
 }
 
 .loading-spinner {

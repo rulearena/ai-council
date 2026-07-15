@@ -4634,6 +4634,186 @@ def test_pending_completed_restart_reconciles_before_mutation_and_rebuild_is_not
     assert "pending_deliberation_restart" not in meeting
 
 
+def test_case_type_change_marker_failure_blocks_mutations_and_retry_keeps_full_snapshot(
+    tmp_path: Path, monkeypatch
+) -> None:
+    client = TestClient(create_test_app(tmp_path), raise_server_exceptions=False)
+    meeting_id = client.post(
+        "/meetings",
+        json={"title": "案件類型切換", "goal": "中立整理", "mode_id": "courtroom", "case_type": "civil"},
+    ).json()["meeting_id"]
+    assert client.put(
+        f"/meetings/{meeting_id}/courtroom/issues",
+        json={"revision": 0, "issues": [{"title": "舊爭點草稿"}]},
+    ).status_code == 200
+    assert client.post(
+        f"/meetings/{meeting_id}/messages", json={"content": "主席舊輪指示"}
+    ).status_code == 200
+    original_append = MeetingRepository.append_event
+    fail_marker = True
+
+    def fail_epoch_marker(self, target_meeting_id, event):
+        if fail_marker and event.get("interaction_type") == "deliberation-epoch-start":
+            raise OSError("simulated case-type marker failure")
+        return original_append(self, target_meeting_id, event)
+
+    monkeypatch.setattr(MeetingRepository, "append_event", fail_epoch_marker)
+    failed = client.put(
+        f"/meetings/{meeting_id}/courtroom/case-type", json={"case_type": "criminal"}
+    )
+    blocked = client.put(
+        f"/meetings/{meeting_id}/details", json={"title": "不應更新", "goal": "不應更新"}
+    )
+    fail_marker = False
+    wrong_selection = client.put(
+        f"/meetings/{meeting_id}/courtroom/case-type", json={"case_type": "civil"}
+    )
+    recovered = client.put(
+        f"/meetings/{meeting_id}/courtroom/case-type", json={"case_type": "criminal"}
+    )
+
+    assert failed.status_code == 409
+    assert blocked.status_code == 409
+    assert wrong_selection.status_code == 409
+    assert recovered.status_code == 200
+    assert recovered.json()["case_type"] == "criminal"
+    marker = MeetingRepository(tmp_path / "data").read_events(meeting_id)[-1]
+    assert marker["interaction_type"] == "deliberation-epoch-start"
+    assert marker["snapshot"] == {
+        "goal": "中立整理",
+        "courtroom_docket": {
+            "schema_version": 1,
+            "revision": 1,
+            "confirmed": False,
+            "next_issue_number": 2,
+            "issues": [{"id": "issue-1", "title": "舊爭點草稿"}],
+        },
+        "models": [
+            {"role_id": "Prosecutor", "model_config_id": "mock-fast"},
+            {"role_id": "Defense", "model_config_id": "mock-fast"},
+            {"role_id": "Judge", "model_config_id": "mock-fast"},
+        ],
+        "materials_revision": 0,
+        "from_case_type": "civil",
+        "to_case_type": "criminal",
+    }
+
+
+def test_case_type_change_metadata_failure_reconciles_completed_marker(
+    tmp_path: Path, monkeypatch
+) -> None:
+    client = TestClient(create_test_app(tmp_path), raise_server_exceptions=False)
+    meeting_id = client.post(
+        "/meetings",
+        json={"title": "類型 finalize", "goal": "測試", "mode_id": "courtroom", "case_type": "civil"},
+    ).json()["meeting_id"]
+    client.post(f"/meetings/{meeting_id}/messages", json={"content": "觸發新 epoch"})
+    original_update = MeetingMetadataStore.update
+    fail_finalize = True
+
+    def fail_case_type_finalize(self, target_meeting_id, transform):
+        nonlocal fail_finalize
+        current = self.get(target_meeting_id)
+        projected = transform(current)
+        if (
+            fail_finalize
+            and current.get("pending_deliberation_restart", {}).get("case_type_change")
+            and not projected.get("pending_deliberation_restart")
+        ):
+            raise OSError("simulated case-type metadata finalize failure")
+        return original_update(self, target_meeting_id, transform)
+
+    monkeypatch.setattr(MeetingMetadataStore, "update", fail_case_type_finalize)
+    failed = client.put(
+        f"/meetings/{meeting_id}/courtroom/case-type", json={"case_type": "criminal"}
+    )
+    fail_finalize = False
+    reconciled = client.put(
+        f"/meetings/{meeting_id}/courtroom/case-type", json={"case_type": "criminal"}
+    )
+
+    assert failed.status_code == 409
+    assert reconciled.status_code == 200
+    assert reconciled.json()["case_type"] == "criminal"
+    assert reconciled.json()["deliberation"]["active_epoch_number"] == 2
+
+
+def test_case_type_change_pending_metadata_failure_writes_no_marker_and_is_retryable(
+    tmp_path: Path, monkeypatch
+) -> None:
+    client = TestClient(create_test_app(tmp_path), raise_server_exceptions=False)
+    meeting_id = client.post(
+        "/meetings",
+        json={"title": "pending fault", "goal": "測試", "mode_id": "courtroom", "case_type": "civil"},
+    ).json()["meeting_id"]
+    client.post(f"/meetings/{meeting_id}/messages", json={"content": "既有討論"})
+    original_update = MeetingMetadataStore.update
+    fail_pending = True
+
+    def fail_pending_metadata_write(self, target_meeting_id, transform):
+        nonlocal fail_pending
+        current = self.get(target_meeting_id)
+        projected = transform(current)
+        if fail_pending and projected.get("pending_deliberation_restart"):
+            raise OSError("simulated pending metadata failure")
+        return original_update(self, target_meeting_id, transform)
+
+    monkeypatch.setattr(MeetingMetadataStore, "update", fail_pending_metadata_write)
+    failed = client.put(
+        f"/meetings/{meeting_id}/courtroom/case-type", json={"case_type": "criminal"}
+    )
+    fail_pending = False
+    recovered = client.put(
+        f"/meetings/{meeting_id}/courtroom/case-type", json={"case_type": "criminal"}
+    )
+
+    assert failed.status_code == 409
+    assert recovered.status_code == 200
+    assert recovered.json()["case_type"] == "criminal"
+    markers = [
+        event
+        for event in MeetingRepository(tmp_path / "data").read_events(meeting_id)
+        if event.get("interaction_type") == "deliberation-epoch-start"
+    ]
+    assert len(markers) == 1
+
+
+def test_legacy_courtroom_transcript_keeps_catalog_label_after_explicit_civil_selection(
+    tmp_path: Path,
+) -> None:
+    client = TestClient(create_test_app(tmp_path))
+    meeting_id = client.post(
+        "/meetings",
+        json={"title": "舊法院", "goal": "舊流程", "mode_id": "courtroom", "case_type": "criminal"},
+    ).json()["meeting_id"]
+    MeetingMetadataStore(tmp_path / "data").update(
+        meeting_id,
+        lambda current: {key: value for key, value in current.items() if key != "case_type"},
+    )
+    MeetingRepository(tmp_path / "data").append_event(
+        meeting_id,
+        {
+            "event_id": f"{meeting_id}:legacy-charge",
+            "meeting_id": meeting_id,
+            "step_id": "courtroom-charge",
+            "role": "Prosecutor",
+            "status": "completed",
+            "interaction_type": "courtroom-issue-phase",
+            "issue_phase": "charge",
+            "parsed_output": {"summary": "舊檢察官主張"},
+        },
+    )
+
+    assert client.put(
+        f"/meetings/{meeting_id}/courtroom/case-type", json={"case_type": "civil"}
+    ).status_code == 200
+    transcript = client.get(f"/meetings/{meeting_id}/transcript.md?epoch=all")
+
+    assert transcript.status_code == 200
+    assert "## 檢察官" in transcript.text
+    assert "## 原告代理人" not in transcript.text
+
+
 def test_restart_rejects_a_truly_inflight_meeting(
     tmp_path: Path, monkeypatch
 ) -> None:
@@ -4691,12 +4871,8 @@ def test_restart_rejects_non_active_issue_after_an_issue_has_started(tmp_path: P
     assert client.post(
         f"/meetings/{meeting_id}/courtroom/issues/issue-1/arguments"
     ).status_code == 202
-    deadline = time.monotonic() + 5
-    while time.monotonic() < deadline:
-        meeting = client.get(f"/meetings/{meeting_id}").json()
-        if meeting["courtroom"]["current_issue_id"] == "issue-1":
-            break
-        time.sleep(0.01)
+    meeting = wait_for_activity(client, meeting_id, "completed")
+    assert meeting["courtroom"]["current_issue_id"] == "issue-1"
 
     wrong = client.post(
         f"/meetings/{meeting_id}/deliberations/restart",

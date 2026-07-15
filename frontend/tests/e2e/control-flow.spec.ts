@@ -2198,10 +2198,15 @@ test('courtroom handles two confirmed issues one at a time before the final verd
 
   const primary = page.getByTestId('courtroom-primary-action')
   await expect(primary).toContainText('開始此爭點')
+  await expect(primary).toContainText('下一位是原告代理人')
   await primary.click()
   await expect(page.locator('[data-issue-id="issue-1"]')).toContainText('等待主席送交法官', { timeout: 15000 })
+  await expect(page.getByTestId('courtroom-awaiting-ruling-issue-1')).toHaveText(
+    '攻防已完成，等待主席送交法官；不會自動判斷。',
+  )
   await expect(page.locator('[data-issue-id="issue-2"]')).toContainText('待審')
   await expect(primary).toContainText('請法官判斷此爭點')
+  await expect(page.getByTestId('courtroom-sticky-primary-action')).toHaveCSS('position', 'sticky')
 
   await page.getByTestId('chairman-action-select').selectOption('role:Defense')
   await expect(page.getByTestId('send-chair-message-button')).toHaveText('請被告代理人回答')
@@ -2223,6 +2228,7 @@ test('courtroom handles two confirmed issues one at a time before the final verd
   await expect(primary).toContainText('最終判決')
   await primary.click()
   await expect(page.getByTestId('courtroom-final-verdict')).toContainText('Mock verdict', { timeout: 15000 })
+  await expect(page.getByTestId('courtroom-final-verdict')).not.toContainText('upheld')
 
   await page.reload()
   await page.getByTestId('past-topics-button').click()

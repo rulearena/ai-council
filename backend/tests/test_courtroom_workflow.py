@@ -1042,8 +1042,10 @@ def test_directed_courtroom_response_is_only_available_during_ruling_pause(
     assert {event["docket_revision"] for event in linked} == {2}
     assert {event["issue_id"] for event in linked} == {"issue-1"}
     assert {event["case_type"] for event in linked} == {"civil"}
-    assert {event["role_display"] for event in linked} == {"被告代理人"}
-    assert {event["phase_display"] for event in linked} == {"答辯方補充"}
+    assert linked[0]["role_display"] == "主席"
+    assert linked[0]["phase_display"] == "主席指示"
+    assert linked[1]["role_display"] == "被告代理人"
+    assert linked[1]["phase_display"] == "答辯方補充"
     assert after_directed["courtroom"]["issues"][0]["status"] == "awaiting-ruling"
 
     client.post(f"/meetings/{meeting_id}/courtroom/issues/issue-1/ruling")

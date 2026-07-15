@@ -330,6 +330,14 @@ class MeetingRunner:
             raise ValueError(f"Missing model assignment for role: {role}")
         directed_sequence = self._next_directed_response_number(meeting_id)
         context_fields = context_fields or {}
+        instruction_context_fields = {
+            **context_fields,
+            **(
+                {"role_display": "主席", "phase_display": "主席指示"}
+                if context_fields.get("case_type") in {"civil", "criminal"}
+                else {}
+            ),
+        }
         instruction_event_id = f"{meeting_id}:human-directed-message:{uuid.uuid4().hex}"
         self.repository.append_event(
             meeting_id,
@@ -344,7 +352,7 @@ class MeetingRunner:
                 "target_role_id": role,
                 "content": instruction,
                 **self._audit_event_fields(inputs),
-                **context_fields,
+                **instruction_context_fields,
             },
         )
         directed_step = StepDefinition(

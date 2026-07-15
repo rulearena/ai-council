@@ -87,8 +87,9 @@ def test_case_profile_renders_case_specific_final_without_cross_domain_fields() 
         "unresolved_questions": [],
     })
 
-    assert "返還價金" in civil and "量刑" not in civil
-    assert "竊盜罪" in criminal and "量刑考量：犯後態度" in criminal
+    assert "返還價金：請求成立" in civil and "upheld" not in civil and "量刑" not in civil
+    assert "竊盜罪：有罪" in criminal and "guilty" not in criminal
+    assert "量刑考量：犯後態度" in criminal
 
 
 def test_final_semantics_validate_all_visible_penalty_and_money_text() -> None:
@@ -124,3 +125,43 @@ def test_final_semantics_validate_all_visible_penalty_and_money_text() -> None:
             {"summary": "無金額", "claims": [{"evidence_refs": ["[證物二]"]}]},
             inputs,
         )
+
+
+@pytest.mark.parametrize(
+    "penalty_text",
+    ["判處一年", "判處徒刑五年", "緩刑三年"],
+)
+def test_criminal_final_rejects_common_chinese_concrete_penalty_phrases(
+    penalty_text: str,
+) -> None:
+    with pytest.raises(ValueError, match="concrete penalty"):
+        CourtroomCaseProfile.for_type("criminal").validate_final_semantics(
+            {"summary": penalty_text},
+            None,
+        )
+
+
+def test_civil_final_compares_traditional_chinese_money_values_to_visible_evidence() -> None:
+    profile = CourtroomCaseProfile.for_type("civil")
+    inputs = {
+        "__case_files_by_role": {
+            "Judge": "### [證物一] 收據\n價款為新臺幣一百萬元"
+        }
+    }
+
+    profile.validate_final_semantics(
+        {
+            "summary": "應返還新臺幣1000000元",
+            "claims": [{"evidence_refs": ["[證物一]"]}],
+        },
+        inputs,
+    )
+    for unsupported in ("新臺幣一百元", "新臺幣二百萬元"):
+        with pytest.raises(ValueError, match="not supported"):
+            profile.validate_final_semantics(
+                {
+                    "summary": f"應返還{unsupported}",
+                    "claims": [{"evidence_refs": ["[證物一]"]}],
+                },
+                inputs,
+            )

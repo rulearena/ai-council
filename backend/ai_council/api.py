@@ -395,7 +395,10 @@ def create_app(
     def reconcile_pending_restart(meeting_id: str, operation: str | None) -> None:
         metadata = metadata_store.get(meeting_id)
         pending = metadata.get("pending_deliberation_restart")
-        if not isinstance(pending, dict) or operation == "restart_deliberation":
+        if not isinstance(pending, dict) or operation in {
+            "restart_deliberation",
+            "update_courtroom_case_type",
+        }:
             return
         marker = next(
             (
@@ -411,10 +414,16 @@ def create_app(
                 status_code=409,
                 detail="Deliberation restart must be retried before changing the meeting",
             )
-        metadata_store.update(
-            meeting_id,
-            lambda current: finalize_deliberation_restart_metadata(current, marker),
-        )
+        try:
+            metadata_store.update(
+                meeting_id,
+                lambda current: finalize_deliberation_restart_metadata(current, marker),
+            )
+        except OSError as error:
+            raise HTTPException(
+                status_code=409,
+                detail="Deliberation restart metadata is pending recovery",
+            ) from error
 
     meeting_transitions.set_before_transition(reconcile_pending_restart)
     model_health = ModelHealthCheckStore()
@@ -1109,6 +1118,47 @@ def create_app(
         reject_running_meeting(jobs, meeting_id)
         reject_terminal_meeting(repository, meeting_id)
         metadata = metadata_store.get(meeting_id)
+        pending_restart = metadata.get("pending_deliberation_restart")
+        if isinstance(pending_restart, dict):
+            if not pending_restart.get("case_type_change"):
+                raise HTTPException(
+                    status_code=409,
+                    detail="Deliberation restart must recover before changing case type",
+                )
+            if pending_restart.get("target_case_type") != request.case_type:
+                raise HTTPException(
+                    status_code=409,
+                    detail="Retry the same pending courtroom case type selection",
+                )
+            marker = next(
+                (
+                    event
+                    for event in reversed(repository.read_events(meeting_id))
+                    if event.get("interaction_type") == "deliberation-epoch-start"
+                    and event.get("epoch_id") == pending_restart.get("epoch_id")
+                ),
+                None,
+            )
+            if marker is not None:
+                try:
+                    metadata = metadata_store.update(
+                        meeting_id,
+                        lambda current: finalize_deliberation_restart_metadata(current, marker),
+                    )
+                except OSError as error:
+                    raise HTTPException(
+                        status_code=409,
+                        detail="Case type change metadata is pending recovery",
+                    ) from error
+            else:
+                metadata = metadata_store.update(
+                    meeting_id,
+                    lambda current: {
+                        key: value
+                        for key, value in current.items()
+                        if key != "pending_deliberation_restart"
+                    },
+                )
         if metadata.get("mode_id") != "courtroom":
             raise HTTPException(status_code=400, detail="Case type is only available for courtroom meetings")
         docket = metadata.get("courtroom_docket")
@@ -1120,6 +1170,14 @@ def create_app(
         if current != request.case_type and not confirmed:
             events = repository.read_events(meeting_id)
             if DeliberationEpochs.view(events).active_events:
+                snapshot = {
+                    "goal": metadata.get("goal"),
+                    "courtroom_docket": metadata.get("courtroom_docket"),
+                    "models": metadata.get("participants") or [],
+                    "materials_revision": case_materials.view(meeting_id).revision,
+                    "from_case_type": current,
+                    "to_case_type": request.case_type,
+                }
                 marker = DeliberationEpochs.restart_marker(
                     meeting_id=meeting_id,
                     events=events,
@@ -1127,9 +1185,39 @@ def create_app(
                         scope="all_deliberation",
                         reason="case_type_changed",
                     ),
-                    snapshot={"from_case_type": current, "to_case_type": request.case_type},
+                    snapshot=snapshot,
                 )
-                repository.append_event(meeting_id, marker)
+                try:
+                    metadata_store.update(
+                        meeting_id,
+                        lambda existing: {
+                            **existing,
+                            "pending_deliberation_restart": {
+                                "epoch_id": marker["epoch_id"],
+                                "scope": "all_deliberation",
+                                "reason": "case_type_changed",
+                                "case_type_change": True,
+                                "target_case_type": request.case_type,
+                            },
+                        },
+                    )
+                    repository.append_event(meeting_id, marker)
+                    updated = metadata_store.update(
+                        meeting_id,
+                        lambda existing: finalize_deliberation_restart_metadata(existing, marker),
+                    )
+                except OSError as error:
+                    raise HTTPException(
+                        status_code=409,
+                        detail="Case type change is pending recovery; retry the same selection",
+                    ) from error
+                return project_meeting_summary(
+                    updated,
+                    repository.read_events(meeting_id),
+                    mode=meeting_mode(mode_catalog, updated),
+                    model_pricing=model_pricing_by_id(model_repository),
+                    meeting_assignments=meeting_assignments,
+                )
 
         def apply_case_type(existing: dict[str, Any]) -> dict[str, Any]:
             updated = {**existing, "case_type": request.case_type}
@@ -3055,15 +3143,16 @@ def transcript_presentation_labels(
     events: list[dict[str, Any]],
 ) -> tuple[dict[str, str], dict[str, str]]:
     role_labels = {role.id: role.name for role in mode.roles}
-    role_labels.update(
-        {
-            str(participant["role_id"]): str(
-                participant.get("display_name") or role_labels.get(str(participant["role_id"]))
-                or participant["role_id"]
-            )
-            for participant in participants
-        }
-    )
+    if mode.id != "courtroom":
+        role_labels.update(
+            {
+                str(participant["role_id"]): str(
+                    participant.get("display_name") or role_labels.get(str(participant["role_id"]))
+                    or participant["role_id"]
+                )
+                for participant in participants
+            }
+        )
     role_labels["Human"] = "主席"
     role_labels["System"] = "系統"
 
@@ -3136,6 +3225,14 @@ def finalize_deliberation_restart_metadata(
     updated.pop("pending_deliberation_restart", None)
     updated["deliberation_epoch_id"] = marker["epoch_id"]
     updated["deliberation_epoch_number"] = marker["epoch_number"]
+    snapshot = marker.get("snapshot")
+    if (
+        marker.get("restart_reason") == "case_type_changed"
+        and isinstance(snapshot, dict)
+        and snapshot.get("to_case_type") in {"civil", "criminal"}
+    ):
+        updated["case_type"] = snapshot["to_case_type"]
+        updated.pop("courtroom_docket", None)
     if marker.get("restart_scope") == "rebuild_issues":
         updated.pop("courtroom_docket", None)
     return updated

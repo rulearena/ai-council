@@ -5,7 +5,7 @@ import Drawer from './Drawer.vue'
 import RoleSilhouette from './RoleSilhouette.vue'
 import { transcriptDownloadUrl } from '../api'
 import type { MeetingEvent } from '../api'
-import { roleDisplayName, statusDisplayLabel, stepDisplayLabel } from '../presentation'
+import { eventRoleDisplayName, statusDisplayLabel, stepDisplayLabel } from '../presentation'
 
 defineProps<{ show: boolean }>()
 defineEmits<{ close: [] }>()
@@ -29,7 +29,7 @@ const activeTab = ref<RecordsTab>('timeline')
 const copiedDiagnosticEventId = ref<string | null>(null)
 const copyDiagnosticErrorEventId = ref<string | null>(null)
 const participants = computed(() => selectedMeeting.value?.participants ?? [])
-const displayRole = (role: string) => roleDisplayName(activeMode.value, participants.value, role)
+const displayRole = (event: MeetingEvent) => eventRoleDisplayName(activeMode.value, participants.value, event)
 const displayStep = (event: MeetingEvent) => stepDisplayLabel(activeMode.value, participants.value, event)
 
 const diagnosticKeys = [
@@ -143,9 +143,9 @@ function copyDiagnosticStatus(event: MeetingEvent) {
       >
         <button type="button" class="timeline-main" @click="selectedEvent = event">
           <span class="role-badge" :class="roleClass(event.role)" :style="roleColorVars(event.role)" data-testid="role-badge">
-            <img v-if="roleIcon(event.role)" :src="roleIcon(event.role)" class="role-icon" :alt="displayRole(event.role)" />
+            <img v-if="roleIcon(event.role)" :src="roleIcon(event.role)" class="role-icon" :alt="displayRole(event)" />
             <RoleSilhouette v-else-if="roleClass(event.role)" :color="roleColor(event.role)" :size="16" />
-            {{ displayRole(event.role) }}
+            {{ displayRole(event) }}
           </span>
           <strong>{{ displayStep(event) }}</strong>
           <em class="status-badge" :data-status="event.status">{{ statusDisplayLabel(event.status) }}</em>

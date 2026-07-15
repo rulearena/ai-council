@@ -73,9 +73,12 @@ export function interactionDisplayLabel(
   participants: PresentationParticipant[],
   event: PresentationEvent,
 ): string | null {
-  const roleName = event.role_display || roleDisplayName(mode, participants, event.role)
+  const roleName = eventRoleDisplayName(mode, participants, event)
   if (event.interaction_type === 'directed-role-instruction' && event.target_role_id) {
-    return `主席追問${roleDisplayName(mode, participants, event.target_role_id)}`
+    const targetRole = mode.id === 'courtroom' && !event.case_type
+      ? mode.roles.find((role) => role.id === event.target_role_id)?.name ?? event.target_role_id
+      : roleDisplayName(mode, participants, event.target_role_id)
+    return `主席追問${targetRole}`
   }
   if (event.interaction_type === 'directed-role-response') return `${roleName}回應主席追問`
   if (event.interaction_type === 'role-sequence-response') return `${roleName}依序回應`
@@ -91,6 +94,21 @@ export function interactionDisplayLabel(
     } as Record<string, string>)[event.issue_phase ?? ''] ?? '爭點審理'
   }
   return null
+}
+
+export function eventRoleDisplayName(
+  mode: PresentationMode,
+  participants: PresentationParticipant[],
+  event: PresentationEvent,
+): string {
+  if (event.role_display) return event.role_display
+  if (event.role === 'Human' || event.role === 'System') {
+    return roleDisplayName(mode, participants, event.role)
+  }
+  if (mode.id === 'courtroom') {
+    return mode.roles.find((role) => role.id === event.role)?.name ?? event.role
+  }
+  return roleDisplayName(mode, participants, event.role)
 }
 
 export function stepDisplayLabel(

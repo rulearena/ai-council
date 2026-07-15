@@ -14,8 +14,11 @@ import {
 import { councilKey } from '../composables/useCouncil'
 import {
   courtroomFailedPhaseLabel,
+  courtroomFinalOutcomeLabel,
   courtroomIssueStatusLabel,
+  courtroomNextProponentLabel,
   courtroomOutcomeLabel,
+  nextLegacyCaseTypeSelection,
   nextCourtroomDraft,
   type CourtroomDraft,
 } from '../courtroomWorkspace'
@@ -84,11 +87,22 @@ const primaryLabel = computed(() => {
   if (primaryAction.value.kind === 'courtroom-arguments') {
     const hasRuled = projection.issues.some((candidate) => candidate.status === 'ruled')
     return hasRuled
-      ? `進入下一爭點：${issue.title}（下一位是檢察官）`
-      : `開始此爭點：${issue.title}（下一位是檢察官）`
+      ? `進入下一爭點：${issue.title}（下一位是${courtroomNextProponentLabel(projection.case_type)}）`
+      : `開始此爭點：${issue.title}（下一位是${courtroomNextProponentLabel(projection.case_type)}）`
   }
   return primaryAction.value.label
 })
+
+watch(
+  meetingId,
+  (nextId, previousId = '') => {
+    selectedCaseType.value = nextLegacyCaseTypeSelection(
+      previousId,
+      nextId,
+      selectedCaseType.value,
+    )
+  },
+)
 
 watch(
   () => {
@@ -291,6 +305,11 @@ function ruling(issue: CourtroomIssueProjection) {
           </button>
           <p v-if="!failedEvent(issue)" class="error">找不到可重試的失敗紀錄，請到「會議紀錄」查看診斷。</p>
         </section>
+        <p
+          v-if="issue.status === 'awaiting-ruling'"
+          class="awaiting-ruling-explanation"
+          :data-testid="`courtroom-awaiting-ruling-${issue.id}`"
+        >攻防已完成，等待主席送交法官；不會自動判斷。</p>
         <section v-if="ruling(issue)" class="issue-ruling" :data-testid="`courtroom-ruling-${issue.id}`">
           <h3>法官對此爭點的判斷：{{ courtroomOutcomeLabel(ruling(issue)!.outcome, courtroom.case_type) }}</h3>
           <p><strong>理由：</strong>{{ ruling(issue)!.reasoning }}</p>
@@ -300,7 +319,11 @@ function ruling(issue: CourtroomIssueProjection) {
       </li>
     </ol>
 
-    <div v-if="courtroom.status === 'confirmed' && courtroom.final_status !== 'completed' && !failedIssue" class="courtroom-primary-action">
+    <div
+      v-if="courtroom.status === 'confirmed' && courtroom.final_status !== 'completed' && !failedIssue"
+      class="courtroom-primary-action"
+      data-testid="courtroom-sticky-primary-action"
+    >
       <p v-if="currentIssue">目前焦點：{{ currentIssue.title }}</p>
       <button type="button" class="btn btn-primary" data-testid="courtroom-primary-action" :disabled="busy || isMeetingRunning || primaryAction.disabled" @click="startOrContinueMeeting">
         {{ isMeetingRunning ? '執行中…' : primaryLabel }}
@@ -312,7 +335,7 @@ function ruling(issue: CourtroomIssueProjection) {
       <p>{{ finalVerdict.summary }}</p>
       <template v-if="civilFinal">
         <article v-for="claim in civilFinal.claims" :key="claim.claim">
-          <h4>{{ claim.claim }}：{{ claim.outcome }}</h4>
+          <h4>{{ claim.claim }}：{{ courtroomFinalOutcomeLabel(claim.outcome, 'civil') }}</h4>
           <p><strong>理由：</strong>{{ claim.reasoning }}</p>
           <p><strong>給付／義務：</strong>{{ claim.relief.obligation }}</p>
           <p v-if="claim.relief.monetary_amount"><strong>金額：</strong>{{ claim.relief.monetary_amount }}</p>
@@ -322,7 +345,7 @@ function ruling(issue: CourtroomIssueProjection) {
       </template>
       <template v-else-if="criminalFinal">
         <article v-for="charge in criminalFinal.charges" :key="charge.charge">
-          <h4>{{ charge.charge }}：{{ charge.decision }}</h4>
+          <h4>{{ charge.charge }}：{{ courtroomFinalOutcomeLabel(charge.decision, 'criminal') }}</h4>
           <p><strong>理由：</strong>{{ charge.reasoning }}</p>
           <p><strong>證據：</strong>{{ charge.evidence_refs.join('、') || '未引用證據' }}</p>
         </article>

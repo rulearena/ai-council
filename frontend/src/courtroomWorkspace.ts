@@ -15,6 +15,14 @@ export function nextCourtroomDraft(
   }
 }
 
+export function nextLegacyCaseTypeSelection(
+  previousMeetingId: string,
+  nextMeetingId: string,
+  selection: '' | 'civil' | 'criminal',
+): '' | 'civil' | 'criminal' {
+  return previousMeetingId === nextMeetingId ? selection : ''
+}
+
 const ISSUE_STATUS_LABELS: Record<string, string> = {
   pending: '待審',
   'arguments-in-progress': '攻防中',
@@ -55,4 +63,27 @@ export function courtroomOutcomeLabel(
       ? { 'proponent-wins': '檢方主張成立', 'respondent-wins': '辯方主張成立' }
       : {}
   return typed[outcome as keyof typeof typed] ?? OUTCOME_LABELS[outcome] ?? outcome
+}
+
+export function courtroomNextProponentLabel(caseType?: 'civil' | 'criminal' | null): string {
+  return caseType === 'civil' ? '原告代理人' : '檢察官'
+}
+
+export function courtroomFinalOutcomeLabel(
+  outcome: string,
+  caseType: 'civil' | 'criminal',
+): string {
+  const labels = caseType === 'civil'
+    ? {
+        upheld: '請求成立',
+        'partially-upheld': '部分請求成立',
+        rejected: '請求不成立',
+        'insufficient-evidence': '證據不足',
+      }
+    : {
+        guilty: '有罪',
+        'not-guilty': '無罪',
+        'insufficient-evidence': '證據不足',
+      }
+  return labels[outcome as keyof typeof labels] ?? outcome
 }
