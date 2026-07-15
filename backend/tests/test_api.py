@@ -1533,6 +1533,17 @@ def test_start_returns_while_model_execution_continues_in_background(
         delete_response = client.delete(f"/meetings/{meeting_id}")
         assert delete_response.status_code == 409
         assert delete_response.json()["detail"] == "Cannot delete a running meeting"
+        material_response = client.post(
+            f"/meetings/{meeting_id}/materials/notes",
+            json={
+                "revision": 0,
+                "title": "must wait",
+                "content": "do not race an active prompt",
+                "visible_roles": ["Blue"],
+            },
+        )
+        assert material_response.status_code == 409
+        assert material_response.json()["detail"] == "Meeting is already running"
     finally:
         release_model.set()
         wait_for_activity(client, meeting_id, "completed")
@@ -3119,6 +3130,12 @@ def test_create_meeting_stores_and_returns_case_files(tmp_path: Path) -> None:
         (1, "[證物一]"),
         (2, "[證物二]"),
     ]
+    metadata = json.loads(
+        (stored_path.parent / "metadata.json").read_text(encoding="utf-8")
+    )
+    assert "case_files" not in metadata
+    assert metadata["case_file_count"] == 2
+    assert metadata["case_materials_revision"] == 0
 
     fetched = client.get(f"/meetings/{meeting_id}").json()
     assert [(item["evidence_index"], item["citation_anchor"]) for item in fetched["case_files"]] == [
@@ -3155,13 +3172,12 @@ def test_get_meeting_derives_evidence_anchors_for_legacy_case_files_without_rewr
         },
     ).json()["meeting_id"]
     meeting_dir = tmp_path / "data" / "meetings" / meeting_id
-    for path in (meeting_dir / "metadata.json", meeting_dir / "case_files.json"):
-        legacy = json.loads(path.read_text(encoding="utf-8"))
-        items = legacy["case_files"] if path.name == "metadata.json" else legacy
-        for item in items:
-            item.pop("evidence_index")
-            item.pop("citation_anchor")
-        path.write_text(json.dumps(legacy, ensure_ascii=False), encoding="utf-8")
+    case_file_path = meeting_dir / "case_files.json"
+    legacy = json.loads(case_file_path.read_text(encoding="utf-8"))
+    for item in legacy:
+        item.pop("evidence_index")
+        item.pop("citation_anchor")
+    case_file_path.write_text(json.dumps(legacy, ensure_ascii=False), encoding="utf-8")
 
     fetched = client.get(f"/meetings/{meeting_id}")
 
@@ -3175,7 +3191,9 @@ def test_get_meeting_derives_evidence_anchors_for_legacy_case_files_without_rewr
         for item in listed["case_files"]
     ] == expected
     assert "evidence_index" not in (meeting_dir / "case_files.json").read_text(encoding="utf-8")
-    assert "evidence_index" not in (meeting_dir / "metadata.json").read_text(encoding="utf-8")
+    metadata = json.loads((meeting_dir / "metadata.json").read_text(encoding="utf-8"))
+    assert "case_files" not in metadata
+    assert metadata["case_file_count"] == 2
 
 
 def test_create_meeting_rejects_case_files_for_unknown_roles(tmp_path: Path) -> None:
@@ -4716,6 +4734,263 @@ def test_every_non_courtroom_mode_can_restart_without_changing_case_files(
     assert restarted.status_code == 200
     assert restarted.json()["case_files"] == before_manifest
     assert case_file_path.read_bytes() == before_bytes
+
+
+def test_case_material_http_mutations_upgrade_legacy_and_preserve_versions(
+    tmp_path: Path,
+) -> None:
+    client = TestClient(create_test_app(tmp_path))
+    meeting_id = client.post(
+        "/meetings",
+        json={
+            "title": "Versioned evidence",
+            "goal": "inspect evidence",
+            "mode_id": "courtroom",
+            "case_files": [
+                {
+                    "title": "Legacy exhibit",
+                    "content": "legacy body",
+                    "visible_roles": ["Judge"],
+                }
+            ],
+        },
+    ).json()["meeting_id"]
+    path = tmp_path / "data" / "meetings" / meeting_id / "case_files.json"
+    legacy_bytes = path.read_bytes()
+
+    legacy = client.get(f"/meetings/{meeting_id}/materials")
+    assert legacy.status_code == 200
+    assert legacy.json()["schema_version"] == 1
+    assert path.read_bytes() == legacy_bytes
+
+    added = client.post(
+        f"/meetings/{meeting_id}/materials/evidence",
+        json={
+            "revision": 0,
+            "title": "New exhibit",
+            "content": "version one",
+            "visible_roles": ["Defense", "Judge"],
+        },
+    )
+    assert added.status_code == 200
+    assert added.json()["revision"] == 1
+    assert added.json()["evidence"][1]["citation_anchor"] == "[證物二]"
+    evidence_id = added.json()["evidence"][1]["id"]
+
+    versioned = client.post(
+        f"/meetings/{meeting_id}/materials/evidence/{evidence_id}/versions",
+        json={
+            "revision": 1,
+            "title": "New exhibit corrected",
+            "content": "version two",
+            "visible_roles": ["Prosecutor"],
+        },
+    )
+    assert versioned.status_code == 200
+    assert versioned.json()["evidence"][1]["active_version"] == 2
+    assert versioned.json()["evidence"][1]["versions"][0]["visible_roles"] == [
+        "Defense",
+        "Judge",
+    ]
+    assert versioned.json()["evidence"][1]["versions"][1]["visible_roles"] == [
+        "Prosecutor"
+    ]
+
+    stale = client.post(
+        f"/meetings/{meeting_id}/materials/evidence/{evidence_id}/deactivate",
+        json={"revision": 1},
+    )
+    deactivated = client.post(
+        f"/meetings/{meeting_id}/materials/evidence/{evidence_id}/deactivate",
+        json={"revision": 2},
+    )
+    reactivated = client.post(
+        f"/meetings/{meeting_id}/materials/evidence/{evidence_id}/reactivate",
+        json={"revision": 3},
+    )
+
+    assert stale.status_code == 409
+    assert deactivated.json()["evidence"][1]["status"] == "inactive"
+    assert reactivated.json()["evidence"][1]["status"] == "active"
+
+
+def test_case_notes_and_promoted_chair_message_are_versioned_without_event_rewrite(
+    tmp_path: Path,
+) -> None:
+    client = TestClient(create_test_app(tmp_path))
+    meeting_id = client.post(
+        "/meetings", json={"title": "Case notes", "goal": "remember facts"}
+    ).json()["meeting_id"]
+    source = client.post(
+        f"/meetings/{meeting_id}/messages",
+        json={"content": "The parties agree the inspection happened on Monday."},
+    ).json()
+    events_path = tmp_path / "data" / "meetings" / meeting_id / "events.jsonl"
+    source_bytes = events_path.read_bytes()
+
+    promoted = client.post(
+        f"/meetings/{meeting_id}/messages/{source['event_id']}/promote-to-note",
+        json={
+            "revision": 0,
+            "title": "Agreed inspection date",
+            "visible_roles": ["Blue", "Red", "Judge"],
+        },
+    )
+    assert promoted.status_code == 200
+    assert events_path.read_bytes() == source_bytes
+    note = promoted.json()["notes"][0]
+    assert note["versions"][0]["content"] == source["content"]
+    assert note["versions"][0]["source_event_id"] == source["event_id"]
+
+    updated = client.post(
+        f"/meetings/{meeting_id}/materials/notes/{note['id']}/versions",
+        json={
+            "revision": 1,
+            "title": "Agreed inspection",
+            "content": "Inspection was Monday at 10:00.",
+            "visible_roles": ["Judge"],
+        },
+    )
+    assert updated.status_code == 200
+    assert updated.json()["notes"][0]["active_version"] == 2
+    assert updated.json()["notes"][0]["versions"][0]["source_event_id"] == source["event_id"]
+
+
+def test_active_materials_reach_prompts_inactive_versions_do_not_and_restart_clears_gate(
+    tmp_path: Path,
+) -> None:
+    client = TestClient(create_test_app(tmp_path))
+    meeting_id = client.post(
+        "/meetings",
+        json={
+            "title": "Prompt materials",
+            "goal": "use current facts",
+            "case_files": [
+                {
+                    "title": "Active exhibit",
+                    "content": "ACTIVE_EVIDENCE",
+                    "visible_roles": ["Blue"],
+                },
+                {
+                    "title": "Inactive exhibit",
+                    "content": "INACTIVE_EVIDENCE",
+                    "visible_roles": ["Blue"],
+                },
+            ],
+        },
+    ).json()["meeting_id"]
+    deactivated = client.post(
+        f"/meetings/{meeting_id}/materials/evidence/case-file-2/deactivate",
+        json={"revision": 0},
+    )
+    assert deactivated.status_code == 200
+    note = client.post(
+        f"/meetings/{meeting_id}/materials/notes",
+        json={
+            "revision": 1,
+            "title": "Binding fact",
+            "content": "PERSISTENT_CASE_NOTE",
+            "visible_roles": ["Blue"],
+        },
+    )
+    assert note.status_code == 200
+    assert client.post(f"/meetings/{meeting_id}/start", json={}).status_code == 202
+    completed = wait_for_activity(client, meeting_id, "completed")
+    blue_prompt = completed["events"][0]["prompt_messages"][0]["content"]
+    assert "ACTIVE_EVIDENCE" in blue_prompt
+    assert "PERSISTENT_CASE_NOTE" in blue_prompt
+    assert "INACTIVE_EVIDENCE" not in blue_prompt
+    assert {event["materials_revision"] for event in completed["events"]} == {2}
+
+    changed = client.post(
+        f"/meetings/{meeting_id}/materials/notes",
+        json={
+            "revision": 2,
+            "title": "Late fact",
+            "content": "LATE_CASE_NOTE",
+            "visible_roles": ["Blue", "Red", "Judge"],
+        },
+    )
+    assert changed.status_code == 200
+    assert changed.json()["pending_impact"]["deliberation_epoch_id"] == "epoch-1"
+
+    blocked = [
+        client.post(f"/meetings/{meeting_id}/start", json={}),
+        client.post(
+            f"/meetings/{meeting_id}/roles/Blue/respond",
+            json={"instruction": "answer despite changed evidence"},
+        ),
+        client.post(
+            f"/meetings/{meeting_id}/sequences", json={"roles": ["Blue", "Red"]}
+        ),
+        client.post(f"/meetings/{meeting_id}/steps/missing/retry", json={}),
+    ]
+    assert {response.status_code for response in blocked} == {409}
+    assert all("materials changed" in response.json()["detail"].lower() for response in blocked)
+
+    material_bytes = (
+        tmp_path / "data" / "meetings" / meeting_id / "case_files.json"
+    ).read_bytes()
+    restarted = client.post(
+        f"/meetings/{meeting_id}/deliberations/restart",
+        json={"scope": "all_deliberation", "reason": "acknowledge new evidence"},
+    )
+    assert restarted.status_code == 200
+    assert client.get(f"/meetings/{meeting_id}/materials").json()["pending_impact"] is None
+    assert (
+        tmp_path / "data" / "meetings" / meeting_id / "case_files.json"
+    ).read_bytes() == material_bytes
+    raw = MeetingRepository(tmp_path / "data").read_events(meeting_id)
+    assert raw[-1]["snapshot"]["materials_revision"] == 3
+    assert client.post(f"/meetings/{meeting_id}/start", json={}).status_code == 202
+    wait_for_activity(client, meeting_id, "completed")
+
+
+def test_pending_material_impact_blocks_every_courtroom_ai_entrypoint(tmp_path: Path) -> None:
+    client = TestClient(create_test_app(tmp_path))
+    meeting_id = client.post(
+        "/meetings",
+        json={"title": "Court material gate", "goal": "block all", "mode_id": "courtroom"},
+    ).json()["meeting_id"]
+    MeetingRepository(tmp_path / "data").append_event(
+        meeting_id,
+        {
+            "event_id": "existing-ai-output",
+            "meeting_id": meeting_id,
+            "step_id": "courtroom-draft-r1",
+            "base_step_id": "courtroom-issue-draft",
+            "role": "Judge",
+            "attempt": 1,
+            "status": "completed",
+            "interaction_type": "courtroom-issue-draft",
+        },
+    )
+    assert client.post(
+        f"/meetings/{meeting_id}/materials/notes",
+        json={
+            "revision": 0,
+            "title": "changed fact",
+            "content": "new fact",
+            "visible_roles": ["Judge"],
+        },
+    ).status_code == 200
+
+    responses = [
+        client.post(
+            f"/meetings/{meeting_id}/courtroom/issues/draft", json={"revision": 0}
+        ),
+        client.post(f"/meetings/{meeting_id}/courtroom/issues/issue-1/arguments"),
+        client.post(f"/meetings/{meeting_id}/courtroom/issues/issue-1/ruling"),
+        client.post(f"/meetings/{meeting_id}/courtroom/final-verdict"),
+        client.post(
+            f"/meetings/{meeting_id}/roles/Judge/respond",
+            json={"instruction": "judge now"},
+        ),
+        client.post(f"/meetings/{meeting_id}/steps/missing/retry", json={}),
+    ]
+
+    assert {response.status_code for response in responses} == {409}
+    assert all("materials changed" in response.json()["detail"].lower() for response in responses)
 
 
 def test_alternate_local_frontend_origin_can_call_api(tmp_path: Path) -> None:

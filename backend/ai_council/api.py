@@ -25,6 +25,13 @@ from ai_council.meetings.execution_state import (
     MeetingExecutionStateStore,
     interrupted_execution_event,
 )
+from ai_council.meetings.case_materials import (
+    CaseMaterialConflict,
+    CaseMaterialLimits as VersionedCaseMaterialLimits,
+    CaseMaterials,
+    CaseMaterialsView,
+    CaseMaterialValidationError,
+)
 from ai_council.meetings.deliberation import (
     DeliberationEpochs,
     RestartCommand,
@@ -51,6 +58,7 @@ from ai_council.meetings.repository import MeetingRepository
 from ai_council.meetings.runner import (
     CASE_FILES_BY_ROLE_INPUT,
     CASE_FILES_DEFAULT_ROLE,
+    MATERIALS_REVISION_INPUT,
     latest_unresolved_fixed_relay_failure,
     MeetingRunner,
     RunnerAdapters,
@@ -195,6 +203,23 @@ class RestartDeliberationRequest(BaseModel):
         return stripped
 
 
+class CaseMaterialContentRequest(BaseModel):
+    revision: int = Field(ge=0)
+    title: str
+    content: str
+    visible_roles: list[str]
+
+
+class CaseMaterialStatusRequest(BaseModel):
+    revision: int = Field(ge=0)
+
+
+class PromoteCaseNoteRequest(BaseModel):
+    revision: int = Field(ge=0)
+    title: str
+    visible_roles: list[str]
+
+
 class StartMeetingRequest(BaseModel):
     models: dict[str, str] = Field(default_factory=dict)
 
@@ -320,6 +345,7 @@ def create_app(
     data_path = Path(data_dir)
     metadata_store = MeetingMetadataStore(data_path)
     repository = MeetingRepository(data_path)
+    case_materials = CaseMaterials(repository)
     courtroom_workflow = CourtroomWorkflowService(metadata_store, repository)
     execution_state_store = MeetingExecutionStateStore(data_path)
     model_repository = ModelConfigRepository(model_config_path)
@@ -562,18 +588,23 @@ def create_app(
             "mode_id": mode.id,
             "participants": participants,
             "inputs": request.inputs,
-            "case_files": case_file_manifest(case_files),
+            "case_materials_revision": 0,
+            "case_file_count": len(case_files),
         }
         metadata_store.save(metadata)
         if case_files:
             repository.save_case_files(meeting_id, case_files)
-        return project_meeting_summary(
-            metadata,
-            [],
-            mode=mode,
-            model_pricing={},
-            meeting_assignments=meeting_assignments,
-        )
+        return {
+            **project_meeting_summary(
+                metadata,
+                [],
+                mode=mode,
+                model_pricing={},
+                meeting_assignments=meeting_assignments,
+            ),
+            "case_files": case_file_manifest(case_files),
+            "materials_revision": 0,
+        }
 
     @app.get("/meetings")
     def list_meetings(q: str | None = None) -> list[dict[str, Any]]:
@@ -593,8 +624,11 @@ def create_app(
             mode = modes_by_id.get(mode_id) or modes_by_id.get(DEFAULT_MODE_ID)
             if mode is None:
                 raise HTTPException(status_code=500, detail=f"Missing default mode: {DEFAULT_MODE_ID}")
+            material_view = case_materials.view(meeting_id)
+            active_evidence = active_case_evidence_projection(material_view)
             summaries.append(
-                project_meeting_summary(
+                {
+                    **project_meeting_summary(
                     metadata,
                     events,
                     mode=mode,
@@ -605,7 +639,10 @@ def create_app(
                         jobs.is_running(meeting_id),
                         mode,
                     ),
-                )
+                    ),
+                    "case_files": case_file_manifest(active_evidence),
+                    "materials_revision": material_view.revision,
+                }
             )
         return summaries
 
@@ -616,6 +653,7 @@ def create_app(
         deliberation = DeliberationEpochs.view(all_events)
         events = deliberation.active_events
         workflow_events = deliberation.workflow_events
+        material_view = case_materials.view(meeting_id)
         return {
             **project_meeting_summary(
                 metadata,
@@ -632,8 +670,281 @@ def create_app(
                 workflow_events=workflow_events,
             ),
             "events": project_events(events),
-            "case_files": project_case_files(repository.read_case_files(meeting_id)),
+            "case_files": active_case_evidence_projection(material_view),
+            "case_materials": project_case_materials(
+                material_view, active_epoch_id=deliberation.active_epoch.id
+            ),
         }
+
+    def validate_material_roles(
+        metadata: dict[str, Any], visible_roles: list[str]
+    ) -> None:
+        mode = meeting_mode(mode_catalog, metadata)
+        allowed = {
+            str(participant["role_id"])
+            for participant in project_participants(mode, metadata)
+        }
+        requested = [role.strip() for role in visible_roles if role.strip()]
+        if not requested:
+            raise HTTPException(
+                status_code=400,
+                detail="Material requires at least one visible role",
+            )
+        unknown = sorted(set(requested) - allowed)
+        if unknown:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Unknown material visible role: {', '.join(unknown)}",
+            )
+
+    def material_change_impact(meeting_id: str) -> dict[str, Any] | None:
+        deliberation = DeliberationEpochs.view(repository.read_events(meeting_id))
+        has_ai_output = any(
+            event.get("role") not in {"Human", "System"}
+            and event.get("status") == "completed"
+            for event in deliberation.active_events
+        )
+        if not has_ai_output:
+            return None
+        return {
+            "deliberation_epoch_id": deliberation.active_epoch.id,
+            "reason": "prompt_material_changed_after_ai_output",
+        }
+
+    def versioned_limits() -> VersionedCaseMaterialLimits:
+        return VersionedCaseMaterialLimits(
+            per_item_chars=limits.per_file_chars,
+            total_chars=limits.total_chars,
+        )
+
+    def perform_material_mutation(
+        meeting_id: str,
+        operation: Callable[[dict[str, Any], dict[str, Any] | None], CaseMaterialsView],
+    ) -> dict[str, Any]:
+        reject_running_meeting(jobs, meeting_id)
+        metadata = metadata_store.get(meeting_id)
+        try:
+            view = operation(metadata, material_change_impact(meeting_id))
+        except CaseMaterialConflict as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+        except CaseMaterialValidationError as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
+        active_epoch_id = DeliberationEpochs.view(
+            repository.read_events(meeting_id)
+        ).active_epoch.id
+        active_evidence = active_case_evidence_projection(view)
+        metadata_store.update(
+            meeting_id,
+            lambda current: {
+                **{key: value for key, value in current.items() if key != "case_files"},
+                "case_materials_revision": view.revision,
+                "case_file_count": len(active_evidence),
+            },
+        )
+        return project_case_materials(view, active_epoch_id=active_epoch_id)
+
+    @app.get("/meetings/{meeting_id}/materials")
+    def get_case_materials(meeting_id: str) -> dict[str, Any]:
+        metadata_store.get(meeting_id)
+        active_epoch_id = DeliberationEpochs.view(
+            repository.read_events(meeting_id)
+        ).active_epoch.id
+        return project_case_materials(
+            case_materials.view(meeting_id), active_epoch_id=active_epoch_id
+        )
+
+    @app.post("/meetings/{meeting_id}/materials/evidence")
+    @meeting_transitions.synchronized
+    def add_case_evidence(
+        meeting_id: str, request: CaseMaterialContentRequest
+    ) -> dict[str, Any]:
+        def operation(metadata: dict[str, Any], impact: dict[str, Any] | None) -> CaseMaterialsView:
+            validate_material_roles(metadata, request.visible_roles)
+            return case_materials.add_evidence(
+                meeting_id,
+                expected_revision=request.revision,
+                title=request.title,
+                content=request.content,
+                visible_roles=request.visible_roles,
+                limits=versioned_limits(),
+                impact=impact,
+            )
+
+        return perform_material_mutation(meeting_id, operation)
+
+    @app.post("/meetings/{meeting_id}/materials/evidence/{evidence_id}/versions")
+    @meeting_transitions.synchronized
+    def add_case_evidence_version(
+        meeting_id: str,
+        evidence_id: str,
+        request: CaseMaterialContentRequest,
+    ) -> dict[str, Any]:
+        def operation(metadata: dict[str, Any], impact: dict[str, Any] | None) -> CaseMaterialsView:
+            validate_material_roles(metadata, request.visible_roles)
+            return case_materials.add_evidence_version(
+                meeting_id,
+                evidence_id,
+                expected_revision=request.revision,
+                title=request.title,
+                content=request.content,
+                visible_roles=request.visible_roles,
+                limits=versioned_limits(),
+                impact=impact,
+            )
+
+        return perform_material_mutation(meeting_id, operation)
+
+    def set_case_evidence_status(
+        meeting_id: str,
+        evidence_id: str,
+        request: CaseMaterialStatusRequest,
+        *,
+        active: bool,
+    ) -> dict[str, Any]:
+        return perform_material_mutation(
+            meeting_id,
+            lambda _metadata, impact: case_materials.set_evidence_active(
+                meeting_id,
+                evidence_id,
+                active=active,
+                expected_revision=request.revision,
+                limits=versioned_limits(),
+                impact=impact,
+            ),
+        )
+
+    @app.post("/meetings/{meeting_id}/materials/evidence/{evidence_id}/deactivate")
+    @meeting_transitions.synchronized
+    def deactivate_case_evidence(
+        meeting_id: str, evidence_id: str, request: CaseMaterialStatusRequest
+    ) -> dict[str, Any]:
+        return set_case_evidence_status(
+            meeting_id, evidence_id, request, active=False
+        )
+
+    @app.post("/meetings/{meeting_id}/materials/evidence/{evidence_id}/reactivate")
+    @meeting_transitions.synchronized
+    def reactivate_case_evidence(
+        meeting_id: str, evidence_id: str, request: CaseMaterialStatusRequest
+    ) -> dict[str, Any]:
+        return set_case_evidence_status(
+            meeting_id, evidence_id, request, active=True
+        )
+
+    @app.post("/meetings/{meeting_id}/materials/notes")
+    @meeting_transitions.synchronized
+    def add_case_note(
+        meeting_id: str, request: CaseMaterialContentRequest
+    ) -> dict[str, Any]:
+        def operation(metadata: dict[str, Any], impact: dict[str, Any] | None) -> CaseMaterialsView:
+            validate_material_roles(metadata, request.visible_roles)
+            return case_materials.add_note(
+                meeting_id,
+                expected_revision=request.revision,
+                title=request.title,
+                content=request.content,
+                visible_roles=request.visible_roles,
+                limits=versioned_limits(),
+                impact=impact,
+            )
+
+        return perform_material_mutation(meeting_id, operation)
+
+    @app.post("/meetings/{meeting_id}/materials/notes/{note_id}/versions")
+    @meeting_transitions.synchronized
+    def add_case_note_version(
+        meeting_id: str,
+        note_id: str,
+        request: CaseMaterialContentRequest,
+    ) -> dict[str, Any]:
+        def operation(metadata: dict[str, Any], impact: dict[str, Any] | None) -> CaseMaterialsView:
+            validate_material_roles(metadata, request.visible_roles)
+            return case_materials.add_note_version(
+                meeting_id,
+                note_id,
+                expected_revision=request.revision,
+                title=request.title,
+                content=request.content,
+                visible_roles=request.visible_roles,
+                limits=versioned_limits(),
+                impact=impact,
+            )
+
+        return perform_material_mutation(meeting_id, operation)
+
+    def set_case_note_status(
+        meeting_id: str,
+        note_id: str,
+        request: CaseMaterialStatusRequest,
+        *,
+        active: bool,
+    ) -> dict[str, Any]:
+        return perform_material_mutation(
+            meeting_id,
+            lambda _metadata, impact: case_materials.set_note_active(
+                meeting_id,
+                note_id,
+                active=active,
+                expected_revision=request.revision,
+                limits=versioned_limits(),
+                impact=impact,
+            ),
+        )
+
+    @app.post("/meetings/{meeting_id}/materials/notes/{note_id}/deactivate")
+    @meeting_transitions.synchronized
+    def deactivate_case_note(
+        meeting_id: str, note_id: str, request: CaseMaterialStatusRequest
+    ) -> dict[str, Any]:
+        return set_case_note_status(meeting_id, note_id, request, active=False)
+
+    @app.post("/meetings/{meeting_id}/materials/notes/{note_id}/reactivate")
+    @meeting_transitions.synchronized
+    def reactivate_case_note(
+        meeting_id: str, note_id: str, request: CaseMaterialStatusRequest
+    ) -> dict[str, Any]:
+        return set_case_note_status(meeting_id, note_id, request, active=True)
+
+    @app.post("/meetings/{meeting_id}/messages/{event_id}/promote-to-note")
+    @meeting_transitions.synchronized
+    def promote_message_to_case_note(
+        meeting_id: str,
+        event_id: str,
+        request: PromoteCaseNoteRequest,
+    ) -> dict[str, Any]:
+        metadata = metadata_store.get(meeting_id)
+        validate_material_roles(metadata, request.visible_roles)
+        source = next(
+            (
+                event
+                for event in active_meeting_events(repository, meeting_id)
+                if event.get("event_id") == event_id
+            ),
+            None,
+        )
+        if (
+            source is None
+            or source.get("role") != "Human"
+            or source.get("status") != "completed"
+            or not str(source.get("content", "")).strip()
+        ):
+            raise HTTPException(
+                status_code=400,
+                detail="Only an active completed chairman message can become a case note",
+            )
+        return perform_material_mutation(
+            meeting_id,
+            lambda _metadata, impact: case_materials.add_note(
+                meeting_id,
+                expected_revision=request.revision,
+                title=request.title,
+                content=str(source["content"]),
+                visible_roles=request.visible_roles,
+                source_event_id=event_id,
+                limits=versioned_limits(),
+                impact=impact,
+            ),
+        )
 
     @app.get("/meetings/{meeting_id}/deliberations")
     def get_deliberations(meeting_id: str) -> dict[str, Any]:
@@ -745,6 +1056,7 @@ def create_app(
             "mode_id": mode.id,
             "participants": metadata.get("participants") or [],
             "courtroom_docket": metadata.get("courtroom_docket"),
+            "materials_revision": case_materials.view(meeting_id).revision,
         }
         marker = DeliberationEpochs.restart_marker(
             meeting_id=meeting_id,
@@ -826,6 +1138,7 @@ def create_app(
             meeting_id,
             metadata_store=metadata_store,
             repository=repository,
+            case_materials=case_materials,
             mode_catalog=mode_catalog,
             meeting_assignments=meeting_assignments,
         )
@@ -857,6 +1170,7 @@ def create_app(
             meeting_id,
             metadata_store=metadata_store,
             repository=repository,
+            case_materials=case_materials,
             mode_catalog=mode_catalog,
             meeting_assignments=meeting_assignments,
         )
@@ -890,6 +1204,7 @@ def create_app(
             meeting_id,
             metadata_store=metadata_store,
             repository=repository,
+            case_materials=case_materials,
             mode_catalog=mode_catalog,
             meeting_assignments=meeting_assignments,
         )
@@ -920,6 +1235,7 @@ def create_app(
             meeting_id,
             metadata_store=metadata_store,
             repository=repository,
+            case_materials=case_materials,
             mode_catalog=mode_catalog,
             meeting_assignments=meeting_assignments,
         )
@@ -1094,6 +1410,9 @@ def create_app(
         metadata = metadata_store.get(meeting_id)
         require_meeting_goal(metadata)
         reject_terminal_meeting(repository, meeting_id)
+        material_view = require_case_materials_ready(
+            repository, case_materials, meeting_id
+        )
         mode = meeting_mode(mode_catalog, metadata)
         if mode.id == "courtroom":
             raise HTTPException(
@@ -1112,7 +1431,7 @@ def create_app(
                 mode=mode,
                 metadata=metadata,
                 model_assignments=model_assignments,
-                inputs=meeting_inputs_for_runner(metadata, repository.read_case_files(meeting_id)),
+                inputs=material_inputs_for_runner(metadata, material_view),
             ),
         ):
             raise HTTPException(status_code=409, detail="Meeting is already running")
@@ -1232,6 +1551,9 @@ def create_app(
         metadata = metadata_store.get(meeting_id)
         require_meeting_goal(metadata)
         reject_terminal_meeting(repository, meeting_id)
+        material_view = require_case_materials_ready(
+            repository, case_materials, meeting_id
+        )
         mode = meeting_mode(mode_catalog, metadata)
         if mode.category != "relay":
             raise HTTPException(
@@ -1289,7 +1611,7 @@ def create_app(
             plan,
             role_display_name,
             resolved_meeting_models(meeting_assignments, metadata, mode),
-            meeting_inputs_for_runner(metadata, repository.read_case_files(meeting_id)),
+            material_inputs_for_runner(metadata, material_view),
             directed_context,
         )
 
@@ -1392,6 +1714,9 @@ def create_app(
         metadata = metadata_store.get(meeting_id)
         require_meeting_goal(metadata)
         reject_terminal_meeting(repository, meeting_id)
+        material_view = require_case_materials_ready(
+            repository, case_materials, meeting_id
+        )
         mode = meeting_mode(mode_catalog, metadata)
         if mode.id == "courtroom":
             raise HTTPException(
@@ -1433,7 +1758,7 @@ def create_app(
                     status_code=400,
                     detail=f"Missing model assignment for role: {role}",
                 )
-        inputs = meeting_inputs_for_runner(metadata, repository.read_case_files(meeting_id))
+        inputs = material_inputs_for_runner(metadata, material_view)
         if not jobs.start(
             meeting_id,
             lambda: runner.respond_as_sequence(
@@ -1457,6 +1782,9 @@ def create_app(
         metadata = metadata_store.get(meeting_id)
         require_meeting_goal(metadata)
         reject_terminal_meeting(repository, meeting_id)
+        material_view = require_case_materials_ready(
+            repository, case_materials, meeting_id
+        )
         mode = meeting_mode(mode_catalog, metadata)
         model_assignments = resolved_meeting_models(
             meeting_assignments,
@@ -1549,9 +1877,7 @@ def create_app(
                 if failed is None or failed.get("status") != "failed":
                     raise CourtroomWorkflowError(f"Step is not failed: {step_id}", 400)
                 interaction_type = failed.get("interaction_type")
-                retry_inputs = meeting_inputs_for_runner(
-                    metadata, repository.read_case_files(meeting_id)
-                )
+                retry_inputs = material_inputs_for_runner(metadata, material_view)
                 if interaction_type in {
                     "courtroom-issue-draft",
                     "courtroom-issue-phase",
@@ -1584,6 +1910,9 @@ def create_app(
                                 fresh_metadata = metadata_store.get(meeting_id)
                                 require_meeting_goal(fresh_metadata)
                                 reject_terminal_meeting(repository, meeting_id)
+                                fresh_material_view = require_case_materials_ready(
+                                    repository, case_materials, meeting_id
+                                )
                                 fresh_mode = meeting_mode(mode_catalog, fresh_metadata)
                                 if fresh_mode.id != "courtroom":
                                     raise CourtroomWorkflowError(
@@ -1635,9 +1964,8 @@ def create_app(
                                     fresh_metadata,
                                     fresh_mode,
                                 )
-                                fresh_inputs = meeting_inputs_for_runner(
-                                    fresh_metadata,
-                                    repository.read_case_files(meeting_id),
+                                fresh_inputs = material_inputs_for_runner(
+                                    fresh_metadata, fresh_material_view
                                 )
                         except Exception as error:
                             record_stale_courtroom_operation(
@@ -1660,10 +1988,7 @@ def create_app(
                 if not jobs.start(meeting_id, operation):
                     raise CourtroomWorkflowError("Meeting is already running")
                 return JSONResponse(status_code=202, content={"status": "running"})
-            retry_inputs = meeting_inputs_for_runner(
-                metadata,
-                repository.read_case_files(meeting_id),
-            )
+            retry_inputs = material_inputs_for_runner(metadata, material_view)
             if mode.category == "relay":
                 operation = lambda: runner.retry_failed_step(
                     meeting_id=meeting_id,
@@ -2072,24 +2397,137 @@ def project_case_files(case_files: list[dict[str, Any]]) -> list[dict[str, Any]]
     return projected
 
 
+def project_case_materials(
+    view: CaseMaterialsView, *, active_epoch_id: str
+) -> dict[str, Any]:
+    def project_version(version: Any) -> dict[str, Any]:
+        return {
+            "version": version.version,
+            "title": version.title,
+            "content": version.content,
+            "visible_roles": list(version.visible_roles),
+            "size": version.size,
+            "created_at": version.created_at,
+            "source_event_id": version.source_event_id,
+        }
+
+    impact = view.pending_impact
+    effective_impact = (
+        impact
+        if impact is not None and impact.get("deliberation_epoch_id") == active_epoch_id
+        else None
+    )
+    return {
+        "schema_version": view.schema_version,
+        "revision": view.revision,
+        "pending_impact": effective_impact,
+        "evidence": [
+            {
+                "id": item.id,
+                "evidence_index": item.evidence_index,
+                "citation_anchor": item.citation_anchor,
+                "status": item.status,
+                "active_version": item.active_version,
+                "versions": [project_version(version) for version in item.versions],
+            }
+            for item in view.evidence
+        ],
+        "notes": [
+            {
+                "id": item.id,
+                "status": item.status,
+                "active_version": item.active_version,
+                "versions": [project_version(version) for version in item.versions],
+            }
+            for item in view.notes
+        ],
+    }
+
+
+def active_case_material_prompt_items(view: CaseMaterialsView) -> list[dict[str, Any]]:
+    items: list[dict[str, Any]] = []
+    for evidence in view.evidence:
+        if evidence.status != "active":
+            continue
+        version = next(
+            version
+            for version in evidence.versions
+            if version.version == evidence.active_version
+        )
+        items.append(
+            {
+                "kind": "evidence",
+                "id": evidence.id,
+                "evidence_index": evidence.evidence_index,
+                "citation_anchor": evidence.citation_anchor,
+                "title": version.title,
+                "content": version.content,
+                "visible_roles": list(version.visible_roles),
+                "size": version.size,
+            }
+        )
+    for note in view.notes:
+        if note.status != "active":
+            continue
+        version = next(
+            version for version in note.versions if version.version == note.active_version
+        )
+        items.append(
+            {
+                "kind": "note",
+                "id": note.id,
+                "title": version.title,
+                "content": version.content,
+                "visible_roles": list(version.visible_roles),
+                "size": version.size,
+            }
+        )
+    return items
+
+
+def active_case_evidence_projection(view: CaseMaterialsView) -> list[dict[str, Any]]:
+    return [
+        {key: value for key, value in item.items() if key != "kind"}
+        for item in active_case_material_prompt_items(view)
+        if item["kind"] == "evidence"
+    ]
+
+
 def meeting_inputs_for_runner(
     metadata: dict[str, Any],
     case_files: list[dict[str, Any]],
+    *,
+    materials_revision: int | None = None,
 ) -> dict[str, Any]:
     inputs: dict[str, Any] = dict(metadata.get("inputs") or {})
     if case_files:
         inputs[CASE_FILES_BY_ROLE_INPUT] = case_files_by_role(case_files)
+    if materials_revision is not None:
+        inputs[MATERIALS_REVISION_INPUT] = materials_revision
     return inputs
+
+
+def material_inputs_for_runner(
+    metadata: dict[str, Any], view: CaseMaterialsView
+) -> dict[str, Any]:
+    return meeting_inputs_for_runner(
+        metadata,
+        active_case_material_prompt_items(view),
+        materials_revision=view.revision,
+    )
 
 
 def case_files_by_role(case_files: list[dict[str, Any]]) -> dict[str, str]:
     grouped: dict[str, list[str]] = {}
-    for item in project_case_files(case_files):
+    for item in case_files:
         title = str(item.get("title", "")).strip()
         content = str(item.get("content", ""))
         if not title or not content.strip():
             continue
-        block = f"### {item['citation_anchor']} {title}\n{content}"
+        if item.get("kind") == "note":
+            block = f"### 案件備註：{title}\n{content}"
+        else:
+            block = f"### {item['citation_anchor']} {title}\n{content}"
         for role in item.get("visible_roles") or []:
             grouped.setdefault(str(role), []).append(block)
     instruction = (
@@ -2102,6 +2540,24 @@ def case_files_by_role(case_files: list[dict[str, Any]]) -> dict[str, str]:
     }
     rendered[CASE_FILES_DEFAULT_ROLE] = instruction
     return rendered
+
+
+def require_case_materials_ready(
+    repository: MeetingRepository,
+    materials: CaseMaterials,
+    meeting_id: str,
+) -> CaseMaterialsView:
+    view = materials.view(meeting_id)
+    impact = view.pending_impact
+    active_epoch_id = DeliberationEpochs.view(
+        repository.read_events(meeting_id)
+    ).active_epoch.id
+    if impact is not None and impact.get("deliberation_epoch_id") == active_epoch_id:
+        raise HTTPException(
+            status_code=409,
+            detail="Case materials changed; restart deliberation before AI execution",
+        )
+    return view
 
 
 def validate_participant_ids(
@@ -2295,12 +2751,16 @@ def courtroom_operation_context(
     *,
     metadata_store: MeetingMetadataStore,
     repository: MeetingRepository,
+    case_materials: CaseMaterials,
     mode_catalog: ModeCatalogRepository,
     meeting_assignments: MeetingModelAssignments,
 ) -> tuple[dict[str, Any], ModeDefinition, dict[str, ModelConfig], dict[str, Any]]:
     metadata = metadata_store.get(meeting_id)
     require_meeting_goal(metadata)
     reject_terminal_meeting(repository, meeting_id)
+    material_view = require_case_materials_ready(
+        repository, case_materials, meeting_id
+    )
     mode = meeting_mode(mode_catalog, metadata)
     if mode.id != "courtroom":
         raise HTTPException(
@@ -2311,7 +2771,7 @@ def courtroom_operation_context(
         metadata,
         mode,
         resolved_meeting_models(meeting_assignments, metadata, mode),
-        meeting_inputs_for_runner(metadata, repository.read_case_files(meeting_id)),
+        material_inputs_for_runner(metadata, material_view),
     )
 
 

@@ -29,6 +29,7 @@ REQUIRED_JSON_SCHEMA_HASH = DEFAULT_OUTPUT_SCHEMA_REGISTRY.get(DEFAULT_OUTPUT_SC
 LIFECYCLE_STATUSES = {"cancelled", "closed", "reopened"}
 CASE_FILES_BY_ROLE_INPUT = "__case_files_by_role"
 CASE_FILES_DEFAULT_ROLE = "__default__"
+MATERIALS_REVISION_INPUT = "__materials_revision"
 
 
 class ModelAdapter(Protocol):
@@ -582,6 +583,9 @@ class MeetingRunner:
         config = model_assignments[step.role]
         event_step_id = event_step_id or self._event_step_id(step.step_id, round_number)
         extra_event_fields = extra_event_fields or {}
+        materials_revision = (inputs or {}).get(MATERIALS_REVISION_INPUT)
+        if isinstance(materials_revision, int):
+            extra_event_fields = {**extra_event_fields, "materials_revision": materials_revision}
         output_schema = self.output_schemas.get(step.output_schema_id)
         prompt_metadata = self._prompt_metadata(step.template_name, output_schema)
         prompt = self.prompt_renderer.render(
@@ -822,6 +826,7 @@ class MeetingRunner:
             ),
         )
         events: list[dict[str, object]] = []
+        materials_revision = (inputs or {}).get(MATERIALS_REVISION_INPUT)
         for current_attempt in (attempt, attempt + 1):
             if current_attempt != attempt and self._is_terminal(meeting_id):
                 return events
@@ -854,6 +859,8 @@ class MeetingRunner:
                         started_clock=started_clock,
                         prompt_metadata=prompt_metadata,
                     )
+                if isinstance(materials_revision, int):
+                    failure_event["materials_revision"] = materials_revision
                 if self._is_terminal(meeting_id):
                     events.append(self._discarded_terminal_attempt(failure_event))
                     return events
@@ -875,6 +882,8 @@ class MeetingRunner:
                         started_clock=started_clock,
                         prompt_metadata=prompt_metadata,
                     )
+                if isinstance(materials_revision, int):
+                    failure_event["materials_revision"] = materials_revision
                 if self._is_terminal(meeting_id):
                     failure_event = self._discarded_terminal_attempt(failure_event)
                 events.append(failure_event)
@@ -900,6 +909,8 @@ class MeetingRunner:
                 "status": "completed",
                 **self._timing_fields(started_at, started_clock),
             }
+            if isinstance(materials_revision, int):
+                completed_event["materials_revision"] = materials_revision
             if response.token_usage is not None:
                 completed_event["token_usage"] = response.token_usage
             if self._is_terminal(meeting_id):
@@ -1071,6 +1082,7 @@ class MeetingRunner:
             "issue_id",
             "issue_phase",
             "courtroom_operation",
+            "materials_revision",
         ]:
             value = extra_event_fields.get(key)
             if isinstance(value, (str, int)):
@@ -1103,7 +1115,7 @@ class MeetingRunner:
         rendered = {
             str(key): str(value)
             for key, value in (inputs or {}).items()
-            if key != CASE_FILES_BY_ROLE_INPUT
+            if key not in {CASE_FILES_BY_ROLE_INPUT, MATERIALS_REVISION_INPUT}
         }
         case_files_by_role = (inputs or {}).get(CASE_FILES_BY_ROLE_INPUT)
         if isinstance(case_files_by_role, dict):
