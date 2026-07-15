@@ -1748,6 +1748,19 @@ def test_app_startup_marks_leftover_execution_state_failed(tmp_path: Path) -> No
                 "prompt_template_name": "blue_propose",
                 "prompt_template_hash": TEST_BLUE_PROPOSE_TEMPLATE_HASH,
                 "output_schema_hash": TEST_OUTPUT_SCHEMA_HASH,
+                "interaction_type": "directed-role-response",
+                "directed_sequence": 1,
+                "in_response_to_event_id": "chair-instruction-1",
+                "materials_revision": 4,
+                "materials_refs": [
+                    {
+                        "kind": "note",
+                        "id": "case-note-1",
+                        "version": 2,
+                        "status": "active",
+                        "visible_roles": ["Blue"],
+                    }
+                ],
             }
         ),
         encoding="utf-8",
@@ -1764,6 +1777,10 @@ def test_app_startup_marks_leftover_execution_state_failed(tmp_path: Path) -> No
     assert meeting["events"][-1]["prompt_template_name"] == "blue_propose"
     assert meeting["events"][-1]["prompt_template_hash"] == TEST_BLUE_PROPOSE_TEMPLATE_HASH
     assert meeting["events"][-1]["output_schema_hash"] == TEST_OUTPUT_SCHEMA_HASH
+    assert meeting["events"][-1]["materials_revision"] == 4
+    assert meeting["events"][-1]["materials_refs"][0]["version"] == 2
+    assert meeting["events"][-1]["interaction_type"] == "directed-role-response"
+    assert meeting["events"][-1]["in_response_to_event_id"] == "chair-instruction-1"
     assert meeting["events"][-1]["failure_kind"] == "interrupted"
     assert meeting["events"][-1]["adapter"] == "mock"
     assert meeting["events"][-1]["prompt_messages"] == [
@@ -3134,8 +3151,8 @@ def test_create_meeting_stores_and_returns_case_files(tmp_path: Path) -> None:
         (stored_path.parent / "metadata.json").read_text(encoding="utf-8")
     )
     assert "case_files" not in metadata
-    assert metadata["case_file_count"] == 2
-    assert metadata["case_materials_revision"] == 0
+    assert "case_file_count" not in metadata
+    assert "case_materials_revision" not in metadata
 
     fetched = client.get(f"/meetings/{meeting_id}").json()
     assert [(item["evidence_index"], item["citation_anchor"]) for item in fetched["case_files"]] == [
@@ -3193,7 +3210,7 @@ def test_get_meeting_derives_evidence_anchors_for_legacy_case_files_without_rewr
     assert "evidence_index" not in (meeting_dir / "case_files.json").read_text(encoding="utf-8")
     metadata = json.loads((meeting_dir / "metadata.json").read_text(encoding="utf-8"))
     assert "case_files" not in metadata
-    assert metadata["case_file_count"] == 2
+    assert "case_file_count" not in metadata
 
 
 def test_create_meeting_rejects_case_files_for_unknown_roles(tmp_path: Path) -> None:
@@ -4756,7 +4773,9 @@ def test_case_material_http_mutations_upgrade_legacy_and_preserve_versions(
         },
     ).json()["meeting_id"]
     path = tmp_path / "data" / "meetings" / meeting_id / "case_files.json"
+    metadata_path = path.with_name("metadata.json")
     legacy_bytes = path.read_bytes()
+    metadata_bytes = metadata_path.read_bytes()
 
     legacy = client.get(f"/meetings/{meeting_id}/materials")
     assert legacy.status_code == 200
@@ -4812,6 +4831,20 @@ def test_case_material_http_mutations_upgrade_legacy_and_preserve_versions(
     assert stale.status_code == 409
     assert deactivated.json()["evidence"][1]["status"] == "inactive"
     assert reactivated.json()["evidence"][1]["status"] == "active"
+    historical = client.get(
+        f"/meetings/{meeting_id}/materials", params={"revision": 1}
+    )
+    assert historical.status_code == 200
+    assert historical.json()["revision"] == 1
+    assert historical.json()["evidence"][1]["active_version"] == 1
+    assert historical.json()["evidence"][1]["versions"][-1]["visible_roles"] == [
+        "Defense",
+        "Judge",
+    ]
+    history = reactivated.json()["revision_history"]
+    assert [entry["revision"] for entry in history] == [0, 1, 2, 3, 4]
+    assert "content" not in json.dumps(history)
+    assert metadata_path.read_bytes() == metadata_bytes
 
 
 def test_case_notes_and_promoted_chair_message_are_versioned_without_event_rewrite(
@@ -4854,6 +4887,17 @@ def test_case_notes_and_promoted_chair_message_are_versioned_without_event_rewri
     assert updated.status_code == 200
     assert updated.json()["notes"][0]["active_version"] == 2
     assert updated.json()["notes"][0]["versions"][0]["source_event_id"] == source["event_id"]
+
+    deactivated = client.post(
+        f"/meetings/{meeting_id}/materials/notes/{note['id']}/deactivate",
+        json={"revision": 2},
+    )
+    reactivated = client.post(
+        f"/meetings/{meeting_id}/materials/notes/{note['id']}/reactivate",
+        json={"revision": 3},
+    )
+    assert deactivated.json()["notes"][0]["status"] == "inactive"
+    assert reactivated.json()["notes"][0]["status"] == "active"
 
 
 def test_active_materials_reach_prompts_inactive_versions_do_not_and_restart_clears_gate(
@@ -4901,6 +4945,10 @@ def test_active_materials_reach_prompts_inactive_versions_do_not_and_restart_cle
     assert "PERSISTENT_CASE_NOTE" in blue_prompt
     assert "INACTIVE_EVIDENCE" not in blue_prompt
     assert {event["materials_revision"] for event in completed["events"]} == {2}
+    assert {
+        reference["id"]
+        for reference in completed["events"][0]["materials_refs"]
+    } == {"case-file-1", "case-note-1"}
 
     changed = client.post(
         f"/meetings/{meeting_id}/materials/notes",
@@ -4991,6 +5039,111 @@ def test_pending_material_impact_blocks_every_courtroom_ai_entrypoint(tmp_path: 
 
     assert {response.status_code for response in responses} == {409}
     assert all("materials changed" in response.json()["detail"].lower() for response in responses)
+
+
+def test_inactive_note_is_excluded_from_prompt_and_inactive_version_waits_until_reactivation(
+    tmp_path: Path,
+) -> None:
+    client = TestClient(create_test_app(tmp_path))
+    meeting_id = client.post(
+        "/meetings", json={"title": "inactive notes", "goal": "ignore inactive"}
+    ).json()["meeting_id"]
+    created = client.post(
+        f"/meetings/{meeting_id}/materials/notes",
+        json={
+            "revision": 0,
+            "title": "temporary",
+            "content": "INACTIVE_NOTE_CONTENT",
+            "visible_roles": ["Blue"],
+        },
+    ).json()
+    note_id = created["notes"][0]["id"]
+    assert client.post(
+        f"/meetings/{meeting_id}/materials/notes/{note_id}/deactivate",
+        json={"revision": 1},
+    ).status_code == 200
+    assert client.post(f"/meetings/{meeting_id}/start", json={}).status_code == 202
+    meeting = wait_for_activity(client, meeting_id, "completed")
+    assert all(
+        "INACTIVE_NOTE_CONTENT" not in event["prompt_messages"][0]["content"]
+        for event in meeting["events"]
+    )
+
+    versioned = client.post(
+        f"/meetings/{meeting_id}/materials/notes/{note_id}/versions",
+        json={
+            "revision": 2,
+            "title": "still inactive",
+            "content": "NEW_INACTIVE_NOTE",
+            "visible_roles": ["Red"],
+        },
+    )
+    assert versioned.status_code == 200
+    assert versioned.json()["pending_impact"] is None
+    reactivated = client.post(
+        f"/meetings/{meeting_id}/materials/notes/{note_id}/reactivate",
+        json={"revision": 3},
+    )
+    assert reactivated.status_code == 200
+    assert reactivated.json()["pending_impact"] is not None
+
+
+def test_carried_ruling_counts_as_active_ai_output_and_keeps_material_references(
+    tmp_path: Path,
+) -> None:
+    client = TestClient(create_test_app(tmp_path))
+    meeting_id = client.post(
+        "/meetings",
+        json={"title": "carried ruling", "goal": "preserve ruling", "mode_id": "courtroom"},
+    ).json()["meeting_id"]
+    repository = MeetingRepository(tmp_path / "data")
+    repository.append_event(
+        meeting_id,
+        {
+            "event_id": "ruling-issue-1",
+            "meeting_id": meeting_id,
+            "step_id": "ruling-issue-1",
+            "role": "Judge",
+            "attempt": 1,
+            "status": "completed",
+            "interaction_type": "courtroom-issue-phase",
+            "issue_id": "issue-1",
+            "issue_phase": "ruling",
+            "materials_revision": 5,
+            "materials_refs": [
+                {
+                    "kind": "evidence",
+                    "id": "case-file-1",
+                    "version": 2,
+                    "status": "active",
+                    "visible_roles": ["Judge"],
+                }
+            ],
+        },
+    )
+    marker = DeliberationEpochs.restart_marker(
+        meeting_id=meeting_id,
+        events=repository.read_events(meeting_id),
+        command=RestartCommand(
+            scope="current_issue", reason="retry issue two", issue_id="issue-2"
+        ),
+    )
+    repository.append_event(meeting_id, marker)
+
+    carried = DeliberationEpochs.view(repository.read_events(meeting_id)).workflow_events[0]
+    assert carried["materials_revision"] == 5
+    assert carried["materials_refs"][0]["version"] == 2
+    changed = client.post(
+        f"/meetings/{meeting_id}/materials/notes",
+        json={
+            "revision": 0,
+            "title": "new fact",
+            "content": "changes carried judgment context",
+            "visible_roles": ["Judge"],
+        },
+    )
+    assert changed.status_code == 200
+    assert changed.json()["pending_impact"]["deliberation_epoch_id"] == marker["epoch_id"]
 
 
 def test_alternate_local_frontend_origin_can_call_api(tmp_path: Path) -> None:

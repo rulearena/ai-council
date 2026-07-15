@@ -182,6 +182,8 @@ class DeliberationEpochs:
             "parsed_output",
             "output_schema_id",
             "created_at",
+            "materials_revision",
+            "materials_refs",
         }
         return [
             {key: value for key, value in event.items() if key in allowed}

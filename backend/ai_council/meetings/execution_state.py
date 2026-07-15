@@ -36,6 +36,7 @@ class ActiveExecutionState(TypedDict):
     issue_phase: NotRequired[str]
     courtroom_operation: NotRequired[str]
     materials_revision: NotRequired[int]
+    materials_refs: NotRequired[list[dict[str, object]]]
 
 
 class MeetingExecutionStateStore:
@@ -127,6 +128,7 @@ def interrupted_execution_event(state: ActiveExecutionState) -> dict[str, object
         "issue_phase",
         "courtroom_operation",
         "materials_revision",
+        "materials_refs",
         "adapter",
         "prompt_messages",
         "started_at",

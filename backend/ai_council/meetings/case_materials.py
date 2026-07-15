@@ -55,12 +55,23 @@ class CaseNote:
 
 
 @dataclass(frozen=True)
+class MaterialRevision:
+    revision: int
+    parent_revision: int | None
+    transition: str
+    created_at: str | None
+    evidence: list[dict[str, Any]]
+    notes: list[dict[str, Any]]
+
+
+@dataclass(frozen=True)
 class CaseMaterialsView:
     schema_version: int
     revision: int
     evidence: list[EvidenceMaterial]
     notes: list[CaseNote]
     pending_impact: dict[str, Any] | None
+    revision_history: list[MaterialRevision]
 
 
 class CaseMaterials:
@@ -73,6 +84,24 @@ class CaseMaterials:
         raw = self.repository.read_case_materials_raw(meeting_id)
         document, schema_version = self._document(raw)
         return self._view(document, schema_version=schema_version)
+
+    def view_at_revision(self, meeting_id: str, revision: int) -> CaseMaterialsView:
+        raw = self.repository.read_case_materials_raw(meeting_id)
+        document, schema_version = self._document(raw)
+        entry = next(
+            (
+                candidate
+                for candidate in document["revision_history"]
+                if int(candidate["revision"]) == revision
+            ),
+            None,
+        )
+        if entry is None:
+            raise CaseMaterialValidationError(
+                f"Unknown case materials revision: {revision}"
+            )
+        restored = self._restore_revision(document, entry)
+        return self._view(restored, schema_version=schema_version)
 
     def add_evidence(
         self,
@@ -112,6 +141,7 @@ class CaseMaterials:
             mutate=mutate,
             limits=limits,
             impact=impact,
+            transition="add-evidence",
         )
 
     def add_evidence_version(
@@ -145,6 +175,7 @@ class CaseMaterials:
             mutate=mutate,
             limits=limits,
             impact=impact,
+            transition="version-evidence",
         )
 
     def set_evidence_active(
@@ -165,6 +196,7 @@ class CaseMaterials:
             ),
             limits=limits,
             impact=impact,
+            transition="reactivate-evidence" if active else "deactivate-evidence",
         )
 
     def add_note(
@@ -205,6 +237,7 @@ class CaseMaterials:
             mutate=mutate,
             limits=limits,
             impact=impact,
+            transition="add-note",
         )
 
     def add_note_version(
@@ -238,6 +271,7 @@ class CaseMaterials:
             mutate=mutate,
             limits=limits,
             impact=impact,
+            transition="version-note",
         )
 
     def set_note_active(
@@ -258,6 +292,7 @@ class CaseMaterials:
             ),
             limits=limits,
             impact=impact,
+            transition="reactivate-note" if active else "deactivate-note",
         )
 
     def _mutate(
@@ -268,6 +303,7 @@ class CaseMaterials:
         mutate: Callable[[dict[str, Any]], None],
         limits: CaseMaterialLimits | None,
         impact: dict[str, Any] | None,
+        transition: str,
     ) -> CaseMaterialsView:
         raw = self.repository.read_case_materials_raw(meeting_id)
         document, _ = self._document(raw)
@@ -279,10 +315,22 @@ class CaseMaterials:
         updated = deepcopy(document)
         mutate(updated)
         if limits is not None:
-            self._validate_limits(updated, limits)
+            self._validate_new_versions(document, updated, limits)
+            self._validate_active_total(updated, limits)
         updated["revision"] = actual_revision + 1
-        if impact is not None:
+        if (
+            impact is not None
+            and self._active_prompt_refs(document) != self._active_prompt_refs(updated)
+        ):
             updated["pending_impact"] = deepcopy(impact)
+        updated["revision_history"].append(
+            self._revision_entry(
+                updated,
+                revision=actual_revision + 1,
+                parent_revision=actual_revision,
+                transition=transition,
+            )
+        )
         self.repository.save_case_materials(meeting_id, updated)
         return self._view(updated, schema_version=CASE_MATERIALS_SCHEMA_VERSION)
 
@@ -291,7 +339,21 @@ class CaseMaterials:
         cls, raw: list[dict[str, Any]] | dict[str, Any] | None
     ) -> tuple[dict[str, Any], int]:
         if isinstance(raw, dict) and raw.get("schema_version") == CASE_MATERIALS_SCHEMA_VERSION:
-            return deepcopy(raw), CASE_MATERIALS_SCHEMA_VERSION
+            document = deepcopy(raw)
+            if "revision_history" not in document:
+                document["revision_history"] = [
+                    cls._revision_entry(
+                        document,
+                        revision=int(document["revision"]),
+                        parent_revision=(
+                            int(document["revision"]) - 1
+                            if int(document["revision"]) > 0
+                            else None
+                        ),
+                        transition="legacy-versioned-snapshot",
+                    )
+                ]
+            return document, CASE_MATERIALS_SCHEMA_VERSION
         if isinstance(raw, dict):
             raise CaseMaterialValidationError(
                 f"Unsupported case materials schema: {raw.get('schema_version')!r}"
@@ -314,7 +376,10 @@ class CaseMaterials:
                                 1,
                                 title=str(item.get("title", "")),
                                 content=str(item.get("content", "")),
-                                visible_roles=[str(role) for role in item.get("visible_roles") or []],
+                                visible_roles=[
+                                    str(role)
+                                    for role in item.get("visible_roles") or []
+                                ],
                                 created_at=item.get("created_at"),
                             )
                         ],
@@ -324,11 +389,11 @@ class CaseMaterials:
             return cls._empty_document(evidence=evidence, next_index=next_index), 1
         return cls._empty_document(), CASE_MATERIALS_SCHEMA_VERSION
 
-    @staticmethod
+    @classmethod
     def _empty_document(
-        *, evidence: list[dict[str, Any]] | None = None, next_index: int = 1
+        cls, *, evidence: list[dict[str, Any]] | None = None, next_index: int = 1
     ) -> dict[str, Any]:
-        return {
+        document = {
             "schema_version": CASE_MATERIALS_SCHEMA_VERSION,
             "revision": 0,
             "next_evidence_index": next_index,
@@ -337,6 +402,15 @@ class CaseMaterials:
             "notes": [],
             "pending_impact": None,
         }
+        document["revision_history"] = [
+            cls._revision_entry(
+                document,
+                revision=0,
+                parent_revision=None,
+                transition="initial",
+            )
+        ]
+        return document
 
     @staticmethod
     def _version(
@@ -384,7 +458,30 @@ class CaseMaterials:
         item["status"] = requested
 
     @classmethod
-    def _validate_limits(cls, document: dict[str, Any], limits: CaseMaterialLimits) -> None:
+    def _validate_new_versions(
+        cls,
+        before: dict[str, Any],
+        after: dict[str, Any],
+        limits: CaseMaterialLimits,
+    ) -> None:
+        before_counts = {
+            (kind, str(item["id"])): len(item["versions"])
+            for kind, collection in (("evidence", before["evidence"]), ("note", before["notes"]))
+            for item in collection
+        }
+        for kind, collection in (("evidence", after["evidence"]), ("note", after["notes"])):
+            for item in collection:
+                start = before_counts.get((kind, str(item["id"])), 0)
+                for version in item["versions"][start:]:
+                    if int(version["size"]) > limits.per_item_chars:
+                        raise CaseMaterialValidationError(
+                            f"Material content exceeds {limits.per_item_chars} characters"
+                        )
+
+    @classmethod
+    def _validate_active_total(
+        cls, document: dict[str, Any], limits: CaseMaterialLimits
+    ) -> None:
         total = 0
         for collection in (document["evidence"], document["notes"]):
             for item in collection:
@@ -392,10 +489,6 @@ class CaseMaterials:
                     continue
                 version = cls._active_version(item)
                 size = int(version["size"])
-                if size > limits.per_item_chars:
-                    raise CaseMaterialValidationError(
-                        f"Material content exceeds {limits.per_item_chars} characters"
-                    )
                 total += size
         if total > limits.total_chars:
             raise CaseMaterialValidationError(
@@ -410,7 +503,106 @@ class CaseMaterials:
             evidence=[cls._evidence_view(item) for item in document["evidence"]],
             notes=[cls._note_view(item) for item in document["notes"]],
             pending_impact=deepcopy(document.get("pending_impact")),
+            revision_history=[
+                cls._revision_view(entry) for entry in document["revision_history"]
+            ],
         )
+
+    @classmethod
+    def _revision_entry(
+        cls,
+        document: dict[str, Any],
+        *,
+        revision: int,
+        parent_revision: int | None,
+        transition: str,
+    ) -> dict[str, Any]:
+        references = cls._material_refs(document)
+        return {
+            "revision": revision,
+            "parent_revision": parent_revision,
+            "transition": transition,
+            "created_at": datetime.now(UTC).isoformat(),
+            **references,
+        }
+
+    @classmethod
+    def _material_refs(cls, document: dict[str, Any]) -> dict[str, list[dict[str, Any]]]:
+        def reference(kind: str, item: dict[str, Any]) -> dict[str, Any]:
+            version = cls._active_version(item)
+            result = {
+                "kind": kind,
+                "id": str(item["id"]),
+                "status": str(item["status"]),
+                "version": int(item["active_version"]),
+                "visible_roles": [str(role) for role in version["visible_roles"]],
+            }
+            if kind == "evidence":
+                result.update(
+                    {
+                        "evidence_index": int(item["evidence_index"]),
+                        "citation_anchor": str(item["citation_anchor"]),
+                    }
+                )
+            return result
+
+        return {
+            "evidence": [reference("evidence", item) for item in document["evidence"]],
+            "notes": [reference("note", item) for item in document["notes"]],
+        }
+
+    @staticmethod
+    def _revision_view(entry: dict[str, Any]) -> MaterialRevision:
+        return MaterialRevision(
+            revision=int(entry["revision"]),
+            parent_revision=(
+                int(entry["parent_revision"])
+                if entry.get("parent_revision") is not None
+                else None
+            ),
+            transition=str(entry["transition"]),
+            created_at=entry.get("created_at"),
+            evidence=deepcopy(entry["evidence"]),
+            notes=deepcopy(entry["notes"]),
+        )
+
+    @classmethod
+    def _restore_revision(
+        cls, document: dict[str, Any], entry: dict[str, Any]
+    ) -> dict[str, Any]:
+        def restore(
+            collection: str, references: list[dict[str, Any]]
+        ) -> list[dict[str, Any]]:
+            current_by_id = {str(item["id"]): item for item in document[collection]}
+            restored = []
+            for reference in references:
+                current = deepcopy(current_by_id[str(reference["id"])])
+                version = int(reference["version"])
+                current["status"] = reference["status"]
+                current["active_version"] = version
+                current["versions"] = [
+                    item
+                    for item in current["versions"]
+                    if int(item["version"]) <= version
+                ]
+                restored.append(current)
+            return restored
+
+        restored = deepcopy(document)
+        restored["revision"] = int(entry["revision"])
+        restored["evidence"] = restore("evidence", entry["evidence"])
+        restored["notes"] = restore("notes", entry["notes"])
+        restored["pending_impact"] = None
+        return restored
+
+    @classmethod
+    def _active_prompt_refs(cls, document: dict[str, Any]) -> list[dict[str, Any]]:
+        references = cls._material_refs(document)
+        return [
+            reference
+            for reference in [*references["evidence"], *references["notes"]]
+            if reference["status"] == "active"
+        ]
 
     @classmethod
     def _evidence_view(cls, item: dict[str, Any]) -> EvidenceMaterial:

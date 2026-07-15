@@ -933,7 +933,17 @@ def test_retry_failed_directed_response_reuses_instruction_linkage_and_generic_p
     inputs = {
         "__case_files_by_role": {
             "Defense": "[證物二] 遺產稅繳納紀錄",
-        }
+        },
+        "__materials_revision": 7,
+        "__materials_refs": [
+            {
+                "kind": "evidence",
+                "id": "case-file-2",
+                "version": 3,
+                "status": "active",
+                "visible_roles": ["Defense"],
+            }
+        ],
     }
 
     runner.respond_as_role(
@@ -975,6 +985,9 @@ def test_retry_failed_directed_response_reuses_instruction_linkage_and_generic_p
     assert {event["in_response_to_event_id"] for event in responses} == {
         instructions[0]["event_id"]
     }
+    assert instructions[0]["materials_revision"] == 7
+    assert {event["materials_revision"] for event in responses} == {7}
+    assert {event["materials_refs"][0]["version"] for event in responses} == {3}
     assert responses[-1]["step_id"] == "directed-1-defense-response"
     assert responses[-1]["base_step_id"] == "defense-response"
     retry_prompt = adapter.requests[-1].prompt

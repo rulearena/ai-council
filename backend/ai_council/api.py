@@ -59,6 +59,7 @@ from ai_council.meetings.runner import (
     CASE_FILES_BY_ROLE_INPUT,
     CASE_FILES_DEFAULT_ROLE,
     MATERIALS_REVISION_INPUT,
+    MATERIALS_REFS_INPUT,
     latest_unresolved_fixed_relay_failure,
     MeetingRunner,
     RunnerAdapters,
@@ -588,8 +589,6 @@ def create_app(
             "mode_id": mode.id,
             "participants": participants,
             "inputs": request.inputs,
-            "case_materials_revision": 0,
-            "case_file_count": len(case_files),
         }
         metadata_store.save(metadata)
         if case_files:
@@ -702,7 +701,7 @@ def create_app(
         has_ai_output = any(
             event.get("role") not in {"Human", "System"}
             and event.get("status") == "completed"
-            for event in deliberation.active_events
+            for event in deliberation.workflow_events
         )
         if not has_ai_output:
             return None
@@ -732,26 +731,25 @@ def create_app(
         active_epoch_id = DeliberationEpochs.view(
             repository.read_events(meeting_id)
         ).active_epoch.id
-        active_evidence = active_case_evidence_projection(view)
-        metadata_store.update(
-            meeting_id,
-            lambda current: {
-                **{key: value for key, value in current.items() if key != "case_files"},
-                "case_materials_revision": view.revision,
-                "case_file_count": len(active_evidence),
-            },
-        )
         return project_case_materials(view, active_epoch_id=active_epoch_id)
 
     @app.get("/meetings/{meeting_id}/materials")
-    def get_case_materials(meeting_id: str) -> dict[str, Any]:
+    def get_case_materials(
+        meeting_id: str, revision: int | None = None
+    ) -> dict[str, Any]:
         metadata_store.get(meeting_id)
         active_epoch_id = DeliberationEpochs.view(
             repository.read_events(meeting_id)
         ).active_epoch.id
-        return project_case_materials(
-            case_materials.view(meeting_id), active_epoch_id=active_epoch_id
-        )
+        try:
+            view = (
+                case_materials.view(meeting_id)
+                if revision is None
+                else case_materials.view_at_revision(meeting_id, revision)
+            )
+        except CaseMaterialValidationError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        return project_case_materials(view, active_epoch_id=active_epoch_id)
 
     @app.post("/meetings/{meeting_id}/materials/evidence")
     @meeting_transitions.synchronized
@@ -2441,6 +2439,17 @@ def project_case_materials(
             }
             for item in view.notes
         ],
+        "revision_history": [
+            {
+                "revision": item.revision,
+                "parent_revision": item.parent_revision,
+                "transition": item.transition,
+                "created_at": item.created_at,
+                "evidence": item.evidence,
+                "notes": item.notes,
+            }
+            for item in view.revision_history
+        ],
     }
 
 
@@ -2510,11 +2519,18 @@ def meeting_inputs_for_runner(
 def material_inputs_for_runner(
     metadata: dict[str, Any], view: CaseMaterialsView
 ) -> dict[str, Any]:
-    return meeting_inputs_for_runner(
+    inputs = meeting_inputs_for_runner(
         metadata,
         active_case_material_prompt_items(view),
         materials_revision=view.revision,
     )
+    latest = view.revision_history[-1]
+    inputs[MATERIALS_REFS_INPUT] = [
+        reference
+        for reference in [*latest.evidence, *latest.notes]
+        if reference["status"] == "active"
+    ]
+    return inputs
 
 
 def case_files_by_role(case_files: list[dict[str, Any]]) -> dict[str, str]:
