@@ -159,6 +159,35 @@ models:
     assert all(event.get("type") != "token_delta" for event in persisted_events)
 
 
+def test_meeting_websocket_replaces_snapshot_when_deliberation_epoch_changes(
+    tmp_path: Path,
+) -> None:
+    app = create_test_app(tmp_path)
+    client = TestClient(app)
+    meeting_id = client.post(
+        "/meetings", json={"title": "WS restart", "goal": "WS restart"}
+    ).json()["meeting_id"]
+    assert client.post(f"/meetings/{meeting_id}/start", json={}).status_code == 202
+    wait_for_activity(client, meeting_id, "completed")
+
+    with client.websocket_connect(f"/meetings/{meeting_id}/events") as websocket:
+        initial = websocket.receive_json()
+        restarted = client.post(
+            f"/meetings/{meeting_id}/deliberations/restart",
+            json={"scope": "all_deliberation", "reason": "WS full replace"},
+        )
+        replacement = websocket.receive_json()
+
+    assert len(initial["events"]) == 4
+    assert restarted.status_code == 200
+    assert replacement == {
+        "type": "snapshot",
+        "events": [],
+        "stream_events": [],
+        "activity_status": "idle",
+    }
+
+
 def create_test_app(
     tmp_path: Path,
     *,

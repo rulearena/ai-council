@@ -272,7 +272,7 @@ export function useCouncil() {
 
   // event_ids this session has already processed for the currently-open meeting - lets
   // the WS handler tell a genuinely new event apart from one merely being resent (every
-  // reconnect's first message is a "snapshot" of the *entire* event history, see
+  // reconnect's first message is a snapshot of the active deliberation, see
   // connectMeetingEvents/backend's meeting_events websocket handler). Deliberately NOT
   // reset on every reconnect (only on an actual meeting switch, in openMeeting below) -
   // event_ids are stable and unique per (step, round, attempt) (see runner.py's
@@ -713,7 +713,7 @@ export function useCouncil() {
           last_step_id: latestEvent?.step_id ?? null,
           updated_at: latestEvent?.created_at ?? selectedMeeting.value.updated_at,
         }
-        // A reconnect's "snapshot" resends the meeting's *entire* history (not just what
+        // A reconnect's "snapshot" resends the active deliberation (not just what
         // happened since we disconnected), so most of its events are old news the
         // instant we've already lived through them once - only events this session has
         // never seen before should be allowed to resolve a pendingRoles entry. Without

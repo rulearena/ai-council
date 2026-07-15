@@ -11,6 +11,7 @@ from threading import Event, Lock, Thread
 import pytest
 
 from ai_council.meetings.modes import ModeCatalogRepository, relay_plan
+from ai_council.meetings.deliberation import DeliberationEpochs, RestartCommand
 from ai_council.meetings.repository import MeetingRepository
 from ai_council.meetings.runner import (
     MeetingRunner,
@@ -1922,6 +1923,52 @@ def test_parallel_runner_completes_fanout_then_synthesis(tmp_path: Path) -> None
     assert "Member-1" in synthesis_prompt
     assert "Continue" in synthesis_prompt
     assert {event["output_schema_id"] for event in completed} == {"role-output/v1"}
+
+
+def test_parallel_restart_synthesis_uses_only_active_epoch_members(tmp_path: Path) -> None:
+    old_output = json.dumps(
+        {"summary": "ARCHIVED_MEMBER", "arguments": [], "risks": [], "recommendation": "old"}
+    )
+    new_output = json.dumps(
+        {"summary": "ACTIVE_MEMBER", "arguments": [], "risks": [], "recommendation": "new"}
+    )
+    runner = build_runner(
+        tmp_path,
+        adapter=FakeAdapter([old_output] * 4 + [new_output] * 4),
+        templates=("brainstorm_member", "brainstorm_synthesis"),
+        extra_placeholders=" {{ instance_prompt }} {{ fanout_outputs }}",
+    )
+    assignments = parallel_model_assignments()
+    runner.start_parallel(
+        plan=PARALLEL_PLAN,
+        meeting_id="meeting-1",
+        goal="first",
+        model_assignments=assignments,
+    )
+    raw = runner.repository.read_events("meeting-1")
+    runner.repository.append_event(
+        "meeting-1",
+        DeliberationEpochs.restart_marker(
+            meeting_id="meeting-1",
+            events=raw,
+            command=RestartCommand(scope="all_deliberation", reason="fresh synthesis"),
+        ),
+    )
+
+    runner.start_parallel(
+        plan=PARALLEL_PLAN,
+        meeting_id="meeting-1",
+        goal="second",
+        model_assignments=assignments,
+    )
+
+    active = DeliberationEpochs.view(
+        runner.repository.read_events("meeting-1")
+    ).active_events
+    synthesis_prompt = active[-1]["prompt_messages"][0]["content"]
+    assert active[-1]["step_id"] == "synthesis-1"
+    assert "ACTIVE_MEMBER" in synthesis_prompt
+    assert "ARCHIVED_MEMBER" not in synthesis_prompt
 
 
 def test_parallel_fanout_and_synthesis_use_their_step_output_schemas(tmp_path: Path) -> None:

@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from typing import Any, Protocol
 
 from ai_council.meetings.repository import MeetingRepository
+from ai_council.meetings.deliberation import DeliberationEpochs
 from ai_council.meetings.runner import MeetingRunner, StepDefinition
 from ai_council.models.config import ModelConfig
 from ai_council.prompting.schemas import (
@@ -339,7 +340,7 @@ class CourtroomWorkflowService:
             )
             if not completed:
                 return
-            event = self.repository.read_events(meeting_id)[-1]
+            event = self._workflow_events(meeting_id)[-1]
             parsed = event.get("parsed_output")
             issues = parsed.get("issues") if isinstance(parsed, dict) else None
             if not isinstance(issues, list):
@@ -365,7 +366,7 @@ class CourtroomWorkflowService:
             docket = self.require_confirmed(metadata)
             revision = int(docket["revision"])
             issue = self._require_issue(docket, issue_id)
-            self.validate_arguments(metadata, self.repository.read_events(meeting_id), issue_id)
+            self.validate_arguments(metadata, self._workflow_events(meeting_id), issue_id)
             self._append_reservation(meeting_id, "arguments", revision, issue_id)
             workflow_steps = [
                 ("charge", "Prosecutor", "courtroom_issue_charge"),
@@ -405,7 +406,7 @@ class CourtroomWorkflowService:
             docket = self.require_confirmed(metadata)
             revision = int(docket["revision"])
             issue = self._require_issue(docket, issue_id)
-            self.validate_ruling(metadata, self.repository.read_events(meeting_id), issue_id)
+            self.validate_ruling(metadata, self._workflow_events(meeting_id), issue_id)
             self._append_reservation(meeting_id, "ruling", revision, issue_id)
             runner.run_workflow_step(
                 meeting_id=meeting_id,
@@ -440,7 +441,7 @@ class CourtroomWorkflowService:
             metadata = self._require_courtroom(meeting_id)
             docket = self.require_confirmed(metadata)
             revision = int(docket["revision"])
-            events = self.repository.read_events(meeting_id)
+            events = self._workflow_events(meeting_id)
             self.validate_final(metadata, events)
             projection = project_courtroom(metadata, events)
             assert projection is not None
@@ -481,7 +482,7 @@ class CourtroomWorkflowService:
         with self._meeting_lock(meeting_id):
             metadata = self._require_courtroom(meeting_id)
             docket = self._docket(metadata)
-            events = self.repository.read_events(meeting_id)
+            events = self._workflow_events(meeting_id)
             matching = [event for event in events if event.get("step_id") == step_id]
             failed = matching[-1] if matching else None
             if failed is None or failed.get("status") != "failed":
@@ -512,7 +513,7 @@ class CourtroomWorkflowService:
                     attempt=attempt,
                 )
                 if completed:
-                    completed_event = self.repository.read_events(meeting_id)[-1]
+                    completed_event = self._workflow_events(meeting_id)[-1]
                     parsed = completed_event.get("parsed_output")
                     issues = parsed.get("issues") if isinstance(parsed, dict) else None
                     if isinstance(issues, list):
@@ -608,7 +609,11 @@ class CourtroomWorkflowService:
         issue_id: str | None = None,
     ) -> None:
         event: dict[str, Any] = {
-            "event_id": f"{meeting_id}:courtroom-operation:{operation}:{revision}:{issue_id or 'docket'}",
+            "event_id": DeliberationEpochs.view(
+                self.repository.read_events(meeting_id)
+            ).event_id(
+                f"{meeting_id}:courtroom-operation:{operation}:{revision}:{issue_id or 'docket'}"
+            ),
             "meeting_id": meeting_id,
             "step_id": "courtroom-operation",
             "role": "System",
@@ -621,6 +626,11 @@ class CourtroomWorkflowService:
         if issue_id is not None:
             event["issue_id"] = issue_id
         self.repository.append_event(meeting_id, event)
+
+    def _workflow_events(self, meeting_id: str) -> list[dict[str, Any]]:
+        return DeliberationEpochs.view(
+            self.repository.read_events(meeting_id)
+        ).workflow_events
 
     @staticmethod
     def _require_issue(docket: dict[str, Any], issue_id: str) -> dict[str, Any]:
