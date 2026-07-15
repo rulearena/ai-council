@@ -100,6 +100,12 @@ def test_courtroom_ruling_rejects_an_unknown_outcome() -> None:
         )
 
 
+def test_courtroom_issue_draft_rejects_duplicate_titles() -> None:
+    codec = DEFAULT_OUTPUT_SCHEMA_REGISTRY.get("courtroom-issue-draft/v1")
+    with pytest.raises(OutputParseError, match="unique"):
+        codec.parse('{"issues":[{"title":"同一爭點"},{"title":"同一爭點"}]}')
+
+
 def test_structured_verdict_v1_registry_accepts_a_known_verdict_literal() -> None:
     codec = DEFAULT_OUTPUT_SCHEMA_REGISTRY.get("structured-verdict/v1")
 

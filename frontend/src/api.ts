@@ -66,6 +66,7 @@ export type CourtroomIssueProjection = {
   status: 'pending' | 'arguments-in-progress' | 'awaiting-ruling' | 'ruled' | 'failed'
   failed_step_id?: string
   failed_phase?: 'charge' | 'defense' | 'rebuttal' | 'ruling'
+  failed_phase_display?: string
   failure_kind?: 'parse_error' | 'timeout' | 'adapter_error' | 'configuration_error' | 'interrupted'
   ruling?: CourtroomRuling
 }
@@ -74,6 +75,30 @@ export type CourtroomRuling = {
   outcome: 'proponent-wins' | 'respondent-wins' | 'partially-upheld' | 'insufficient-evidence'
   reasoning: string
   evidence_refs: string[]
+  unresolved_questions: string[]
+}
+
+export type CourtroomCivilFinal = {
+  summary: string
+  claims: Array<{
+    claim: string
+    outcome: string
+    reasoning: string
+    evidence_refs: string[]
+    relief: { obligation: string; monetary_amount: string | null; calculation_basis: string | null }
+  }>
+  unresolved_questions: string[]
+}
+
+export type CourtroomCriminalFinal = {
+  summary: string
+  charges: Array<{
+    charge: string
+    decision: string
+    reasoning: string
+    evidence_refs: string[]
+  }>
+  sentencing_factors: string[]
   unresolved_questions: string[]
 }
 
@@ -86,6 +111,8 @@ export type CourtroomProjection = {
   final_status: 'not-ready' | 'ready' | 'failed' | 'completed'
   failed_step_id?: string
   available_actions: string[]
+  case_type: 'civil' | 'criminal' | null
+  requires_case_type: boolean
 }
 
 export type CaseFile = {
@@ -390,6 +417,13 @@ export async function startMeeting(meetingId: string): Promise<void> {
 
 export async function draftCourtroomIssues(meetingId: string, revision: number): Promise<void> {
   await postJson(`/meetings/${meetingId}/courtroom/issues/draft`, { revision })
+}
+
+export async function updateCourtroomCaseType(
+  meetingId: string,
+  caseType: 'civil' | 'criminal',
+): Promise<Meeting> {
+  return putJson(`/meetings/${meetingId}/courtroom/case-type`, { case_type: caseType })
 }
 
 export async function replaceCourtroomIssues(

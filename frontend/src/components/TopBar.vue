@@ -140,7 +140,7 @@ defineEmits<{
           :readonly="editPolicy.goalReadonly"
           :disabled="loading || !editPolicy.canEdit"
         />
-        <small v-if="editPolicy.goalReadonly">爭點已確認，為保持裁定基準一致，目標已設為唯讀。</small>
+        <small v-if="editPolicy.goalReadonly">爭點已確認，為保持判斷基準一致，目標已設為唯讀。</small>
         <small v-else-if="editPolicy.confirmGoalChange">修改目標只影響後續 AI 回應，儲存前會再次確認。</small>
       </label>
       <div class="meeting-details-editor-actions">

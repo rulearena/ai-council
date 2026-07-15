@@ -5,9 +5,11 @@ import {
   confirmCourtroomIssues,
   draftCourtroomIssues,
   replaceCourtroomIssues,
+  updateCourtroomCaseType,
   type CourtroomIssueProjection,
   type MeetingEvent,
-  type StructuredVerdict,
+  type CourtroomCivilFinal,
+  type CourtroomCriminalFinal,
 } from '../api'
 import { councilKey } from '../composables/useCouncil'
 import {
@@ -35,6 +37,7 @@ const drafts = reactive<Record<string, CourtroomDraft>>({})
 const busy = ref(false)
 const feedback = ref('')
 const localError = ref('')
+const selectedCaseType = ref<'' | 'civil' | 'criminal'>('')
 
 const courtroom = computed(() => selectedMeeting.value?.courtroom ?? null)
 const meetingId = computed(() => selectedMeeting.value?.meeting_id ?? '')
@@ -53,11 +56,21 @@ const failedDraft = computed(() => [...events.value].reverse().find(
     event.status === 'failed' &&
     event.docket_revision === courtroom.value?.revision,
 ) ?? null)
-const finalVerdict = computed(() => [...events.value].reverse().find(
+const finalEvent = computed(() => [...events.value].reverse().find(
   (event) => event.interaction_type === 'courtroom-final-verdict' &&
     event.status === 'completed' &&
     event.docket_revision === courtroom.value?.revision,
-)?.parsed_output as StructuredVerdict | undefined)
+) ?? null)
+const finalVerdict = computed(() => finalEvent.value?.parsed_output as
+  | CourtroomCivilFinal
+  | CourtroomCriminalFinal
+  | undefined)
+const civilFinal = computed(() => courtroom.value?.case_type === 'civil'
+  ? finalVerdict.value as CourtroomCivilFinal | undefined
+  : undefined)
+const criminalFinal = computed(() => courtroom.value?.case_type === 'criminal'
+  ? finalVerdict.value as CourtroomCriminalFinal | undefined
+  : undefined)
 const currentIssue = computed(() => courtroom.value?.issues.find(
   (issue) => issue.id === courtroom.value?.current_issue_id,
 ) ?? courtroom.value?.issues.find((issue) => issue.status === 'pending') ?? null)
@@ -151,6 +164,16 @@ async function generateDraft() {
   })
 }
 
+async function selectCaseType() {
+  if (!selectedCaseType.value) return
+  const id = meetingId.value
+  await runWorkspaceAction(async () => {
+    await updateCourtroomCaseType(id, selectedCaseType.value as 'civil' | 'criminal')
+    await openMeeting(id)
+    feedback.value = '案件類型已設定。'
+  })
+}
+
 async function saveIssues() {
   const id = meetingId.value
   await runWorkspaceAction(async () => {
@@ -203,14 +226,24 @@ function ruling(issue: CourtroomIssueProjection) {
       <div>
         <h2>爭點審理</h2>
         <p v-if="courtroom.status !== 'confirmed'">先建立並確認爭點；確認前不會開始審理。</p>
-        <p v-else>一次只處理一個爭點；每次攻防與裁定後都會停下等待主席。</p>
+        <p v-else>一次只處理一個爭點；每次攻防與法官判斷後都會停下等待主席。</p>
       </div>
       <span class="docket-state" data-testid="courtroom-docket-status">
         {{ courtroom.status === 'confirmed' ? '已確認' : '草稿，尚未開始審理' }}
       </span>
     </header>
 
-    <template v-if="courtroom.status !== 'confirmed'">
+    <div v-if="courtroom.requires_case_type" class="courtroom-case-type-gate" data-testid="legacy-courtroom-case-type-gate">
+      <p>這是舊法院會議。請先選擇案件類型，AI 才能依正確角色與法律流程繼續。</p>
+      <select v-model="selectedCaseType" data-testid="legacy-courtroom-case-type-select" aria-label="案件類型">
+        <option value="" disabled>請選擇民事或刑事</option>
+        <option value="civil">民事</option>
+        <option value="criminal">刑事</option>
+      </select>
+      <button type="button" class="btn btn-primary" data-testid="save-courtroom-case-type-button" :disabled="busy || !selectedCaseType" @click="selectCaseType">套用案件類型</button>
+    </div>
+
+    <template v-else-if="courtroom.status !== 'confirmed'">
       <div class="courtroom-draft-actions">
         <button type="button" class="btn btn-secondary" data-testid="generate-courtroom-draft-button" :disabled="busy || isMeetingRunning" @click="generateDraft">
           <span v-if="busy || isMeetingRunning" class="loading-spinner" aria-hidden="true"></span>
@@ -246,7 +279,7 @@ function ruling(issue: CourtroomIssueProjection) {
         </header>
         <p v-if="issue.id === courtroom.current_issue_id" class="current-focus">目前焦點</p>
         <section v-if="issue.status === 'failed'" class="issue-failure" :data-testid="`courtroom-issue-failure-${issue.id}`">
-          <p><strong>{{ courtroomFailedPhaseLabel(issue.failed_phase) }}執行失敗，請重試。</strong></p>
+          <p><strong>{{ issue.failed_phase_display || courtroomFailedPhaseLabel(issue.failed_phase) }}執行失敗，請重試。</strong></p>
           <button
             type="button"
             class="btn btn-primary btn-sm"
@@ -254,12 +287,12 @@ function ruling(issue: CourtroomIssueProjection) {
             :disabled="busy || isMeetingRunning || !failedEvent(issue)"
             @click="retryIssue(issue)"
           >
-            {{ busy || isMeetingRunning ? '重新執行中…' : `重試${courtroomFailedPhaseLabel(issue.failed_phase)}` }}
+            {{ busy || isMeetingRunning ? '重新執行中…' : `重試${issue.failed_phase_display || courtroomFailedPhaseLabel(issue.failed_phase)}` }}
           </button>
           <p v-if="!failedEvent(issue)" class="error">找不到可重試的失敗紀錄，請到「會議紀錄」查看診斷。</p>
         </section>
         <section v-if="ruling(issue)" class="issue-ruling" :data-testid="`courtroom-ruling-${issue.id}`">
-          <h3>爭點裁定：{{ courtroomOutcomeLabel(ruling(issue)!.outcome) }}</h3>
+          <h3>法官對此爭點的判斷：{{ courtroomOutcomeLabel(ruling(issue)!.outcome, courtroom.case_type) }}</h3>
           <p><strong>理由：</strong>{{ ruling(issue)!.reasoning }}</p>
           <p><strong>證據：</strong>{{ ruling(issue)!.evidence_refs.length ? ruling(issue)!.evidence_refs.join('、') : '未引用證據' }}</p>
           <p><strong>未解問題：</strong>{{ ruling(issue)!.unresolved_questions.length ? ruling(issue)!.unresolved_questions.join('；') : '無' }}</p>
@@ -277,7 +310,24 @@ function ruling(issue: CourtroomIssueProjection) {
     <section v-if="finalVerdict" class="courtroom-final-verdict" data-testid="courtroom-final-verdict">
       <h3>最終判決</h3>
       <p>{{ finalVerdict.summary }}</p>
-      <p><strong>建議：</strong>{{ finalVerdict.recommendation }}</p>
+      <template v-if="civilFinal">
+        <article v-for="claim in civilFinal.claims" :key="claim.claim">
+          <h4>{{ claim.claim }}：{{ claim.outcome }}</h4>
+          <p><strong>理由：</strong>{{ claim.reasoning }}</p>
+          <p><strong>給付／義務：</strong>{{ claim.relief.obligation }}</p>
+          <p v-if="claim.relief.monetary_amount"><strong>金額：</strong>{{ claim.relief.monetary_amount }}</p>
+          <p v-if="claim.relief.calculation_basis"><strong>計算基礎：</strong>{{ claim.relief.calculation_basis }}</p>
+          <p><strong>證據：</strong>{{ claim.evidence_refs.join('、') || '未引用證據' }}</p>
+        </article>
+      </template>
+      <template v-else-if="criminalFinal">
+        <article v-for="charge in criminalFinal.charges" :key="charge.charge">
+          <h4>{{ charge.charge }}：{{ charge.decision }}</h4>
+          <p><strong>理由：</strong>{{ charge.reasoning }}</p>
+          <p><strong>證據：</strong>{{ charge.evidence_refs.join('、') || '未引用證據' }}</p>
+        </article>
+        <p><strong>量刑考量：</strong>{{ criminalFinal.sentencing_factors.join('、') || '無' }}</p>
+      </template>
     </section>
 
     <p v-if="feedback" class="success" data-testid="courtroom-workspace-feedback">{{ feedback }}</p>

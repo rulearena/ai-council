@@ -89,3 +89,38 @@ def test_case_profile_renders_case_specific_final_without_cross_domain_fields() 
 
     assert "返還價金" in civil and "量刑" not in civil
     assert "竊盜罪" in criminal and "量刑考量：犯後態度" in criminal
+
+
+def test_final_semantics_validate_all_visible_penalty_and_money_text() -> None:
+    criminal = CourtroomCaseProfile.for_type("criminal")
+    with pytest.raises(ValueError, match="concrete penalty"):
+        criminal.validate_final_semantics(
+            {
+                "summary": "有罪",
+                "charges": [{"reasoning": "應處有期徒刑一年"}],
+                "sentencing_factors": [],
+                "unresolved_questions": [],
+            },
+            None,
+        )
+
+    civil = CourtroomCaseProfile.for_type("civil")
+    inputs = {
+        "__case_files_by_role": {
+            "Judge": "### [證物一] 匯款\n被告收受新臺幣 100 元"
+        }
+    }
+    civil.validate_final_semantics(
+        {"summary": "返還新臺幣 100 元", "claims": [{"evidence_refs": ["[證物一]"]}]},
+        inputs,
+    )
+    with pytest.raises(ValueError, match="not supported"):
+        civil.validate_final_semantics(
+            {"summary": "返還新臺幣 999 元", "claims": [{"evidence_refs": ["[證物一]"]}]},
+            inputs,
+        )
+    with pytest.raises(ValueError, match="unknown or invisible"):
+        civil.validate_final_semantics(
+            {"summary": "無金額", "claims": [{"evidence_refs": ["[證物二]"]}]},
+            inputs,
+        )

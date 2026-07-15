@@ -72,6 +72,11 @@ def test_new_courtroom_requires_explicit_case_type(tmp_path: Path) -> None:
     )
     assert created.status_code == 200
     assert created.json()["case_type"] == "criminal"
+    assert [participant["display_name"] for participant in created.json()["participants"]] == [
+        "檢察官",
+        "辯護人",
+        "法官",
+    ]
 
 
 def test_non_courtroom_rejects_case_type(tmp_path: Path) -> None:
@@ -119,6 +124,58 @@ def test_case_type_switch_clears_unconfirmed_draft_and_locks_after_confirmation(
         json={"case_type": "civil"},
     )
     assert locked.status_code == 409
+
+
+def test_case_type_switch_starts_new_epoch_and_invalidates_old_draft_retry(
+    tmp_path: Path,
+) -> None:
+    client = create_client(tmp_path)
+    meeting_id = create_courtroom(client)
+    client.post(
+        f"/meetings/{meeting_id}/courtroom/issues/draft",
+        json={"revision": 0},
+    )
+    civil = wait_for_courtroom(
+        client,
+        meeting_id,
+        lambda courtroom: courtroom["revision"] == 1,
+    )
+    old = next(
+        event for event in civil["events"]
+        if event.get("interaction_type") == "courtroom-issue-draft"
+        and event.get("status") == "completed"
+    )
+
+    switched = client.put(
+        f"/meetings/{meeting_id}/courtroom/case-type",
+        json={"case_type": "criminal"},
+    )
+    assert switched.json()["deliberation"]["active_epoch_number"] == 2
+    history = client.get(f"/meetings/{meeting_id}/deliberations").json()
+    assert history["epochs"][-1]["reason"] == "case_type_changed"
+    assert client.post(
+        f"/meetings/{meeting_id}/steps/{old['step_id']}/retry",
+        json={},
+    ).status_code == 400
+
+    client.post(
+        f"/meetings/{meeting_id}/courtroom/issues/draft",
+        json={"revision": 0},
+    )
+    criminal = wait_for_courtroom(
+        client,
+        meeting_id,
+        lambda courtroom: courtroom["revision"] == 1,
+    )
+    drafts = [
+        event for event in criminal["events"]
+        if event.get("interaction_type") == "courtroom-issue-draft"
+        and event.get("status") == "completed"
+    ]
+    new = drafts[-1]
+    assert new["event_id"] != old["event_id"]
+    assert new["case_type"] == "criminal"
+    assert "courtroom_civil_issue_draft" not in new["prompt_messages"][0]["content"]
 
 
 def test_confirmed_legacy_courtroom_can_select_type_once_without_rewriting_docket(
@@ -984,6 +1041,9 @@ def test_directed_courtroom_response_is_only_available_during_ruling_pause(
     ]
     assert {event["docket_revision"] for event in linked} == {2}
     assert {event["issue_id"] for event in linked} == {"issue-1"}
+    assert {event["case_type"] for event in linked} == {"civil"}
+    assert {event["role_display"] for event in linked} == {"被告代理人"}
+    assert {event["phase_display"] for event in linked} == {"答辯方補充"}
     assert after_directed["courtroom"]["issues"][0]["status"] == "awaiting-ruling"
 
     client.post(f"/meetings/{meeting_id}/courtroom/issues/issue-1/ruling")

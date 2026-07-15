@@ -1117,6 +1117,20 @@ def create_app(
         if confirmed and current is not None:
             raise HTTPException(status_code=409, detail="Confirmed courtroom case type is read-only")
 
+        if current != request.case_type and not confirmed:
+            events = repository.read_events(meeting_id)
+            if DeliberationEpochs.view(events).active_events:
+                marker = DeliberationEpochs.restart_marker(
+                    meeting_id=meeting_id,
+                    events=events,
+                    command=RestartCommand(
+                        scope="all_deliberation",
+                        reason="case_type_changed",
+                    ),
+                    snapshot={"from_case_type": current, "to_case_type": request.case_type},
+                )
+                repository.append_event(meeting_id, marker)
+
         def apply_case_type(existing: dict[str, Any]) -> dict[str, Any]:
             updated = {**existing, "case_type": request.case_type}
             existing_docket = existing.get("courtroom_docket")
@@ -1650,6 +1664,9 @@ def create_app(
             directed_context = {
                 "docket_revision": int(courtroom["revision"]),
                 "issue_id": str(courtroom["current_issue_id"]),
+                "case_type": profile.case_type,
+                "role_display": profile.role_display(role),
+                "phase_display": "答辯方補充",
             }
         else:
             failed = latest_unresolved_fixed_relay_failure(events, plan)
@@ -2737,17 +2754,28 @@ def project_participants(mode: ModeDefinition, metadata: dict[str, Any]) -> list
         if isinstance(item, dict)
     }
     projected = []
+    courtroom_profile = None
+    if mode.id == "courtroom":
+        try:
+            courtroom_profile = CourtroomCaseProfile.for_metadata(metadata)
+        except CourtroomCaseProfileError:
+            pass
     for role in mode.roles:
         entry = stored.get(role.id, {})
+        role_name = (
+            courtroom_profile.role_display(role.id)
+            if courtroom_profile is not None
+            else role.name
+        )
         projected.append(
             {
                 "role_id": role.id,
-                "name": role.name,
+                "name": role_name,
                 "color": role.color,
                 "kind": role.kind,
                 "portrait": role.portrait,
                 "model_config_id": entry.get("model_config_id"),
-                "display_name": entry.get("display_name") or role.name,
+                "display_name": entry.get("display_name") or role_name,
                 "instance_prompt": entry.get("instance_prompt"),
             }
         )

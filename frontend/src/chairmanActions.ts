@@ -102,7 +102,7 @@ export function projectCourtroomPrimaryAction(
     return {
       kind: 'courtroom-ruling',
       issueId: issue.id,
-      label: `送交爭點裁定：${issue.title}（下一位是法官）`,
+      label: `請法官判斷此爭點：${issue.title}（下一位是法官）`,
       disabled: false,
     }
   }

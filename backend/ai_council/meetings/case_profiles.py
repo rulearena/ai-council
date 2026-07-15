@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import re
 from typing import Mapping
 
 
@@ -71,19 +72,81 @@ class CourtroomCaseProfile:
         if self.case_type == "civil":
             for claim in parsed.get("claims", []) if isinstance(parsed.get("claims"), list) else []:
                 if isinstance(claim, dict):
-                    lines.append(
-                        f"{claim.get('claim', '')}：{claim.get('outcome', '')}｜{claim.get('reasoning', '')}"
-                    )
+                    relief = claim.get("relief") if isinstance(claim.get("relief"), dict) else {}
+                    refs = claim.get("evidence_refs") if isinstance(claim.get("evidence_refs"), list) else []
+                    lines.extend([
+                        f"{claim.get('claim', '')}：{claim.get('outcome', '')}",
+                        f"理由：{claim.get('reasoning', '')}",
+                        f"給付／義務：{relief.get('obligation', '')}",
+                        f"金額：{relief.get('monetary_amount') or '無'}",
+                        f"計算基礎：{relief.get('calculation_basis') or '無'}",
+                        f"證據：{'、'.join(str(ref) for ref in refs) or '未引用證據'}",
+                    ])
         else:
             for charge in parsed.get("charges", []) if isinstance(parsed.get("charges"), list) else []:
                 if isinstance(charge, dict):
-                    lines.append(
-                        f"{charge.get('charge', '')}：{charge.get('decision', '')}｜{charge.get('reasoning', '')}"
-                    )
+                    refs = charge.get("evidence_refs") if isinstance(charge.get("evidence_refs"), list) else []
+                    lines.extend([
+                        f"{charge.get('charge', '')}：{charge.get('decision', '')}",
+                        f"理由：{charge.get('reasoning', '')}",
+                        f"證據：{'、'.join(str(ref) for ref in refs) or '未引用證據'}",
+                    ])
             factors = parsed.get("sentencing_factors")
             if isinstance(factors, list) and factors:
                 lines.append(f"量刑考量：{'、'.join(str(item) for item in factors)}")
         return "\n".join(line for line in lines if line)
+
+    def validate_final_semantics(
+        self,
+        parsed: dict[str, object],
+        inputs: dict[str, object] | None,
+    ) -> None:
+        visible_text = "\n".join(_visible_strings(parsed))
+        if self.case_type == "criminal":
+            if _CONCRETE_PENALTY.search(visible_text):
+                raise ValueError("Criminal verdict must not state a concrete penalty")
+            return
+        by_role = (inputs or {}).get("__case_files_by_role")
+        judge_evidence = str(by_role.get("Judge", "")) if isinstance(by_role, dict) else ""
+        visible_anchors = set(re.findall(r"\[證物[^\]]+\]", judge_evidence))
+        referenced_anchors = set(re.findall(r"\[證物[^\]]+\]", visible_text))
+        if not referenced_anchors.issubset(visible_anchors):
+            raise ValueError("Civil verdict cites unknown or invisible evidence")
+        claims = parsed.get("claims")
+        for claim in claims if isinstance(claims, list) else []:
+            if not isinstance(claim, dict):
+                continue
+            refs = claim.get("evidence_refs")
+            if isinstance(refs, list) and any(str(ref) not in visible_anchors for ref in refs):
+                raise ValueError("Civil verdict cites unknown or invisible evidence")
+        if not _money_values(visible_text).issubset(_money_values(judge_evidence)):
+            raise ValueError("Civil verdict monetary amount is not supported by visible evidence")
+
+
+_CONCRETE_PENALTY = re.compile(
+    r"(?:有期徒刑|無期徒刑|死刑|拘役|罰金|處以|宣告刑|應執行)"
+)
+_MONEY = re.compile(
+    r"(?:新臺幣|臺幣|美金|美元|NT\$|\$)\s*([0-9][0-9,]*(?:\.[0-9]+)?)|"
+    r"([0-9][0-9,]*(?:\.[0-9]+)?)\s*元"
+)
+
+
+def _visible_strings(value: object) -> list[str]:
+    if isinstance(value, str):
+        return [value]
+    if isinstance(value, dict):
+        return [text for item in value.values() for text in _visible_strings(item)]
+    if isinstance(value, list):
+        return [text for item in value for text in _visible_strings(item)]
+    return []
+
+
+def _money_values(text: str) -> set[str]:
+    return {
+        (match.group(1) or match.group(2)).replace(",", "")
+        for match in _MONEY.finditer(text)
+    }
 
 
 def _profile(

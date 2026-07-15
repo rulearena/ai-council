@@ -18,8 +18,8 @@ export function nextCourtroomDraft(
 const ISSUE_STATUS_LABELS: Record<string, string> = {
   pending: '待審',
   'arguments-in-progress': '攻防中',
-  'awaiting-ruling': '待裁定',
-  ruled: '已裁定',
+  'awaiting-ruling': '等待主席送交法官',
+  ruled: '法官已判斷',
   failed: '執行失敗，請重試',
 }
 
@@ -27,7 +27,7 @@ const FAILED_PHASE_LABELS: Record<string, string> = {
   charge: '檢察官主張',
   defense: '辯護律師答辯',
   rebuttal: '檢察官反駁',
-  ruling: '法官爭點裁定',
+  ruling: '請法官判斷此爭點',
 }
 
 const OUTCOME_LABELS: Record<string, string> = {
@@ -45,6 +45,14 @@ export function courtroomFailedPhaseLabel(phase: string | undefined): string {
   return phase ? (FAILED_PHASE_LABELS[phase] ?? phase) : '爭點步驟'
 }
 
-export function courtroomOutcomeLabel(outcome: string): string {
-  return OUTCOME_LABELS[outcome] ?? outcome
+export function courtroomOutcomeLabel(
+  outcome: string,
+  caseType?: 'civil' | 'criminal' | null,
+): string {
+  const typed = caseType === 'civil'
+    ? { 'proponent-wins': '原告主張成立', 'respondent-wins': '被告抗辯成立' }
+    : caseType === 'criminal'
+      ? { 'proponent-wins': '檢方主張成立', 'respondent-wins': '辯方主張成立' }
+      : {}
+  return typed[outcome as keyof typeof typed] ?? OUTCOME_LABELS[outcome] ?? outcome
 }

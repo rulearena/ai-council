@@ -87,7 +87,7 @@ export function interactionDisplayLabel(
       charge: '檢察官提出爭點主張',
       defense: '辯護律師針對爭點答辯',
       rebuttal: '檢察官針對爭點反駁',
-      ruling: '法官作成爭點裁定',
+      ruling: '法官判斷此爭點',
     } as Record<string, string>)[event.issue_phase ?? ''] ?? '爭點審理'
   }
   return null

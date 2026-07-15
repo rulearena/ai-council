@@ -277,7 +277,7 @@ test('courtroom primary action is derived from its projected available action', 
   assert.deepEqual(result, {
     kind: 'courtroom-ruling',
     issueId: 'issue-2',
-    label: '送交爭點裁定：是否應返還土地（下一位是法官）',
+    label: '請法官判斷此爭點：是否應返還土地（下一位是法官）',
     disabled: false,
   })
 

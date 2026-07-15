@@ -226,6 +226,13 @@ test('legacy courtroom is gated by issue setup and rejected generic paths preser
     participants: ['Prosecutor', 'Defense', 'Judge'].map((role_id) => ({ role_id, model_config_id: 'mock-fast' })),
     inputs: {},
     case_files: [],
+    courtroom_docket: {
+      schema_version: 1,
+      revision: 1,
+      confirmed: true,
+      next_issue_number: 2,
+      issues: [{ id: 'issue-1', title: '既有爭點不得遺失' }],
+    },
   }))
   const oldSteps = [
     ['courtroom-charge', 'Prosecutor'],
@@ -253,8 +260,11 @@ test('legacy courtroom is gated by issue setup and rejected generic paths preser
   const meetingResponse = page.waitForResponse((response) => response.url().endsWith(`/meetings/${meetingId}`))
   await page.getByTestId('meeting-list-item').filter({ hasText: title }).locator('.meeting-item').click()
   const apiOrigin = new URL((await meetingResponse).url()).origin
-  await expect(page.getByTestId('courtroom-docket-panel')).toContainText('尚無爭點')
-  await expect(page.getByTestId('courtroom-docket-panel')).toContainText('確認前不會開始審理')
+  await expect(page.getByTestId('legacy-courtroom-case-type-gate')).toContainText('請先選擇案件類型')
+  await page.getByTestId('legacy-courtroom-case-type-select').selectOption('civil')
+  await page.getByTestId('save-courtroom-case-type-button').click()
+  await expect(page.getByTestId('legacy-courtroom-case-type-gate')).toHaveCount(0)
+  await expect(page.getByTestId('courtroom-docket-panel')).toContainText('既有爭點不得遺失')
   await expect(page.getByTestId('start-meeting-button')).toHaveCount(0)
   await page.getByTestId('advanced-options-button').click()
   await expect(page.getByTestId('role-sequence-controls')).toHaveCount(0)
@@ -2189,12 +2199,12 @@ test('courtroom handles two confirmed issues one at a time before the final verd
   const primary = page.getByTestId('courtroom-primary-action')
   await expect(primary).toContainText('開始此爭點')
   await primary.click()
-  await expect(page.locator('[data-issue-id="issue-1"]')).toContainText('待裁定', { timeout: 15000 })
+  await expect(page.locator('[data-issue-id="issue-1"]')).toContainText('等待主席送交法官', { timeout: 15000 })
   await expect(page.locator('[data-issue-id="issue-2"]')).toContainText('待審')
-  await expect(primary).toContainText('送交爭點裁定')
+  await expect(primary).toContainText('請法官判斷此爭點')
 
   await page.getByTestId('chairman-action-select').selectOption('role:Defense')
-  await expect(page.getByTestId('send-chair-message-button')).toHaveText('請辯護律師回答')
+  await expect(page.getByTestId('send-chair-message-button')).toHaveText('請被告代理人回答')
   await page.getByTestId('chair-message-input').fill('請說明返還孳息的主要抗辯。')
   await page.getByTestId('send-chair-message-button').click()
   await expect(page.getByTestId('operation-status')).not.toContainText('執行中', { timeout: 15000 })
@@ -2206,7 +2216,7 @@ test('courtroom handles two confirmed issues one at a time before the final verd
   await expect(page.locator('[data-issue-id="issue-2"]')).toContainText('待審')
 
   await primary.click()
-  await expect(page.locator('[data-issue-id="issue-2"]')).toContainText('待裁定', { timeout: 15000 })
+  await expect(page.locator('[data-issue-id="issue-2"]')).toContainText('等待主席送交法官', { timeout: 15000 })
   await expect(page.getByTestId('courtroom-final-verdict')).toHaveCount(0)
   await primary.click()
   await expect(page.getByTestId('courtroom-ruling-issue-2')).toContainText('部分成立', { timeout: 15000 })
@@ -2245,7 +2255,7 @@ test('courtroom exposes a failed final verdict retry and restores completion aft
 
   const primary = page.getByTestId('courtroom-primary-action')
   await primary.click()
-  await expect(page.locator('[data-issue-id="issue-1"]')).toContainText('待裁定', {
+  await expect(page.locator('[data-issue-id="issue-1"]')).toContainText('等待主席送交法官', {
     timeout: 15000,
   })
   await primary.click()
@@ -2318,7 +2328,7 @@ test('courtroom retry rejection rolls back pending roles and never reports false
   await page.getByTestId('courtroom-primary-action').click()
 
   const failure = page.getByTestId('courtroom-issue-failure-issue-1')
-  await expect(failure).toContainText('檢察官主張執行失敗，請重試', { timeout: 15000 })
+  await expect(failure).toContainText('主張方陳述執行失敗，請重試', { timeout: 15000 })
   await page.route('**/meetings/**/steps/**/retry', async (route) => {
     await route.fulfill({
       status: 409,
@@ -2330,7 +2340,7 @@ test('courtroom retry rejection rolls back pending roles and never reports false
   await page.getByTestId('retry-courtroom-issue-issue-1').click()
 
   await expect(page.getByTestId('app-error')).toContainText('failed: 409')
-  await expect(failure).toContainText('檢察官主張執行失敗，請重試')
+  await expect(failure).toContainText('主張方陳述執行失敗，請重試')
   await expect(page.getByTestId('retry-courtroom-issue-issue-1')).toBeEnabled()
   await expect(page.getByTestId('courtroom-workspace-feedback')).toHaveCount(0)
 

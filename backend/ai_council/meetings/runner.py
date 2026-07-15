@@ -61,6 +61,7 @@ class StepDefinition:
     role: str
     template_name: str
     output_schema_id: str = DEFAULT_OUTPUT_SCHEMA_ID
+    semantic_validator: Callable[[dict[str, Any], dict[str, Any] | None], None] | None = None
 
 
 @dataclass(frozen=True)
@@ -287,7 +288,13 @@ class MeetingRunner:
                 "in_response_to_event_id": instruction_event_id,
                 **{
                     key: failed_event[key]
-                    for key in ("docket_revision", "issue_id")
+                    for key in (
+                        "docket_revision",
+                        "issue_id",
+                        "case_type",
+                        "role_display",
+                        "phase_display",
+                    )
                     if key in failed_event
                 },
             },
@@ -648,6 +655,13 @@ class MeetingRunner:
                 )
             )
             parsed_output = output_schema.parse(response.raw_output)
+            if step.semantic_validator is not None:
+                try:
+                    step.semantic_validator(parsed_output, inputs)
+                except ValueError as error:
+                    raise OutputParseError(
+                        str(error), raw_output=response.raw_output
+                    ) from error
         except OutputParseError as error:
             self._clear_active_execution(meeting_id)
             failed_event: dict[str, object] = {
@@ -1083,6 +1097,9 @@ class MeetingRunner:
             "courtroom_operation",
             "materials_revision",
             "materials_refs",
+            "case_type",
+            "role_display",
+            "phase_display",
         ]:
             value = extra_event_fields.get(key)
             if isinstance(value, (str, int, list)):

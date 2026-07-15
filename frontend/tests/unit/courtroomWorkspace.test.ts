@@ -26,7 +26,7 @@ test('courtroom editor preserves unsaved work for same meeting and isolates meet
 })
 
 test('courtroom presentation uses understandable Chinese status and outcome labels', () => {
-  assert.equal(courtroomIssueStatusLabel('awaiting-ruling'), '待裁定')
+  assert.equal(courtroomIssueStatusLabel('awaiting-ruling'), '等待主席送交法官')
   assert.equal(courtroomIssueStatusLabel('failed'), '執行失敗，請重試')
   assert.equal(courtroomFailedPhaseLabel('defense'), '辯護律師答辯')
   assert.equal(courtroomOutcomeLabel('proponent-wins'), '主張方勝')

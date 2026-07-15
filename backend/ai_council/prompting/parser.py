@@ -117,6 +117,7 @@ class CourtroomIssueDraftParser:
             if not isinstance(issues, list) or not issues:
                 raise TypeError("issues must be a non-empty list")
             normalized = []
+            seen_titles: set[str] = set()
             for issue in issues:
                 if not isinstance(issue, dict):
                     raise TypeError("courtroom issue must be an object")
@@ -124,6 +125,9 @@ class CourtroomIssueDraftParser:
                 title = require_string(issue, "title").strip()
                 if not title:
                     raise ValueError("courtroom issue title must not be blank")
+                if title in seen_titles:
+                    raise ValueError("courtroom issue titles must be unique")
+                seen_titles.add(title)
                 normalized.append({"title": title})
             return {"issues": normalized}
         except (json.JSONDecodeError, TypeError, KeyError, ValueError) as error:

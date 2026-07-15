@@ -84,12 +84,28 @@ def project_courtroom(
                 {
                     "failed_step_id": str(latest_failed.get("step_id", "")),
                     "failed_phase": str(latest_failed.get("issue_phase", "")),
+                    "failed_phase_display": str(
+                        latest_failed.get("phase_display")
+                        or latest_failed.get("issue_phase", "")
+                    ),
                     "failure_kind": latest_failed.get("failure_kind"),
                 }
             )
         ruling = phase_events["ruling"]
         if ruling is not None and ruling.get("status") == "completed":
-            projected_issue["ruling"] = ruling.get("parsed_output")
+            parsed_ruling = ruling.get("parsed_output")
+            if isinstance(parsed_ruling, dict):
+                parsed_ruling = dict(parsed_ruling)
+                snapshot_type = ruling.get("case_type")
+                if isinstance(snapshot_type, str):
+                    try:
+                        snapshot_profile = CourtroomCaseProfile.for_type(snapshot_type)
+                        parsed_ruling["outcome_display"] = snapshot_profile.outcome_display(
+                            str(parsed_ruling.get("outcome", ""))
+                        )
+                    except CourtroomCaseProfileError:
+                        pass
+            projected_issue["ruling"] = parsed_ruling
         issues.append(projected_issue)
     all_ruled = bool(issues) and all(issue["status"] == "ruled" for issue in issues)
     final_event = _latest_final_event(events, revision)
@@ -472,6 +488,7 @@ class CourtroomWorkflowService:
                     profile.final.role_id,
                     profile.final.prompt_template,
                     profile.final.output_schema_id,
+                    profile.validate_final_semantics,
                 ),
                 event_step_id=f"courtroom-r{revision}-final-verdict",
                 inputs={**inputs, "issue_rulings": "\n".join(issue_rulings)},
@@ -546,6 +563,7 @@ class CourtroomWorkflowService:
                         profile.final.role_id,
                         profile.final.prompt_template,
                         profile.final.output_schema_id,
+                        profile.validate_final_semantics,
                     ),
                     event_step_id=step_id,
                     inputs={**inputs, "issue_rulings": self._issue_rulings_text(metadata, events)},

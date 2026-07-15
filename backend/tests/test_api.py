@@ -1761,6 +1761,9 @@ def test_app_startup_marks_leftover_execution_state_failed(tmp_path: Path) -> No
                         "visible_roles": ["Blue"],
                     }
                 ],
+                "case_type": "civil",
+                "role_display": "被告代理人",
+                "phase_display": "答辯方補充",
             }
         ),
         encoding="utf-8",
@@ -1781,6 +1784,9 @@ def test_app_startup_marks_leftover_execution_state_failed(tmp_path: Path) -> No
     assert meeting["events"][-1]["materials_refs"][0]["version"] == 2
     assert meeting["events"][-1]["interaction_type"] == "directed-role-response"
     assert meeting["events"][-1]["in_response_to_event_id"] == "chair-instruction-1"
+    assert meeting["events"][-1]["case_type"] == "civil"
+    assert meeting["events"][-1]["role_display"] == "被告代理人"
+    assert meeting["events"][-1]["phase_display"] == "答辯方補充"
     assert meeting["events"][-1]["failure_kind"] == "interrupted"
     assert meeting["events"][-1]["adapter"] == "mock"
     assert meeting["events"][-1]["prompt_messages"] == [
