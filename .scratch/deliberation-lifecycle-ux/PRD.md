@@ -1,6 +1,6 @@
 # 審議生命週期、案卷版本與民刑事法院體驗
 
-Status: implemented / awaiting acceptance
+Status: implementation reopened / acceptance fixes in progress
 
 Canonical backlog: `spec.md` §15 #88
 

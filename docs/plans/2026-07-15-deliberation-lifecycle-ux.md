@@ -1,6 +1,6 @@
 # Backlog #88 實作計畫：審議生命週期與法院工作區
 
-Status: implemented / awaiting acceptance
+Status: implementation reopened / acceptance fixes in progress
 
 ## Goal
 
