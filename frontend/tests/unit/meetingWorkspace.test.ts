@@ -5,6 +5,7 @@ import {
   buildMeetingSettingsPayload,
   hydrateMeetingSettingsDraft,
   isMeetingSettingsDirty,
+  materialImpactGuidance,
   nextHistorySelection,
   validateMeetingSettingsDraft,
 } from '../../src/meetingWorkspace.ts'
@@ -61,4 +62,15 @@ test('confirmed courtroom settings explain locked goal and case type', () => {
 test('history selection stays local and resets when switching meetings', () => {
   assert.equal(nextHistorySelection('meeting-a', 'meeting-a', 'epoch-1', 'epoch-2'), 'epoch-1')
   assert.equal(nextHistorySelection('meeting-a', 'meeting-b', 'epoch-1', 'epoch-4'), 'epoch-4')
+})
+
+test('material impact guidance only offers restart scopes available to the meeting mode', () => {
+  assert.equal(
+    materialImpactGuidance('red-blue'),
+    '為避免新舊資料混用，目前已暫停 AI。請到「流程操作」輸入原因並重開全部審議。',
+  )
+  assert.equal(
+    materialImpactGuidance('courtroom'),
+    '為避免新舊證據混用，目前已暫停 AI 與法官判斷。請到「流程操作」選擇重開目前爭點、重開全部審議或重新整理爭點。',
+  )
 })

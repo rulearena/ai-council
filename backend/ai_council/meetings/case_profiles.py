@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from decimal import Decimal
 import re
 from typing import Mapping
 
@@ -119,12 +120,53 @@ class CourtroomCaseProfile:
         if not referenced_anchors.issubset(visible_anchors):
             raise ValueError("Civil verdict cites unknown or invisible evidence")
         claims = parsed.get("claims")
+        supported_claim_money: set[tuple[str, Decimal]] = set()
+        top_level_supports: list[set[tuple[str, Decimal]]] = []
         for claim in claims if isinstance(claims, list) else []:
             if not isinstance(claim, dict):
                 continue
             refs = claim.get("evidence_refs")
             if isinstance(refs, list) and any(str(ref) not in visible_anchors for ref in refs):
                 raise ValueError("Civil verdict cites unknown or invisible evidence")
+            claim_money = _structured_money_values(claim)
+            relief = claim.get("relief")
+            calculation_basis = (
+                relief.get("calculation_basis")
+                if isinstance(relief, dict)
+                else None
+            )
+            normalized_refs = [str(ref) for ref in refs] if isinstance(refs, list) else []
+            has_calculation = isinstance(calculation_basis, str) and bool(
+                calculation_basis.strip()
+            )
+            if normalized_refs and has_calculation:
+                claim_evidence = _evidence_for_anchors(judge_evidence, normalized_refs)
+                top_level_supports.append(money_values(claim_evidence))
+            if not claim_money:
+                continue
+            if not normalized_refs or not has_calculation:
+                raise ValueError(
+                    "Civil monetary claim is not supported without evidence_refs and calculation_basis"
+                )
+            claim_evidence = _evidence_for_anchors(judge_evidence, normalized_refs)
+            if not claim_money.issubset(money_values(claim_evidence)):
+                raise ValueError(
+                    "Civil verdict monetary amount is not supported by the claim's visible evidence"
+                )
+            supported_claim_money.update(claim_money)
+
+        top_level_money = _structured_money_values(
+            {key: value for key, value in parsed.items() if key != "claims"}
+        )
+        safely_linked_top_level = (
+            top_level_supports[0]
+            if len(top_level_supports) == 1
+            else supported_claim_money
+        )
+        if not top_level_money.issubset(safely_linked_top_level):
+            raise ValueError(
+                "Civil top-level monetary amount is not supported by explicit claim support"
+            )
         verdict_money = money_values("\n".join(_visible_strings_without_monetary_amount(parsed)))
         verdict_money.update(
             parse_money_expression(amount, assume_money=True)
@@ -132,6 +174,29 @@ class CourtroomCaseProfile:
         )
         if not verdict_money.issubset(money_values(judge_evidence)):
             raise ValueError("Civil verdict monetary amount is not supported by visible evidence")
+
+
+def _structured_money_values(value: object) -> set[tuple[str, Decimal]]:
+    values: set[tuple[str, Decimal]] = set(
+        money_values("\n".join(_visible_strings_without_monetary_amount(value)))
+    )
+    values.update(
+        parse_money_expression(amount, assume_money=True)
+        for amount in _civil_monetary_amounts(value)
+    )
+    return values
+
+
+def _evidence_for_anchors(evidence: str, anchors: list[str]) -> str:
+    """Return only evidence sections explicitly referenced by one claim."""
+    matches = list(re.finditer(r"\[證物[^\]]+\]", evidence))
+    selected: list[str] = []
+    allowed = set(anchors)
+    for index, match in enumerate(matches):
+        end = matches[index + 1].start() if index + 1 < len(matches) else len(evidence)
+        if match.group(0) in allowed:
+            selected.append(evidence[match.start():end])
+    return "\n".join(selected)
 
 
 def _visible_strings(value: object) -> list[str]:

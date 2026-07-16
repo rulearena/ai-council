@@ -74,6 +74,14 @@ class CaseMaterialsView:
     revision_history: list[MaterialRevision]
 
 
+@dataclass(frozen=True)
+class CaseMaterialsSummary:
+    revision: int
+    active_evidence_count: int
+    active_note_count: int
+    pending_impact: dict[str, Any] | None
+
+
 class CaseMaterials:
     """Owns versioned prompt materials in the meeting's single case-file store."""
 
@@ -84,6 +92,28 @@ class CaseMaterials:
         raw = self.repository.read_case_materials_raw(meeting_id)
         document, schema_version = self._document(raw)
         return self._view(document, schema_version=schema_version)
+
+    def summary(self, meeting_id: str) -> CaseMaterialsSummary:
+        """Project counts and revision without copying versions or revision history."""
+        raw = self.repository.read_case_materials_raw(meeting_id)
+        if raw is None:
+            return CaseMaterialsSummary(0, 0, 0, None)
+        if isinstance(raw, list):
+            return CaseMaterialsSummary(0, len(raw), 0, None)
+        if raw.get("schema_version") != CASE_MATERIALS_SCHEMA_VERSION:
+            raise CaseMaterialValidationError(
+                f"Unsupported case materials schema: {raw.get('schema_version')!r}"
+            )
+        return CaseMaterialsSummary(
+            revision=int(raw.get("revision", 0)),
+            active_evidence_count=sum(
+                item.get("status") == "active" for item in raw.get("evidence", [])
+            ),
+            active_note_count=sum(
+                item.get("status") == "active" for item in raw.get("notes", [])
+            ),
+            pending_impact=raw.get("pending_impact"),
+        )
 
     def view_at_revision(self, meeting_id: str, revision: int) -> CaseMaterialsView:
         raw = self.repository.read_case_materials_raw(meeting_id)

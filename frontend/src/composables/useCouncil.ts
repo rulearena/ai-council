@@ -271,6 +271,8 @@ export function useCouncil() {
   const devMode = ref(false)
   let closeEventStream: (() => void) | null = null
   let assignmentSaveGeneration = 0
+  let meetingSelectionGeneration = 0
+  let meetingOutputGeneration = 0
 
   // event_ids this session has already processed for the currently-open meeting - lets
   // the WS handler tell a genuinely new event apart from one merely being resent (every
@@ -582,6 +584,8 @@ export function useCouncil() {
   }
 
   async function openMeeting(meetingId: string) {
+    const selectionGeneration = ++meetingSelectionGeneration
+    ++meetingOutputGeneration
     // Only reset the queue when actually switching meetings. requestSelectedRoleResponse /
     // requestSelectedRoleSequence / retrySelectedStep call openMeeting on the SAME meeting
     // right after enqueuing roles, so clearing unconditionally would erase what was just pushed.
@@ -592,7 +596,9 @@ export function useCouncil() {
       chairmanActionFeedback.value = ''
       seenEventIds = new Set()
     }
-    selectedMeeting.value = await getMeeting(meetingId)
+    const meeting = await getMeeting(meetingId)
+    if (selectionGeneration !== meetingSelectionGeneration) return false
+    selectedMeeting.value = meeting
     assignmentUpdateError.value = ''
     selectedModels.value = Object.fromEntries(
       selectedMeeting.value.participants.map((participant) => [
@@ -601,7 +607,14 @@ export function useCouncil() {
       ]),
     )
     selectedEvent.value = selectedMeeting.value.events?.at(-1) ?? null
-    transcript.value = await getTranscript(meetingId)
+    const outputGeneration = ++meetingOutputGeneration
+    const refreshedTranscript = await getTranscript(meetingId)
+    if (
+      selectionGeneration !== meetingSelectionGeneration ||
+      outputGeneration !== meetingOutputGeneration ||
+      selectedMeeting.value?.meeting_id !== meetingId
+    ) return false
+    transcript.value = refreshedTranscript
     connectMeetingEvents(meetingId)
     return true
   }
@@ -761,16 +774,21 @@ export function useCouncil() {
   }
 
   async function refreshMeetingOutputs(meetingId: string, activityStatus: Meeting['activity_status']) {
+    const generation = ++meetingOutputGeneration
     try {
-      transcript.value = await getTranscript(meetingId)
+      const refreshedTranscript = await getTranscript(meetingId)
+      if (generation !== meetingOutputGeneration || selectedMeeting.value?.meeting_id !== meetingId) return
+      transcript.value = refreshedTranscript
       if (activityStatus !== 'running') {
         const refreshedMeeting = await getMeeting(meetingId)
-        if (selectedMeeting.value?.meeting_id === meetingId) {
-          selectedMeeting.value = refreshedMeeting
-        }
-        meetings.value = await getMeetings()
+        if (generation !== meetingOutputGeneration || selectedMeeting.value?.meeting_id !== meetingId) return
+        selectedMeeting.value = refreshedMeeting
+        const refreshedMeetings = await getMeetings()
+        if (generation !== meetingOutputGeneration || selectedMeeting.value?.meeting_id !== meetingId) return
+        meetings.value = refreshedMeetings
       }
     } catch (caught) {
+      if (generation !== meetingOutputGeneration || selectedMeeting.value?.meeting_id !== meetingId) return
       error.value = caught instanceof Error ? caught.message : String(caught)
     }
   }
@@ -787,8 +805,13 @@ export function useCouncil() {
         if (selectedMeeting.value?.meeting_id !== meetingId) return
         if (refreshed.activity_status === 'running') continue
         selectedMeeting.value = refreshed
-        transcript.value = await getTranscript(meetingId)
-        meetings.value = await getMeetings()
+        const generation = ++meetingOutputGeneration
+        const refreshedTranscript = await getTranscript(meetingId)
+        if (generation !== meetingOutputGeneration || selectedMeeting.value?.meeting_id !== meetingId) return
+        transcript.value = refreshedTranscript
+        const refreshedMeetings = await getMeetings()
+        if (generation !== meetingOutputGeneration || selectedMeeting.value?.meeting_id !== meetingId) return
+        meetings.value = refreshedMeetings
         return
       } catch (caught) {
         if (selectedMeeting.value?.meeting_id !== meetingId) return
@@ -828,12 +851,14 @@ export function useCouncil() {
   async function restartSelectedDeliberation(
     scope: 'current_issue' | 'all_deliberation' | 'rebuild_issues',
     reason: string,
+    selectedIssueId?: string,
   ): Promise<boolean> {
     if (!selectedMeeting.value || !reason.trim() || isMeetingRunning.value || isTerminalMeeting.value) return false
     const meetingId = selectedMeeting.value.meeting_id
     const issueId = scope === 'current_issue'
-      ? selectedMeeting.value.courtroom?.current_issue_id ?? undefined
+      ? selectedIssueId || selectedMeeting.value.courtroom?.current_issue_id || undefined
       : undefined
+    if (scope === 'current_issue' && !issueId) return false
     return runAction(async () => {
       await restartDeliberation(meetingId, scope, reason.trim(), issueId)
       await openMeeting(meetingId)

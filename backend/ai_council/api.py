@@ -705,24 +705,28 @@ def create_app(
             mode = modes_by_id.get(mode_id) or modes_by_id.get(DEFAULT_MODE_ID)
             if mode is None:
                 raise HTTPException(status_code=500, detail=f"Missing default mode: {DEFAULT_MODE_ID}")
-            material_view = case_materials.view(meeting_id)
-            active_evidence = active_case_evidence_projection(material_view)
+            material_summary = case_materials.summary(meeting_id)
             summaries.append(
                 {
                     **project_meeting_summary(
-                    metadata,
-                    events,
-                    mode=mode,
-                    model_pricing=pricing,
-                    meeting_assignments=meeting_assignments,
-                    activity_status=live_activity_status(
-                        DeliberationEpochs.view(events).active_events,
-                        jobs.is_running(meeting_id),
-                        mode,
+                        metadata,
+                        events,
+                        mode=mode,
+                        model_pricing=pricing,
+                        meeting_assignments=meeting_assignments,
+                        activity_status=live_activity_status(
+                            DeliberationEpochs.view(events).active_events,
+                            jobs.is_running(meeting_id),
+                            mode,
+                        ),
                     ),
-                    ),
-                    "case_files": case_file_manifest(active_evidence),
-                    "materials_revision": material_view.revision,
+                    "case_materials_summary": {
+                        "revision": material_summary.revision,
+                        "active_evidence_count": material_summary.active_evidence_count,
+                        "active_note_count": material_summary.active_note_count,
+                        "pending_impact": material_summary.pending_impact,
+                    },
+                    "materials_revision": material_summary.revision,
                 }
             )
         return summaries
@@ -1042,6 +1046,7 @@ def create_app(
                     "issue_id": epoch.issue_id,
                     "implicit": epoch.implicit,
                     "event_count": len(epoch.events),
+                    "materials_revision": epoch_materials_revision(epoch),
                 }
                 for epoch in view.epochs
             ],
@@ -3406,6 +3411,21 @@ def workflow_meeting_events(
     repository: MeetingRepository, meeting_id: str
 ) -> list[dict[str, Any]]:
     return DeliberationEpochs.view(repository.read_events(meeting_id)).workflow_events
+
+
+def epoch_materials_revision(epoch: Any) -> int | None:
+    if isinstance(epoch.marker, dict):
+        snapshot = epoch.marker.get("snapshot")
+        if isinstance(snapshot, dict) and isinstance(snapshot.get("materials_revision"), int):
+            return snapshot["materials_revision"]
+    return next(
+        (
+            event["materials_revision"]
+            for event in reversed(epoch.events)
+            if isinstance(event.get("materials_revision"), int)
+        ),
+        None,
+    )
 
 
 def finalize_deliberation_restart_metadata(

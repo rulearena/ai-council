@@ -77,6 +77,7 @@ export type DeliberationEpoch = {
   issue_id: string | null
   implicit: boolean
   event_count: number
+  materials_revision?: number | null
 }
 
 export type Deliberations = {
@@ -505,8 +506,9 @@ export async function restartDeliberation(
   })
 }
 
-export async function getCaseMaterials(meetingId: string): Promise<CaseMaterials> {
-  return getJson(`/meetings/${meetingId}/materials`)
+export async function getCaseMaterials(meetingId: string, revision?: number): Promise<CaseMaterials> {
+  const query = revision === undefined ? '' : `?revision=${encodeURIComponent(revision)}`
+  return getJson(`/meetings/${meetingId}/materials${query}`)
 }
 
 export async function addCaseEvidence(meetingId: string, payload: CaseMaterialPayload): Promise<CaseMaterials> {

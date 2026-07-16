@@ -8,11 +8,13 @@ import {
   getCaseMaterials,
   setCaseEvidenceActive,
   setCaseNoteActive,
+  ApiError,
   type CaseMaterials,
   type VersionedCaseMaterial,
 } from '../api'
 import { activeMode, councilKey } from '../composables/useCouncil'
 import { roleDisplayName } from '../presentation'
+import { materialImpactGuidance } from '../meetingWorkspace'
 import Drawer from './Drawer.vue'
 
 const props = defineProps<{ show: boolean }>()
@@ -21,6 +23,8 @@ const store = inject(councilKey)!
 const { selectedMeeting, loading, runAction, openMeeting } = store
 const materials = ref<CaseMaterials | null>(null)
 const localError = ref('')
+const materialsLoadError = ref('')
+const materialsLoading = ref(false)
 const formKind = ref<'evidence' | 'note'>('evidence')
 const editingId = ref<string | null>(null)
 const form = reactive({ title: '', content: '', visibleRoles: [] as string[] })
@@ -28,14 +32,39 @@ let materialsGeneration = 0
 const participants = computed(() => selectedMeeting.value?.participants ?? [])
 const displayRole = (role: string) => roleDisplayName(activeMode.value, participants.value, role)
 
-watch([() => props.show, () => selectedMeeting.value?.meeting_id], async ([show, id]) => {
+const pendingImpactGuidance = computed(() => materialImpactGuidance(selectedMeeting.value?.mode_id ?? ''))
+
+function caughtMessage(caught: unknown): string {
+  return caught instanceof ApiError && typeof caught.detail === 'string'
+    ? caught.detail
+    : caught instanceof Error ? caught.message : String(caught)
+}
+
+async function loadMaterials(id: string) {
   const generation = ++materialsGeneration
   materials.value = null
+  materialsLoadError.value = ''
+  materialsLoading.value = true
+  try {
+    const response = await getCaseMaterials(id)
+    if (generation !== materialsGeneration || selectedMeeting.value?.meeting_id !== id || !props.show) return
+    materials.value = response
+    clearForm()
+  } catch (caught) {
+    if (generation === materialsGeneration && selectedMeeting.value?.meeting_id === id && props.show) {
+      materialsLoadError.value = caughtMessage(caught)
+    }
+  } finally {
+    if (generation === materialsGeneration) materialsLoading.value = false
+  }
+}
+
+watch([() => props.show, () => selectedMeeting.value?.meeting_id], ([show, id]) => {
+  ++materialsGeneration
+  materials.value = null
+  materialsLoadError.value = ''
   if (!show || !id) return
-  const response = await getCaseMaterials(id)
-  if (generation !== materialsGeneration || selectedMeeting.value?.meeting_id !== id || !props.show) return
-  materials.value = response
-  clearForm()
+  void loadMaterials(id)
 }, { immediate: true })
 
 function latest(item: VersionedCaseMaterial) {
@@ -103,10 +132,14 @@ async function toggle(item: VersionedCaseMaterial, kind: 'evidence' | 'note') {
 
 <template>
   <Drawer :show="show" title="案卷與證據" test-id="case-materials-drawer" close-test-id="case-materials-close-button" @close="$emit('close')">
+    <div v-if="materialsLoadError" class="error" data-testid="materials-load-error">
+      <p>{{ materialsLoadError }}</p>
+      <button type="button" class="btn btn-secondary btn-sm" data-testid="retry-materials-load-button" :disabled="materialsLoading" @click="selectedMeeting && loadMaterials(selectedMeeting.meeting_id)">重新載入</button>
+    </div>
     <template v-if="selectedMeeting && materials">
       <section v-if="materials.pending_impact" class="materials-impact-warning" data-testid="materials-impact-warning">
         <strong>案卷已在 AI 發言後變更</strong>
-        <p>為避免新舊證據混用，目前已暫停 AI 與法官判斷。請到「流程操作」選擇重開目前爭點、重開全部審議或重新整理爭點。</p>
+        <p>{{ pendingImpactGuidance }}</p>
       </section>
       <section class="materials-section">
         <h3>證物（{{ materials.evidence.filter(item => item.status === 'active').length }}）</h3>
@@ -136,6 +169,6 @@ async function toggle(item: VersionedCaseMaterial, kind: 'evidence' | 'note') {
         <div><button type="submit" class="btn btn-primary" :disabled="loading || !form.title.trim() || !form.content.trim() || !form.visibleRoles.length">{{ editingId ? '保存新版本' : '新增' }}</button><button v-if="editingId" type="button" class="btn btn-secondary" @click="clearForm">取消</button></div>
       </form>
     </template>
-    <p v-else class="empty-state">請先選擇會議。</p>
+    <p v-else-if="!materialsLoadError" class="empty-state">{{ selectedMeeting ? '正在載入案卷…' : '請先選擇會議。' }}</p>
   </Drawer>
 </template>

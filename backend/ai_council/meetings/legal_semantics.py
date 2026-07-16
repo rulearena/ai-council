@@ -52,13 +52,13 @@ _PUNISHMENT_SEMANTIC = re.compile(
     r"判刑|判處|科刑|刑期|徒刑|拘役|緩刑|監禁|入監|褫奪公權|"
     r"宣告刑|應執行|應處"
 )
-_MONEY_PENALTY_SEMANTIC = re.compile(r"罰金|罰鍰|科處|處以")
+_MONEY_PENALTY_SEMANTIC = re.compile(r"罰金|罰鍰|罰款|科處|處以")
 _PENALTY_DURATION = re.compile(
     rf"(?<![{_TOKEN_BOUNDARY}])(?:{_ARABIC_NUMBER}|[{_CHINESE_NUMBER}]+)\s*"
-    rf"(?:年|個月|月|日)(?![{_TOKEN_BOUNDARY}])"
+    rf"(?:年|載|個月|月|日)(?![{_TOKEN_BOUNDARY}])"
 )
 _INHERENT_CONCRETE_PENALTY = re.compile(
-    r"死刑|無期徒刑|"
+    r"死刑|處死|無期徒刑|"
     r"(?:(?:永久|終身|無限期).{0,8}(?:監禁|徒刑|褫奪公權|拘禁|入監)|"
     r"(?:監禁|徒刑|褫奪公權|拘禁|入監).{0,8}(?:永久|終身|無限期))"
 )

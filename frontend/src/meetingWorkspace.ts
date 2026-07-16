@@ -91,3 +91,9 @@ export function nextHistorySelection(
 ): string {
   return previousMeetingId === nextMeetingId ? selectedEpochId : activeEpochId
 }
+
+export function materialImpactGuidance(modeId: string): string {
+  return modeId === 'courtroom'
+    ? '為避免新舊證據混用，目前已暫停 AI 與法官判斷。請到「流程操作」選擇重開目前爭點、重開全部審議或重新整理爭點。'
+    : '為避免新舊資料混用，目前已暫停 AI。請到「流程操作」輸入原因並重開全部審議。'
+}

@@ -3,8 +3,8 @@ import { computed, inject, ref, watch } from 'vue'
 import { activeMode, councilKey, formatDateTime, roleClass, roleColor, roleColorVars, roleIcon } from '../composables/useCouncil'
 import Drawer from './Drawer.vue'
 import RoleSilhouette from './RoleSilhouette.vue'
-import { getDeliberations, getTranscript, promoteMessageToCaseNote, transcriptDownloadUrl } from '../api'
-import type { Deliberations, MeetingEvent } from '../api'
+import { ApiError, getCaseMaterials, getDeliberations, getTranscript, promoteMessageToCaseNote, transcriptDownloadUrl } from '../api'
+import type { CaseMaterials, Deliberations, MeetingEvent, VersionedCaseMaterial } from '../api'
 import { nextHistorySelection } from '../meetingWorkspace'
 import { eventRoleDisplayName, roleDisplayName, statusDisplayLabel, stepDisplayLabel } from '../presentation'
 
@@ -34,6 +34,10 @@ const copyDiagnosticErrorEventId = ref<string | null>(null)
 const deliberations = ref<Deliberations | null>(null)
 const selectedEpochId = ref('')
 const historyTranscript = ref('')
+const archivedMaterials = ref<CaseMaterials | null>(null)
+const archivedMaterialsUnavailable = ref(false)
+const recordsLoadError = ref('')
+const recordsLoading = ref(false)
 let historyMeetingId: string | null = null
 let historyGeneration = 0
 const promotionEvent = ref<MeetingEvent | null>(null)
@@ -45,6 +49,15 @@ const participants = computed(() => selectedMeeting.value?.participants ?? [])
 const displayRole = (event: MeetingEvent) => eventRoleDisplayName(activeMode.value, participants.value, event)
 const displayStep = (event: MeetingEvent) => stepDisplayLabel(activeMode.value, participants.value, event)
 const displayParticipantRole = (role: string) => roleDisplayName(activeMode.value, participants.value, role)
+const selectedEpoch = computed(() => deliberations.value?.epochs.find((epoch) => epoch.id === selectedEpochId.value))
+
+function activeMaterialVersion(item: VersionedCaseMaterial) {
+  return item.versions.find((version) => version.version === item.active_version) ?? item.versions.at(-1)
+}
+
+function visibleRoleNames(item: VersionedCaseMaterial) {
+  return (activeMaterialVersion(item)?.visible_roles ?? []).map(displayParticipantRole).join('、') || '無可見角色'
+}
 
 const diagnosticKeys = [
   'event_id',
@@ -105,37 +118,102 @@ function copyDiagnosticStatus(event: MeetingEvent) {
   return ''
 }
 
-watch([() => props.show, () => selectedMeeting.value?.meeting_id], async ([show, meetingId]) => {
+function caughtMessage(caught: unknown): string {
+  return caught instanceof ApiError && typeof caught.detail === 'string'
+    ? caught.detail
+    : caught instanceof Error ? caught.message : String(caught)
+}
+
+async function loadDeliberations(meetingId: string) {
   const generation = ++historyGeneration
   deliberations.value = null
   historyTranscript.value = ''
+  archivedMaterials.value = null
+  archivedMaterialsUnavailable.value = false
+  recordsLoadError.value = ''
+  recordsLoading.value = true
+  promotionEvent.value = null
+  const previousMeetingId = historyMeetingId
+  try {
+    const response = await getDeliberations(meetingId)
+    if (generation !== historyGeneration || selectedMeeting.value?.meeting_id !== meetingId || !props.show) return
+    deliberations.value = response
+    selectedEpochId.value = nextHistorySelection(
+      previousMeetingId,
+      meetingId,
+      selectedEpochId.value,
+      deliberations.value.active_epoch_id,
+    )
+    historyMeetingId = meetingId
+  } catch (caught) {
+    if (generation === historyGeneration && selectedMeeting.value?.meeting_id === meetingId && props.show) {
+      recordsLoadError.value = caughtMessage(caught)
+    }
+  } finally {
+    if (generation === historyGeneration) recordsLoading.value = false
+  }
+}
+
+watch([() => props.show, () => selectedMeeting.value?.meeting_id], ([show, meetingId]) => {
+  ++historyGeneration
+  deliberations.value = null
+  historyTranscript.value = ''
+  archivedMaterials.value = null
+  archivedMaterialsUnavailable.value = false
+  recordsLoadError.value = ''
   promotionEvent.value = null
   if (!show || !meetingId) return
-  const previousMeetingId = historyMeetingId
-  const response = await getDeliberations(meetingId)
-  if (generation !== historyGeneration || selectedMeeting.value?.meeting_id !== meetingId || !props.show) return
-  deliberations.value = response
-  selectedEpochId.value = nextHistorySelection(
-    previousMeetingId,
-    meetingId,
-    selectedEpochId.value,
-    deliberations.value.active_epoch_id,
-  )
-  historyMeetingId = meetingId
+  void loadDeliberations(meetingId)
 }, { immediate: true })
 
-watch(selectedEpochId, async (epochId) => {
-  const meetingId = selectedMeeting.value?.meeting_id
+async function loadArchivedEpoch(meetingId: string, epochId: string) {
   const generation = ++historyGeneration
+  recordsLoadError.value = ''
+  recordsLoading.value = true
+  archivedMaterials.value = null
+  archivedMaterialsUnavailable.value = false
+  try {
+    const revision = selectedEpoch.value?.materials_revision
+    const [response, materialResult] = await Promise.all([
+      getTranscript(meetingId, epochId),
+      typeof revision === 'number'
+        ? getCaseMaterials(meetingId, revision).then((value) => ({ value, unavailable: false }))
+        : Promise.resolve({ value: null, unavailable: true }),
+    ])
+    if (generation !== historyGeneration || selectedMeeting.value?.meeting_id !== meetingId || selectedEpochId.value !== epochId || !props.show) return
+    historyTranscript.value = response
+    archivedMaterials.value = materialResult.value
+    archivedMaterialsUnavailable.value = materialResult.unavailable
+    activeTab.value = 'transcript'
+  } catch (caught) {
+    if (generation === historyGeneration && selectedMeeting.value?.meeting_id === meetingId && selectedEpochId.value === epochId && props.show) {
+      recordsLoadError.value = caughtMessage(caught)
+    }
+  } finally {
+    if (generation === historyGeneration) recordsLoading.value = false
+  }
+}
+
+watch(selectedEpochId, (epochId) => {
+  const meetingId = selectedMeeting.value?.meeting_id
   if (!meetingId || !epochId || epochId === deliberations.value?.active_epoch_id) {
+    ++historyGeneration
     historyTranscript.value = ''
+    archivedMaterials.value = null
+    archivedMaterialsUnavailable.value = false
     return
   }
-  const response = await getTranscript(meetingId, epochId)
-  if (generation !== historyGeneration || selectedMeeting.value?.meeting_id !== meetingId || selectedEpochId.value !== epochId || !props.show) return
-  historyTranscript.value = response
-  activeTab.value = 'transcript'
+  void loadArchivedEpoch(meetingId, epochId)
 })
+
+function retryRecordsLoad() {
+  const meetingId = selectedMeeting.value?.meeting_id
+  if (!meetingId) return
+  if (!deliberations.value) void loadDeliberations(meetingId)
+  else if (selectedEpochId.value && !browsingCurrent.value) {
+    void loadArchivedEpoch(meetingId, selectedEpochId.value)
+  }
+}
 
 function beginPromotion(event: MeetingEvent) {
   promotionEvent.value = event
@@ -166,12 +244,37 @@ async function promoteToCaseNote() {
 
 <template>
   <Drawer :show="show" title="議事紀錄" test-id="records-drawer" close-test-id="records-close-button" @close="$emit('close')">
+    <div v-if="recordsLoadError" class="error" data-testid="records-load-error">
+      <p>{{ recordsLoadError }}</p>
+      <button type="button" class="btn btn-secondary btn-sm" data-testid="retry-records-load-button" :disabled="recordsLoading" @click="retryRecordsLoad">重新載入</button>
+    </div>
     <label v-if="deliberations && deliberations.epochs.length" class="epoch-picker">審議輪次
       <select v-model="selectedEpochId" data-testid="records-epoch-select">
         <option v-for="epoch in deliberations.epochs" :key="epoch.id" :value="epoch.id">第 {{ epoch.number }} 輪{{ epoch.id === deliberations.active_epoch_id ? '（目前）' : '（已封存）' }} · {{ epoch.event_count }} 筆</option>
       </select>
     </label>
     <p v-if="!browsingCurrent" class="archive-notice">正在查看封存輪次。這裡只能閱讀或下載，不會替換目前會議，也不能編輯或重試。</p>
+    <section v-if="!browsingCurrent" class="archived-materials" data-testid="archived-materials-snapshot">
+      <template v-if="archivedMaterials">
+        <h3>本輪使用的案卷（修訂 {{ archivedMaterials.revision }}）</h3>
+        <p>以下是這一輪審議當時可用的證據與備註，不會替換目前案卷。</p>
+        <article v-for="item in archivedMaterials.evidence" :key="`evidence-${item.id}`" data-testid="archived-evidence-card">
+          <strong>證據：{{ activeMaterialVersion(item)?.title }}</strong>
+          <span>v{{ item.active_version }} · {{ item.status === 'active' ? '使用中' : '已停用' }}</span>
+          <p>{{ activeMaterialVersion(item)?.content }}</p>
+          <small>可見：{{ visibleRoleNames(item) }}</small>
+        </article>
+        <article v-for="item in archivedMaterials.notes" :key="`note-${item.id}`" data-testid="archived-note-card">
+          <strong>備註：{{ activeMaterialVersion(item)?.title }}</strong>
+          <span>v{{ item.active_version }} · {{ item.status === 'active' ? '使用中' : '已停用' }}</span>
+          <p>{{ activeMaterialVersion(item)?.content }}</p>
+          <small>可見：{{ visibleRoleNames(item) }}</small>
+        </article>
+        <p v-if="!archivedMaterials.evidence.length && !archivedMaterials.notes.length">本輪沒有案卷資料。</p>
+      </template>
+      <p v-else-if="archivedMaterialsUnavailable" data-testid="archived-materials-unavailable">這個舊輪次沒有記錄案卷修訂，因此無法還原當時的證據與備註；目前案卷不受影響。</p>
+      <p v-else>正在載入本輪案卷…</p>
+    </section>
     <form v-if="promotionEvent" class="material-form" data-testid="promote-case-note-form" @submit.prevent="promoteToCaseNote">
       <h3>轉為案件備註</h3>
       <label>備註標題<input v-model="promotionTitle" data-testid="promote-case-note-title" :disabled="loading" /></label>

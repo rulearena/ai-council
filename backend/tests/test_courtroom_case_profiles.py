@@ -8,6 +8,16 @@ from ai_council.meetings.case_profiles import (
 )
 
 
+def supported_money_claim(ref: str = "[證物一]") -> dict[str, object]:
+    return {
+        "evidence_refs": [ref],
+        "relief": {
+            "monetary_amount": None,
+            "calculation_basis": "依引用證物所載金額計算",
+        },
+    }
+
+
 @pytest.mark.parametrize(
     ("case_type", "proponent", "respondent"),
     [
@@ -112,12 +122,12 @@ def test_final_semantics_validate_all_visible_penalty_and_money_text() -> None:
         }
     }
     civil.validate_final_semantics(
-        {"summary": "返還新臺幣 100 元", "claims": [{"evidence_refs": ["[證物一]"]}]},
+        {"summary": "返還新臺幣 100 元", "claims": [supported_money_claim()]},
         inputs,
     )
     with pytest.raises(ValueError, match="not supported"):
         civil.validate_final_semantics(
-            {"summary": "返還新臺幣 999 元", "claims": [{"evidence_refs": ["[證物一]"]}]},
+            {"summary": "返還新臺幣 999 元", "claims": [supported_money_claim()]},
             inputs,
         )
     with pytest.raises(ValueError, match="unknown or invisible"):
@@ -152,7 +162,7 @@ def test_civil_final_compares_traditional_chinese_money_values_to_visible_eviden
     profile.validate_final_semantics(
         {
             "summary": "應返還新臺幣1000000元",
-            "claims": [{"evidence_refs": ["[證物一]"]}],
+            "claims": [supported_money_claim()],
         },
         inputs,
     )
@@ -161,7 +171,7 @@ def test_civil_final_compares_traditional_chinese_money_values_to_visible_eviden
             profile.validate_final_semantics(
                 {
                     "summary": f"應返還{unsupported}",
-                    "claims": [{"evidence_refs": ["[證物一]"]}],
+                    "claims": [supported_money_claim()],
                 },
                 inputs,
             )
@@ -200,7 +210,7 @@ def test_civil_money_tokenizer_normalizes_complete_equivalent_amounts(
     CourtroomCaseProfile.for_type("civil").validate_final_semantics(
         {
             "summary": f"應返還{verdict_amount}",
-            "claims": [{"evidence_refs": ["[證物一]"]}],
+            "claims": [supported_money_claim()],
         },
         {
             "__case_files_by_role": {
@@ -234,7 +244,7 @@ def test_civil_money_tokenizer_never_truncates_or_changes_magnitude(
         CourtroomCaseProfile.for_type("civil").validate_final_semantics(
             {
                 "summary": f"應返還{unsupported_amount}",
-                "claims": [{"evidence_refs": ["[證物一]"]}],
+                "claims": [supported_money_claim()],
             },
             {
                 "__case_files_by_role": {
@@ -262,7 +272,10 @@ def test_civil_verdict_bare_amount_is_checked_but_bare_evidence_quantity_is_not_
                 "summary": "應返還款項",
                 "claims": [{
                     "evidence_refs": ["[證物一]"],
-                    "relief": {"monetary_amount": "100萬"},
+                    "relief": {
+                        "monetary_amount": "100萬",
+                        "calculation_basis": "依價款計算",
+                    },
                 }],
             },
             {"__case_files_by_role": {"Judge": "[證物一] 持有100萬股"}},
@@ -310,7 +323,14 @@ def test_civil_general_prose_bare_magnitude_accepts_equal_evidence_money() -> No
     CourtroomCaseProfile.for_type("civil").validate_final_semantics(
         {
             "summary": "應返還100萬",
-            "claims": [{"reasoning": "持有100萬股不另計價", "evidence_refs": ["[證物一]"]}],
+            "claims": [{
+                "reasoning": "持有100萬股不另計價",
+                "evidence_refs": ["[證物一]"],
+                "relief": {
+                    "monetary_amount": None,
+                    "calculation_basis": "依價款計算",
+                },
+            }],
         },
         {"__case_files_by_role": {"Judge": "[證物一] 價款100萬"}},
     )
@@ -339,11 +359,91 @@ def test_civil_bare_monetary_amount_is_validated_against_strict_evidence(
             "summary": "請求給付",
             "claims": [{
                 "evidence_refs": ["[證物一]"],
-                "relief": {"monetary_amount": monetary_amount},
+                "relief": {
+                    "monetary_amount": monetary_amount,
+                    "calculation_basis": "依價金計算",
+                },
             }],
         },
         {"__case_files_by_role": {"Judge": "[證物一] 價金一百萬元"}},
     )
+
+
+@pytest.mark.parametrize(
+    ("field", "claim_value"),
+    [
+        ("title", "請求新臺幣十萬元"),
+        ("reasoning", "損害為新臺幣十萬元"),
+        ("obligation", "給付新臺幣十萬元"),
+        ("calculation_basis", "本金新臺幣十萬元"),
+    ],
+)
+def test_civil_claim_money_requires_claim_local_refs_and_calculation_basis(
+    field: str,
+    claim_value: str,
+) -> None:
+    claim: dict[str, object] = {
+        "title": "損害賠償",
+        "reasoning": "依契約計算",
+        "evidence_refs": [],
+        "relief": {
+            "obligation": "給付損害",
+            "monetary_amount": None,
+            "calculation_basis": "收據加總",
+        },
+    }
+    if field in {"title", "reasoning"}:
+        claim[field] = claim_value
+    else:
+        relief = claim["relief"]
+        assert isinstance(relief, dict)
+        relief[field] = claim_value
+
+    with pytest.raises(ValueError, match="evidence_refs and calculation_basis"):
+        CourtroomCaseProfile.for_type("civil").validate_final_semantics(
+            {"summary": "部分勝訴", "claims": [claim]},
+            {"__case_files_by_role": {"Judge": "[證物一] 收據新臺幣十萬元"}},
+        )
+
+
+def test_civil_claim_money_must_be_supported_by_that_claims_visible_evidence() -> None:
+    with pytest.raises(ValueError, match="not supported"):
+        CourtroomCaseProfile.for_type("civil").validate_final_semantics(
+            {
+                "summary": "部分勝訴",
+                "claims": [{
+                    "title": "損害賠償新臺幣十萬元",
+                    "evidence_refs": ["[證物二]"],
+                    "relief": {
+                        "monetary_amount": None,
+                        "calculation_basis": "依收據加總",
+                    },
+                }],
+            },
+            {
+                "__case_files_by_role": {
+                    "Judge": "### [證物一] 收據\n新臺幣十萬元\n### [證物二] 契約\n無金額"
+                }
+            },
+        )
+
+
+def test_civil_top_level_money_requires_explicitly_linked_claim_support() -> None:
+    with pytest.raises(ValueError, match="claim support"):
+        CourtroomCaseProfile.for_type("civil").validate_final_semantics(
+            {
+                "summary": "應給付新臺幣十萬元",
+                "claims": [{
+                    "title": "損害賠償",
+                    "evidence_refs": [],
+                    "relief": {
+                        "monetary_amount": None,
+                        "calculation_basis": "依收據加總",
+                    },
+                }],
+            },
+            {"__case_files_by_role": {"Judge": "[證物一] 收據新臺幣十萬元"}},
+        )
 
 
 @pytest.mark.parametrize(

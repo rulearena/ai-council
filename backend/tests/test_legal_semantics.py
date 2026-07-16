@@ -143,7 +143,15 @@ def test_different_currency_markers_never_collide_at_the_same_value() -> None:
 
 @pytest.mark.parametrize(
     "text",
-    ["死刑", "無期徒刑", "終身監禁", "終身徒刑", "永久褫奪公權"],
+    [
+        "死刑",
+        "應予處死",
+        "處死",
+        "無期徒刑",
+        "終身監禁",
+        "終身徒刑",
+        "永久褫奪公權",
+    ],
 )
 def test_penalty_guard_rejects_inherently_concrete_penalties(text: str) -> None:
     assert contains_concrete_penalty(text)
@@ -157,6 +165,8 @@ def test_penalty_guard_rejects_inherently_concrete_penalties(text: str) -> None:
         "認定有罪\n褫奪公權三年",
         "認定有罪\n科處新臺幣十萬元",
         "認定有罪\n罰鍰100萬元",
+        "認定有罪\n罰款新臺幣十萬元",
+        "認定有罪\n有期徒刑為五載",
     ],
 )
 def test_penalty_guard_rejects_concrete_semantics_within_visible_fragments(text: str) -> None:

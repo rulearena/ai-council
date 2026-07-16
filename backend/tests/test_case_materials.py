@@ -44,6 +44,39 @@ def test_legacy_materials_project_without_writing_or_upgrading(tmp_path: Path) -
     assert isinstance(json.loads(path.read_text(encoding="utf-8")), list)
 
 
+def test_material_summary_counts_active_items_without_building_a_full_view(
+    tmp_path: Path, monkeypatch
+) -> None:
+    repository = MeetingRepository(tmp_path)
+    repository.save_case_materials(
+        "meeting-1",
+        {
+            "schema_version": 2,
+            "revision": 7,
+            "next_evidence_index": 3,
+            "next_note_number": 2,
+            "evidence": [
+                {"id": "e1", "status": "active", "versions": [{"content": "large-a"}]},
+                {"id": "e2", "status": "inactive", "versions": [{"content": "large-b"}]},
+            ],
+            "notes": [
+                {"id": "n1", "status": "active", "versions": [{"content": "large-c"}]}
+            ],
+            "pending_impact": {"deliberation_epoch_id": "epoch-1"},
+            "revision_history": [{"revision": 7, "evidence": [], "notes": []}],
+        },
+    )
+    materials = CaseMaterials(repository)
+    monkeypatch.setattr(materials, "_view", lambda *_args, **_kwargs: pytest.fail("full view"))
+
+    summary = materials.summary("meeting-1")
+
+    assert summary.revision == 7
+    assert summary.active_evidence_count == 1
+    assert summary.active_note_count == 1
+    assert summary.pending_impact == {"deliberation_epoch_id": "epoch-1"}
+
+
 def test_first_explicit_mutation_atomically_upgrades_and_never_reuses_anchor(
     tmp_path: Path,
 ) -> None:

@@ -2606,6 +2606,98 @@ test('ordinary restart archives the prior epoch without duplicating evidence', a
   await expect(page.getByTestId('case-evidence-card')).toContainText('v1')
 })
 
+test('archived records show their historical case-material revision without replacing live materials', async ({ page }) => {
+  await page.goto('/')
+  const meetingId = await createMeetingViaNewCase(page, `E2E archived materials ${Date.now()}`, {
+    caseFiles: [{ title: '原始證據', content: '第一版內容', visibleRoles: ['Blue', 'Judge'] }],
+  })
+  const apiOrigin = process.env.E2E_API_BASE_URL ?? 'http://127.0.0.1:5009'
+  const initialMaterials = await (await page.request.get(`${apiOrigin}/meetings/${meetingId}/materials`)).json()
+  const evidenceId = initialMaterials.evidence[0].id as string
+  const noted = await page.request.post(`${apiOrigin}/meetings/${meetingId}/materials/notes`, {
+    data: {
+      revision: initialMaterials.revision,
+      title: '封存輪次備註',
+      content: '只應顯示在當時快照的備註內容',
+      visible_roles: ['Red', 'Judge'],
+    },
+  })
+  expect(noted.ok()).toBeTruthy()
+
+  await page.getByTestId('start-meeting-button').click()
+  await expect(page.getByTestId('operation-status')).toContainText('狀態：已完成', { timeout: 15000 })
+  await openAdvancedOptions(page)
+  await page.getByTestId('restart-reason-input').fill('建立可查閱的封存輪次')
+  await page.getByTestId('restart-deliberation-button').click()
+  await expect(page.getByTestId('operation-status')).toContainText('狀態：尚未開始')
+
+  const versioned = await page.request.post(`${apiOrigin}/meetings/${meetingId}/materials/evidence/${evidenceId}/versions`, {
+    data: {
+      revision: (await noted.json()).revision,
+      title: '目前證據',
+      content: '第二版目前內容',
+      visible_roles: ['Blue', 'Red', 'Judge'],
+    },
+  })
+  expect(versioned.ok()).toBeTruthy()
+
+  let archivedMaterialAttempts = 0
+  await page.route(/\/materials\?revision=1$/, async (route) => {
+    archivedMaterialAttempts += 1
+    if (archivedMaterialAttempts === 1) {
+      await route.fulfill({ status: 503, contentType: 'application/json', body: JSON.stringify({ detail: '歷史案卷暫時無法載入' }) })
+      return
+    }
+    await route.continue()
+  })
+  await page.getByTestId('records-button').click()
+  const epochSelect = page.getByTestId('records-epoch-select')
+  const archivedEpoch = await epochSelect.locator('option').first().getAttribute('value')
+  await epochSelect.selectOption(archivedEpoch!)
+  await expect(page.getByTestId('records-load-error')).toContainText('歷史案卷暫時無法載入')
+  await expect(page.getByTestId('archived-materials-unavailable')).toHaveCount(0)
+  await page.getByTestId('retry-records-load-button').click()
+  const snapshot = page.getByTestId('archived-materials-snapshot')
+  await expect(snapshot).toContainText('本輪使用的案卷（修訂 1）')
+  await expect(page.getByTestId('archived-evidence-card')).toContainText('原始證據')
+  await expect(page.getByTestId('archived-evidence-card')).toContainText('v1 · 使用中')
+  await expect(page.getByTestId('archived-evidence-card')).toContainText('可見：藍軍、裁判')
+  await expect(page.getByTestId('archived-note-card')).toContainText('封存輪次備註')
+  await expect(page.getByTestId('archived-note-card')).toContainText('可見：紅軍、裁判')
+  await page.getByTestId('records-close-button').click()
+
+  await page.getByTestId('case-materials-button').click()
+  await expect(page.getByTestId('case-evidence-card')).toContainText('目前證據')
+  await expect(page.getByTestId('case-evidence-card')).toContainText('v2')
+  await expect(page.getByTestId('case-evidence-card')).toContainText('第二版目前內容')
+})
+
+test('archived records explain when a legacy epoch has no recoverable material revision', async ({ page }) => {
+  await page.goto('/')
+  const meetingId = await createMeetingViaNewCase(page, `E2E legacy archived materials ${Date.now()}`)
+  await page.getByTestId('start-meeting-button').click()
+  await expect(page.getByTestId('operation-status')).toContainText('狀態：已完成', { timeout: 15000 })
+  await openAdvancedOptions(page)
+  await page.getByTestId('restart-reason-input').fill('建立舊輪次示例')
+  const restarted = page.waitForResponse((response) => response.url().endsWith('/deliberations/restart'))
+  await page.getByTestId('restart-deliberation-button').click()
+  expect((await restarted).ok()).toBe(true)
+  await expect(page.getByTestId('advanced-options-panel')).toHaveCount(0)
+
+  await page.route(new RegExp(`/meetings/${meetingId}/deliberations$`), async (route) => {
+    const response = await route.fetch()
+    const body = await response.json()
+    delete body.epochs[0].materials_revision
+    await route.fulfill({ response, json: body })
+  })
+  await page.getByTestId('records-button').click()
+  const epochSelect = page.getByTestId('records-epoch-select')
+  const archivedEpoch = await epochSelect.locator('option').first().getAttribute('value')
+  await epochSelect.selectOption(archivedEpoch!)
+  await expect(page.getByTestId('archived-materials-unavailable')).toContainText('無法還原當時的證據與備註')
+  await expect(page.getByTestId('archived-materials-unavailable')).toContainText('目前案卷不受影響')
+})
+
 test('versioned evidence and promoted notes trigger a visible restart gate', async ({ page }) => {
   await page.goto('/')
   const topic = `E2E material impact ${Date.now()}`
@@ -2644,7 +2736,7 @@ test('versioned evidence and promoted notes trigger a visible restart gate', asy
   await expect(page.getByTestId('case-evidence-card')).toContainText('已停用')
   await page.getByTestId('reactivate-evidence-button').click()
   await expect(page.getByTestId('case-evidence-card')).toContainText('使用中')
-  await expect(page.getByTestId('materials-impact-warning')).toContainText('目前已暫停 AI 與法官判斷')
+  await expect(page.getByTestId('materials-impact-warning')).toContainText('輸入原因並重開全部審議')
   await page.getByTestId('case-materials-close-button').click()
 
   await openAdvancedOptions(page)
@@ -2700,6 +2792,44 @@ test('courtroom exposes current issue, all deliberation, and rebuild restart sco
   await page.getByTestId('meeting-settings-button').click()
   await expect(page.getByTestId('meeting-goal-input')).toBeEditable()
   await expect(page.getByTestId('meeting-case-type-select')).toBeEnabled()
+})
+
+test('courtroom can restart a selected ruled issue after the final verdict without losing other rulings', async ({ page }) => {
+  await page.goto('/')
+  await createMeetingViaNewCase(page, `E2E restart ruled issue ${Date.now()}`, {
+    modeId: 'courtroom',
+    caseType: 'civil',
+  })
+  await page.getByTestId('add-courtroom-issue-button').click()
+  await page.getByTestId('courtroom-issue-title-0').fill('第一爭點')
+  await page.getByTestId('add-courtroom-issue-button').click()
+  await page.getByTestId('courtroom-issue-title-1').fill('第二爭點')
+  await page.getByTestId('save-courtroom-issues-button').click()
+  await page.getByTestId('confirm-courtroom-issues-button').click()
+
+  const primary = page.getByTestId('courtroom-primary-action')
+  for (const nextLabel of ['請法官判斷此爭點', '進入下一爭點：第二爭點', '請法官判斷此爭點', '最終判決']) {
+    await primary.click()
+    await expect(primary).toContainText(nextLabel, { timeout: 15000 })
+  }
+  await primary.click()
+  await expect(page.getByTestId('courtroom-final-verdict')).toBeVisible({ timeout: 15000 })
+  await expect(page.getByTestId('courtroom-ruling-issue-1')).toBeVisible()
+  await expect(page.getByTestId('courtroom-ruling-issue-2')).toBeVisible()
+
+  await openAdvancedOptions(page)
+  await page.getByTestId('restart-scope-select').selectOption('current_issue')
+  await expect(page.getByTestId('restart-issue-select')).toBeVisible()
+  await page.getByTestId('restart-issue-select').selectOption('issue-1')
+  await page.getByTestId('restart-reason-input').fill('補充第一爭點的攻防')
+  const restarted = page.waitForResponse((response) => response.url().endsWith('/deliberations/restart'))
+  await page.getByTestId('restart-deliberation-button').click()
+  expect((await restarted).ok()).toBe(true)
+
+  await expect(page.getByTestId('courtroom-final-verdict')).toHaveCount(0)
+  await expect(page.locator('[data-issue-id="issue-1"]')).toContainText('待審')
+  await expect(page.getByTestId('courtroom-ruling-issue-1')).toHaveCount(0)
+  await expect(page.getByTestId('courtroom-ruling-issue-2')).toBeVisible()
 })
 
 test('criminal courtroom uses criminal roles and reaches a penalty-safe final verdict', async ({ page }) => {
@@ -2821,6 +2951,7 @@ test('late records and case-material responses from another meeting are discarde
   await createMeetingViaNewCase(page, topicB)
   await page.getByTestId('past-topics-button').click()
   await page.getByTestId('meeting-list-item').filter({ hasText: topicA }).locator('.meeting-item').click()
+  await expect(page.getByTestId('meetings-modal')).not.toBeVisible()
 
   let releaseMaterials!: () => void
   const materialsGate = new Promise<void>((resolve) => { releaseMaterials = resolve })
@@ -2870,6 +3001,72 @@ test('late records and case-material responses from another meeting are discarde
   releaseHistory()
   await expect(page.getByTestId('records-epoch-select').locator('option')).toHaveCount(1)
   await expect(page.getByTestId('step-timeline')).toContainText(topicB)
+})
+
+test('late transcript refresh from a previous meeting cannot overwrite the active meeting', async ({ page }) => {
+  await page.goto('/')
+  const topicA = `E2E late transcript A ${Date.now()}`
+  const topicB = `E2E late transcript B ${Date.now()}`
+  const meetingAId = await createMeetingViaNewCase(page, topicA)
+  await createMeetingViaNewCase(page, topicB)
+  await page.getByTestId('past-topics-button').click()
+  await page.getByTestId('meeting-list-item').filter({ hasText: topicA }).locator('.meeting-item').click()
+  await expect(page.getByTestId('meetings-modal')).not.toBeVisible()
+
+  let releaseTranscript!: () => void
+  const transcriptGate = new Promise<void>((resolve) => { releaseTranscript = resolve })
+  await page.route(new RegExp(`/meetings/${meetingAId}/transcript\\.md`), async (route) => {
+    await transcriptGate
+    await route.fulfill({ status: 200, contentType: 'text/markdown', body: '# LATE A TRANSCRIPT MUST NOT LEAK' })
+  })
+  const requestedTranscript = page.waitForRequest((request) => request.url().includes(`/meetings/${meetingAId}/transcript.md`))
+  await page.getByTestId('start-meeting-button').click()
+  await requestedTranscript
+  await page.getByTestId('past-topics-button').click()
+  await page.getByTestId('meeting-list-item').filter({ hasText: topicB }).locator('.meeting-item').click()
+  const lateTranscriptResponse = page.waitForResponse((response) => response.url().includes(`/meetings/${meetingAId}/transcript.md`))
+  releaseTranscript()
+  await lateTranscriptResponse
+
+  await page.getByTestId('records-button').click()
+  await page.getByTestId('records-tab-transcript').click()
+  await expect(page.getByTestId('transcript-preview')).not.toContainText('LATE A TRANSCRIPT MUST NOT LEAK')
+  await expect(page.getByTestId('step-timeline')).toHaveCount(0)
+})
+
+test('records and case-material initial load errors stay local and can be retried', async ({ page }) => {
+  await page.goto('/')
+  const meetingId = await createMeetingViaNewCase(page, `E2E drawer retry ${Date.now()}`)
+  let recordsAttempts = 0
+  await page.route(new RegExp(`/meetings/${meetingId}/deliberations$`), async (route) => {
+    recordsAttempts += 1
+    if (recordsAttempts === 1) {
+      await route.fulfill({ status: 503, contentType: 'application/json', body: JSON.stringify({ detail: '紀錄暫時無法載入' }) })
+      return
+    }
+    await route.continue()
+  })
+  await page.getByTestId('records-button').click()
+  await expect(page.getByTestId('records-load-error')).toContainText('紀錄暫時無法載入')
+  await page.getByTestId('retry-records-load-button').click()
+  await expect(page.getByTestId('records-epoch-select')).toBeVisible()
+  await expect(page.getByTestId('records-load-error')).toHaveCount(0)
+  await page.getByTestId('records-close-button').click()
+
+  let materialsAttempts = 0
+  await page.route(new RegExp(`/meetings/${meetingId}/materials$`), async (route) => {
+    materialsAttempts += 1
+    if (materialsAttempts === 1) {
+      await route.fulfill({ status: 503, contentType: 'application/json', body: JSON.stringify({ detail: '案卷暫時無法載入' }) })
+      return
+    }
+    await route.continue()
+  })
+  await page.getByTestId('case-materials-button').click()
+  await expect(page.getByTestId('materials-load-error')).toContainText('案卷暫時無法載入')
+  await page.getByTestId('retry-materials-load-button').click()
+  await expect(page.getByTestId('case-material-form')).toBeVisible()
+  await expect(page.getByTestId('materials-load-error')).toHaveCount(0)
 })
 
 test('model manager tab supports create, test, edit, and delete for a model config', async ({
@@ -3759,7 +3956,11 @@ test('saving a recognized markerless CLI preset does not inject cli_provider', a
   await page.getByTestId(`edit-model-button-${modelId}`).click()
   await expect(page.getByTestId('model-form-cli-preset-select')).toHaveValue('claude')
   await expect(page.getByTestId('model-form-cli-model-mode-select')).toHaveValue('default')
+  const defaultUpdate = page.waitForResponse((response) =>
+    response.request().method() === 'PUT' && response.url().endsWith(`/models/${modelId}`),
+  )
   await page.getByTestId('model-form-save').click()
+  expect((await defaultUpdate).ok()).toBe(true)
   expect(updatePayload).toMatchObject({
     command: ['claude', '-p', '{prompt}'],
     extra_body: {},
@@ -3770,7 +3971,11 @@ test('saving a recognized markerless CLI preset does not inject cli_provider', a
   await page.getByTestId(`edit-model-button-${modelId}`).click()
   await page.getByTestId('model-form-cli-model-mode-select').selectOption('exact')
   await page.getByTestId('model-form-cli-exact-model-input').fill('claude-exact-x')
+  const exactUpdate = page.waitForResponse((response) =>
+    response.request().method() === 'PUT' && response.url().endsWith(`/models/${modelId}`),
+  )
   await page.getByTestId('model-form-save').click()
+  expect((await exactUpdate).ok()).toBe(true)
   expect(updatePayload).toMatchObject({
     command: ['claude', '--model', 'claude-exact-x', '-p', '{prompt}'],
     extra_body: { cli_provider: 'claude' },

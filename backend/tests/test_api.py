@@ -24,6 +24,7 @@ from ai_council.models.adapters import AdapterError, MockModelAdapter, ModelRequ
 from ai_council.models.config import ModelConfigRepository
 from ai_council.meetings.repository import MeetingRepository
 from ai_council.meetings.deliberation import DeliberationEpochs, RestartCommand
+from ai_council.meetings.case_materials import CaseMaterials
 
 TEST_BLUE_PROPOSE_TEMPLATE_HASH = "28f2086e8a3af020b64aa6f2b3e3abda9046507388e535b194eb1b9fec80fe7d"
 TEST_OUTPUT_SCHEMA_HASH = "15a45919652be5c70d3fd1690a10d37f876f19a14b2a76cc0f21765def281377"
@@ -387,6 +388,44 @@ def test_atomic_case_type_change_uses_a_new_epoch_and_archives_the_old_draft(
     epochs = client.get(f"/meetings/{meeting_id}/deliberations").json()["epochs"]
     assert epochs[0]["event_count"] == 1
     assert epochs[1]["reason"] == "case_type_changed"
+
+
+def test_deliberation_history_projects_each_epochs_materials_revision_or_null(
+    tmp_path: Path,
+) -> None:
+    client = TestClient(create_test_app(tmp_path))
+    meeting_id = client.post(
+        "/meetings", json={"title": "歷史案卷", "goal": "檢視當時證據"}
+    ).json()["meeting_id"]
+    repository = MeetingRepository(tmp_path / "data")
+    repository.append_event(
+        meeting_id,
+        {
+            "event_id": f"{meeting_id}:old",
+            "meeting_id": meeting_id,
+            "step_id": "old",
+            "role": "Judge",
+            "status": "completed",
+            "materials_revision": 4,
+        },
+    )
+    marker = DeliberationEpochs.restart_marker(
+        meeting_id=meeting_id,
+        events=repository.read_events(meeting_id),
+        command=RestartCommand(scope="all_deliberation", reason="new evidence"),
+        snapshot={"materials_revision": 5},
+    )
+    repository.append_event(meeting_id, marker)
+
+    epochs = client.get(f"/meetings/{meeting_id}/deliberations").json()["epochs"]
+
+    assert [epoch["materials_revision"] for epoch in epochs] == [4, 5]
+
+    legacy_id = client.post(
+        "/meetings", json={"title": "舊資料", "goal": "無 revision"}
+    ).json()["meeting_id"]
+    legacy = client.get(f"/meetings/{legacy_id}/deliberations").json()["epochs"]
+    assert legacy[0]["materials_revision"] is None
 
 
 def test_atomic_goal_change_event_failure_keeps_old_settings_and_is_retryable(
@@ -2341,6 +2380,42 @@ def test_list_meetings_without_query_returns_everything(tmp_path: Path) -> None:
     assert len(response.json()) == 2
 
 
+def test_list_meetings_uses_lightweight_material_summaries_without_projecting_content(
+    tmp_path: Path, monkeypatch
+) -> None:
+    client = TestClient(create_test_app(tmp_path))
+    meeting_id = client.post(
+        "/meetings",
+        json={
+            "title": "大型案卷",
+            "goal": "只列摘要",
+            "case_files": [{
+                "title": "大型證據",
+                "content": "CONTENT-MUST-NOT-BE-PROJECTED",
+                "visible_roles": ["Judge"],
+            }],
+        },
+    ).json()["meeting_id"]
+
+    monkeypatch.setattr(
+        CaseMaterials,
+        "view",
+        lambda *_args, **_kwargs: pytest.fail("list endpoint must not build full materials view"),
+    )
+    response = client.get("/meetings")
+
+    assert response.status_code == 200
+    listed = next(item for item in response.json() if item["meeting_id"] == meeting_id)
+    assert listed["materials_revision"] == 0
+    assert listed["case_materials_summary"] == {
+        "revision": 0,
+        "active_evidence_count": 1,
+        "active_note_count": 0,
+        "pending_impact": None,
+    }
+    assert "CONTENT-MUST-NOT-BE-PROJECTED" not in response.text
+
+
 def test_meeting_activity_status_projects_failed_latest_step(tmp_path: Path) -> None:
     app = create_test_app(
         tmp_path,
@@ -3643,10 +3718,8 @@ def test_get_meeting_derives_evidence_anchors_for_legacy_case_files_without_rewr
     expected = [(1, "[證物一]"), (2, "[證物二]")]
     assert [(item["evidence_index"], item["citation_anchor"]) for item in body["case_files"]] == expected
     listed = next(item for item in client.get("/meetings").json() if item["meeting_id"] == meeting_id)
-    assert [
-        (item["evidence_index"], item["citation_anchor"])
-        for item in listed["case_files"]
-    ] == expected
+    assert listed["case_files"] == []
+    assert listed["case_materials_summary"]["active_evidence_count"] == 2
     assert "evidence_index" not in (meeting_dir / "case_files.json").read_text(encoding="utf-8")
     metadata = json.loads((meeting_dir / "metadata.json").read_text(encoding="utf-8"))
     assert "case_files" not in metadata
