@@ -1,6 +1,6 @@
 # 05 — 法院設定與主席動作資訊架構驗收修補
 
-Status: approved / ready
+Status: implemented / awaiting acceptance
 
 Blocked by: none
 
@@ -37,4 +37,11 @@ Canonical contract: `spec.md` §15 #88 acceptance 修補
 - 爭點區不再出現案件類型下拉；一鍵開啟會議設定完成補齊。
 - 法院 composer 不再顯示「請全體回應」，各指定角色選項清楚說明不推進流程。
 - 等待法官時狀態不是「已完成」，主 CTA 短、清楚且必須由主席明示點擊。
-- Targeted unit/e2e、完整 frontend unit/build/Chromium、backend regression 與 direct browser smoke 全綠。
+- Targeted unit/e2e、完整 frontend unit/build、backend regression 與 direct browser smoke 全綠；若完整 Chromium 被既有 flake 阻擋，必須在相同環境由 main 重現並記入 canonical backlog。
+
+## Completion
+
+- Commits: `892bcb8`, `0a9aa0b`, `543350c`.
+- Frontend unit 48/48、build、targeted Chromium 6/6 + legacy terminal 1/1、direct non-test-runner Chromium 通過。
+- Backend 589/589 通過；Standards 與 Spec 最終複審均 pass。
+- 完整 Chromium 兩次各 89/90，失敗為不同法院 transition 的既有 async refresh race；main 固定點在相同壓力下 10 次重現 4 次，已記錄為 canonical backlog #89。

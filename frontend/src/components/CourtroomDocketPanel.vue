@@ -5,7 +5,6 @@ import {
   confirmCourtroomIssues,
   draftCourtroomIssues,
   replaceCourtroomIssues,
-  updateCourtroomCaseType,
   type CourtroomIssueProjection,
   type MeetingEvent,
   type CourtroomCivilFinal,
@@ -17,10 +16,11 @@ import {
   courtroomFinalOutcomeLabel,
   courtroomIssueStatusLabel,
   courtroomOutcomeLabel,
-  nextLegacyCaseTypeSelection,
   nextCourtroomDraft,
   type CourtroomDraft,
 } from '../courtroomWorkspace'
+
+const emit = defineEmits<{ 'open-meeting-settings': [] }>()
 
 const store = inject(councilKey)!
 const {
@@ -39,7 +39,6 @@ const drafts = reactive<Record<string, CourtroomDraft>>({})
 const busy = ref(false)
 const feedback = ref('')
 const localError = ref('')
-const selectedCaseType = ref<'' | 'civil' | 'criminal'>('')
 
 const courtroom = computed(() => selectedMeeting.value?.courtroom ?? null)
 const meetingId = computed(() => selectedMeeting.value?.meeting_id ?? '')
@@ -80,17 +79,11 @@ const failedIssue = computed(() => courtroom.value?.issues.find(
   (issue) => issue.status === 'failed',
 ) ?? null)
 const primaryLabel = computed(() => primaryAction.value.label)
-
-watch(
-  meetingId,
-  (nextId, previousId = '') => {
-    selectedCaseType.value = nextLegacyCaseTypeSelection(
-      previousId,
-      nextId,
-      selectedCaseType.value,
-    )
-  },
-)
+const primaryExplanation = computed(() => ({
+  'courtroom-arguments': '按下後才會開始目前爭點的三段攻防。',
+  'courtroom-ruling': '按下後才會呼叫法官；不會自動判斷。',
+  'courtroom-final': '所有爭點均已判斷；按下後才會請法官作成全案最終判決。',
+} as Record<string, string>)[primaryAction.value.kind] ?? '')
 
 watch(
   () => {
@@ -166,16 +159,6 @@ async function generateDraft() {
   })
 }
 
-async function selectCaseType() {
-  if (!selectedCaseType.value) return
-  const id = meetingId.value
-  await runWorkspaceAction(async () => {
-    await updateCourtroomCaseType(id, selectedCaseType.value as 'civil' | 'criminal')
-    await openMeeting(id)
-    feedback.value = '案件類型已設定。'
-  })
-}
-
 async function saveIssues() {
   const id = meetingId.value
   await runWorkspaceAction(async () => {
@@ -236,13 +219,8 @@ function ruling(issue: CourtroomIssueProjection) {
     </header>
 
     <div v-if="courtroom.requires_case_type" class="courtroom-case-type-gate" data-testid="legacy-courtroom-case-type-gate">
-      <p>這是舊法院會議。請先選擇案件類型，AI 才能依正確角色與法律流程繼續。</p>
-      <select v-model="selectedCaseType" data-testid="legacy-courtroom-case-type-select" aria-label="案件類型">
-        <option value="" disabled>請選擇民事或刑事</option>
-        <option value="civil">民事</option>
-        <option value="criminal">刑事</option>
-      </select>
-      <button type="button" class="btn btn-primary" data-testid="save-courtroom-case-type-button" :disabled="busy || !selectedCaseType" @click="selectCaseType">套用案件類型</button>
+      <p>這是舊法院會議。請到會議設定選擇案件類型並一次儲存全部設定，AI 才能依正確角色與法律流程繼續。</p>
+      <button type="button" class="btn btn-primary" data-testid="open-meeting-settings-from-courtroom" @click="emit('open-meeting-settings')">前往會議設定</button>
     </div>
 
     <template v-else-if="courtroom.status !== 'confirmed'">
@@ -313,6 +291,7 @@ function ruling(issue: CourtroomIssueProjection) {
       data-testid="courtroom-sticky-primary-action"
     >
       <p v-if="currentIssue">目前焦點：{{ currentIssue.title }}</p>
+      <small v-if="primaryExplanation" data-testid="courtroom-primary-action-explanation">{{ primaryExplanation }}</small>
       <button type="button" class="btn btn-primary" data-testid="courtroom-primary-action" :disabled="busy || isMeetingRunning || primaryAction.disabled" @click="startOrContinueMeeting">
         {{ isMeetingRunning ? '執行中…' : primaryLabel }}
       </button>

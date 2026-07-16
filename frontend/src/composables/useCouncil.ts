@@ -6,6 +6,7 @@ import { DEFAULT_MODE_ID, getModeById, refreshModeCatalog, type ModeDefinition, 
 import { applyModeScene } from '../scenes'
 import { roleDisplayName } from '../presentation'
 import { canLeaveMeetingSettings } from '../meetingSettingsNavigation'
+import { projectOperationStatusText } from '../operationStatus'
 import {
   chairmanActionBlockReason,
   chairmanActionOptions,
@@ -362,12 +363,15 @@ export function useCouncil() {
   )
 
   const events = computed(() => selectedMeeting.value?.events ?? [])
-  const isTerminalMeeting = computed(() => {
+  const terminalMeetingStatus = computed<'closed' | 'cancelled' | null>(() => {
     const lifecycleEvent = [...events.value]
       .reverse()
       .find((event) => ['closed', 'cancelled', 'reopened'].includes(event.status))
     return lifecycleEvent?.status === 'closed' || lifecycleEvent?.status === 'cancelled'
+      ? lifecycleEvent.status
+      : null
   })
+  const isTerminalMeeting = computed(() => terminalMeetingStatus.value !== null)
   const isMeetingRunning = computed(() => selectedMeeting.value?.activity_status === 'running')
   // A failed role step must be retried before any new AI batch. The backend cannot
   // advance that fixed round through generic /start, so every AI composer path shares
@@ -399,6 +403,7 @@ export function useCouncil() {
   const chairmanPresentation = computed(() => chairmanActionPresentation(
     chairmanAction.value,
     selectedMeeting.value?.participants ?? [],
+    selectedMeeting.value?.mode_id ?? activeMode.value.id,
   ))
   const startButtonLabel = computed(() => isMeetingRunning.value ? '執行中…' : primaryAction.value.label)
   const selectedSequencePreset = computed(
@@ -410,6 +415,13 @@ export function useCouncil() {
     if (loading.value) return 'running'
     return selectedMeeting.value?.activity_status ?? 'idle'
   })
+  const operationStatusText = computed(() => projectOperationStatusText(
+    operationStatus.value,
+    selectedMeeting.value?.mode_id === 'courtroom'
+      ? selectedMeeting.value.courtroom ?? null
+      : null,
+    terminalMeetingStatus.value,
+  ))
   const filteredMeetings = computed(() => {
     const query = meetingSearch.value.trim().toLowerCase()
     return meetings.value
@@ -1207,6 +1219,7 @@ export function useCouncil() {
     primaryAction,
     selectedSequencePreset,
     operationStatus,
+    operationStatusText,
     filteredMeetings,
     roleOutputEvents,
     latestRoleEvent,

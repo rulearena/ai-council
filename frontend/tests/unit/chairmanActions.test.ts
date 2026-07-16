@@ -10,11 +10,12 @@ import {
   meetingEditPolicy,
   projectFixedRoundFailedRole,
   projectCourtroomPrimaryAction,
+  projectCourtroomWorkflowStatus,
   projectPrimaryAction,
   requestRoleSequenceWithFailureGuard,
 } from '../../src/chairmanActions.ts'
 
-test('courtroom primary action derives the proponent from the shared case profile projection', () => {
+test('courtroom primary action keeps the issue title out of the short formal CTA', () => {
   const base = {
     available_actions: ['start-issue'],
     current_issue_id: null,
@@ -23,12 +24,65 @@ test('courtroom primary action derives the proponent from the shared case profil
 
   assert.equal(
     projectCourtroomPrimaryAction({ ...base, case_type: 'civil' }).label,
-    '開始此爭點：責任是否成立（下一位是原告代理人）',
+    '開始爭點攻防',
   )
   assert.equal(
     projectCourtroomPrimaryAction({ ...base, case_type: 'criminal' }).label,
-    '開始此爭點：責任是否成立（下一位是檢察官）',
+    '開始爭點攻防',
   )
+  assert.equal(projectCourtroomPrimaryAction({
+    ...base,
+    issues: [
+      { id: 'issue-0', title: '前一爭點', status: 'ruled' },
+      { id: 'issue-1', title: '責任是否成立', status: 'pending' },
+    ],
+  }).label, '進入下一爭點')
+  assert.equal(projectCourtroomPrimaryAction({
+    ...base,
+    available_actions: ['final-verdict'],
+  }).label, '作成最終判決')
+})
+
+test('courtroom workflow status describes the chairman decision still required while idle', () => {
+  const issue = { id: 'issue-1', title: '責任是否成立', status: 'pending' }
+  assert.equal(projectCourtroomWorkflowStatus({
+    requires_case_type: true,
+    status: 'confirmed',
+    available_actions: [],
+    current_issue_id: null,
+    issues: [issue],
+  }), '待補案件設定')
+  assert.equal(projectCourtroomWorkflowStatus({
+    status: 'confirmed',
+    available_actions: ['start-issue'],
+    current_issue_id: null,
+    issues: [issue],
+  }), '待主席開始攻防')
+  assert.equal(projectCourtroomWorkflowStatus({
+    status: 'confirmed',
+    available_actions: ['submit-ruling'],
+    current_issue_id: 'issue-1',
+    issues: [{ ...issue, status: 'awaiting-ruling' }],
+  }), '攻防完成，待主席送交法官')
+  assert.equal(projectCourtroomWorkflowStatus({
+    status: 'confirmed',
+    available_actions: ['start-issue'],
+    current_issue_id: null,
+    issues: [{ ...issue, status: 'ruled' }, { id: 'issue-2', title: '損害', status: 'pending' }],
+  }), '待主席進入下一爭點')
+  assert.equal(projectCourtroomWorkflowStatus({
+    status: 'confirmed',
+    available_actions: ['final-verdict'],
+    current_issue_id: null,
+    issues: [{ ...issue, status: 'ruled' }],
+  }), '待主席作成最終判決')
+  assert.equal(projectCourtroomWorkflowStatus({
+    status: 'confirmed',
+    final_status: 'completed',
+    available_actions: [],
+    current_issue_id: null,
+    issues: [{ ...issue, status: 'ruled' }],
+  }), '全案審理完成')
 })
 
 const roles = [
@@ -64,10 +118,9 @@ test('courtroom AI composer actions follow the backend available actions', () =>
     }),
     [
       { value: 'note', label: '記錄補充（不會呼叫 AI）' },
-      { value: 'all', label: '請全體回應（下一步：開始爭點「佔有權源」）' },
-      { value: 'role:Prosecutor', label: '請檢察官回答' },
-      { value: 'role:Defense', label: '請辯護律師回答' },
-      { value: 'role:Judge', label: '請法官回答' },
+      { value: 'role:Prosecutor', label: '請檢察官補充（不會裁定或推進流程）' },
+      { value: 'role:Defense', label: '請辯護律師補充（不會裁定或推進流程）' },
+      { value: 'role:Judge', label: '請法官補充（不會裁定或推進流程）' },
     ],
   )
 
@@ -166,6 +219,11 @@ test('each chairman action states its audience and whether it invokes AI', () =>
     placeholder: '輸入要請辯護律師回答的問題或指示…',
     submitLabel: '請辯護律師回答',
     successMessage: '已請辯護律師針對這項指示回答。',
+  })
+  assert.deepEqual(chairmanActionPresentation('role:Defense', roles, 'courtroom'), {
+    placeholder: '輸入要請辯護律師補充的問題或指示；不會裁定或推進流程…',
+    submitLabel: '請辯護律師補充',
+    successMessage: '已請辯護律師補充；未裁定，也未推進正式流程。',
   })
 })
 
@@ -295,7 +353,7 @@ test('courtroom primary action is derived from its projected available action', 
   assert.deepEqual(result, {
     kind: 'courtroom-ruling',
     issueId: 'issue-2',
-    label: '請法官判斷此爭點：是否應返還土地（下一位是法官）',
+    label: '送交法官判斷',
     disabled: false,
   })
 

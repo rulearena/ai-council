@@ -69,12 +69,13 @@ export function validateMeetingSettingsDraft(
   meeting: MeetingSettingsSource,
 ): MeetingSettingsErrors {
   const confirmedCourtroom = meeting.mode_id === 'courtroom' && meeting.courtroom?.status === 'confirmed'
+  const legacyCaseTypeMissing = confirmedCourtroom && !meeting.case_type
   return {
     title: draft.title.trim() ? '' : '請輸入會議名稱。',
     goal: confirmedCourtroom && draft.goal !== (meeting.goal ?? '')
       ? '爭點已確認，AI 目標只能檢視；重新整理爭點後才可修改。'
       : draft.goal.trim() ? '' : '請輸入 AI 最終目標。',
-    caseType: confirmedCourtroom && draft.caseType !== meeting.case_type
+    caseType: confirmedCourtroom && !legacyCaseTypeMissing && draft.caseType !== meeting.case_type
       ? '爭點已確認，案件類型只能檢視；重新整理爭點後才可修改。'
       : meeting.mode_id === 'courtroom' && !draft.caseType ? '請選擇民事或刑事。' : '',
     participantModels: Object.values(draft.participantModels).every(Boolean)

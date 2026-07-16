@@ -59,7 +59,7 @@ function onSeatClick(role: CouncilRole | 'Chairman') {
 
     <CouncilStage :scene="currentScene" @seat-click="onSeatClick" />
 
-    <CourtroomDocketPanel />
+    <CourtroomDocketPanel @open-meeting-settings="meetingSettingsOpen = true" />
 
     <ActionBar />
 

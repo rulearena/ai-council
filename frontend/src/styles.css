@@ -1428,6 +1428,32 @@ h2 {
   color: var(--color-text-muted);
 }
 
+.courtroom-case-type-gate {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 14px;
+  padding: 12px;
+  border: 1px solid rgba(245, 178, 66, 0.45);
+  border-radius: 10px;
+  background: rgba(245, 178, 66, 0.1);
+}
+
+.courtroom-case-type-gate p,
+.courtroom-primary-action small {
+  margin: 0;
+}
+
+.courtroom-primary-action small {
+  flex: 1;
+  color: var(--color-text-secondary);
+}
+
+.courtroom-primary-action .btn {
+  flex: none;
+}
+
 .docket-state {
   flex: none;
   padding: 5px 9px;
@@ -1557,9 +1583,14 @@ h2 {
   }
 
   .courtroom-docket-header,
+  .courtroom-case-type-gate,
   .courtroom-primary-action {
     align-items: flex-start;
     flex-direction: column;
+  }
+
+  .courtroom-primary-action .btn {
+    width: 100%;
   }
 
   .courtroom-issue-editor > li {
