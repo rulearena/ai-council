@@ -15,7 +15,7 @@ import { activeMode, councilKey } from '../composables/useCouncil'
 import { roleDisplayName } from '../presentation'
 import Drawer from './Drawer.vue'
 
-defineProps<{ show: boolean }>()
+const props = defineProps<{ show: boolean }>()
 defineEmits<{ close: [] }>()
 const store = inject(councilKey)!
 const { selectedMeeting, loading, runAction, openMeeting } = store
@@ -27,7 +27,8 @@ const form = reactive({ title: '', content: '', visibleRoles: [] as string[] })
 const participants = computed(() => selectedMeeting.value?.participants ?? [])
 const displayRole = (role: string) => roleDisplayName(activeMode.value, participants.value, role)
 
-watch(() => selectedMeeting.value?.meeting_id, async (id) => {
+watch([() => props.show, () => selectedMeeting.value?.meeting_id], async ([show, id]) => {
+  if (!show) return
   materials.value = id ? await getCaseMaterials(id) : null
   clearForm()
 }, { immediate: true })
@@ -96,7 +97,7 @@ async function toggle(item: VersionedCaseMaterial, kind: 'evidence' | 'note') {
       </section>
       <section class="materials-section">
         <h3>證物（{{ materials.evidence.filter(item => item.status === 'active').length }}）</h3>
-        <article v-for="item in materials.evidence" :key="item.id" class="material-card" :data-status="item.status">
+        <article v-for="item in materials.evidence" :key="item.id" class="material-card" :data-status="item.status" :data-material-id="item.id" data-testid="case-evidence-card">
           <header><strong>{{ item.citation_anchor }} · {{ latest(item).title }}</strong><span>v{{ item.active_version }} · {{ item.status === 'active' ? '使用中' : '已停用' }}</span></header>
           <p>{{ latest(item).content }}</p>
           <small>可見：{{ latest(item).visible_roles.map(displayRole).join('、') }}</small>
@@ -105,13 +106,13 @@ async function toggle(item: VersionedCaseMaterial, kind: 'evidence' | 'note') {
       </section>
       <section class="materials-section">
         <h3>案件備註（{{ materials.notes.filter(item => item.status === 'active').length }}）</h3>
-        <article v-for="item in materials.notes" :key="item.id" class="material-card" :data-status="item.status">
+        <article v-for="item in materials.notes" :key="item.id" class="material-card" :data-status="item.status" :data-material-id="item.id" data-testid="case-note-card">
           <header><strong>{{ latest(item).title }}</strong><span>v{{ item.active_version }} · {{ item.status === 'active' ? '使用中' : '已停用' }}</span></header>
           <p>{{ latest(item).content }}</p>
           <div><button type="button" class="btn btn-secondary btn-sm" @click="edit(item, 'note')">建立新版本</button><button type="button" class="btn btn-ghost btn-sm" @click="toggle(item, 'note')">{{ item.status === 'active' ? '停用' : '重新啟用' }}</button></div>
         </article>
       </section>
-      <form class="material-form" @submit.prevent="saveMaterial">
+      <form class="material-form" data-testid="case-material-form" @submit.prevent="saveMaterial">
         <h3>{{ editingId ? '建立新版本' : formKind === 'evidence' ? '新增證物' : '新增案件備註' }}</h3>
         <div v-if="!editingId" class="segmented"><button type="button" :class="{ active: formKind === 'evidence' }" @click="formKind = 'evidence'">證物</button><button type="button" :class="{ active: formKind === 'note' }" @click="formKind = 'note'">案件備註</button></div>
         <label>標題<input v-model="form.title" :disabled="loading" /></label>

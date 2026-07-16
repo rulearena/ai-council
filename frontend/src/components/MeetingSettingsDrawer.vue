@@ -21,6 +21,7 @@ const { selectedMeeting, models, loading, openMeeting, runAction } = store
 const draft = ref<MeetingSettingsDraft | null>(null)
 const baselineDraft = ref<MeetingSettingsDraft | null>(null)
 const saveError = ref('')
+let saveGeneration = 0
 
 const dirty = computed(() => Boolean(
   draft.value && baselineDraft.value &&
@@ -32,6 +33,9 @@ const errors = computed(() => draft.value && selectedMeeting.value
   : { title: '', goal: '', caseType: '', participantModels: '' })
 const invalid = computed(() => Object.values(errors.value).some(Boolean))
 const confirmedCourtroom = computed(() => selectedMeeting.value?.mode_id === 'courtroom' && selectedMeeting.value.courtroom?.status === 'confirmed')
+const assignmentWarnings = computed(() => selectedMeeting.value?.participants
+  .filter((participant) => participant.model_assignment_warning)
+  .map((participant) => `${displayRole(participant.role_id)}：${participant.model_assignment_warning}`) ?? [])
 const displayRole = (role: string) => roleDisplayName(activeMode.value, selectedMeeting.value?.participants ?? [], role)
 
 function hydrate() {
@@ -43,6 +47,7 @@ function hydrate() {
 }
 
 watch([() => props.show, () => selectedMeeting.value?.meeting_id], ([show], [previousShow, previousMeetingId]) => {
+  saveGeneration += 1
   if (!show) return
   if (previousShow && previousMeetingId && previousMeetingId !== selectedMeeting.value?.meeting_id && dirty.value) {
     window.confirm('切換會議會放棄尚未儲存的會議設定。')
@@ -62,14 +67,20 @@ async function save() {
   const hasAiOutput = (meeting.events ?? []).some((event) => !['Human', 'System'].includes(event.role) && event.status === 'completed')
   if (goalChanged && hasAiOutput && !window.confirm('修改目標只影響後續 AI 回應，既有發言不會重新產生。確定儲存？')) return
   saveError.value = ''
+  const requestGeneration = ++saveGeneration
+  const meetingId = meeting.meeting_id
   const payload = buildMeetingSettingsPayload(draft.value)
   const ok = await runAction(async () => {
-    await updateMeetingSettings(meeting.meeting_id, payload)
-    await openMeeting(meeting.meeting_id)
+    await updateMeetingSettings(meetingId, payload)
+    if (requestGeneration !== saveGeneration || selectedMeeting.value?.meeting_id !== meetingId) return
+    await openMeeting(meetingId)
+    if (requestGeneration !== saveGeneration || selectedMeeting.value?.meeting_id !== meetingId) return
     hydrate()
     emit('close')
   })
-  if (!ok) saveError.value = store.error.value || '會議設定儲存失敗。'
+  if (!ok && requestGeneration === saveGeneration && selectedMeeting.value?.meeting_id === meetingId) {
+    saveError.value = store.error.value || '會議設定儲存失敗。'
+  }
 }
 </script>
 
@@ -97,6 +108,10 @@ async function save() {
       </section>
       <section>
         <h3>角色模型</h3>
+        <div v-if="assignmentWarnings.length" class="materials-impact-warning" data-testid="assignment-fallback-warning">
+          <strong>部分原指派模型已無法使用，系統目前使用替代模型</strong>
+          <p v-for="warning in assignmentWarnings" :key="warning">{{ warning }}</p>
+        </div>
         <label v-for="participant in selectedMeeting.participants" :key="participant.role_id">
           {{ displayRole(participant.role_id) }}
           <select v-model="draft.participantModels[participant.role_id]" :data-testid="`${participant.role_id.toLowerCase()}-model-select`" :disabled="loading">

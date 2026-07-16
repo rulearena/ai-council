@@ -1915,12 +1915,20 @@ pre {
 
 .drawer {
   width: min(420px, 100%);
+  max-width: 100vw;
+  min-width: 0;
+  box-sizing: border-box;
   height: 100%;
   overflow: auto;
   border-left: 1px solid var(--color-border);
   background: var(--color-surface);
   box-shadow: var(--shadow-md);
   animation: drawer-slide-in 200ms ease;
+}
+
+.drawer * {
+  min-width: 0;
+  box-sizing: border-box;
 }
 
 .scope-hint,
