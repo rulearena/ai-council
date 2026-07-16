@@ -289,6 +289,10 @@ test('legacy courtroom is gated by issue setup and rejected generic paths preser
   await page.getByTestId('records-close-button').click()
 
   await page.getByTestId('advanced-options-button').click()
+  page.once('dialog', async (dialog) => {
+    expect(dialog.message()).toBe('確定結案？結案後無法再新增發言或回應。')
+    await dialog.accept()
+  })
   await page.getByTestId('close-meeting-button').click()
   await expect(page.getByTestId('operation-status')).toContainText('狀態：已結案')
 
