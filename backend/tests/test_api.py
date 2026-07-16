@@ -297,6 +297,206 @@ def test_atomic_meeting_settings_keep_the_goal_change_audit_after_ai_output(
     assert audit[0]["content"] == "主席修改會議目標\n舊目標：原目標\n新目標：新目標"
 
 
+@pytest.mark.parametrize("legacy_route", ["details", "participant-models", "case-type"])
+def test_legacy_setting_writes_invalidate_an_atomic_client_revision(
+    tmp_path: Path, legacy_route: str
+) -> None:
+    client = TestClient(create_test_app(tmp_path))
+    courtroom = legacy_route == "case-type"
+    meeting_id = client.post(
+        "/meetings",
+        json={
+            "title": "原名稱",
+            "goal": "原目標",
+            **(
+                {"mode_id": "courtroom", "case_type": "civil"}
+                if courtroom
+                else {}
+            ),
+        },
+    ).json()["meeting_id"]
+    meeting = client.get(f"/meetings/{meeting_id}").json()
+    models = {
+        participant["role_id"]: "mock-fast"
+        for participant in meeting["participants"]
+    }
+    if legacy_route == "details":
+        changed = client.put(
+            f"/meetings/{meeting_id}/details",
+            json={"title": "另一個 client", "goal": "原目標"},
+        )
+    elif legacy_route == "participant-models":
+        changed = client.put(
+            f"/meetings/{meeting_id}/participant-models", json={"models": models}
+        )
+    else:
+        changed = client.put(
+            f"/meetings/{meeting_id}/courtroom/case-type",
+            json={"case_type": "criminal"},
+        )
+    assert changed.status_code == 200
+    assert changed.json()["settings_revision"] == 1
+
+    stale = client.put(
+        f"/meetings/{meeting_id}/settings",
+        json={
+            "expected_revision": 0,
+            "title": "過期覆寫",
+            "goal": "原目標",
+            "case_type": "criminal" if courtroom else None,
+            "scene": "courtroom" if courtroom else "meeting-room",
+            "participant_models": models,
+        },
+    )
+    assert stale.status_code == 409
+
+
+def test_atomic_case_type_change_uses_a_new_epoch_and_archives_the_old_draft(
+    tmp_path: Path,
+) -> None:
+    client = TestClient(create_test_app(tmp_path))
+    meeting_id = client.post(
+        "/meetings",
+        json={
+            "title": "類型切換",
+            "goal": "判斷責任",
+            "mode_id": "courtroom",
+            "case_type": "civil",
+        },
+    ).json()["meeting_id"]
+    client.post(f"/meetings/{meeting_id}/messages", json={"content": "舊輪討論"})
+
+    changed = client.put(
+        f"/meetings/{meeting_id}/settings",
+        json={
+            "expected_revision": 0,
+            "title": "類型切換",
+            "goal": "判斷責任",
+            "case_type": "criminal",
+            "scene": "courtroom",
+            "participant_models": {
+                "Prosecutor": "mock-fast",
+                "Defense": "mock-fast",
+                "Judge": "mock-fast",
+            },
+        },
+    )
+
+    assert changed.status_code == 200
+    assert changed.json()["deliberation"]["active_epoch_number"] == 2
+    epochs = client.get(f"/meetings/{meeting_id}/deliberations").json()["epochs"]
+    assert epochs[0]["event_count"] == 1
+    assert epochs[1]["reason"] == "case_type_changed"
+
+
+def test_atomic_goal_change_event_failure_keeps_old_settings_and_is_retryable(
+    tmp_path: Path, monkeypatch
+) -> None:
+    client = TestClient(create_test_app(tmp_path), raise_server_exceptions=False)
+    meeting_id = client.post(
+        "/meetings", json={"title": "原名稱", "goal": "原目標"}
+    ).json()["meeting_id"]
+    assert client.post(f"/meetings/{meeting_id}/start", json={}).status_code == 202
+    wait_for_activity(client, meeting_id, "completed")
+    original_append = MeetingRepository.append_event
+    fail_audit = True
+
+    def fail_goal_audit(self, target_meeting_id, event):
+        if fail_audit and event.get("interaction_type") == "meeting-goal-changed":
+            raise OSError("simulated audit failure")
+        return original_append(self, target_meeting_id, event)
+
+    monkeypatch.setattr(MeetingRepository, "append_event", fail_goal_audit)
+    payload = {
+        "expected_revision": 0,
+        "title": "新名稱",
+        "goal": "新目標",
+        "case_type": None,
+        "scene": "meeting-room",
+        "participant_models": {
+            "Blue": "mock-fast",
+            "Red": "mock-fast",
+            "Judge": "mock-fast",
+        },
+    }
+    failed = client.put(f"/meetings/{meeting_id}/settings", json=payload)
+    still_old = client.get(f"/meetings/{meeting_id}").json()
+    blocked = client.put(
+        f"/meetings/{meeting_id}/tags", json={"tags": ["must-not-pass"]}
+    )
+    fail_audit = False
+    recovered = client.put(f"/meetings/{meeting_id}/settings", json=payload)
+
+    assert failed.status_code == 409
+    assert (still_old["title"], still_old["goal"], still_old["settings_revision"]) == (
+        "原名稱",
+        "原目標",
+        0,
+    )
+    assert blocked.status_code == 409
+    assert recovered.status_code == 200
+    assert recovered.json()["settings_revision"] == 1
+
+
+def test_atomic_settings_finalize_failure_is_reconciled_before_next_transition(
+    tmp_path: Path, monkeypatch
+) -> None:
+    client = TestClient(create_test_app(tmp_path), raise_server_exceptions=False)
+    meeting_id = client.post(
+        "/meetings", json={"title": "原名稱", "goal": "原目標"}
+    ).json()["meeting_id"]
+    assert client.post(f"/meetings/{meeting_id}/start", json={}).status_code == 202
+    wait_for_activity(client, meeting_id, "completed")
+    original_update = MeetingMetadataStore.update
+    fail_finalize = True
+
+    def fail_settings_finalize(self, target_meeting_id, transform):
+        nonlocal fail_finalize
+        current = self.get(target_meeting_id)
+        projected = transform(current)
+        if (
+            fail_finalize
+            and current.get("pending_meeting_settings")
+            and not projected.get("pending_meeting_settings")
+        ):
+            raise OSError("simulated settings finalize failure")
+        return original_update(self, target_meeting_id, transform)
+
+    monkeypatch.setattr(MeetingMetadataStore, "update", fail_settings_finalize)
+    failed = client.put(
+        f"/meetings/{meeting_id}/settings",
+        json={
+            "expected_revision": 0,
+            "title": "新名稱",
+            "goal": "新目標",
+            "case_type": None,
+            "scene": "meeting-room",
+            "participant_models": {
+                "Blue": "mock-fast",
+                "Red": "mock-fast",
+                "Judge": "mock-fast",
+            },
+        },
+    )
+    before_recovery = client.get(f"/meetings/{meeting_id}").json()
+    fail_finalize = False
+    reconciled = client.put(
+        f"/meetings/{meeting_id}/tags", json={"tags": ["after-recovery"]}
+    )
+
+    assert failed.status_code == 409
+    assert before_recovery["title"] == "原名稱"
+    assert reconciled.status_code == 200
+    assert reconciled.json()["title"] == "新名稱"
+    assert reconciled.json()["settings_revision"] == 1
+    audits = [
+        event
+        for event in client.get(f"/meetings/{meeting_id}").json()["events"]
+        if event.get("interaction_type") == "meeting-goal-changed"
+    ]
+    assert len(audits) == 1
+
+
 def test_case_file_limits_endpoint_reports_environment_overrides(
     tmp_path: Path,
     monkeypatch,
@@ -4949,8 +5149,8 @@ def test_case_type_change_metadata_failure_reconciles_completed_marker(
         projected = transform(current)
         if (
             fail_finalize
-            and current.get("pending_deliberation_restart", {}).get("case_type_change")
-            and not projected.get("pending_deliberation_restart")
+            and current.get("pending_meeting_settings")
+            and not projected.get("pending_meeting_settings")
         ):
             raise OSError("simulated case-type metadata finalize failure")
         return original_update(self, target_meeting_id, transform)
@@ -4986,7 +5186,7 @@ def test_case_type_change_pending_metadata_failure_writes_no_marker_and_is_retry
         nonlocal fail_pending
         current = self.get(target_meeting_id)
         projected = transform(current)
-        if fail_pending and projected.get("pending_deliberation_restart"):
+        if fail_pending and projected.get("pending_meeting_settings"):
             raise OSError("simulated pending metadata failure")
         return original_update(self, target_meeting_id, transform)
 

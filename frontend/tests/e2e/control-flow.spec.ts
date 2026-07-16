@@ -420,14 +420,14 @@ test('Settings rolls back a rejected participant assignment and shows the server
 
   await page.getByTestId('blue-model-select').selectOption('mock-slow')
   await page.getByTestId('save-meeting-settings-button').click()
-  await expect(page.getByRole('alert')).toContainText('settings failed: 500')
+  await expect(page.getByRole('alert')).toContainText('Assignment save failed')
   await expect(page.getByTestId('blue-model-select')).toHaveValue('mock-slow')
   page.once('dialog', (dialog) => dialog.accept())
   await closeSettings(page)
   await expect(page.getByTestId('seat-model-label-blue')).toHaveText('Mock · mock-fast')
 })
 
-test('a delayed assignment save cannot overwrite a meeting selected while it was pending', async ({
+test('a delayed assignment save blocks leaving and remains scoped to its meeting', async ({
   page,
 }) => {
   await page.goto('/')
@@ -461,11 +461,19 @@ test('a delayed assignment save cannot overwrite a meeting selected while it was
   await page.getByTestId('blue-model-select').selectOption('mock-slow')
   await page.getByTestId('save-meeting-settings-button').click()
   await expect.poll(() => successIntercepted).toBe(true)
-  page.once('dialog', (dialog) => dialog.accept())
-  await closeSettings(page)
-  await openTopic(topicB)
+  let savingAlertMessage = ''
+  page.once('dialog', async (dialog) => {
+    savingAlertMessage = dialog.message()
+    await dialog.accept()
+  })
+  await page.getByTestId('meeting-settings-close-button').click()
+  expect(savingAlertMessage).toContain('正在儲存')
+  await expect(page.getByTestId('meeting-settings-drawer')).toBeVisible()
+
   releaseSuccess()
   await successResponse
+  await expect(page.getByTestId('seat-model-label-blue')).toContainText('mock-slow')
+  await openTopic(topicB)
 
   await expect(page.getByTestId('meeting-title-display')).toHaveText(topicB)
   await expect(page.getByTestId('seat-model-label-blue')).toContainText('mock-broken')
@@ -2317,7 +2325,7 @@ test('courtroom retry rejection rolls back pending roles and never reports false
 
   await page.getByTestId('retry-courtroom-issue-issue-1').click()
 
-  await expect(page.getByTestId('app-error')).toContainText('failed: 409')
+  await expect(page.getByTestId('app-error')).toContainText('重試狀態已改變，請重新操作。')
   await expect(failure).toContainText('主張方陳述執行失敗，請重試')
   await expect(page.getByTestId('retry-courtroom-issue-issue-1')).toBeEnabled()
   await expect(page.getByTestId('courtroom-workspace-feedback')).toHaveCount(0)
@@ -2589,6 +2597,7 @@ test('ordinary restart archives the prior epoch without duplicating evidence', a
   await expect(page.getByTestId('transcript-preview')).toContainText('Mock response')
   await expect(page.getByText('正在查看封存輪次。')).toBeVisible()
   await expect(page.getByRole('link', { name: '下載 Markdown' })).toHaveAttribute('href', new RegExp(`epoch=${archivedEpoch}`))
+  await expect(page.getByTestId('download-all-epochs')).toHaveAttribute('href', /epoch=all/)
   await page.getByTestId('records-close-button').click()
 
   await page.getByTestId('case-materials-button').click()
@@ -2606,13 +2615,21 @@ test('versioned evidence and promoted notes trigger a visible restart gate', asy
   await page.getByTestId('chair-message-input').fill('跨輪都應知道的重要事實')
   await page.getByTestId('send-chair-message-button').click()
   await page.getByTestId('records-button').click()
-  page.once('dialog', (dialog) => dialog.accept('固定案件事實'))
+  await page.getByTestId('promote-case-note-button').last().click()
+  const promotionForm = page.getByTestId('promote-case-note-form')
+  await promotionForm.getByTestId('promote-case-note-title').fill('固定案件事實')
+  await promotionForm.locator('input[type="checkbox"]').last().uncheck()
   const promoted = page.waitForResponse((response) => response.url().includes('/promote-to-note'))
-  await page.getByTestId('promote-case-note-button').click()
+  await promotionForm.getByTestId('confirm-promote-case-note').click()
   await promoted
   await page.getByTestId('records-close-button').click()
   await page.getByTestId('case-materials-button').click()
   await expect(page.getByTestId('case-note-card')).toContainText('固定案件事實')
+  await expect(page.getByTestId('case-note-card')).toContainText('可見：藍軍、紅軍')
+  await page.getByTestId('deactivate-note-button').click()
+  await expect(page.getByTestId('case-note-card')).toContainText('已停用')
+  await page.getByTestId('reactivate-note-button').click()
+  await expect(page.getByTestId('case-note-card')).toContainText('使用中')
   await page.getByTestId('case-materials-close-button').click()
 
   await page.getByTestId('start-meeting-button').click()
@@ -2623,6 +2640,10 @@ test('versioned evidence and promoted notes trigger a visible restart gate', asy
   await form.getByLabel('內容').fill('補充後的第二版內容')
   await form.getByRole('button', { name: '保存新版本' }).click()
   await expect(page.getByTestId('case-evidence-card')).toContainText('v2')
+  await page.getByTestId('deactivate-evidence-button').click()
+  await expect(page.getByTestId('case-evidence-card')).toContainText('已停用')
+  await page.getByTestId('reactivate-evidence-button').click()
+  await expect(page.getByTestId('case-evidence-card')).toContainText('使用中')
   await expect(page.getByTestId('materials-impact-warning')).toContainText('目前已暫停 AI 與法官判斷')
   await page.getByTestId('case-materials-close-button').click()
 
@@ -2730,6 +2751,125 @@ test('meeting drawers remain usable at 375px and dirty close requires confirmati
     const box = await page.getByTestId('case-materials-drawer').boundingBox()
     return box ? box.x + box.width : Number.POSITIVE_INFINITY
   }).toBeLessThanOrEqual(375)
+  await page.getByTestId('case-materials-close-button').click()
+
+  await createMeetingViaNewCase(page, `E2E narrow courtroom ${Date.now()}`, { modeId: 'courtroom', caseType: 'civil' })
+  await page.getByTestId('add-courtroom-issue-button').click()
+  await page.getByTestId('courtroom-issue-title-0').fill('行動版粘性按鈕爭點')
+  await page.getByTestId('save-courtroom-issues-button').click()
+  await page.getByTestId('confirm-courtroom-issues-button').click()
+  const stickyAction = page.getByTestId('courtroom-sticky-primary-action')
+  await expect(stickyAction).toBeVisible()
+  await expect.poll(async () => {
+    const box = await stickyAction.boundingBox()
+    return box ? box.y + box.height : Number.POSITIVE_INFINITY
+  }).toBeLessThanOrEqual(812)
+})
+
+test('running meeting settings are read-only with an explicit explanation', async ({ page }) => {
+  await page.goto('/')
+  await createMeetingViaNewCase(page, `E2E running settings lock ${Date.now()}`, {
+    modelAssignments: { Blue: 'mock-slow', Red: 'mock-slow', Judge: 'mock-slow' },
+  })
+  await page.getByTestId('start-meeting-button').click()
+  await page.getByTestId('meeting-settings-button').click()
+  await expect(page.getByTestId('meeting-settings-running-notice')).toContainText('完成前無法編輯或儲存')
+  await expect(page.getByTestId('meeting-title-input')).toBeDisabled()
+  await expect(page.getByTestId('meeting-goal-input')).toBeDisabled()
+  await expect(page.getByTestId('scene-select')).toBeDisabled()
+  await expect(page.getByTestId('blue-model-select')).toBeDisabled()
+  await expect(page.getByTestId('save-meeting-settings-button')).toBeDisabled()
+})
+
+test('dirty meeting settings centrally block navigation and a slow save cannot be closed', async ({ page }) => {
+  await page.goto('/')
+  const topic = `E2E guarded settings ${Date.now()}`
+  await createMeetingViaNewCase(page, topic)
+  await page.getByTestId('meeting-settings-button').click()
+  await page.getByTestId('meeting-title-input').fill(`${topic} draft`)
+
+  page.once('dialog', (dialog) => dialog.dismiss())
+  await page.getByTestId('meeting-settings-close-button').click()
+  await expect(page.getByTestId('meeting-settings-drawer')).toBeVisible()
+  await expect(page.getByTestId('meeting-title-input')).toHaveValue(`${topic} draft`)
+
+  await page.route(/\/meetings\/[^/]+\/settings$/, async (route) => {
+    await new Promise((resolve) => setTimeout(resolve, 500))
+    await route.continue()
+  })
+  const saved = page.waitForResponse((response) => response.request().method() === 'PUT' && response.url().endsWith('/settings'))
+  await page.getByTestId('save-meeting-settings-button').click()
+  page.once('dialog', (dialog) => {
+    expect(dialog.type()).toBe('alert')
+    expect(dialog.message()).toContain('正在儲存')
+    void dialog.accept()
+  })
+  await page.getByTestId('meeting-settings-close-button').click()
+  await expect(page.getByTestId('meeting-settings-drawer')).toBeVisible()
+  expect((await saved).ok()).toBe(true)
+  await expect(page.getByTestId('meeting-settings-drawer')).not.toBeVisible({ timeout: 5000 })
+  await expect(page.getByTestId('meeting-title-display')).toHaveText(`${topic} draft`)
+})
+
+test('late records and case-material responses from another meeting are discarded', async ({ page }) => {
+  await page.goto('/')
+  const topicA = `E2E late drawer A ${Date.now()}`
+  const topicB = `E2E late drawer B ${Date.now()}`
+  const meetingAId = await createMeetingViaNewCase(page, topicA, {
+    caseFiles: [{ title: '只屬於 A', content: 'A 案證據', visibleRoles: ['Blue', 'Red', 'Judge'] }],
+  })
+  await createMeetingViaNewCase(page, topicB)
+  await page.getByTestId('past-topics-button').click()
+  await page.getByTestId('meeting-list-item').filter({ hasText: topicA }).locator('.meeting-item').click()
+
+  let releaseMaterials!: () => void
+  const materialsGate = new Promise<void>((resolve) => { releaseMaterials = resolve })
+  await page.route(new RegExp(`/meetings/${meetingAId}/materials$`), async (route) => {
+    const response = await route.fetch()
+    await materialsGate
+    await route.fulfill({ response })
+  })
+  const requestedMaterials = page.waitForRequest((request) => request.url().endsWith(`/meetings/${meetingAId}/materials`))
+  await page.getByTestId('case-materials-button').click()
+  await requestedMaterials
+  await page.getByTestId('case-materials-close-button').click()
+  await page.getByTestId('past-topics-button').click()
+  await page.getByTestId('meeting-list-item').filter({ hasText: topicB }).locator('.meeting-item').click()
+  await page.getByTestId('case-materials-button').click()
+  releaseMaterials()
+  await expect(page.getByTestId('case-evidence-card')).toHaveCount(0)
+  await page.getByTestId('case-materials-close-button').click()
+
+  await page.getByTestId('past-topics-button').click()
+  await page.getByTestId('meeting-list-item').filter({ hasText: topicA }).locator('.meeting-item').click()
+  let releaseHistory!: () => void
+  const historyGate = new Promise<void>((resolve) => { releaseHistory = resolve })
+  await page.route(new RegExp(`/meetings/${meetingAId}/deliberations$`), async (route) => {
+    await historyGate
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        active_epoch_id: 'late-a-2',
+        active_epoch_number: 2,
+        epochs: [
+          { id: 'late-a-1', number: 1, event_count: 3 },
+          { id: 'late-a-2', number: 2, event_count: 0 },
+        ],
+      }),
+    })
+  })
+  const requestedHistory = page.waitForRequest((request) => request.url().endsWith(`/meetings/${meetingAId}/deliberations`))
+  await page.getByTestId('records-button').click()
+  await requestedHistory
+  await page.getByTestId('records-close-button').click()
+  await page.getByTestId('past-topics-button').click()
+  await page.getByTestId('meeting-list-item').filter({ hasText: topicB }).locator('.meeting-item').click()
+  await page.getByTestId('records-button').click()
+  await expect(page.getByTestId('records-epoch-select').locator('option')).toHaveCount(1)
+  releaseHistory()
+  await expect(page.getByTestId('records-epoch-select').locator('option')).toHaveCount(1)
+  await expect(page.getByTestId('step-timeline')).toContainText(topicB)
 })
 
 test('model manager tab supports create, test, edit, and delete for a model config', async ({

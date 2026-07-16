@@ -25,8 +25,7 @@ const {
 } = store
 
 async function selectMeeting(meetingId: string) {
-  await openMeeting(meetingId)
-  emit('close')
+  if (await openMeeting(meetingId)) emit('close')
 }
 </script>
 

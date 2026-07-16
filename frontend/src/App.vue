@@ -14,6 +14,7 @@ import ModeHelpDrawer from './components/ModeHelpDrawer.vue'
 import CourtroomDocketPanel from './components/CourtroomDocketPanel.vue'
 import MeetingSettingsDrawer from './components/MeetingSettingsDrawer.vue'
 import CaseMaterialsDrawer from './components/CaseMaterialsDrawer.vue'
+import { canLeaveMeetingSettings } from './meetingSettingsNavigation'
 
 const store = useCouncil()
 provide(councilKey, store)
@@ -32,6 +33,12 @@ function closeModal() {
   openModal.value = null
 }
 
+function navigateFromMeetingSettings(action: () => void) {
+  if (!canLeaveMeetingSettings()) return
+  meetingSettingsOpen.value = false
+  action()
+}
+
 function onSeatClick(role: CouncilRole | 'Chairman') {
   if (!store.selectedMeeting.value) return
   openRole.value = openRole.value === role ? null : role
@@ -41,13 +48,13 @@ function onSeatClick(role: CouncilRole | 'Chairman') {
 <template>
   <main class="app-shell">
     <TopBar
-      @open-settings="openModal = 'settings'"
+      @open-settings="navigateFromMeetingSettings(() => openModal = 'settings')"
       @open-meeting-settings="meetingSettingsOpen = true"
-      @open-materials="materialsOpen = true"
-      @open-past-topics="openModal = 'past-topics'"
-      @open-new-case="openModal = 'new-case'"
-      @open-records="recordsOpen = true"
-      @open-mode-help="modeHelpOpen = true"
+      @open-materials="navigateFromMeetingSettings(() => materialsOpen = true)"
+      @open-past-topics="navigateFromMeetingSettings(() => openModal = 'past-topics')"
+      @open-new-case="navigateFromMeetingSettings(() => openModal = 'new-case')"
+      @open-records="navigateFromMeetingSettings(() => recordsOpen = true)"
+      @open-mode-help="navigateFromMeetingSettings(() => modeHelpOpen = true)"
     />
 
     <CouncilStage :scene="currentScene" @seat-click="onSeatClick" />

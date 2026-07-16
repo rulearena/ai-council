@@ -24,12 +24,17 @@ const localError = ref('')
 const formKind = ref<'evidence' | 'note'>('evidence')
 const editingId = ref<string | null>(null)
 const form = reactive({ title: '', content: '', visibleRoles: [] as string[] })
+let materialsGeneration = 0
 const participants = computed(() => selectedMeeting.value?.participants ?? [])
 const displayRole = (role: string) => roleDisplayName(activeMode.value, participants.value, role)
 
 watch([() => props.show, () => selectedMeeting.value?.meeting_id], async ([show, id]) => {
-  if (!show) return
-  materials.value = id ? await getCaseMaterials(id) : null
+  const generation = ++materialsGeneration
+  materials.value = null
+  if (!show || !id) return
+  const response = await getCaseMaterials(id)
+  if (generation !== materialsGeneration || selectedMeeting.value?.meeting_id !== id || !props.show) return
+  materials.value = response
   clearForm()
 }, { immediate: true })
 
@@ -59,30 +64,38 @@ async function saveMaterial() {
   if (!meetingId || !materials.value || !form.title.trim() || !form.content.trim() || !form.visibleRoles.length) return
   const payload = { revision: materials.value.revision, title: form.title.trim(), content: form.content.trim(), visible_roles: [...form.visibleRoles] }
   localError.value = ''
+  const generation = ++materialsGeneration
   const ok = await runAction(async () => {
+    let response: CaseMaterials
     if (formKind.value === 'evidence') {
-      materials.value = editingId.value
+      response = editingId.value
         ? await addCaseEvidenceVersion(meetingId, editingId.value, payload)
         : await addCaseEvidence(meetingId, payload)
     } else {
-      materials.value = editingId.value
+      response = editingId.value
         ? await addCaseNoteVersion(meetingId, editingId.value, payload)
         : await addCaseNote(meetingId, payload)
     }
+    if (generation !== materialsGeneration || selectedMeeting.value?.meeting_id !== meetingId || !props.show) return
+    materials.value = response
     await openMeeting(meetingId)
+    if (generation !== materialsGeneration || selectedMeeting.value?.meeting_id !== meetingId || !props.show) return
     clearForm()
   })
-  if (!ok) localError.value = store.error.value
+  if (!ok && generation === materialsGeneration && selectedMeeting.value?.meeting_id === meetingId) localError.value = store.error.value
 }
 
 async function toggle(item: VersionedCaseMaterial, kind: 'evidence' | 'note') {
   const meetingId = selectedMeeting.value?.meeting_id
   if (!meetingId || !materials.value) return
   const active = item.status !== 'active'
+  const generation = ++materialsGeneration
   await runAction(async () => {
-    materials.value = kind === 'evidence'
+    const response = kind === 'evidence'
       ? await setCaseEvidenceActive(meetingId, item.id, materials.value!.revision, active)
       : await setCaseNoteActive(meetingId, item.id, materials.value!.revision, active)
+    if (generation !== materialsGeneration || selectedMeeting.value?.meeting_id !== meetingId || !props.show) return
+    materials.value = response
     await openMeeting(meetingId)
   })
 }
@@ -101,7 +114,7 @@ async function toggle(item: VersionedCaseMaterial, kind: 'evidence' | 'note') {
           <header><strong>{{ item.citation_anchor }} · {{ latest(item).title }}</strong><span>v{{ item.active_version }} · {{ item.status === 'active' ? '使用中' : '已停用' }}</span></header>
           <p>{{ latest(item).content }}</p>
           <small>可見：{{ latest(item).visible_roles.map(displayRole).join('、') }}</small>
-          <div><button type="button" class="btn btn-secondary btn-sm" @click="edit(item, 'evidence')">建立新版本</button><button type="button" class="btn btn-ghost btn-sm" @click="toggle(item, 'evidence')">{{ item.status === 'active' ? '停用' : '重新啟用' }}</button></div>
+          <div><button type="button" class="btn btn-secondary btn-sm" @click="edit(item, 'evidence')">建立新版本</button><button type="button" class="btn btn-ghost btn-sm" :data-testid="item.status === 'active' ? 'deactivate-evidence-button' : 'reactivate-evidence-button'" @click="toggle(item, 'evidence')">{{ item.status === 'active' ? '停用' : '重新啟用' }}</button></div>
         </article>
       </section>
       <section class="materials-section">
@@ -109,7 +122,8 @@ async function toggle(item: VersionedCaseMaterial, kind: 'evidence' | 'note') {
         <article v-for="item in materials.notes" :key="item.id" class="material-card" :data-status="item.status" :data-material-id="item.id" data-testid="case-note-card">
           <header><strong>{{ latest(item).title }}</strong><span>v{{ item.active_version }} · {{ item.status === 'active' ? '使用中' : '已停用' }}</span></header>
           <p>{{ latest(item).content }}</p>
-          <div><button type="button" class="btn btn-secondary btn-sm" @click="edit(item, 'note')">建立新版本</button><button type="button" class="btn btn-ghost btn-sm" @click="toggle(item, 'note')">{{ item.status === 'active' ? '停用' : '重新啟用' }}</button></div>
+          <small>可見：{{ latest(item).visible_roles.map(displayRole).join('、') }}</small>
+          <div><button type="button" class="btn btn-secondary btn-sm" @click="edit(item, 'note')">建立新版本</button><button type="button" class="btn btn-ghost btn-sm" :data-testid="item.status === 'active' ? 'deactivate-note-button' : 'reactivate-note-button'" @click="toggle(item, 'note')">{{ item.status === 'active' ? '停用' : '重新啟用' }}</button></div>
         </article>
       </section>
       <form class="material-form" data-testid="case-material-form" @submit.prevent="saveMaterial">

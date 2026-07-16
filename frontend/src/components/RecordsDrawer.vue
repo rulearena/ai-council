@@ -6,7 +6,7 @@ import RoleSilhouette from './RoleSilhouette.vue'
 import { getDeliberations, getTranscript, promoteMessageToCaseNote, transcriptDownloadUrl } from '../api'
 import type { Deliberations, MeetingEvent } from '../api'
 import { nextHistorySelection } from '../meetingWorkspace'
-import { eventRoleDisplayName, statusDisplayLabel, stepDisplayLabel } from '../presentation'
+import { eventRoleDisplayName, roleDisplayName, statusDisplayLabel, stepDisplayLabel } from '../presentation'
 
 const props = defineProps<{ show: boolean }>()
 defineEmits<{ close: [] }>()
@@ -35,11 +35,16 @@ const deliberations = ref<Deliberations | null>(null)
 const selectedEpochId = ref('')
 const historyTranscript = ref('')
 let historyMeetingId: string | null = null
+let historyGeneration = 0
+const promotionEvent = ref<MeetingEvent | null>(null)
+const promotionTitle = ref('')
+const promotionVisibleRoles = ref<string[]>([])
 const browsingCurrent = computed(() => selectedEpochId.value === deliberations.value?.active_epoch_id)
 const shownTranscript = computed(() => browsingCurrent.value ? transcript.value : historyTranscript.value)
 const participants = computed(() => selectedMeeting.value?.participants ?? [])
 const displayRole = (event: MeetingEvent) => eventRoleDisplayName(activeMode.value, participants.value, event)
 const displayStep = (event: MeetingEvent) => stepDisplayLabel(activeMode.value, participants.value, event)
+const displayParticipantRole = (role: string) => roleDisplayName(activeMode.value, participants.value, role)
 
 const diagnosticKeys = [
   'event_id',
@@ -101,9 +106,15 @@ function copyDiagnosticStatus(event: MeetingEvent) {
 }
 
 watch([() => props.show, () => selectedMeeting.value?.meeting_id], async ([show, meetingId]) => {
+  const generation = ++historyGeneration
+  deliberations.value = null
+  historyTranscript.value = ''
+  promotionEvent.value = null
   if (!show || !meetingId) return
   const previousMeetingId = historyMeetingId
-  deliberations.value = await getDeliberations(meetingId)
+  const response = await getDeliberations(meetingId)
+  if (generation !== historyGeneration || selectedMeeting.value?.meeting_id !== meetingId || !props.show) return
+  deliberations.value = response
   selectedEpochId.value = nextHistorySelection(
     previousMeetingId,
     meetingId,
@@ -115,28 +126,40 @@ watch([() => props.show, () => selectedMeeting.value?.meeting_id], async ([show,
 
 watch(selectedEpochId, async (epochId) => {
   const meetingId = selectedMeeting.value?.meeting_id
+  const generation = ++historyGeneration
   if (!meetingId || !epochId || epochId === deliberations.value?.active_epoch_id) {
     historyTranscript.value = ''
     return
   }
-  historyTranscript.value = await getTranscript(meetingId, epochId)
+  const response = await getTranscript(meetingId, epochId)
+  if (generation !== historyGeneration || selectedMeeting.value?.meeting_id !== meetingId || selectedEpochId.value !== epochId || !props.show) return
+  historyTranscript.value = response
   activeTab.value = 'transcript'
 })
 
-async function promoteToCaseNote(event: MeetingEvent) {
+function beginPromotion(event: MeetingEvent) {
+  promotionEvent.value = event
+  promotionTitle.value = event.content?.slice(0, 24) || '主席備註'
+  promotionVisibleRoles.value = participants.value.map((participant) => participant.role_id)
+}
+
+async function promoteToCaseNote() {
   const meeting = selectedMeeting.value
-  if (!meeting) return
-  const title = window.prompt('案件備註標題：', event.content?.slice(0, 24) || '主席備註')
-  if (!title?.trim()) return
+  const event = promotionEvent.value
+  if (!meeting || !event || !promotionTitle.value.trim() || !promotionVisibleRoles.value.length) return
+  const meetingId = meeting.meeting_id
+  const generation = ++historyGeneration
   await runAction(async () => {
     await promoteMessageToCaseNote(
-      meeting.meeting_id,
+      meetingId,
       event.event_id,
       meeting.case_materials?.revision ?? 0,
-      title.trim(),
-      meeting.participants.map((participant) => participant.role_id),
+      promotionTitle.value.trim(),
+      [...promotionVisibleRoles.value],
     )
-    await openMeeting(meeting.meeting_id)
+    if (generation !== historyGeneration || selectedMeeting.value?.meeting_id !== meetingId) return
+    await openMeeting(meetingId)
+    if (generation === historyGeneration && selectedMeeting.value?.meeting_id === meetingId) promotionEvent.value = null
   })
 }
 </script>
@@ -149,6 +172,12 @@ async function promoteToCaseNote(event: MeetingEvent) {
       </select>
     </label>
     <p v-if="!browsingCurrent" class="archive-notice">正在查看封存輪次。這裡只能閱讀或下載，不會替換目前會議，也不能編輯或重試。</p>
+    <form v-if="promotionEvent" class="material-form" data-testid="promote-case-note-form" @submit.prevent="promoteToCaseNote">
+      <h3>轉為案件備註</h3>
+      <label>備註標題<input v-model="promotionTitle" data-testid="promote-case-note-title" :disabled="loading" /></label>
+      <fieldset><legend>可見角色</legend><label v-for="participant in participants" :key="participant.role_id"><input v-model="promotionVisibleRoles" type="checkbox" :value="participant.role_id" :disabled="loading" />{{ displayParticipantRole(participant.role_id) }}</label></fieldset>
+      <div><button type="submit" class="btn btn-primary" data-testid="confirm-promote-case-note" :disabled="loading || !promotionTitle.trim() || !promotionVisibleRoles.length">建立備註</button><button type="button" class="btn btn-secondary" :disabled="loading" @click="promotionEvent = null">取消</button></div>
+    </form>
     <div class="records-tabs">
       <button
         type="button"
@@ -223,7 +252,7 @@ async function promoteToCaseNote(event: MeetingEvent) {
           class="btn btn-secondary btn-sm"
           data-testid="promote-case-note-button"
           :disabled="loading || isTerminalMeeting"
-          @click="promoteToCaseNote(event)"
+          @click="beginPromotion(event)"
         >轉為案件備註</button>
         <button
           v-if="event.role === 'Human' && event.step_id === 'human-message' && !event.corrects_event_id"
@@ -303,6 +332,14 @@ async function promoteToCaseNote(event: MeetingEvent) {
         >
           下載 Markdown
         </a>
+        <a
+          v-if="selectedMeeting"
+          class="btn btn-secondary btn-sm"
+          data-testid="download-all-epochs"
+          :href="transcriptDownloadUrl(selectedMeeting.meeting_id, 'all')"
+          target="_blank"
+          rel="noreferrer"
+        >下載全部輪次</a>
       </div>
       <div v-if="!shownTranscript" class="empty-state">
         <p>尚無逐字稿</p>

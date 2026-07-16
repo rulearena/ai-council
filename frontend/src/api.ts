@@ -657,7 +657,7 @@ export async function retryStep(
 
 export async function getTranscript(meetingId: string, epoch = 'current'): Promise<string> {
   const response = await fetch(`${API_BASE}/meetings/${meetingId}/transcript.md?epoch=${encodeURIComponent(epoch)}`)
-  if (!response.ok) throw new Error(`Transcript request failed: ${response.status}`)
+  if (!response.ok) throw new ApiError(`Transcript request failed: ${response.status}`, response.status, await readErrorDetail(response))
   return response.text()
 }
 

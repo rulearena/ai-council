@@ -5,6 +5,7 @@ import roleJudgeIcon from '../assets/roles/judge.png'
 import { DEFAULT_MODE_ID, getModeById, refreshModeCatalog, type ModeDefinition, type ModeRoleDefinition } from '../modes'
 import { applyModeScene } from '../scenes'
 import { roleDisplayName } from '../presentation'
+import { canLeaveMeetingSettings } from '../meetingSettingsNavigation'
 import {
   chairmanActionBlockReason,
   chairmanActionOptions,
@@ -585,6 +586,7 @@ export function useCouncil() {
     // requestSelectedRoleSequence / retrySelectedStep call openMeeting on the SAME meeting
     // right after enqueuing roles, so clearing unconditionally would erase what was just pushed.
     if (meetingId !== selectedMeeting.value?.meeting_id) {
+      if (!canLeaveMeetingSettings()) return false
       pendingRoles.value = []
       meetingInfoCopied.value = false
       chairmanActionFeedback.value = ''
@@ -601,6 +603,7 @@ export function useCouncil() {
     selectedEvent.value = selectedMeeting.value.events?.at(-1) ?? null
     transcript.value = await getTranscript(meetingId)
     connectMeetingEvents(meetingId)
+    return true
   }
 
   async function updateSelectedMeetingDetails(nextTitle: string, nextGoal: string) {
@@ -1133,7 +1136,9 @@ export function useCouncil() {
       await action()
       return true
     } catch (caught) {
-      error.value = caught instanceof Error ? caught.message : String(caught)
+      error.value = caught instanceof ApiError && typeof caught.detail === 'string'
+        ? caught.detail
+        : caught instanceof Error ? caught.message : String(caught)
       return false
     } finally {
       loading.value = false
