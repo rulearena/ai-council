@@ -2,7 +2,7 @@
 import { computed, inject, ref, watch } from 'vue'
 import { activeMode, councilKey, formatDateTime, sequencePresets } from '../composables/useCouncil'
 import { nextMeetingMigrationDraft } from '../meetingMigration'
-import { roleDisplayName, statusDisplayLabel, stepDisplayLabel } from '../presentation'
+import { roleDisplayName, stepDisplayLabel } from '../presentation'
 
 const store = inject(councilKey)!
 const {
@@ -21,7 +21,7 @@ const {
   selectedSequencePresetId,
   error,
   operationStatus,
-  operationStatusLabel,
+  operationStatusText,
   failedRole,
   currentStepProgress,
   submitChairmanAction,
@@ -166,7 +166,7 @@ const canSubmitChairman = computed(() => {
     </section>
 
     <div class="action-bar-status" data-testid="operation-status">
-      <span><i class="status-dot" :data-status="operationStatus" aria-hidden="true"></i>狀態：{{ operationStatus === operationStatusLabel ? statusDisplayLabel(operationStatus) : operationStatusLabel }}</span>
+      <span><i class="status-dot" :data-status="operationStatus" aria-hidden="true"></i>狀態：{{ operationStatusText }}</span>
       <span v-if="lastStepLabel">最後步驟：{{ lastStepLabel }}</span>
       <span v-if="selectedMeeting">更新：{{ formatDateTime(selectedMeeting.updated_at) }}</span>
     </div>

@@ -288,6 +288,10 @@ test('legacy courtroom is gated by issue setup and rejected generic paths preser
   await expect(page.getByTestId('step-timeline')).toContainText('法官判決')
   await page.getByTestId('records-close-button').click()
 
+  await page.getByTestId('advanced-options-button').click()
+  await page.getByTestId('close-meeting-button').click()
+  await expect(page.getByTestId('operation-status')).toContainText('狀態：已結案')
+
   await page.getByTestId('past-topics-button').click()
   page.once('dialog', (dialog) => dialog.accept())
   await page.getByTestId('meeting-list-item').filter({ hasText: title }).getByTestId('delete-meeting-button').click()
