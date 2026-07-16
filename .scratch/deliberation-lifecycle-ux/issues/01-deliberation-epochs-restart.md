@@ -1,6 +1,6 @@
 # 01 — 審議輪次與重開
 
-Status: ready-for-agent
+Status: implemented / awaiting acceptance
 
 Blocked by: none
 

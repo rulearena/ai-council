@@ -1,6 +1,6 @@
 # 02 — 版本化案卷、證據與案件備註
 
-Status: ready-for-agent
+Status: implemented / awaiting acceptance
 
 Blocked by: 01-deliberation-epochs-restart
 

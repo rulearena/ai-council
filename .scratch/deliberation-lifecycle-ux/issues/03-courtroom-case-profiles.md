@@ -1,6 +1,6 @@
 # 03 — 民刑事案件 profile 與法院語意
 
-Status: ready-for-agent
+Status: implemented / awaiting acceptance
 
 Blocked by: 01-deliberation-epochs-restart, 02-versioned-case-materials
 

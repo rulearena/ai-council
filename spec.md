@@ -573,7 +573,7 @@ config/models.yaml.example
 
     Courtroom 新 meeting 建立時必須由使用者選擇 `civil` 或 `criminal`，舊 courtroom meeting 在下次執行前也必須明示選擇，不得由 AI 、title 或 goal 自動推論。案件類型在爭點確認前可改，變更會使未確認 docket 失效；確認後與 goal 一併鎖定，只有「重新整理爭點」才重新開放。internal role IDs 維持穩定，但民事顯示為原告代理人／被告代理人／法官，刑事顯示為檢察官／辯護人／法官。兩類爭點草稿都由法官模型中立產生、主席確認；固定三段攻防為主張方陳述 → 答辯方答辯 → 主張方限縮反駁，第三段不得新增主張或證據，之後必須停下，由主席決定是否追問答辯方，並手動按「請法官判斷此爭點」；不可自動判斷。單一爭點的產出稱「法官對此爭點的判斷」，只有全案結果稱「最終判決」；結果文案依民事／刑事投影，後端保持一致的中立 issue outcome IDs。最終判決採 case-specific versioned schema：刑事只判斷罪責與量刑考量，不產生具體刑期、罰金或刑罰；民事只能使用案卷中已有金額與計算基礎，每個金額必須有非空證據引用，證據不足時不得自行估算。
 
-    UI 必須把 scope 拆清：全域「系統設定」只管 Provider、模型設定／健康與「進階功能 → 顯示事件原始資料」（預設關閉、不影響 AI）；meeting 次導覽提供「會議設定」、「案卷與證據（數量）」、「議事紀錄」，「流程操作」只放重開、重新整理爭點、序列、取消、結案與重新開啟。會議設定使用右側 drawer，統一編輯 title、goal、case type、scene 與完整角色模型，全部先留在 local draft，最後以單一原子儲存 interface 一次驗證與寫入；執行中禁止，dirty close 要求確認，鎖定欄位顯示原因。等待法官時，目前爭點卡必須顯示「攻防已完成，等待主席送交法官；不會自動判斷」與 sticky 主按鈕「請法官判斷此爭點」。設定、重開、證據變更、歷史輪次、民刑事全流程、375px layout 及 reload/switch isolation 需有 HTTP、frontend unit、Playwright 與真瀏覽器覆蓋。（2026-07-15 grill-me 完成並經 Human Owner 整批核准）
+    UI 必須把 scope 拆清：全域「系統設定」只管 Provider、模型設定／健康與「進階功能 → 顯示事件原始資料」（預設關閉、不影響 AI）；meeting 次導覽提供「會議設定」、「案卷與證據（數量）」、「議事紀錄」，「流程操作」只放重開、重新整理爭點、序列、取消、結案與重新開啟。會議設定使用右側 drawer，統一編輯 title、goal、case type、scene 與完整角色模型，全部先留在 local draft，最後以單一原子儲存 interface 一次驗證與寫入；執行中禁止，dirty close 要求確認，鎖定欄位顯示原因。等待法官時，目前爭點卡必須顯示「攻防已完成，等待主席送交法官；不會自動判斷」與 sticky 主按鈕「請法官判斷此爭點」。設定、重開、證據變更、歷史輪次、民刑事全流程、375px layout 及 reload/switch isolation 需有 HTTP、frontend unit、Playwright 與真瀏覽器覆蓋。（2026-07-15 grill-me 完成並經 Human Owner 整批核准；已完成 2026-07-16，`implemented / awaiting acceptance`）
 
 ## 16. 會議模式系統（Mode System）設計
 

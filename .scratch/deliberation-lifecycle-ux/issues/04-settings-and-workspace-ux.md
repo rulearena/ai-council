@@ -1,6 +1,6 @@
 # 04 — 會議工作區資訊架構與整合體驗
 
-Status: ready-for-agent
+Status: implemented / awaiting acceptance
 
 Blocked by: 01-deliberation-epochs-restart, 02-versioned-case-materials, 03-courtroom-case-profiles
 
