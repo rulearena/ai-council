@@ -13,6 +13,10 @@ from ai_council.meetings.legal_semantics import (
     parse_money_expression,
 )
 
+_INVALID_EVIDENCE_ENVELOPE = (
+    "Civil verdict received an invalid structured evidence envelope"
+)
+
 
 class CourtroomCaseProfileError(ValueError):
     """Raised when a courtroom meeting has no usable explicit case type."""
@@ -115,10 +119,17 @@ class CourtroomCaseProfile:
             if contains_concrete_penalty(parsed):
                 raise ValueError("Criminal verdict must not state a concrete penalty")
             return
+        referenced_anchors = set(re.findall(r"\[證物[^\]]+\]", visible_text))
         evidence_by_anchor = _judge_evidence_by_anchor(inputs)
+        if evidence_by_anchor is None:
+            if referenced_anchors or _structured_money_values(parsed):
+                raise ValueError(
+                    "Civil verdict evidence and money are not supported without "
+                    "structured evidence"
+                )
+            return
         judge_evidence = "\n".join(evidence_by_anchor.values())
         visible_anchors = set(evidence_by_anchor)
-        referenced_anchors = set(re.findall(r"\[證物[^\]]+\]", visible_text))
         if not referenced_anchors.issubset(visible_anchors):
             raise ValueError("Civil verdict cites unknown or invisible evidence")
         claims = parsed.get("claims")
@@ -193,67 +204,36 @@ def _structured_money_values(value: object) -> set[tuple[str, Decimal]]:
 
 def _judge_evidence_by_anchor(
     inputs: dict[str, object] | None,
-) -> dict[str, str]:
+) -> dict[str, str] | None:
     structured_by_role = (inputs or {}).get(CASE_EVIDENCE_BY_ROLE_INPUT)
-    if structured_by_role is not None:
-        if not isinstance(structured_by_role, dict):
-            raise ValueError(
-                "Civil verdict received an invalid structured evidence envelope"
-            )
-        blocks = structured_by_role.get("Judge", [])
-        if not isinstance(blocks, list):
-            raise ValueError(
-                "Civil verdict received an invalid structured evidence envelope"
-            )
-        evidence: dict[str, str] = {}
-        for block in blocks:
-            if not isinstance(block, dict):
-                raise ValueError(
-                    "Civil verdict received an invalid structured evidence envelope"
-                )
-            anchor = block.get("citation_anchor")
-            evidence_id = block.get("id")
-            version = block.get("version")
-            content = block.get("content")
-            if (
-                not isinstance(anchor, str)
-                or re.fullmatch(r"\[證物[^\[\]\n]+\]", anchor) is None
-                or not isinstance(evidence_id, str)
-                or not evidence_id.strip()
-                or not isinstance(version, int)
-                or isinstance(version, bool)
-                or version < 1
-                or not isinstance(content, str)
-                or anchor in evidence
-            ):
-                raise ValueError(
-                    "Civil verdict received an invalid structured evidence envelope"
-                )
-            evidence[anchor] = content
-        return evidence
-
-    rendered_by_role = (inputs or {}).get("__case_files_by_role")
-    rendered = (
-        str(rendered_by_role.get("Judge", ""))
-        if isinstance(rendered_by_role, dict)
-        else ""
-    )
-    headings = list(
-        re.finditer(
-            r"^### (\[證物[^\[\]\n]+\])(?: [^\n]*)?\n",
-            rendered,
-            re.MULTILINE,
-        )
-    )
-    evidence = {}
-    for index, heading in enumerate(headings):
-        anchor = heading.group(1)
-        if anchor in evidence:
-            raise ValueError(
-                "Civil verdict received ambiguous legacy evidence headings"
-            )
-        end = headings[index + 1].start() if index + 1 < len(headings) else len(rendered)
-        evidence[anchor] = rendered[heading.end():end]
+    if structured_by_role is None:
+        return None
+    if not isinstance(structured_by_role, dict):
+        raise ValueError(_INVALID_EVIDENCE_ENVELOPE)
+    blocks = structured_by_role.get("Judge", [])
+    if not isinstance(blocks, list):
+        raise ValueError(_INVALID_EVIDENCE_ENVELOPE)
+    evidence: dict[str, str] = {}
+    for block in blocks:
+        if not isinstance(block, dict):
+            raise ValueError(_INVALID_EVIDENCE_ENVELOPE)
+        anchor = block.get("citation_anchor")
+        evidence_id = block.get("id")
+        version = block.get("version")
+        content = block.get("content")
+        if (
+            not isinstance(anchor, str)
+            or re.fullmatch(r"\[證物[^\[\]\n]+\]", anchor) is None
+            or not isinstance(evidence_id, str)
+            or not evidence_id.strip()
+            or not isinstance(version, int)
+            or isinstance(version, bool)
+            or version < 1
+            or not isinstance(content, str)
+            or anchor in evidence
+        ):
+            raise ValueError(_INVALID_EVIDENCE_ENVELOPE)
+        evidence[anchor] = content
     return evidence
 
 

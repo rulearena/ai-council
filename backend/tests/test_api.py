@@ -4550,7 +4550,7 @@ def test_case_files_reach_only_visible_role_prompts(tmp_path: Path) -> None:
         assert "不可假造不存在的證物錨點" in prompt
 
 
-def test_civil_final_and_retry_ground_money_in_structured_visible_evidence(
+def test_api_projects_legacy_case_files_to_structured_evidence_for_final_and_retry(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -4601,6 +4601,10 @@ def test_civil_final_and_retry_ground_money_in_structured_visible_evidence(
             ],
         },
     ).json()["meeting_id"]
+    assert isinstance(
+        MeetingRepository(tmp_path / "data").read_case_materials_raw(meeting_id),
+        list,
+    )
     run_single_courtroom_issue(client, meeting_id, "損害金額")
 
     assert client.post(
