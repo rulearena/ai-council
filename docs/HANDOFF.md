@@ -22,7 +22,7 @@
 | Provider & Model UX | `dad0410`–`9dd4162` | Anthropic/Gemini discovery、可搜尋 exact model、Claude/Codex/AGY CLI presets、測試 loading/slow/stale-safe feedback 與 health result ordering（實作計畫：`docs/plans/2026-07-14-provider-model-ux.md`） |
 | Meeting UX Contract | `f6c3499`–`c18cf21` | `title`／AI `goal` 分離、舊 meeting 明示遷移 gate、集中式繁中 presentation、title + ID copy 與可追溯定向角色追問（實作計畫：`docs/plans/2026-07-14-meeting-ux-contract.md`） |
 | Chairman & Courtroom Issue Flow | `2bb78af`–`15867f4` | 統一主席 composer、title/goal 編輯與鎖定、精確主 CTA、逐一爭點攻防／裁定／最終判決、legacy courtroom gate 與 per-meeting transition coordinator（實作計畫：`docs/plans/2026-07-14-chairman-courtroom-flow.md`） |
-| Deliberation Lifecycle & Courtroom Workspace | `e37d199`–`0bd4692` | append-only 審議輪次與三種法院重開、版本化證據／案件備註、民刑事 case profile 與安全 final schema、原子 meeting settings、歷史案卷與 responsive workspace（實作計畫：`docs/plans/2026-07-15-deliberation-lifecycle-ux.md`） |
+| Deliberation Lifecycle & Courtroom Workspace | `3551665` | append-only 審議輪次與三種法院重開、版本化證據／案件備註、民刑事 case profile 與安全 final schema、原子 meeting settings、歷史案卷與 responsive workspace（實作計畫：`docs/plans/2026-07-15-deliberation-lifecycle-ux.md`） |
 
 **目前驗收基線（任何改動後不得低於此）**：後端 `pytest` **589 passed**；frontend unit **45 passed**；前端 `npm run build` 綠；Chromium e2e **90 passed**。
 
@@ -92,7 +92,7 @@ Backlog 88「審議生命週期、案卷版本與民刑事法院體驗重整」�
     <主repo>/backend/.venv/bin/python -c 'import os; from pathlib import Path; import uvicorn; from ai_council.api import create_app; app=create_app(data_dir=Path(os.environ["AI_COUNCIL_DATA_DIR"]), model_config_path=Path(os.environ["AI_COUNCIL_MODEL_CONFIG_PATH"]), modes_config_path=Path(os.environ["AI_COUNCIL_MODES_CONFIG_PATH"]), prompt_dir=Path(os.environ["AI_COUNCIL_PROMPT_DIR"]), start_model_health_checks=False); uvicorn.run(app, host="127.0.0.1", port=8123)' &
   cd ../frontend
   VITE_API_BASE_URL=http://127.0.0.1:8123 npx vite --port 3123 &
-  E2E_BASE_URL=http://127.0.0.1:3123 E2E_DATA_DIR="$DATA/data" \
+  E2E_BASE_URL=http://127.0.0.1:3123 E2E_API_BASE_URL=http://127.0.0.1:8123 E2E_DATA_DIR="$DATA/data" \
     PLAYWRIGHT_BROWSERS_PATH=<主repo>/frontend/.cache/ms-playwright npx playwright test
   # 停止自起服務後，回到 repo root 清理：rm -rf .scratch/e2e-runtime
   ```
