@@ -15,6 +15,8 @@ export type CourtroomIssueProjection = {
 export type CourtroomProjection = {
   case_type?: 'civil' | 'criminal' | null
   status?: string
+  requires_case_type?: boolean
+  final_status?: string
   available_actions: string[]
   current_issue_id: string | null
   issues: CourtroomIssueProjection[]
@@ -92,14 +94,11 @@ export function projectCourtroomPrimaryAction(
   const actions = new Set(courtroom.available_actions)
   const issue = pendingCourtroomIssue(courtroom)
   if (actions.has('start-issue') && issue) {
-    const proponent = courtroom.case_type === 'civil' ? '原告代理人' : '檢察官'
     const hasRuled = courtroom.issues.some((candidate) => candidate.status === 'ruled')
     return {
       kind: 'courtroom-arguments',
       issueId: issue.id,
-      label: hasRuled
-        ? `進入下一爭點：${issue.title}（下一位是${proponent}）`
-        : `開始此爭點：${issue.title}（下一位是${proponent}）`,
+      label: hasRuled ? '進入下一爭點' : '開始爭點攻防',
       disabled: false,
     }
   }
@@ -107,14 +106,14 @@ export function projectCourtroomPrimaryAction(
     return {
       kind: 'courtroom-ruling',
       issueId: issue.id,
-      label: `請法官判斷此爭點：${issue.title}（下一位是法官）`,
+      label: '送交法官判斷',
       disabled: false,
     }
   }
   if (actions.has('final-verdict')) {
     return {
       kind: 'courtroom-final',
-      label: '請法官作成最終判決',
+      label: '作成最終判決',
       disabled: false,
     }
   }
@@ -133,6 +132,22 @@ export function projectCourtroomPrimaryAction(
   }
 }
 
+export function projectCourtroomWorkflowStatus(courtroom: CourtroomProjection): string {
+  if (courtroom.requires_case_type) return '待補案件設定'
+  if (courtroom.status !== 'confirmed') return '待主席確認爭點'
+  if (courtroom.final_status === 'completed') return '全案審理完成'
+  const actions = new Set(courtroom.available_actions)
+  if (actions.has('submit-ruling')) return '攻防完成，待主席送交法官'
+  if (actions.has('final-verdict')) return '待主席作成最終判決'
+  if (actions.has('retry-failed-step')) return '執行失敗，待主席重試'
+  if (actions.has('start-issue')) {
+    return courtroom.issues.some((issue) => issue.status === 'ruled')
+      ? '待主席進入下一爭點'
+      : '待主席開始攻防'
+  }
+  return '法院審理中'
+}
+
 export function chairmanActionOptions(input: {
   modeId: string
   modeCategory: string
@@ -146,25 +161,21 @@ export function chairmanActionOptions(input: {
   ]
   if (input.failedRole) return options
   const courtroomActions = new Set(input.courtroom?.available_actions ?? [])
-  const canAskAll = input.modeId !== 'courtroom' || projectCourtroomPrimaryAction(input.courtroom!).disabled === false
+  const canAskAll = input.modeId !== 'courtroom'
   const canDirect = input.modeCategory === 'relay' && (
     input.modeId !== 'courtroom' || courtroomActions.has('directed-response')
   )
   if (canAskAll) {
-    const courtroomPrimary = input.modeId === 'courtroom'
-      ? projectCourtroomPrimaryAction(input.courtroom!)
-      : null
-    const courtroomIssue = input.courtroom ? pendingCourtroomIssue(input.courtroom) : null
-    const nextLabel = courtroomPrimary?.kind === 'courtroom-arguments' && courtroomIssue
-      ? `開始爭點「${courtroomIssue.title}」`
-      : (courtroomPrimary?.label ?? input.nextActionLabel)?.replace(/（下一位.*$/, '')
+    const nextLabel = input.nextActionLabel?.replace(/（下一位.*$/, '')
     const suffix = nextLabel ? `（下一步：${nextLabel}）` : ''
     options.push({ value: 'all', label: `請全體回應${suffix}` })
   }
   if (canDirect) {
     options.push(...input.participants.map((participant) => ({
       value: `role:${participant.role_id}`,
-      label: `請${participantName(input.participants, participant.role_id)}回答`,
+      label: input.modeId === 'courtroom'
+        ? `請${participantName(input.participants, participant.role_id)}補充（不會裁定或推進流程）`
+        : `請${participantName(input.participants, participant.role_id)}回答`,
     })))
   }
   return options
@@ -182,6 +193,7 @@ export function chairmanActionBlockReason(
 export function chairmanActionPresentation(
   action: string,
   participants: ChairmanParticipant[],
+  modeId?: string,
 ): { placeholder: string; submitLabel: string; successMessage: string } {
   if (action === 'note') {
     return {
@@ -199,6 +211,13 @@ export function chairmanActionPresentation(
   }
   const roleId = action.startsWith('role:') ? action.slice('role:'.length) : ''
   const roleName = participantName(participants, roleId)
+  if (modeId === 'courtroom') {
+    return {
+      placeholder: `輸入要請${roleName}補充的問題或指示；不會裁定或推進流程…`,
+      submitLabel: `請${roleName}補充`,
+      successMessage: `已請${roleName}補充；未裁定，也未推進正式流程。`,
+    }
+  }
   return {
     placeholder: `輸入要請${roleName}回答的問題或指示…`,
     submitLabel: `請${roleName}回答`,

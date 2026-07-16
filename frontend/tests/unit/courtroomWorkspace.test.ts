@@ -6,7 +6,6 @@ import {
   courtroomFinalOutcomeLabel,
   courtroomIssueStatusLabel,
   courtroomOutcomeLabel,
-  nextLegacyCaseTypeSelection,
   nextCourtroomDraft,
 } from '../../src/courtroomWorkspace.ts'
 
@@ -25,11 +24,6 @@ test('courtroom editor preserves unsaved work for same meeting and isolates meet
     revision: 0,
     issues: [],
   }), { revision: 0, issues: [] })
-})
-
-test('legacy case type selection never leaks across meeting switches', () => {
-  assert.equal(nextLegacyCaseTypeSelection('meeting-a', 'meeting-a', 'civil'), 'civil')
-  assert.equal(nextLegacyCaseTypeSelection('meeting-a', 'meeting-b', 'civil'), '')
 })
 
 test('courtroom presentation uses understandable Chinese status and outcome labels', () => {

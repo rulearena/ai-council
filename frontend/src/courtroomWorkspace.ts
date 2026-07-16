@@ -15,14 +15,6 @@ export function nextCourtroomDraft(
   }
 }
 
-export function nextLegacyCaseTypeSelection(
-  previousMeetingId: string,
-  nextMeetingId: string,
-  selection: '' | 'civil' | 'criminal',
-): '' | 'civil' | 'criminal' {
-  return previousMeetingId === nextMeetingId ? selection : ''
-}
-
 const ISSUE_STATUS_LABELS: Record<string, string> = {
   pending: '待審',
   'arguments-in-progress': '攻防中',

@@ -59,6 +59,19 @@ test('confirmed courtroom settings explain locked goal and case type', () => {
   })
 })
 
+test('legacy confirmed courtroom can fill its missing case type through atomic meeting settings', () => {
+  const legacyMeeting = { ...meeting, case_type: null }
+  const draft = hydrateMeetingSettingsDraft(legacyMeeting)
+  draft.caseType = 'civil'
+
+  assert.deepEqual(validateMeetingSettingsDraft(draft, legacyMeeting), {
+    title: '',
+    goal: '',
+    caseType: '',
+    participantModels: '',
+  })
+})
+
 test('history selection stays local and resets when switching meetings', () => {
   assert.equal(nextHistorySelection('meeting-a', 'meeting-a', 'epoch-1', 'epoch-2'), 'epoch-1')
   assert.equal(nextHistorySelection('meeting-a', 'meeting-b', 'epoch-1', 'epoch-4'), 'epoch-4')

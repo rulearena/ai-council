@@ -35,6 +35,7 @@ const errors = computed(() => draft.value && selectedMeeting.value
   : { title: '', goal: '', caseType: '', participantModels: '' })
 const invalid = computed(() => Object.values(errors.value).some(Boolean))
 const confirmedCourtroom = computed(() => selectedMeeting.value?.mode_id === 'courtroom' && selectedMeeting.value.courtroom?.status === 'confirmed')
+const caseTypeLocked = computed(() => confirmedCourtroom.value && Boolean(selectedMeeting.value?.case_type))
 const assignmentWarnings = computed(() => selectedMeeting.value?.participants
   .filter((participant) => participant.model_assignment_warning)
   .map((participant) => `${displayRole(participant.role_id)}：${participant.model_assignment_warning}`) ?? [])
@@ -104,11 +105,12 @@ async function save() {
         <small v-if="confirmedCourtroom">爭點已確認。重新整理爭點後才可修改 AI 目標。</small>
         <small v-if="errors.goal" class="field-error">{{ errors.goal }}</small>
         <label v-if="selectedMeeting.mode_id === 'courtroom'">案件類型
-          <select v-model="draft.caseType" data-testid="meeting-case-type-select" :disabled="loading || isMeetingRunning || confirmedCourtroom">
+          <select v-model="draft.caseType" data-testid="meeting-case-type-select" :disabled="loading || isMeetingRunning || caseTypeLocked">
             <option :value="null" disabled>請選擇</option><option value="civil">民事</option><option value="criminal">刑事</option>
           </select>
         </label>
-        <small v-if="confirmedCourtroom">爭點已確認。重新整理爭點後才可變更案件類型。</small>
+        <small v-if="caseTypeLocked">爭點已確認。重新整理爭點後才可變更案件類型。</small>
+        <small v-else-if="confirmedCourtroom">這是缺少案件類型的舊法院會議；請在此選擇後一次儲存全部設定。</small>
         <small v-if="errors.caseType" class="field-error">{{ errors.caseType }}</small>
       </section>
       <section>

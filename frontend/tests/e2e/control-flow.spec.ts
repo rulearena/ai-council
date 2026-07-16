@@ -209,6 +209,7 @@ test('chairman asks everyone from the unified composer exactly once and reload p
 })
 
 test('legacy courtroom is gated by issue setup and rejected generic paths preserve old events', async ({ page }) => {
+  await page.setViewportSize({ width: 375, height: 812 })
   const dataDir = process.env.E2E_DATA_DIR
   expect(dataDir).toBeTruthy()
   const meetingId = `meeting-legacy-courtroom-${Date.now()}`
@@ -260,9 +261,18 @@ test('legacy courtroom is gated by issue setup and rejected generic paths preser
   const meetingResponse = page.waitForResponse((response) => response.url().endsWith(`/meetings/${meetingId}`))
   await page.getByTestId('meeting-list-item').filter({ hasText: title }).locator('.meeting-item').click()
   const apiOrigin = new URL((await meetingResponse).url()).origin
-  await expect(page.getByTestId('legacy-courtroom-case-type-gate')).toContainText('請先選擇案件類型')
-  await page.getByTestId('legacy-courtroom-case-type-select').selectOption('civil')
-  await page.getByTestId('save-courtroom-case-type-button').click()
+  const caseTypeGate = page.getByTestId('legacy-courtroom-case-type-gate')
+  await expect(caseTypeGate).toContainText('請到會議設定選擇案件類型')
+  await expect(page.getByTestId('legacy-courtroom-case-type-select')).toHaveCount(0)
+  await caseTypeGate.getByRole('button', { name: '前往會議設定' }).click()
+  await expect(page.getByTestId('meeting-settings-drawer')).toBeVisible()
+  await expect(page.getByTestId('meeting-case-type-select')).toBeEnabled()
+  await page.getByTestId('meeting-case-type-select').selectOption('civil')
+  const settingsSaved = page.waitForResponse(
+    (response) => response.request().method() === 'PUT' && response.url().endsWith(`/meetings/${meetingId}/settings`),
+  )
+  await page.getByTestId('save-meeting-settings-button').click()
+  expect((await settingsSaved).status()).toBe(200)
   await expect(page.getByTestId('legacy-courtroom-case-type-gate')).toHaveCount(0)
   await expect(page.getByTestId('courtroom-docket-panel')).toContainText('既有爭點不得遺失')
   await expect(page.getByTestId('start-meeting-button')).toHaveCount(0)
@@ -2170,6 +2180,8 @@ test('courtroom handles two confirmed issues one at a time before the final verd
   await expect(page.getByTestId('courtroom-issue-title-1')).toHaveValue('被告是否具有合法占有權源？')
   await page.getByTestId('confirm-courtroom-issues-button').click()
   await expect(page.getByTestId('courtroom-docket-status')).toHaveText('已確認')
+  await expect(page.getByTestId('operation-status')).toContainText('待主席開始攻防')
+  await expect(page.getByTestId('chairman-action-select')).not.toContainText('請全體回應')
 
   await page.getByTestId('meeting-settings-button').click()
   await expect(page.getByTestId('meeting-goal-input')).toHaveAttribute('readonly', '')
@@ -2177,19 +2189,21 @@ test('courtroom handles two confirmed issues one at a time before the final verd
   await page.getByTestId('meeting-settings-close-button').click()
 
   const primary = page.getByTestId('courtroom-primary-action')
-  await expect(primary).toContainText('開始此爭點')
-  await expect(primary).toContainText('下一位是原告代理人')
+  await expect(primary).toHaveText('開始爭點攻防')
   await primary.click()
   await expect(page.locator('[data-issue-id="issue-1"]')).toContainText('等待主席送交法官', { timeout: 15000 })
   await expect(page.getByTestId('courtroom-awaiting-ruling-issue-1')).toHaveText(
     '攻防已完成，等待主席送交法官；不會自動判斷。',
   )
   await expect(page.locator('[data-issue-id="issue-2"]')).toContainText('待審')
-  await expect(primary).toContainText('請法官判斷此爭點')
+  await expect(primary).toHaveText('送交法官判斷')
+  await expect(page.getByTestId('operation-status')).toContainText('攻防完成，待主席送交法官')
+  await expect(page.getByTestId('courtroom-primary-action-explanation')).toHaveText('按下後才會呼叫法官；不會自動判斷。')
   await expect(page.getByTestId('courtroom-sticky-primary-action')).toHaveCSS('position', 'sticky')
 
   await page.getByTestId('chairman-action-select').selectOption('role:Defense')
-  await expect(page.getByTestId('send-chair-message-button')).toHaveText('請被告代理人回答')
+  await expect(page.getByTestId('chairman-action-select')).toContainText('不會裁定或推進流程')
+  await expect(page.getByTestId('send-chair-message-button')).toHaveText('請被告代理人補充')
   await page.getByTestId('chair-message-input').fill('請說明返還孳息的主要抗辯。')
   await page.getByTestId('send-chair-message-button').click()
   await expect(page.getByTestId('operation-status')).not.toContainText('執行中', { timeout: 15000 })
@@ -2197,7 +2211,8 @@ test('courtroom handles two confirmed issues one at a time before the final verd
   await primary.click()
   await expect(page.getByTestId('courtroom-ruling-issue-1')).toContainText('部分成立', { timeout: 15000 })
   await expect(page.getByTestId('courtroom-ruling-issue-1')).toContainText('理由：Mock issue ruling')
-  await expect(primary).toContainText('進入下一爭點')
+  await expect(primary).toHaveText('進入下一爭點')
+  await expect(page.getByTestId('operation-status')).toContainText('待主席進入下一爭點')
   await expect(page.locator('[data-issue-id="issue-2"]')).toContainText('待審')
 
   await primary.click()
@@ -2205,7 +2220,8 @@ test('courtroom handles two confirmed issues one at a time before the final verd
   await expect(page.getByTestId('courtroom-final-verdict')).toHaveCount(0)
   await primary.click()
   await expect(page.getByTestId('courtroom-ruling-issue-2')).toContainText('部分成立', { timeout: 15000 })
-  await expect(primary).toContainText('最終判決')
+  await expect(primary).toHaveText('作成最終判決')
+  await expect(page.getByTestId('operation-status')).toContainText('待主席作成最終判決')
   await primary.click()
   await expect(page.getByTestId('courtroom-final-verdict')).toContainText('Mock verdict', { timeout: 15000 })
   await expect(page.getByTestId('courtroom-final-verdict')).not.toContainText('upheld')
@@ -2762,7 +2778,7 @@ test('courtroom exposes current issue, all deliberation, and rebuild restart sco
   await page.getByTestId('save-courtroom-issues-button').click()
   await page.getByTestId('confirm-courtroom-issues-button').click()
   await page.getByTestId('courtroom-primary-action').click()
-  await expect(page.getByTestId('courtroom-primary-action')).toContainText('請法官判斷此爭點', { timeout: 15000 })
+  await expect(page.getByTestId('courtroom-primary-action')).toHaveText('送交法官判斷', { timeout: 15000 })
 
   await openAdvancedOptions(page)
   await page.getByTestId('restart-scope-select').selectOption('current_issue')
@@ -2808,9 +2824,9 @@ test('courtroom can restart a selected ruled issue after the final verdict witho
   await page.getByTestId('confirm-courtroom-issues-button').click()
 
   const primary = page.getByTestId('courtroom-primary-action')
-  for (const nextLabel of ['請法官判斷此爭點', '進入下一爭點：第二爭點', '請法官判斷此爭點', '最終判決']) {
+  for (const nextLabel of ['送交法官判斷', '進入下一爭點', '送交法官判斷', '作成最終判決']) {
     await primary.click()
-    await expect(primary).toContainText(nextLabel, { timeout: 15000 })
+    await expect(primary).toHaveText(nextLabel, { timeout: 15000 })
   }
   await primary.click()
   await expect(page.getByTestId('courtroom-final-verdict')).toBeVisible({ timeout: 15000 })
@@ -2846,7 +2862,7 @@ test('criminal courtroom uses criminal roles and reaches a penalty-safe final ve
   await page.getByTestId('confirm-courtroom-issues-button').click()
   const primary = page.getByTestId('courtroom-primary-action')
   await primary.click()
-  await expect(primary).toContainText('請法官判斷此爭點', { timeout: 15000 })
+  await expect(primary).toHaveText('送交法官判斷', { timeout: 15000 })
   await primary.click()
   await expect(primary).toContainText('最終判決', { timeout: 15000 })
   await primary.click()

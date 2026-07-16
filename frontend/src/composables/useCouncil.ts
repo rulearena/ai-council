@@ -12,6 +12,7 @@ import {
   chairmanActionPresentation,
   executeChairmanAction,
   projectFixedRoundFailedRole,
+  projectCourtroomWorkflowStatus,
   projectPrimaryAction,
   requestRoleSequenceWithFailureGuard,
   runWithPendingRoles,
@@ -399,6 +400,7 @@ export function useCouncil() {
   const chairmanPresentation = computed(() => chairmanActionPresentation(
     chairmanAction.value,
     selectedMeeting.value?.participants ?? [],
+    selectedMeeting.value?.mode_id ?? activeMode.value.id,
   ))
   const startButtonLabel = computed(() => isMeetingRunning.value ? '執行中…' : primaryAction.value.label)
   const selectedSequencePreset = computed(
@@ -409,6 +411,12 @@ export function useCouncil() {
   const operationStatus = computed(() => {
     if (loading.value) return 'running'
     return selectedMeeting.value?.activity_status ?? 'idle'
+  })
+  const operationStatusLabel = computed(() => {
+    const meeting = selectedMeeting.value
+    return operationStatus.value !== 'running' && meeting?.mode_id === 'courtroom' && meeting.courtroom
+      ? projectCourtroomWorkflowStatus(meeting.courtroom)
+      : operationStatus.value
   })
   const filteredMeetings = computed(() => {
     const query = meetingSearch.value.trim().toLowerCase()
@@ -1207,6 +1215,7 @@ export function useCouncil() {
     primaryAction,
     selectedSequencePreset,
     operationStatus,
+    operationStatusLabel,
     filteredMeetings,
     roleOutputEvents,
     latestRoleEvent,
