@@ -52,10 +52,82 @@ export type Meeting = {
   tags: string[]
   pinned: boolean
   mode_id: string
+  case_type?: 'civil' | 'criminal' | null
+  settings_revision: number
+  scene: string
+  deliberation: DeliberationSummary
   participants: MeetingParticipant[]
   case_files?: CaseFile[]
   events?: MeetingEvent[]
   courtroom: CourtroomProjection | null
+  case_materials?: CaseMaterials
+}
+
+export type DeliberationSummary = {
+  active_epoch_id: string
+  active_epoch_number: number
+  epoch_count: number
+}
+
+export type DeliberationEpoch = {
+  id: string
+  number: number
+  reason: string | null
+  scope: 'current_issue' | 'all_deliberation' | 'rebuild_issues' | null
+  issue_id: string | null
+  implicit: boolean
+  event_count: number
+  materials_revision?: number | null
+}
+
+export type Deliberations = {
+  active_epoch_id: string
+  active_epoch_number: number
+  epochs: DeliberationEpoch[]
+}
+
+export type CaseMaterialVersion = {
+  version: number
+  title: string
+  content: string
+  visible_roles: string[]
+  size: number
+  created_at: string
+  source_event_id: string | null
+}
+
+export type VersionedCaseMaterial = {
+  id: string
+  status: 'active' | 'inactive'
+  active_version: number
+  versions: CaseMaterialVersion[]
+  evidence_index?: number
+  citation_anchor?: string
+}
+
+export type CaseMaterials = {
+  schema_version: number
+  revision: number
+  pending_impact: { deliberation_epoch_id: string; reason: string } | null
+  evidence: VersionedCaseMaterial[]
+  notes: VersionedCaseMaterial[]
+  revision_history: Array<Record<string, unknown>>
+}
+
+export type MeetingSettingsPayload = {
+  expected_revision: number
+  title: string
+  goal: string
+  case_type: 'civil' | 'criminal' | null
+  scene: string
+  participant_models: Record<string, string>
+}
+
+export type CaseMaterialPayload = {
+  revision: number
+  title: string
+  content: string
+  visible_roles: string[]
 }
 
 export type CourtroomIssueProjection = {
@@ -65,6 +137,7 @@ export type CourtroomIssueProjection = {
   status: 'pending' | 'arguments-in-progress' | 'awaiting-ruling' | 'ruled' | 'failed'
   failed_step_id?: string
   failed_phase?: 'charge' | 'defense' | 'rebuttal' | 'ruling'
+  failed_phase_display?: string
   failure_kind?: 'parse_error' | 'timeout' | 'adapter_error' | 'configuration_error' | 'interrupted'
   ruling?: CourtroomRuling
 }
@@ -73,6 +146,30 @@ export type CourtroomRuling = {
   outcome: 'proponent-wins' | 'respondent-wins' | 'partially-upheld' | 'insufficient-evidence'
   reasoning: string
   evidence_refs: string[]
+  unresolved_questions: string[]
+}
+
+export type CourtroomCivilFinal = {
+  summary: string
+  claims: Array<{
+    claim: string
+    outcome: string
+    reasoning: string
+    evidence_refs: string[]
+    relief: { obligation: string; monetary_amount: string | null; calculation_basis: string | null }
+  }>
+  unresolved_questions: string[]
+}
+
+export type CourtroomCriminalFinal = {
+  summary: string
+  charges: Array<{
+    charge: string
+    decision: string
+    reasoning: string
+    evidence_refs: string[]
+  }>
+  sentencing_factors: string[]
   unresolved_questions: string[]
 }
 
@@ -85,6 +182,8 @@ export type CourtroomProjection = {
   final_status: 'not-ready' | 'ready' | 'failed' | 'completed'
   failed_step_id?: string
   available_actions: string[]
+  case_type: 'civil' | 'criminal' | null
+  requires_case_type: boolean
 }
 
 export type CaseFile = {
@@ -173,6 +272,9 @@ export type MeetingEvent = {
   docket_revision?: number
   issue_id?: string
   issue_phase?: 'charge' | 'defense' | 'rebuttal' | 'ruling'
+  case_type?: 'civil' | 'criminal'
+  role_display?: string
+  phase_display?: string
   target_role_id?: string
   in_response_to_event_id?: string
   directed_sequence?: number
@@ -342,6 +444,7 @@ export async function createMeeting(
   goal: string,
   options?: {
     modeId?: string
+    caseType?: 'civil' | 'criminal'
     inputs?: Record<string, string>
     participants?: Array<{
       role_id: string
@@ -360,6 +463,7 @@ export async function createMeeting(
     title,
     goal,
     mode_id: options?.modeId ?? DEFAULT_MODE_ID,
+    case_type: options?.caseType,
     inputs: options?.inputs ?? {},
     participants: options?.participants ?? [],
     case_files: options?.caseFiles ?? [],
@@ -374,8 +478,75 @@ export async function updateMeetingDetails(
   return putJson(`/meetings/${meetingId}/details`, { title, goal })
 }
 
+export async function updateMeetingSettings(
+  meetingId: string,
+  payload: MeetingSettingsPayload,
+): Promise<Meeting> {
+  return putJson(`/meetings/${meetingId}/settings`, payload)
+}
+
 export async function getMeeting(meetingId: string): Promise<Meeting> {
   return getJson(`/meetings/${meetingId}`)
+}
+
+export async function getDeliberations(meetingId: string): Promise<Deliberations> {
+  return getJson(`/meetings/${meetingId}/deliberations`)
+}
+
+export async function restartDeliberation(
+  meetingId: string,
+  scope: 'current_issue' | 'all_deliberation' | 'rebuild_issues',
+  reason: string,
+  issueId?: string,
+): Promise<Meeting> {
+  return postJson(`/meetings/${meetingId}/deliberations/restart`, {
+    scope,
+    reason,
+    issue_id: issueId,
+  })
+}
+
+export async function getCaseMaterials(meetingId: string, revision?: number): Promise<CaseMaterials> {
+  const query = revision === undefined ? '' : `?revision=${encodeURIComponent(revision)}`
+  return getJson(`/meetings/${meetingId}/materials${query}`)
+}
+
+export async function addCaseEvidence(meetingId: string, payload: CaseMaterialPayload): Promise<CaseMaterials> {
+  return postJson(`/meetings/${meetingId}/materials/evidence`, payload)
+}
+
+export async function addCaseEvidenceVersion(meetingId: string, evidenceId: string, payload: CaseMaterialPayload): Promise<CaseMaterials> {
+  return postJson(`/meetings/${meetingId}/materials/evidence/${encodeURIComponent(evidenceId)}/versions`, payload)
+}
+
+export async function setCaseEvidenceActive(meetingId: string, evidenceId: string, revision: number, active: boolean): Promise<CaseMaterials> {
+  return postJson(`/meetings/${meetingId}/materials/evidence/${encodeURIComponent(evidenceId)}/${active ? 'reactivate' : 'deactivate'}`, { revision })
+}
+
+export async function addCaseNote(meetingId: string, payload: CaseMaterialPayload): Promise<CaseMaterials> {
+  return postJson(`/meetings/${meetingId}/materials/notes`, payload)
+}
+
+export async function addCaseNoteVersion(meetingId: string, noteId: string, payload: CaseMaterialPayload): Promise<CaseMaterials> {
+  return postJson(`/meetings/${meetingId}/materials/notes/${encodeURIComponent(noteId)}/versions`, payload)
+}
+
+export async function setCaseNoteActive(meetingId: string, noteId: string, revision: number, active: boolean): Promise<CaseMaterials> {
+  return postJson(`/meetings/${meetingId}/materials/notes/${encodeURIComponent(noteId)}/${active ? 'reactivate' : 'deactivate'}`, { revision })
+}
+
+export async function promoteMessageToCaseNote(
+  meetingId: string,
+  eventId: string,
+  revision: number,
+  title: string,
+  visibleRoles: string[],
+): Promise<CaseMaterials> {
+  return postJson(`/meetings/${meetingId}/messages/${encodeURIComponent(eventId)}/promote-to-note`, {
+    revision,
+    title,
+    visible_roles: visibleRoles,
+  })
 }
 
 export async function startMeeting(meetingId: string): Promise<void> {
@@ -384,6 +555,13 @@ export async function startMeeting(meetingId: string): Promise<void> {
 
 export async function draftCourtroomIssues(meetingId: string, revision: number): Promise<void> {
   await postJson(`/meetings/${meetingId}/courtroom/issues/draft`, { revision })
+}
+
+export async function updateCourtroomCaseType(
+  meetingId: string,
+  caseType: 'civil' | 'criminal',
+): Promise<Meeting> {
+  return putJson(`/meetings/${meetingId}/courtroom/case-type`, { case_type: caseType })
 }
 
 export async function replaceCourtroomIssues(
@@ -479,9 +657,9 @@ export async function retryStep(
   await postJson(`/meetings/${meetingId}/steps/${stepId}/retry`, {})
 }
 
-export async function getTranscript(meetingId: string): Promise<string> {
-  const response = await fetch(`${API_BASE}/meetings/${meetingId}/transcript.md`)
-  if (!response.ok) throw new Error(`Transcript request failed: ${response.status}`)
+export async function getTranscript(meetingId: string, epoch = 'current'): Promise<string> {
+  const response = await fetch(`${API_BASE}/meetings/${meetingId}/transcript.md?epoch=${encodeURIComponent(epoch)}`)
+  if (!response.ok) throw new ApiError(`Transcript request failed: ${response.status}`, response.status, await readErrorDetail(response))
   return response.text()
 }
 
@@ -542,6 +720,6 @@ async function deleteJson<T>(path: string): Promise<T> {
   return response.json()
 }
 
-export function transcriptDownloadUrl(meetingId: string): string {
-  return `${API_BASE}/meetings/${meetingId}/transcript.md`
+export function transcriptDownloadUrl(meetingId: string, epoch = 'current'): string {
+  return `${API_BASE}/meetings/${meetingId}/transcript.md?epoch=${encodeURIComponent(epoch)}`
 }

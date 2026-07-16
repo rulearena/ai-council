@@ -20,6 +20,7 @@ class ActiveExecutionState(TypedDict):
     adapter: NotRequired[str]
     prompt_messages: NotRequired[list[dict[str, str]]]
     status: Literal["running"]
+    deliberation_epoch_id: NotRequired[str]
     started_at: NotRequired[str]
     prompt_template_name: NotRequired[str]
     prompt_template_hash: NotRequired[str]
@@ -34,6 +35,11 @@ class ActiveExecutionState(TypedDict):
     issue_id: NotRequired[str]
     issue_phase: NotRequired[str]
     courtroom_operation: NotRequired[str]
+    materials_revision: NotRequired[int]
+    materials_refs: NotRequired[list[dict[str, object]]]
+    case_type: NotRequired[str]
+    role_display: NotRequired[str]
+    phase_display: NotRequired[str]
 
 
 class MeetingExecutionStateStore:
@@ -87,11 +93,13 @@ def interrupted_execution_event(state: ActiveExecutionState) -> dict[str, object
             )
         except ValueError:
             duration_ms = 0
+    legacy_event_id = (
+        f"{state['meeting_id']}:{state['step_id']}:"
+        f"attempt-{state['attempt']}:interrupted"
+    )
+    epoch_id = state.get("deliberation_epoch_id")
     event: dict[str, object] = {
-        "event_id": (
-            f"{state['meeting_id']}:{state['step_id']}:"
-            f"attempt-{state['attempt']}:interrupted"
-        ),
+        "event_id": f"{epoch_id}:{legacy_event_id}" if epoch_id and epoch_id != "epoch-1" else legacy_event_id,
         "meeting_id": state["meeting_id"],
         "step_id": state["step_id"],
         "base_step_id": state["base_step_id"],
@@ -106,6 +114,8 @@ def interrupted_execution_event(state: ActiveExecutionState) -> dict[str, object
         "completed_at": completed_at.isoformat(),
         "duration_ms": duration_ms,
     }
+    if epoch_id:
+        event["deliberation_epoch_id"] = epoch_id
     for key in [
         "prompt_template_name",
         "prompt_template_hash",
@@ -120,6 +130,11 @@ def interrupted_execution_event(state: ActiveExecutionState) -> dict[str, object
         "issue_id",
         "issue_phase",
         "courtroom_operation",
+        "materials_revision",
+        "materials_refs",
+        "case_type",
+        "role_display",
+        "phase_display",
         "adapter",
         "prompt_messages",
         "started_at",

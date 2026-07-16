@@ -28,6 +28,7 @@ const {
   cancelSelectedMeeting,
   closeSelectedMeeting,
   reopenSelectedMeeting,
+  restartSelectedDeliberation,
   requestSelectedRoleSequence,
   updateSelectedMeetingDetails,
 } = store
@@ -35,6 +36,33 @@ const {
 const advancedOpen = ref(false)
 const migrationTitle = ref('')
 const migrationGoal = ref('')
+const restartReason = ref('')
+const restartScope = ref<'current_issue' | 'all_deliberation' | 'rebuild_issues'>('all_deliberation')
+const restartIssueId = ref('')
+const restarting = ref(false)
+
+const restartableIssues = computed(() => {
+  const courtroom = selectedMeeting.value?.courtroom
+  if (!courtroom) return []
+  return courtroom.issues.filter((issue) =>
+    issue.id === courtroom.current_issue_id || issue.status === 'ruled',
+  )
+})
+
+async function restartDiscussion() {
+  if (!restartReason.value.trim()) return
+  restarting.value = true
+  const accepted = await restartSelectedDeliberation(
+    restartScope.value,
+    restartReason.value,
+    restartScope.value === 'current_issue' ? restartIssueId.value : undefined,
+  )
+  if (accepted) {
+    restartReason.value = ''
+    advancedOpen.value = false
+  }
+  restarting.value = false
+}
 
 watch(
   [
@@ -57,6 +85,22 @@ watch(
     )
     migrationTitle.value = next.title
     migrationGoal.value = next.goal
+  },
+  { immediate: true },
+)
+
+watch(() => selectedMeeting.value?.meeting_id, () => {
+  restartScope.value = 'all_deliberation'
+  restartReason.value = ''
+  restartIssueId.value = ''
+})
+
+watch(
+  [restartScope, () => selectedMeeting.value?.courtroom?.current_issue_id, restartableIssues],
+  ([scope, currentIssueId, issues]) => {
+    if (scope !== 'current_issue') return
+    if (issues.some((issue) => issue.id === restartIssueId.value)) return
+    restartIssueId.value = currentIssueId || issues[0]?.id || ''
   },
   { immediate: true },
 )
@@ -191,6 +235,25 @@ const canSubmitChairman = computed(() => {
         </button>
         <div v-if="advancedOpen" class="advanced-options-panel" data-testid="advanced-options-panel">
           <strong>流程操作</strong>
+          <section v-if="selectedMeeting && !isTerminalMeeting" class="restart-controls" data-testid="restart-controls">
+            <h3>重開審議</h3>
+            <p>舊討論會封存於議事紀錄；案卷與證據不會複製或刪除。</p>
+            <label v-if="selectedMeeting.mode_id === 'courtroom'">重開範圍
+              <select v-model="restartScope" data-testid="restart-scope-select" :disabled="loading || isMeetingRunning">
+                <option value="current_issue" :disabled="!restartableIssues.length">重開單一爭點（保留其他爭點判斷）</option>
+                <option value="all_deliberation">重開全部審議（保留已確認爭點）</option>
+                <option value="rebuild_issues">重新整理爭點（解鎖目標與案件類型）</option>
+              </select>
+            </label>
+            <label v-if="selectedMeeting.mode_id === 'courtroom' && restartScope === 'current_issue'">選擇爭點
+              <select v-model="restartIssueId" data-testid="restart-issue-select" :disabled="loading || isMeetingRunning">
+                <option v-for="issue in restartableIssues" :key="issue.id" :value="issue.id">{{ issue.position }}. {{ issue.title }}</option>
+              </select>
+            </label>
+            <label>原因（必填）<textarea v-model="restartReason" data-testid="restart-reason-input" :disabled="loading || isMeetingRunning" placeholder="例如：新增重要證物，需重新評估" /></label>
+            <p v-if="selectedMeeting.case_materials?.pending_impact" class="materials-impact-inline">案卷已變更，必須完成其中一種重開才能繼續 AI。</p>
+            <button type="button" class="btn btn-secondary" data-testid="restart-deliberation-button" :disabled="loading || restarting || isMeetingRunning || !restartReason.trim() || (restartScope === 'current_issue' && !restartIssueId)" @click="restartDiscussion">{{ restarting ? '重開中…' : '確認重開' }}</button>
+          </section>
           <section v-if="sequencePresets.length && selectedMeeting?.mode_id !== 'courtroom'" class="sequence-panel" data-testid="role-sequence-controls">
             <label>
               自動接續

@@ -7,6 +7,8 @@ from typing import Any, Protocol
 
 from ai_council.prompting.parser import (
     CourtroomIssueDraftParser,
+    CourtroomCivilFinalParser,
+    CourtroomCriminalFinalParser,
     CourtroomRulingParser,
     OutputParseError,
     RoleOutputParser,
@@ -17,6 +19,8 @@ DEFAULT_OUTPUT_SCHEMA_ID = "role-output/v1"
 STRUCTURED_VERDICT_V1_ID = "structured-verdict/v1"
 COURTROOM_ISSUE_DRAFT_V1_ID = "courtroom-issue-draft/v1"
 COURTROOM_RULING_V1_ID = "courtroom-ruling/v1"
+COURTROOM_CIVIL_FINAL_V1_ID = "courtroom-civil-final/v1"
+COURTROOM_CRIMINAL_FINAL_V1_ID = "courtroom-criminal-final/v1"
 ROLE_OUTPUT_V1_SCHEMA = (
     '{"summary":"string","arguments":[{"title":"string","detail":"string"}],'
     '"risks":[{"title":"string","detail":"string"}],"recommendation":"string"}'
@@ -33,6 +37,18 @@ COURTROOM_RULING_V1_SCHEMA = (
     '{"outcome":"proponent-wins | respondent-wins | partially-upheld | '
     'insufficient-evidence","reasoning":"string","evidence_refs":["[證物一]"],'
     '"unresolved_questions":["string"]}'
+)
+COURTROOM_CIVIL_FINAL_V1_SCHEMA = (
+    '{"summary":"string","claims":[{"claim":"string","outcome":"upheld | '
+    'partially-upheld | rejected | insufficient-evidence","reasoning":"string",'
+    '"evidence_refs":["[證物一]"],"relief":{"obligation":"string",'
+    '"monetary_amount":"string | null","calculation_basis":"string | null"}}],'
+    '"unresolved_questions":["string"]}'
+)
+COURTROOM_CRIMINAL_FINAL_V1_SCHEMA = (
+    '{"summary":"string","charges":[{"charge":"string","decision":"guilty | '
+    'not-guilty | insufficient-evidence","reasoning":"string","evidence_refs":'
+    '["[證物一]"]}],"sentencing_factors":["string"],"unresolved_questions":["string"]}'
 )
 
 
@@ -107,6 +123,16 @@ DEFAULT_OUTPUT_SCHEMA_REGISTRY = OutputSchemaRegistry(
             id=COURTROOM_RULING_V1_ID,
             schema=COURTROOM_RULING_V1_SCHEMA,
             parser=CourtroomRulingParser(),
+        ),
+        OutputSchemaCodec(
+            id=COURTROOM_CIVIL_FINAL_V1_ID,
+            schema=COURTROOM_CIVIL_FINAL_V1_SCHEMA,
+            parser=CourtroomCivilFinalParser(),
+        ),
+        OutputSchemaCodec(
+            id=COURTROOM_CRIMINAL_FINAL_V1_ID,
+            schema=COURTROOM_CRIMINAL_FINAL_V1_SCHEMA,
+            parser=CourtroomCriminalFinalParser(),
         ),
     ]
 )

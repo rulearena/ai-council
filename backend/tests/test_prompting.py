@@ -43,6 +43,59 @@ def test_courtroom_output_schemas_parse_drafts_and_issue_rulings() -> None:
     }
 
 
+def test_civil_final_requires_evidence_and_calculation_for_money() -> None:
+    codec = DEFAULT_OUTPUT_SCHEMA_REGISTRY.get("courtroom-civil-final/v1")
+    valid = {
+        "summary": "原告部分勝訴",
+        "claims": [{
+            "claim": "返還價金",
+            "outcome": "upheld",
+            "reasoning": "契約及付款紀錄可證",
+            "evidence_refs": ["[證物一]"],
+            "relief": {
+                "obligation": "返還價金",
+                "monetary_amount": "新臺幣 100 元",
+                "calculation_basis": "[證物一] 所載付款 100 元",
+            },
+        }],
+        "unresolved_questions": [],
+    }
+    assert codec.parse(json.dumps(valid, ensure_ascii=False))["claims"][0]["relief"]["monetary_amount"]
+
+    valid["claims"][0]["evidence_refs"] = []
+    with pytest.raises(OutputParseError, match="evidence"):
+        codec.parse(json.dumps(valid, ensure_ascii=False))
+
+
+def test_criminal_final_allows_factors_but_rejects_concrete_penalty() -> None:
+    codec = DEFAULT_OUTPUT_SCHEMA_REGISTRY.get("courtroom-criminal-final/v1")
+    valid = {
+        "summary": "犯罪成立",
+        "charges": [{
+            "charge": "竊盜罪",
+            "decision": "guilty",
+            "reasoning": "證據足以證明",
+            "evidence_refs": ["[證物一]"],
+        }],
+        "sentencing_factors": ["犯後態度"],
+        "unresolved_questions": [],
+    }
+    assert codec.parse(json.dumps(valid, ensure_ascii=False))["sentencing_factors"] == ["犯後態度"]
+    valid["penalty"] = "有期徒刑一年"
+    with pytest.raises(OutputParseError, match="unknown penalty"):
+        codec.parse(json.dumps(valid, ensure_ascii=False))
+    valid.pop("penalty")
+    valid["sentencing_factors"] = ["有期徒刑一年"]
+    with pytest.raises(OutputParseError, match="concrete penalty"):
+        codec.parse(json.dumps(valid, ensure_ascii=False))
+
+    valid["sentencing_factors"] = ["罰金可能性", "可能適用緩刑"]
+    assert codec.parse(json.dumps(valid, ensure_ascii=False))["sentencing_factors"] == [
+        "罰金可能性",
+        "可能適用緩刑",
+    ]
+
+
 def test_courtroom_ruling_rejects_an_unknown_outcome() -> None:
     codec = DEFAULT_OUTPUT_SCHEMA_REGISTRY.get("courtroom-ruling/v1")
 
@@ -51,6 +104,12 @@ def test_courtroom_ruling_rejects_an_unknown_outcome() -> None:
             '{"outcome":"draw","reasoning":"無",'
             '"evidence_refs":[],"unresolved_questions":[]}'
         )
+
+
+def test_courtroom_issue_draft_rejects_duplicate_titles() -> None:
+    codec = DEFAULT_OUTPUT_SCHEMA_REGISTRY.get("courtroom-issue-draft/v1")
+    with pytest.raises(OutputParseError, match="unique"):
+        codec.parse('{"issues":[{"title":"同一爭點"},{"title":"同一爭點"}]}')
 
 
 def test_structured_verdict_v1_registry_accepts_a_known_verdict_literal() -> None:

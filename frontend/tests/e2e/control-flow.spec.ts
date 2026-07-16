@@ -12,6 +12,7 @@ async function createMeetingViaNewCase(
   options: {
     goal?: string
     modeId?: string
+    caseType?: 'civil' | 'criminal'
     inputs?: Record<string, string>
     caseFiles?: Array<{ title: string; content: string; visibleRoles: string[] }>
     modelAssignments?: Record<string, string>
@@ -28,6 +29,9 @@ async function createMeetingViaNewCase(
     .click()
   await page.getByLabel('會議名稱', { exact: true }).fill(title)
   await page.getByLabel('目標', { exact: true }).fill(options?.goal ?? title)
+  if (modeId === 'courtroom') {
+    await page.getByTestId('courtroom-case-type-select').selectOption(options.caseType ?? 'civil')
+  }
   // debate's position_a/position_b (or any future mode's `kind: 'text'` inputs) render as
   // one labeled field per input id - see NewCaseModal.vue's textInputs.
   for (const [inputId, value] of Object.entries(options.inputs ?? {})) {
@@ -222,6 +226,13 @@ test('legacy courtroom is gated by issue setup and rejected generic paths preser
     participants: ['Prosecutor', 'Defense', 'Judge'].map((role_id) => ({ role_id, model_config_id: 'mock-fast' })),
     inputs: {},
     case_files: [],
+    courtroom_docket: {
+      schema_version: 1,
+      revision: 1,
+      confirmed: true,
+      next_issue_number: 2,
+      issues: [{ id: 'issue-1', title: '既有爭點不得遺失' }],
+    },
   }))
   const oldSteps = [
     ['courtroom-charge', 'Prosecutor'],
@@ -249,8 +260,11 @@ test('legacy courtroom is gated by issue setup and rejected generic paths preser
   const meetingResponse = page.waitForResponse((response) => response.url().endsWith(`/meetings/${meetingId}`))
   await page.getByTestId('meeting-list-item').filter({ hasText: title }).locator('.meeting-item').click()
   const apiOrigin = new URL((await meetingResponse).url()).origin
-  await expect(page.getByTestId('courtroom-docket-panel')).toContainText('尚無爭點')
-  await expect(page.getByTestId('courtroom-docket-panel')).toContainText('確認前不會開始審理')
+  await expect(page.getByTestId('legacy-courtroom-case-type-gate')).toContainText('請先選擇案件類型')
+  await page.getByTestId('legacy-courtroom-case-type-select').selectOption('civil')
+  await page.getByTestId('save-courtroom-case-type-button').click()
+  await expect(page.getByTestId('legacy-courtroom-case-type-gate')).toHaveCount(0)
+  await expect(page.getByTestId('courtroom-docket-panel')).toContainText('既有爭點不得遺失')
   await expect(page.getByTestId('start-meeting-button')).toHaveCount(0)
   await page.getByTestId('advanced-options-button').click()
   await expect(page.getByTestId('role-sequence-controls')).toHaveCount(0)
@@ -280,14 +294,15 @@ test('editing an established goal confirms and audits old/new values while title
   await page.getByTestId('start-meeting-button').click()
   await expect(page.getByTestId('operation-status')).toContainText('狀態：已完成', { timeout: 15000 })
 
-  await page.getByTestId('edit-meeting-details-button').click()
+  await page.getByTestId('meeting-settings-button').click()
   await page.getByTestId('meeting-goal-input').fill(revisedGoal)
   page.once('dialog', async (dialog) => {
     expect(dialog.type()).toBe('confirm')
     expect(dialog.message()).toContain('既有發言不會重新產生')
     await dialog.accept()
   })
-  await page.getByTestId('save-meeting-details-button').click()
+  await page.getByTestId('save-meeting-settings-button').click()
+  await expect(page.getByTestId('meeting-settings-drawer')).not.toBeVisible()
   await page.getByTestId('records-button').click()
   await expect(page.getByTestId('step-timeline')).toContainText('主席修改會議目標')
   await expect(page.getByTestId('step-timeline')).toContainText(`舊目標：${originalGoal}`)
@@ -300,19 +315,18 @@ test('editing an established goal confirms and audits old/new values while title
 
   const eventsPath = join(dataDir!, 'meetings', meetingId, 'events.jsonl')
   const beforeTitleOnly = readFileSync(eventsPath, 'utf8').trim().split('\n').length
-  await expect(page.getByTestId('edit-meeting-details-button')).toBeEnabled()
-  await page.getByTestId('edit-meeting-details-button').click()
+  await page.getByTestId('meeting-settings-button').click()
   await expect(page.getByTestId('meeting-title-input')).toBeEnabled()
   await page.getByTestId('meeting-title-input').fill(`${title}（改名）`)
-  await page.getByTestId('save-meeting-details-button').click()
+  await page.getByTestId('save-meeting-settings-button').click()
   expect(readFileSync(eventsPath, 'utf8').trim().split('\n')).toHaveLength(beforeTitleOnly)
 
   await page.reload()
   await page.getByTestId('past-topics-button').click()
   await page.getByTestId('meeting-list-item').filter({ hasText: `${title}（改名）` }).locator('.meeting-item').click()
-  await page.getByTestId('edit-meeting-details-button').click()
+  await page.getByTestId('meeting-settings-button').click()
   await expect(page.getByTestId('meeting-goal-input')).toHaveValue(revisedGoal)
-  await page.getByRole('button', { name: '取消', exact: true }).click()
+  await page.getByTestId('meeting-settings-close-button').click()
 
   await page.getByTestId('past-topics-button').click()
   page.once('dialog', (dialog) => dialog.accept())
@@ -361,8 +375,8 @@ test('New Case persists the complete relay model roster and reload hydrates that
 
 test('Settings persists complete participant assignments across reload', async ({ page }) => {
   const replacementPayloads: Array<Record<string, string>> = []
-  await page.route('**/meetings/*/participant-models', async (route) => {
-    replacementPayloads.push((route.request().postDataJSON() as { models: Record<string, string> }).models)
+  await page.route('**/meetings/*/settings', async (route) => {
+    replacementPayloads.push((route.request().postDataJSON() as { participant_models: Record<string, string> }).participant_models)
     await route.continue()
   })
   await page.goto('/')
@@ -394,9 +408,9 @@ test('Settings rolls back a rejected participant assignment and shows the server
 }) => {
   await page.goto('/')
   await createMeetingViaNewCase(page, `E2E assignment rollback ${Date.now()}`)
-  await page.getByTestId('settings-button').click()
+  await page.getByTestId('meeting-settings-button').click()
   await expect(page.getByTestId('blue-model-select')).toHaveValue('mock-fast')
-  await page.route(/\/meetings\/[^/]+\/participant-models$/, (route) =>
+  await page.route(/\/meetings\/[^/]+\/settings$/, (route) =>
     route.fulfill({
       status: 500,
       contentType: 'application/json',
@@ -405,14 +419,15 @@ test('Settings rolls back a rejected participant assignment and shows the server
   )
 
   await page.getByTestId('blue-model-select').selectOption('mock-slow')
-
-  await expect(page.getByTestId('assignment-update-error')).toHaveText('Assignment save failed')
-  await expect(page.getByTestId('blue-model-select')).toHaveValue('mock-fast')
+  await page.getByTestId('save-meeting-settings-button').click()
+  await expect(page.getByRole('alert')).toContainText('Assignment save failed')
+  await expect(page.getByTestId('blue-model-select')).toHaveValue('mock-slow')
+  page.once('dialog', (dialog) => dialog.accept())
   await closeSettings(page)
   await expect(page.getByTestId('seat-model-label-blue')).toHaveText('Mock · mock-fast')
 })
 
-test('a delayed assignment save cannot overwrite a meeting selected while it was pending', async ({
+test('a delayed assignment save blocks leaving and remains scoped to its meeting', async ({
   page,
 }) => {
   await page.goto('/')
@@ -427,7 +442,7 @@ test('a delayed assignment save cannot overwrite a meeting selected while it was
     await page.getByTestId('past-topics-button').click()
     await page.getByTestId('meeting-list-item').filter({ hasText: topic }).locator('.meeting-item').click()
   }
-  const assignmentUrl = new RegExp(`/meetings/${meetingAId}/participant-models$`)
+  const assignmentUrl = new RegExp(`/meetings/${meetingAId}/settings$`)
 
   await openTopic(topicA)
   let releaseSuccess!: () => void
@@ -441,47 +456,30 @@ test('a delayed assignment save cannot overwrite a meeting selected while it was
     const response = await route.fetch()
     await route.fulfill({ response })
   })
-  await page.getByTestId('settings-button').click()
+  await page.getByTestId('meeting-settings-button').click()
   const successResponse = page.waitForResponse(assignmentUrl)
   await page.getByTestId('blue-model-select').selectOption('mock-slow')
+  await page.getByTestId('save-meeting-settings-button').click()
   await expect.poll(() => successIntercepted).toBe(true)
-  await closeSettings(page)
-  await openTopic(topicB)
+  let savingAlertMessage = ''
+  page.once('dialog', async (dialog) => {
+    savingAlertMessage = dialog.message()
+    await dialog.accept()
+  })
+  await page.getByTestId('meeting-settings-close-button').click()
+  expect(savingAlertMessage).toContain('正在儲存')
+  await expect(page.getByTestId('meeting-settings-drawer')).toBeVisible()
+
   releaseSuccess()
   await successResponse
-
-  await expect(page.getByTestId('meeting-title-display')).toHaveText(topicB)
-  await expect(page.getByTestId('seat-model-label-blue')).toContainText('mock-broken')
-
-  await page.unroute(assignmentUrl)
-  await openTopic(topicA)
-  let releaseFailure!: () => void
-  const failureGate = new Promise<void>((resolve) => {
-    releaseFailure = resolve
-  })
-  let failureIntercepted = false
-  await page.route(assignmentUrl, async (route) => {
-    failureIntercepted = true
-    await failureGate
-    await route.fulfill({
-      status: 500,
-      contentType: 'application/json',
-      body: JSON.stringify({ detail: 'Delayed A save failed' }),
-    })
-  })
-  await page.getByTestId('settings-button').click()
-  const failureResponse = page.waitForResponse(assignmentUrl)
-  await page.getByTestId('blue-model-select').selectOption('mock-broken')
-  await expect.poll(() => failureIntercepted).toBe(true)
-  await closeSettings(page)
+  await expect(page.getByTestId('seat-model-label-blue')).toContainText('mock-slow')
   await openTopic(topicB)
-  releaseFailure()
-  await failureResponse
 
   await expect(page.getByTestId('meeting-title-display')).toHaveText(topicB)
   await expect(page.getByTestId('seat-model-label-blue')).toContainText('mock-broken')
-  await page.getByTestId('settings-button').click()
-  await expect(page.getByTestId('assignment-update-error')).toHaveCount(0)
+
+  await openTopic(topicA)
+  await expect(page.getByTestId('seat-model-label-blue')).toContainText('mock-slow')
 })
 
 test('a deleted assigned model shows the backend fallback warning without persisting it', async ({
@@ -511,7 +509,7 @@ test('a deleted assigned model shows the backend fallback warning without persis
   await page.reload()
   await page.getByTestId('past-topics-button').click()
   await page.getByTestId('meeting-list-item').filter({ hasText: topic }).locator('.meeting-item').click()
-  await page.getByTestId('settings-button').click()
+  await page.getByTestId('meeting-settings-button').click()
   await expect(page.getByTestId('assignment-fallback-warning')).toContainText(deletedModelId)
 
   const projected = await (await page.request.get(`${apiOrigin}/meetings/${meetingId}`)).json()
@@ -625,21 +623,21 @@ test('legacy recovery hydration trusts the participant projection instead of eve
 
 // Generalized model-assignment helper (mode-system slice B task 9 made the model-select
 // testid role-derived - `${role.toLowerCase()}-model-select` - for any mode's roster, not
-// just red-blue's Blue/Red/Judge). Leaves the Settings modal open, same as before.
+// just red-blue's Blue/Red/Judge). Leaves the meeting-settings drawer open.
 async function setRoleModelsInSettings(page: Page, assignments: Record<string, string>) {
-  await page.getByTestId('settings-button').click()
+  await page.getByTestId('meeting-settings-button').click()
   for (const [role, model] of Object.entries(assignments)) {
     const select = page.getByTestId(`${role.toLowerCase()}-model-select`)
     if ((await select.inputValue()) === model) continue
-    const response = page.waitForResponse(
-      (candidate) =>
-        candidate.request().method() === 'PUT' &&
-        candidate.url().includes('/participant-models'),
-    )
     await select.selectOption(model)
-    await response
-    await expect(select).toBeEnabled()
   }
+  const saveButton = page.getByTestId('save-meeting-settings-button')
+  if (await saveButton.isDisabled()) return
+  const response = page.waitForResponse(
+    (candidate) => candidate.request().method() === 'PUT' && candidate.url().endsWith('/settings'),
+  )
+  await saveButton.click()
+  await response
 }
 
 async function setModelsInSettings(
@@ -650,8 +648,13 @@ async function setModelsInSettings(
 }
 
 async function closeSettings(page: Page) {
-  await page.getByTestId('settings-close-button').click()
-  await expect(page.getByTestId('settings-modal')).not.toBeVisible()
+  if (await page.getByTestId('meeting-settings-drawer').isVisible().catch(() => false)) {
+    await page.getByTestId('meeting-settings-close-button').click()
+    await expect(page.getByTestId('meeting-settings-drawer')).not.toBeVisible()
+  } else {
+    await page.getByTestId('settings-close-button').click()
+    await expect(page.getByTestId('settings-modal')).not.toBeVisible()
+  }
 }
 
 async function openRoleDrawer(page: Page, role: 'blue' | 'red' | 'judge' | 'chairman') {
@@ -755,9 +758,6 @@ test('user can run a mock meeting and add chair feedback', async ({ page }) => {
   await expect(page.getByTestId('role-seat-blue')).toHaveClass(/role-blue/)
 
   await setModelsInSettings(page, { blue: 'mock-slow', red: 'mock-slow', judge: 'mock-slow' })
-  await page.getByTestId('test-blue-model-button').click()
-  await expect(page.getByTestId('model-test-status')).toContainText('藍軍：可用')
-  await expect(page.getByTestId('model-test-status')).toContainText('測試')
   await closeSettings(page)
 
   await page.getByTestId('start-meeting-button').click()
@@ -899,6 +899,9 @@ test('user can run a mock meeting and add chair feedback', async ({ page }) => {
   await page.getByTestId('records-close-button').click()
 
   await setModelsInSettings(page, { blue: 'mock-slow', red: 'mock-slow', judge: 'mock-slow' })
+  await closeSettings(page)
+  await page.getByTestId('settings-button').click()
+  await page.getByTestId('advanced-settings-tab').click()
   await page.getByTestId('dev-mode-toggle').check()
   await closeSettings(page)
 
@@ -1163,7 +1166,9 @@ test('a completed fixed round stays on the explicit new-round action after a Hum
 
   await expect(page.getByTestId('start-meeting-button')).toContainText('開始新回合')
   await page.getByTestId('chair-message-input').fill('主席補充：請議會針對成本做更仔細的討論。')
+  const noteSaved = page.waitForResponse((response) => response.request().method() === 'POST' && response.url().endsWith('/messages'))
   await page.getByTestId('send-chair-message-button').click()
+  await noteSaved
   await expect(page.getByTestId('operation-status')).toContainText('狀態：等待中')
   await expect(page.getByTestId('start-meeting-button')).toContainText('開始新回合')
 
@@ -1193,34 +1198,30 @@ test('a completed fixed round stays on the explicit new-round action after a Hum
 
 test('scene switcher persists the selected scene across a reload', async ({ page }) => {
   await page.goto('/')
+  const topic = `E2E persisted meeting scene ${Date.now()}`
+  await createMeetingViaNewCase(page, topic)
 
   const stageScene = page.getByTestId('council-stage').locator('.stage-scene')
   await expect(stageScene).toHaveAttribute('data-scene', 'meeting-room')
 
-  // Cycle through all three registered scenes (scenes.ts's `scenes` array), not just
-  // one, so a future scene added to the registry without wiring up its switch/persist
-  // path correctly would show up here too.
-  await page.getByTestId('settings-button').click()
+  await page.getByTestId('meeting-settings-button').click()
   await page.getByTestId('scene-select').selectOption('courtroom')
+  await page.getByTestId('save-meeting-settings-button').click()
   await expect(stageScene).toHaveAttribute('data-scene', 'courtroom')
 
-  await page.getByTestId('scene-select').selectOption('default-chamber')
-  await expect(stageScene).toHaveAttribute('data-scene', 'default-chamber')
-  await page.getByTestId('settings-close-button').click()
-
   await page.reload()
-  await expect(page.getByTestId('council-stage').locator('.stage-scene')).toHaveAttribute(
-    'data-scene',
-    'default-chamber',
-  )
+  await page.getByTestId('past-topics-button').click()
+  await page.getByTestId('meeting-list-item').filter({ hasText: topic }).locator('.meeting-item').click()
+  await expect(stageScene).toHaveAttribute('data-scene', 'courtroom')
 })
 
 test('switching to the courtroom scene renders its own seat positions', async ({ page }) => {
   await page.goto('/')
+  await createMeetingViaNewCase(page, `E2E courtroom scene ${Date.now()}`)
 
-  await page.getByTestId('settings-button').click()
+  await page.getByTestId('meeting-settings-button').click()
   await page.getByTestId('scene-select').selectOption('courtroom')
-  await page.getByTestId('settings-close-button').click()
+  await page.getByTestId('save-meeting-settings-button').click()
 
   await expect(page.getByTestId('council-stage').locator('.stage-scene')).toHaveAttribute(
     'data-scene',
@@ -1244,27 +1245,21 @@ test('switching to the courtroom scene renders its own seat positions', async ({
   await expect(page.getByTestId('role-seat-judge')).toBeVisible()
 })
 
-test('falls back to the default scene when localStorage holds an unknown scene id', async ({
+test('meeting scene selection is isolated when switching meetings', async ({
   page,
 }) => {
-  // Simulates a scene that was later removed from the registry - the stored id is stale,
-  // but the stage must still render something instead of going blank.
-  await page.addInitScript(() => {
-    window.localStorage.setItem('ai-council-scene', 'a-scene-that-no-longer-exists')
-  })
   await page.goto('/')
-
-  await expect(page.getByTestId('council-stage')).toBeVisible()
-  await expect(page.getByTestId('council-stage').locator('.stage-scene')).toHaveAttribute(
-    'data-scene',
-    'meeting-room',
-  )
-
-  // The stored preference itself is sanitized on load too - not just the stage's fallback
-  // computed - so the settings picker shows "議事廳" selected, not a blank <select> with
-  // no option matching the stale stored id.
-  await page.getByTestId('settings-button').click()
-  await expect(page.getByTestId('scene-select')).toHaveValue('meeting-room')
+  const topicA = `E2E isolated scene A ${Date.now()}`
+  const topicB = `E2E isolated scene B ${Date.now()}`
+  await createMeetingViaNewCase(page, topicA)
+  await page.getByTestId('meeting-settings-button').click()
+  await page.getByTestId('scene-select').selectOption('courtroom')
+  await page.getByTestId('save-meeting-settings-button').click()
+  await createMeetingViaNewCase(page, topicB)
+  await expect(page.getByTestId('council-stage').locator('.stage-scene')).toHaveAttribute('data-scene', 'meeting-room')
+  await page.getByTestId('past-topics-button').click()
+  await page.getByTestId('meeting-list-item').filter({ hasText: topicA }).locator('.meeting-item').click()
+  await expect(page.getByTestId('council-stage').locator('.stage-scene')).toHaveAttribute('data-scene', 'courtroom')
 })
 
 test('the main "開始新回合" action always starts a fresh fixed round', async ({ page }) => {
@@ -2111,15 +2106,14 @@ test('New Case blocks an empty model catalog and seat nameplates follow persiste
   await expect(page.getByTestId('seat-model-label-judge')).toHaveText('Custom OpenAI-compatible · mock-broken')
   await expect(page.getByTestId('seat-model-label-blue')).toHaveAttribute('title', 'Mock · mock-slow')
 
-  // Changing the model again in Settings must update the seat immediately -
-  // and persist through the explicit participant-model replacement endpoint.
-  await page.getByTestId('settings-button').click()
+  // Changing the model again in meeting settings is staged and saved atomically.
+  await page.getByTestId('meeting-settings-button').click()
   const saved = page.waitForResponse(
-    (response) => response.request().method() === 'PUT' && response.url().includes('/participant-models'),
+    (response) => response.request().method() === 'PUT' && response.url().endsWith('/settings'),
   )
   await page.getByTestId('blue-model-select').selectOption('mock-fast')
+  await page.getByTestId('save-meeting-settings-button').click()
   await saved
-  await page.getByTestId('settings-close-button').click()
   await expect(page.getByTestId('seat-model-label-blue')).toHaveText('Mock · mock-fast')
 
   await page.getByTestId('past-topics-button').click()
@@ -2154,10 +2148,10 @@ test('courtroom handles two confirmed issues one at a time before the final verd
   await expect(page.getByText('回合流程：')).toHaveCount(0)
   await page.getByTestId('advanced-options-button').click()
 
-  await page.getByTestId('edit-meeting-details-button').click()
+  await page.getByTestId('meeting-settings-button').click()
   await page.getByTestId('meeting-title-input').fill(`${topic}（修訂）`)
   await page.getByTestId('meeting-goal-input').fill('判斷被告是否應返還土地及孳息？')
-  await page.getByTestId('save-meeting-details-button').click()
+  await page.getByTestId('save-meeting-settings-button').click()
   await expect(page.getByTestId('meeting-title-display')).toHaveText(`${topic}（修訂）`)
 
   await page.getByTestId('add-courtroom-issue-button').click()
@@ -2177,20 +2171,25 @@ test('courtroom handles two confirmed issues one at a time before the final verd
   await page.getByTestId('confirm-courtroom-issues-button').click()
   await expect(page.getByTestId('courtroom-docket-status')).toHaveText('已確認')
 
-  await page.getByTestId('edit-meeting-details-button').click()
+  await page.getByTestId('meeting-settings-button').click()
   await expect(page.getByTestId('meeting-goal-input')).toHaveAttribute('readonly', '')
-  await expect(page.getByTestId('meeting-details-editor')).toContainText('目標已設為唯讀')
-  await page.getByRole('button', { name: '取消', exact: true }).click()
+  await expect(page.getByTestId('meeting-settings-drawer')).toContainText('爭點已確認')
+  await page.getByTestId('meeting-settings-close-button').click()
 
   const primary = page.getByTestId('courtroom-primary-action')
   await expect(primary).toContainText('開始此爭點')
+  await expect(primary).toContainText('下一位是原告代理人')
   await primary.click()
-  await expect(page.locator('[data-issue-id="issue-1"]')).toContainText('待裁定', { timeout: 15000 })
+  await expect(page.locator('[data-issue-id="issue-1"]')).toContainText('等待主席送交法官', { timeout: 15000 })
+  await expect(page.getByTestId('courtroom-awaiting-ruling-issue-1')).toHaveText(
+    '攻防已完成，等待主席送交法官；不會自動判斷。',
+  )
   await expect(page.locator('[data-issue-id="issue-2"]')).toContainText('待審')
-  await expect(primary).toContainText('送交爭點裁定')
+  await expect(primary).toContainText('請法官判斷此爭點')
+  await expect(page.getByTestId('courtroom-sticky-primary-action')).toHaveCSS('position', 'sticky')
 
   await page.getByTestId('chairman-action-select').selectOption('role:Defense')
-  await expect(page.getByTestId('send-chair-message-button')).toHaveText('請辯護律師回答')
+  await expect(page.getByTestId('send-chair-message-button')).toHaveText('請被告代理人回答')
   await page.getByTestId('chair-message-input').fill('請說明返還孳息的主要抗辯。')
   await page.getByTestId('send-chair-message-button').click()
   await expect(page.getByTestId('operation-status')).not.toContainText('執行中', { timeout: 15000 })
@@ -2202,13 +2201,14 @@ test('courtroom handles two confirmed issues one at a time before the final verd
   await expect(page.locator('[data-issue-id="issue-2"]')).toContainText('待審')
 
   await primary.click()
-  await expect(page.locator('[data-issue-id="issue-2"]')).toContainText('待裁定', { timeout: 15000 })
+  await expect(page.locator('[data-issue-id="issue-2"]')).toContainText('等待主席送交法官', { timeout: 15000 })
   await expect(page.getByTestId('courtroom-final-verdict')).toHaveCount(0)
   await primary.click()
   await expect(page.getByTestId('courtroom-ruling-issue-2')).toContainText('部分成立', { timeout: 15000 })
   await expect(primary).toContainText('最終判決')
   await primary.click()
   await expect(page.getByTestId('courtroom-final-verdict')).toContainText('Mock verdict', { timeout: 15000 })
+  await expect(page.getByTestId('courtroom-final-verdict')).not.toContainText('upheld')
 
   await page.reload()
   await page.getByTestId('past-topics-button').click()
@@ -2241,7 +2241,7 @@ test('courtroom exposes a failed final verdict retry and restores completion aft
 
   const primary = page.getByTestId('courtroom-primary-action')
   await primary.click()
-  await expect(page.locator('[data-issue-id="issue-1"]')).toContainText('待裁定', {
+  await expect(page.locator('[data-issue-id="issue-1"]')).toContainText('等待主席送交法官', {
     timeout: 15000,
   })
   await primary.click()
@@ -2314,7 +2314,7 @@ test('courtroom retry rejection rolls back pending roles and never reports false
   await page.getByTestId('courtroom-primary-action').click()
 
   const failure = page.getByTestId('courtroom-issue-failure-issue-1')
-  await expect(failure).toContainText('檢察官主張執行失敗，請重試', { timeout: 15000 })
+  await expect(failure).toContainText('主張方陳述執行失敗，請重試', { timeout: 15000 })
   await page.route('**/meetings/**/steps/**/retry', async (route) => {
     await route.fulfill({
       status: 409,
@@ -2325,8 +2325,8 @@ test('courtroom retry rejection rolls back pending roles and never reports false
 
   await page.getByTestId('retry-courtroom-issue-issue-1').click()
 
-  await expect(page.getByTestId('app-error')).toContainText('failed: 409')
-  await expect(failure).toContainText('檢察官主張執行失敗，請重試')
+  await expect(page.getByTestId('app-error')).toContainText('重試狀態已改變，請重新操作。')
+  await expect(failure).toContainText('主張方陳述執行失敗，請重試')
   await expect(page.getByTestId('retry-courtroom-issue-issue-1')).toBeEnabled()
   await expect(page.getByTestId('courtroom-workspace-feedback')).toHaveCount(0)
 
@@ -2396,7 +2396,10 @@ test('brainstorm mode creates member instances and runs fanout plus synthesis', 
   await closeSettings(page)
 
   await page.getByTestId('start-meeting-button').click()
-  await expect(page.getByTestId('role-seat-member-1')).toHaveAttribute('data-status', 'thinking')
+  // The local mock fanout can complete before Playwright samples the transient queue;
+  // either state proves the member left its initial waiting state, while the assertions
+  // below still require the complete fanout and synthesis result.
+  await expect(page.getByTestId('role-seat-member-1')).toHaveAttribute('data-status', /thinking|completed/)
   await expect(page.getByTestId('operation-status')).toContainText('狀態：已完成', { timeout: 15000 })
   await expect(page.getByTestId('operation-status')).toContainText('最後步驟：主持人彙整')
   await expect(page.getByTestId('role-seat-member-1')).toHaveAttribute('data-status', 'completed')
@@ -2567,12 +2570,511 @@ test('opening a courtroom meeting switches the stage to the courtroom scene, and
   await page.getByTestId('meetings-close-button').click()
 })
 
+test('ordinary restart archives the prior epoch without duplicating evidence', async ({ page }) => {
+  await page.goto('/')
+  const topic = `E2E ordinary restart ${Date.now()}`
+  await createMeetingViaNewCase(page, topic, {
+    caseFiles: [{ title: '原始證據', content: '唯一一份證據內容', visibleRoles: ['Blue', 'Red', 'Judge'] }],
+  })
+  await page.getByTestId('start-meeting-button').click()
+  await expect(page.getByTestId('operation-status')).toContainText('狀態：已完成', { timeout: 15000 })
+
+  await openAdvancedOptions(page)
+  await expect(page.getByTestId('restart-deliberation-button')).toBeDisabled()
+  await page.getByTestId('restart-reason-input').fill('改用新的評估方向')
+  await page.getByTestId('restart-deliberation-button').click()
+  await expect(page.getByTestId('operation-status')).toContainText('狀態：尚未開始')
+  await expect(page.getByTestId('case-materials-button')).toContainText('（1）')
+
+  await page.getByTestId('records-button').click()
+  const epochSelect = page.getByTestId('records-epoch-select')
+  await expect(epochSelect.locator('option')).toHaveCount(2)
+  await expect(epochSelect.locator('option').last()).toContainText('第 2 輪（目前）')
+  await page.getByTestId('records-tab-transcript').click()
+  await expect(page.getByTestId('transcript-preview')).not.toContainText('Mock response')
+  const archivedEpoch = await epochSelect.locator('option').first().getAttribute('value')
+  await epochSelect.selectOption(archivedEpoch!)
+  await expect(page.getByTestId('transcript-preview')).toContainText('Mock response')
+  await expect(page.getByText('正在查看封存輪次。')).toBeVisible()
+  await expect(page.getByRole('link', { name: '下載 Markdown' })).toHaveAttribute('href', new RegExp(`epoch=${archivedEpoch}`))
+  await expect(page.getByTestId('download-all-epochs')).toHaveAttribute('href', /epoch=all/)
+  await page.getByTestId('records-close-button').click()
+
+  await page.getByTestId('case-materials-button').click()
+  await expect(page.getByTestId('case-evidence-card')).toHaveCount(1)
+  await expect(page.getByTestId('case-evidence-card')).toContainText('[證物一]')
+  await expect(page.getByTestId('case-evidence-card')).toContainText('v1')
+})
+
+test('archived records show their historical case-material revision without replacing live materials', async ({ page }) => {
+  await page.goto('/')
+  const meetingId = await createMeetingViaNewCase(page, `E2E archived materials ${Date.now()}`, {
+    caseFiles: [{ title: '原始證據', content: '第一版內容', visibleRoles: ['Blue', 'Judge'] }],
+  })
+  const apiOrigin = process.env.E2E_API_BASE_URL ?? 'http://127.0.0.1:5009'
+  const initialMaterials = await (await page.request.get(`${apiOrigin}/meetings/${meetingId}/materials`)).json()
+  const evidenceId = initialMaterials.evidence[0].id as string
+  const noted = await page.request.post(`${apiOrigin}/meetings/${meetingId}/materials/notes`, {
+    data: {
+      revision: initialMaterials.revision,
+      title: '封存輪次備註',
+      content: '只應顯示在當時快照的備註內容',
+      visible_roles: ['Red', 'Judge'],
+    },
+  })
+  expect(noted.ok()).toBeTruthy()
+
+  await page.getByTestId('start-meeting-button').click()
+  await expect(page.getByTestId('operation-status')).toContainText('狀態：已完成', { timeout: 15000 })
+  await openAdvancedOptions(page)
+  await page.getByTestId('restart-reason-input').fill('建立可查閱的封存輪次')
+  await page.getByTestId('restart-deliberation-button').click()
+  await expect(page.getByTestId('operation-status')).toContainText('狀態：尚未開始')
+
+  const versioned = await page.request.post(`${apiOrigin}/meetings/${meetingId}/materials/evidence/${evidenceId}/versions`, {
+    data: {
+      revision: (await noted.json()).revision,
+      title: '目前證據',
+      content: '第二版目前內容',
+      visible_roles: ['Blue', 'Red', 'Judge'],
+    },
+  })
+  expect(versioned.ok()).toBeTruthy()
+
+  let archivedMaterialAttempts = 0
+  await page.route(/\/materials\?revision=1$/, async (route) => {
+    archivedMaterialAttempts += 1
+    if (archivedMaterialAttempts === 1) {
+      await route.fulfill({ status: 503, contentType: 'application/json', body: JSON.stringify({ detail: '歷史案卷暫時無法載入' }) })
+      return
+    }
+    await route.continue()
+  })
+  await page.getByTestId('records-button').click()
+  const epochSelect = page.getByTestId('records-epoch-select')
+  const archivedEpoch = await epochSelect.locator('option').first().getAttribute('value')
+  await epochSelect.selectOption(archivedEpoch!)
+  await expect(page.getByTestId('records-load-error')).toContainText('歷史案卷暫時無法載入')
+  await expect(page.getByTestId('archived-materials-unavailable')).toHaveCount(0)
+  await page.getByTestId('retry-records-load-button').click()
+  const snapshot = page.getByTestId('archived-materials-snapshot')
+  await expect(snapshot).toContainText('本輪使用的案卷（修訂 1）')
+  await expect(page.getByTestId('archived-evidence-card')).toContainText('原始證據')
+  await expect(page.getByTestId('archived-evidence-card')).toContainText('v1 · 使用中')
+  await expect(page.getByTestId('archived-evidence-card')).toContainText('可見：藍軍、裁判')
+  await expect(page.getByTestId('archived-note-card')).toContainText('封存輪次備註')
+  await expect(page.getByTestId('archived-note-card')).toContainText('可見：紅軍、裁判')
+  await page.getByTestId('records-close-button').click()
+
+  await page.getByTestId('case-materials-button').click()
+  await expect(page.getByTestId('case-evidence-card')).toContainText('目前證據')
+  await expect(page.getByTestId('case-evidence-card')).toContainText('v2')
+  await expect(page.getByTestId('case-evidence-card')).toContainText('第二版目前內容')
+})
+
+test('archived records explain when a legacy epoch has no recoverable material revision', async ({ page }) => {
+  await page.goto('/')
+  const meetingId = await createMeetingViaNewCase(page, `E2E legacy archived materials ${Date.now()}`)
+  await page.getByTestId('start-meeting-button').click()
+  await expect(page.getByTestId('operation-status')).toContainText('狀態：已完成', { timeout: 15000 })
+  await openAdvancedOptions(page)
+  await page.getByTestId('restart-reason-input').fill('建立舊輪次示例')
+  const restarted = page.waitForResponse((response) => response.url().endsWith('/deliberations/restart'))
+  await page.getByTestId('restart-deliberation-button').click()
+  expect((await restarted).ok()).toBe(true)
+  await expect(page.getByTestId('advanced-options-panel')).toHaveCount(0)
+
+  await page.route(new RegExp(`/meetings/${meetingId}/deliberations$`), async (route) => {
+    const response = await route.fetch()
+    const body = await response.json()
+    delete body.epochs[0].materials_revision
+    await route.fulfill({ response, json: body })
+  })
+  await page.getByTestId('records-button').click()
+  const epochSelect = page.getByTestId('records-epoch-select')
+  const archivedEpoch = await epochSelect.locator('option').first().getAttribute('value')
+  await epochSelect.selectOption(archivedEpoch!)
+  await expect(page.getByTestId('archived-materials-unavailable')).toContainText('無法還原當時的證據與備註')
+  await expect(page.getByTestId('archived-materials-unavailable')).toContainText('目前案卷不受影響')
+})
+
+test('versioned evidence and promoted notes trigger a visible restart gate', async ({ page }) => {
+  await page.goto('/')
+  const topic = `E2E material impact ${Date.now()}`
+  await createMeetingViaNewCase(page, topic, {
+    caseFiles: [{ title: '初始卷證', content: '初始內容', visibleRoles: ['Blue', 'Red', 'Judge'] }],
+  })
+  await page.getByTestId('chair-message-input').fill('跨輪都應知道的重要事實')
+  await page.getByTestId('send-chair-message-button').click()
+  await page.getByTestId('records-button').click()
+  await page.getByTestId('promote-case-note-button').last().click()
+  const promotionForm = page.getByTestId('promote-case-note-form')
+  await promotionForm.getByTestId('promote-case-note-title').fill('固定案件事實')
+  await promotionForm.locator('input[type="checkbox"]').last().uncheck()
+  const promoted = page.waitForResponse((response) => response.url().includes('/promote-to-note'))
+  await promotionForm.getByTestId('confirm-promote-case-note').click()
+  await promoted
+  await page.getByTestId('records-close-button').click()
+  await page.getByTestId('case-materials-button').click()
+  await expect(page.getByTestId('case-note-card')).toContainText('固定案件事實')
+  await expect(page.getByTestId('case-note-card')).toContainText('可見：藍軍、紅軍')
+  await page.getByTestId('deactivate-note-button').click()
+  await expect(page.getByTestId('case-note-card')).toContainText('已停用')
+  await page.getByTestId('reactivate-note-button').click()
+  await expect(page.getByTestId('case-note-card')).toContainText('使用中')
+  await page.getByTestId('case-materials-close-button').click()
+
+  await page.getByTestId('start-meeting-button').click()
+  await expect(page.getByTestId('operation-status')).toContainText('狀態：已完成', { timeout: 15000 })
+  await page.getByTestId('case-materials-button').click()
+  await page.getByTestId('case-evidence-card').getByRole('button', { name: '建立新版本' }).click()
+  const form = page.getByTestId('case-material-form')
+  await form.getByLabel('內容').fill('補充後的第二版內容')
+  await form.getByRole('button', { name: '保存新版本' }).click()
+  await expect(page.getByTestId('case-evidence-card')).toContainText('v2')
+  await page.getByTestId('deactivate-evidence-button').click()
+  await expect(page.getByTestId('case-evidence-card')).toContainText('已停用')
+  await page.getByTestId('reactivate-evidence-button').click()
+  await expect(page.getByTestId('case-evidence-card')).toContainText('使用中')
+  await expect(page.getByTestId('materials-impact-warning')).toContainText('輸入原因並重開全部審議')
+  await page.getByTestId('case-materials-close-button').click()
+
+  await openAdvancedOptions(page)
+  await expect(page.getByText('案卷已變更，必須完成其中一種重開才能繼續 AI。')).toBeVisible()
+  await page.getByTestId('restart-reason-input').fill('納入新版證據')
+  const restarted = page.waitForResponse((response) => response.url().endsWith('/deliberations/restart'))
+  await page.getByTestId('restart-deliberation-button').click()
+  await restarted
+  await expect(page.getByTestId('advanced-options-panel')).toHaveCount(0)
+  await page.getByTestId('case-materials-button').click()
+  await expect(page.getByTestId('materials-impact-warning')).toHaveCount(0)
+  await expect(page.getByTestId('case-evidence-card')).toContainText('[證物一]')
+  await expect(page.getByTestId('case-evidence-card')).toContainText('v2')
+  await expect(page.getByTestId('case-note-card')).toContainText('固定案件事實')
+})
+
+test('courtroom exposes current issue, all deliberation, and rebuild restart scopes', async ({ page }) => {
+  await page.goto('/')
+  const topic = `E2E courtroom restart scopes ${Date.now()}`
+  await createMeetingViaNewCase(page, topic, { modeId: 'courtroom', caseType: 'civil' })
+  await page.getByTestId('add-courtroom-issue-button').click()
+  await page.getByTestId('courtroom-issue-title-0').fill('第一爭點')
+  await page.getByTestId('save-courtroom-issues-button').click()
+  await page.getByTestId('confirm-courtroom-issues-button').click()
+  await page.getByTestId('courtroom-primary-action').click()
+  await expect(page.getByTestId('courtroom-primary-action')).toContainText('請法官判斷此爭點', { timeout: 15000 })
+
+  await openAdvancedOptions(page)
+  await page.getByTestId('restart-scope-select').selectOption('current_issue')
+  await page.getByTestId('restart-reason-input').fill('重新攻防目前爭點')
+  const currentRestart = page.waitForResponse((response) => response.url().endsWith('/deliberations/restart'))
+  await page.getByTestId('restart-deliberation-button').click()
+  await currentRestart
+  await expect(page.getByTestId('advanced-options-panel')).toHaveCount(0)
+  await expect(page.locator('[data-issue-id="issue-1"]')).toContainText('待審')
+
+  await openAdvancedOptions(page)
+  await page.getByTestId('restart-scope-select').selectOption('all_deliberation')
+  await page.getByTestId('restart-reason-input').fill('全部重新審議')
+  const allRestart = page.waitForResponse((response) => response.url().endsWith('/deliberations/restart'))
+  await page.getByTestId('restart-deliberation-button').click()
+  await allRestart
+  await expect(page.getByTestId('advanced-options-panel')).toHaveCount(0)
+  await expect(page.getByTestId('courtroom-docket-status')).toHaveText('已確認')
+
+  await openAdvancedOptions(page)
+  await page.getByTestId('restart-scope-select').selectOption('rebuild_issues')
+  await page.getByTestId('restart-reason-input').fill('重新整理爭點與目標')
+  const rebuildRestart = page.waitForResponse((response) => response.url().endsWith('/deliberations/restart'))
+  await page.getByTestId('restart-deliberation-button').click()
+  await rebuildRestart
+  await expect(page.getByTestId('courtroom-docket-status')).toContainText('草稿')
+  await page.getByTestId('meeting-settings-button').click()
+  await expect(page.getByTestId('meeting-goal-input')).toBeEditable()
+  await expect(page.getByTestId('meeting-case-type-select')).toBeEnabled()
+})
+
+test('courtroom can restart a selected ruled issue after the final verdict without losing other rulings', async ({ page }) => {
+  await page.goto('/')
+  await createMeetingViaNewCase(page, `E2E restart ruled issue ${Date.now()}`, {
+    modeId: 'courtroom',
+    caseType: 'civil',
+  })
+  await page.getByTestId('add-courtroom-issue-button').click()
+  await page.getByTestId('courtroom-issue-title-0').fill('第一爭點')
+  await page.getByTestId('add-courtroom-issue-button').click()
+  await page.getByTestId('courtroom-issue-title-1').fill('第二爭點')
+  await page.getByTestId('save-courtroom-issues-button').click()
+  await page.getByTestId('confirm-courtroom-issues-button').click()
+
+  const primary = page.getByTestId('courtroom-primary-action')
+  for (const nextLabel of ['請法官判斷此爭點', '進入下一爭點：第二爭點', '請法官判斷此爭點', '最終判決']) {
+    await primary.click()
+    await expect(primary).toContainText(nextLabel, { timeout: 15000 })
+  }
+  await primary.click()
+  await expect(page.getByTestId('courtroom-final-verdict')).toBeVisible({ timeout: 15000 })
+  await expect(page.getByTestId('courtroom-ruling-issue-1')).toBeVisible()
+  await expect(page.getByTestId('courtroom-ruling-issue-2')).toBeVisible()
+
+  await openAdvancedOptions(page)
+  await page.getByTestId('restart-scope-select').selectOption('current_issue')
+  await expect(page.getByTestId('restart-issue-select')).toBeVisible()
+  await page.getByTestId('restart-issue-select').selectOption('issue-1')
+  await page.getByTestId('restart-reason-input').fill('補充第一爭點的攻防')
+  const restarted = page.waitForResponse((response) => response.url().endsWith('/deliberations/restart'))
+  await page.getByTestId('restart-deliberation-button').click()
+  expect((await restarted).ok()).toBe(true)
+
+  await expect(page.getByTestId('courtroom-final-verdict')).toHaveCount(0)
+  await expect(page.locator('[data-issue-id="issue-1"]')).toContainText('待審')
+  await expect(page.getByTestId('courtroom-ruling-issue-1')).toHaveCount(0)
+  await expect(page.getByTestId('courtroom-ruling-issue-2')).toBeVisible()
+})
+
+test('criminal courtroom uses criminal roles and reaches a penalty-safe final verdict', async ({ page }) => {
+  await page.goto('/')
+  await createMeetingViaNewCase(page, `E2E criminal final ${Date.now()}`, {
+    modeId: 'courtroom',
+    caseType: 'criminal',
+  })
+  await expect(page.getByTestId('role-seat-prosecutor')).toContainText('檢察官')
+  await expect(page.getByTestId('role-seat-defense')).toContainText('辯護人')
+  await page.getByTestId('add-courtroom-issue-button').click()
+  await page.getByTestId('courtroom-issue-title-0').fill('被告是否成立本項罪責？')
+  await page.getByTestId('save-courtroom-issues-button').click()
+  await page.getByTestId('confirm-courtroom-issues-button').click()
+  const primary = page.getByTestId('courtroom-primary-action')
+  await primary.click()
+  await expect(primary).toContainText('請法官判斷此爭點', { timeout: 15000 })
+  await primary.click()
+  await expect(primary).toContainText('最終判決', { timeout: 15000 })
+  await primary.click()
+  const finalVerdict = page.getByTestId('courtroom-final-verdict')
+  await expect(finalVerdict).toContainText('量刑考量', { timeout: 15000 })
+  await expect(finalVerdict).toContainText('Mock factor')
+  await expect(finalVerdict).not.toContainText(/有期徒刑|拘役|罰金\s*[0-9一二三四五六七八九十百千萬]/)
+})
+
+test('meeting drawers remain usable at 375px and dirty close requires confirmation', async ({ page }) => {
+  await page.setViewportSize({ width: 375, height: 812 })
+  await page.goto('/')
+  const topic = `E2E narrow meeting drawer ${Date.now()}`
+  await createMeetingViaNewCase(page, topic)
+  await page.getByTestId('meeting-settings-button').click()
+  const drawer = page.getByTestId('meeting-settings-drawer')
+  await expect.poll(async () => {
+    const box = await drawer.boundingBox()
+    return box ? box.x + box.width : Number.POSITIVE_INFINITY
+  }).toBeLessThanOrEqual(375)
+  await page.getByTestId('meeting-title-input').fill(`${topic} 未儲存`)
+  page.once('dialog', (dialog) => dialog.dismiss())
+  await page.getByTestId('meeting-settings-close-button').click()
+  await expect(drawer).toBeVisible()
+  page.once('dialog', (dialog) => dialog.accept())
+  await page.getByTestId('meeting-settings-close-button').click()
+  await expect(drawer).not.toBeVisible()
+  await expect(page.getByTestId('meeting-title-display')).toHaveText(topic)
+
+  await page.getByTestId('case-materials-button').click()
+  await expect.poll(async () => {
+    const box = await page.getByTestId('case-materials-drawer').boundingBox()
+    return box ? box.x + box.width : Number.POSITIVE_INFINITY
+  }).toBeLessThanOrEqual(375)
+  await page.getByTestId('case-materials-close-button').click()
+
+  await createMeetingViaNewCase(page, `E2E narrow courtroom ${Date.now()}`, { modeId: 'courtroom', caseType: 'civil' })
+  await page.getByTestId('add-courtroom-issue-button').click()
+  await page.getByTestId('courtroom-issue-title-0').fill('行動版粘性按鈕爭點')
+  await page.getByTestId('save-courtroom-issues-button').click()
+  await page.getByTestId('confirm-courtroom-issues-button').click()
+  const stickyAction = page.getByTestId('courtroom-sticky-primary-action')
+  await expect(stickyAction).toBeVisible()
+  await expect.poll(async () => {
+    const box = await stickyAction.boundingBox()
+    return box ? box.y + box.height : Number.POSITIVE_INFINITY
+  }).toBeLessThanOrEqual(812)
+})
+
+test('running meeting settings are read-only with an explicit explanation', async ({ page }) => {
+  await page.goto('/')
+  await createMeetingViaNewCase(page, `E2E running settings lock ${Date.now()}`, {
+    modelAssignments: { Blue: 'mock-slow', Red: 'mock-slow', Judge: 'mock-slow' },
+  })
+  await page.getByTestId('start-meeting-button').click()
+  await page.getByTestId('meeting-settings-button').click()
+  await expect(page.getByTestId('meeting-settings-running-notice')).toContainText('完成前無法編輯或儲存')
+  await expect(page.getByTestId('meeting-title-input')).toBeDisabled()
+  await expect(page.getByTestId('meeting-goal-input')).toBeDisabled()
+  await expect(page.getByTestId('scene-select')).toBeDisabled()
+  await expect(page.getByTestId('blue-model-select')).toBeDisabled()
+  await expect(page.getByTestId('save-meeting-settings-button')).toBeDisabled()
+})
+
+test('dirty meeting settings centrally block navigation and a slow save cannot be closed', async ({ page }) => {
+  await page.goto('/')
+  const topic = `E2E guarded settings ${Date.now()}`
+  await createMeetingViaNewCase(page, topic)
+  await page.getByTestId('meeting-settings-button').click()
+  await page.getByTestId('meeting-title-input').fill(`${topic} draft`)
+
+  page.once('dialog', (dialog) => dialog.dismiss())
+  await page.getByTestId('meeting-settings-close-button').click()
+  await expect(page.getByTestId('meeting-settings-drawer')).toBeVisible()
+  await expect(page.getByTestId('meeting-title-input')).toHaveValue(`${topic} draft`)
+
+  await page.route(/\/meetings\/[^/]+\/settings$/, async (route) => {
+    await new Promise((resolve) => setTimeout(resolve, 500))
+    await route.continue()
+  })
+  const saved = page.waitForResponse((response) => response.request().method() === 'PUT' && response.url().endsWith('/settings'))
+  await page.getByTestId('save-meeting-settings-button').click()
+  page.once('dialog', (dialog) => {
+    expect(dialog.type()).toBe('alert')
+    expect(dialog.message()).toContain('正在儲存')
+    void dialog.accept()
+  })
+  await page.getByTestId('meeting-settings-close-button').click()
+  await expect(page.getByTestId('meeting-settings-drawer')).toBeVisible()
+  expect((await saved).ok()).toBe(true)
+  await expect(page.getByTestId('meeting-settings-drawer')).not.toBeVisible({ timeout: 5000 })
+  await expect(page.getByTestId('meeting-title-display')).toHaveText(`${topic} draft`)
+})
+
+test('late records and case-material responses from another meeting are discarded', async ({ page }) => {
+  await page.goto('/')
+  const topicA = `E2E late drawer A ${Date.now()}`
+  const topicB = `E2E late drawer B ${Date.now()}`
+  const meetingAId = await createMeetingViaNewCase(page, topicA, {
+    caseFiles: [{ title: '只屬於 A', content: 'A 案證據', visibleRoles: ['Blue', 'Red', 'Judge'] }],
+  })
+  await createMeetingViaNewCase(page, topicB)
+  await page.getByTestId('past-topics-button').click()
+  await page.getByTestId('meeting-list-item').filter({ hasText: topicA }).locator('.meeting-item').click()
+  await expect(page.getByTestId('meetings-modal')).not.toBeVisible()
+
+  let releaseMaterials!: () => void
+  const materialsGate = new Promise<void>((resolve) => { releaseMaterials = resolve })
+  await page.route(new RegExp(`/meetings/${meetingAId}/materials$`), async (route) => {
+    const response = await route.fetch()
+    await materialsGate
+    await route.fulfill({ response })
+  })
+  const requestedMaterials = page.waitForRequest((request) => request.url().endsWith(`/meetings/${meetingAId}/materials`))
+  await page.getByTestId('case-materials-button').click()
+  await requestedMaterials
+  await page.getByTestId('case-materials-close-button').click()
+  await page.getByTestId('past-topics-button').click()
+  await page.getByTestId('meeting-list-item').filter({ hasText: topicB }).locator('.meeting-item').click()
+  await page.getByTestId('case-materials-button').click()
+  releaseMaterials()
+  await expect(page.getByTestId('case-evidence-card')).toHaveCount(0)
+  await page.getByTestId('case-materials-close-button').click()
+
+  await page.getByTestId('past-topics-button').click()
+  await page.getByTestId('meeting-list-item').filter({ hasText: topicA }).locator('.meeting-item').click()
+  let releaseHistory!: () => void
+  const historyGate = new Promise<void>((resolve) => { releaseHistory = resolve })
+  await page.route(new RegExp(`/meetings/${meetingAId}/deliberations$`), async (route) => {
+    await historyGate
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        active_epoch_id: 'late-a-2',
+        active_epoch_number: 2,
+        epochs: [
+          { id: 'late-a-1', number: 1, event_count: 3 },
+          { id: 'late-a-2', number: 2, event_count: 0 },
+        ],
+      }),
+    })
+  })
+  const requestedHistory = page.waitForRequest((request) => request.url().endsWith(`/meetings/${meetingAId}/deliberations`))
+  await page.getByTestId('records-button').click()
+  await requestedHistory
+  await page.getByTestId('records-close-button').click()
+  await page.getByTestId('past-topics-button').click()
+  await page.getByTestId('meeting-list-item').filter({ hasText: topicB }).locator('.meeting-item').click()
+  await page.getByTestId('records-button').click()
+  await expect(page.getByTestId('records-epoch-select').locator('option')).toHaveCount(1)
+  releaseHistory()
+  await expect(page.getByTestId('records-epoch-select').locator('option')).toHaveCount(1)
+  await expect(page.getByTestId('step-timeline')).toContainText(topicB)
+})
+
+test('late transcript refresh from a previous meeting cannot overwrite the active meeting', async ({ page }) => {
+  await page.goto('/')
+  const topicA = `E2E late transcript A ${Date.now()}`
+  const topicB = `E2E late transcript B ${Date.now()}`
+  const meetingAId = await createMeetingViaNewCase(page, topicA)
+  await createMeetingViaNewCase(page, topicB)
+  await page.getByTestId('past-topics-button').click()
+  await page.getByTestId('meeting-list-item').filter({ hasText: topicA }).locator('.meeting-item').click()
+  await expect(page.getByTestId('meetings-modal')).not.toBeVisible()
+
+  let releaseTranscript!: () => void
+  const transcriptGate = new Promise<void>((resolve) => { releaseTranscript = resolve })
+  await page.route(new RegExp(`/meetings/${meetingAId}/transcript\\.md`), async (route) => {
+    await transcriptGate
+    await route.fulfill({ status: 200, contentType: 'text/markdown', body: '# LATE A TRANSCRIPT MUST NOT LEAK' })
+  })
+  const requestedTranscript = page.waitForRequest((request) => request.url().includes(`/meetings/${meetingAId}/transcript.md`))
+  await page.getByTestId('start-meeting-button').click()
+  await requestedTranscript
+  await page.getByTestId('past-topics-button').click()
+  await page.getByTestId('meeting-list-item').filter({ hasText: topicB }).locator('.meeting-item').click()
+  const lateTranscriptResponse = page.waitForResponse((response) => response.url().includes(`/meetings/${meetingAId}/transcript.md`))
+  releaseTranscript()
+  await lateTranscriptResponse
+
+  await page.getByTestId('records-button').click()
+  await page.getByTestId('records-tab-transcript').click()
+  await expect(page.getByTestId('transcript-preview')).not.toContainText('LATE A TRANSCRIPT MUST NOT LEAK')
+  await expect(page.getByTestId('step-timeline')).toHaveCount(0)
+})
+
+test('records and case-material initial load errors stay local and can be retried', async ({ page }) => {
+  await page.goto('/')
+  const meetingId = await createMeetingViaNewCase(page, `E2E drawer retry ${Date.now()}`)
+  let recordsAttempts = 0
+  await page.route(new RegExp(`/meetings/${meetingId}/deliberations$`), async (route) => {
+    recordsAttempts += 1
+    if (recordsAttempts === 1) {
+      await route.fulfill({ status: 503, contentType: 'application/json', body: JSON.stringify({ detail: '紀錄暫時無法載入' }) })
+      return
+    }
+    await route.continue()
+  })
+  await page.getByTestId('records-button').click()
+  await expect(page.getByTestId('records-load-error')).toContainText('紀錄暫時無法載入')
+  await page.getByTestId('retry-records-load-button').click()
+  await expect(page.getByTestId('records-epoch-select')).toBeVisible()
+  await expect(page.getByTestId('records-load-error')).toHaveCount(0)
+  await page.getByTestId('records-close-button').click()
+
+  let materialsAttempts = 0
+  await page.route(new RegExp(`/meetings/${meetingId}/materials$`), async (route) => {
+    materialsAttempts += 1
+    if (materialsAttempts === 1) {
+      await route.fulfill({ status: 503, contentType: 'application/json', body: JSON.stringify({ detail: '案卷暫時無法載入' }) })
+      return
+    }
+    await route.continue()
+  })
+  await page.getByTestId('case-materials-button').click()
+  await expect(page.getByTestId('materials-load-error')).toContainText('案卷暫時無法載入')
+  await page.getByTestId('retry-materials-load-button').click()
+  await expect(page.getByTestId('case-material-form')).toBeVisible()
+  await expect(page.getByTestId('materials-load-error')).toHaveCount(0)
+})
+
 test('model manager tab supports create, test, edit, and delete for a model config', async ({
   page,
 }) => {
   await page.goto('/')
 
-  const modelId = 'e2e-added-mock'
+  const modelId = `e2e-added-mock-${Date.now()}`
   await page.getByTestId('settings-button').click()
   await page.getByTestId('model-manager-tab').click()
 
@@ -2585,12 +3087,6 @@ test('model manager tab supports create, test, edit, and delete for a model conf
   await expect(page.getByTestId('model-form')).not.toBeVisible()
   await expect(modelManagerRow(page, modelId)).toBeVisible()
 
-  // The role dropdowns in 一般 tab read the same `models` ref refreshModels() just updated -
-  // no reload needed for the new model to show up there.
-  await page.getByTestId('general-tab').click()
-  await expect(page.getByTestId('blue-model-select').locator(`option[value="${modelId}"]`)).toHaveCount(1)
-
-  await page.getByTestId('model-manager-tab').click()
   await page.getByTestId(`test-model-button-${modelId}`).click()
   await expect(modelManagerRow(page, modelId).locator('.status-dot')).toHaveAttribute(
     'data-status',
@@ -2621,10 +3117,11 @@ test('model manager tab supports create, test, edit, and delete for a model conf
   await page.getByTestId(`delete-model-button-${modelId}`).click()
   await expect(modelManagerRow(page, modelId)).toHaveCount(0)
 
-  await page.getByTestId('general-tab').click()
-  await expect(page.getByTestId('blue-model-select').locator(`option[value="${modelId}"]`)).toHaveCount(0)
-
   await closeSettings(page)
+  await page.getByTestId('new-case-button').click()
+  await page.getByTestId('mode-select-card-red-blue').getByRole('button', { name: '選擇此模式' }).click()
+  await expect(page.getByTestId('new-case-blue-model-select').locator(`option[value="${modelId}"]`)).toHaveCount(0)
+  await page.getByTestId('new-case-close-button').click()
 })
 
 test('model manager shows accessible connection-test progress, slow feedback, and success', async ({
@@ -2705,7 +3202,7 @@ test('model health remains projected after connection-test feedback is unmounted
 
   await page.getByTestId(`test-model-button-${modelId}`).click()
   await expect(row.getByTestId(`model-test-feedback-${modelId}`)).toHaveText('連線成功')
-  await page.getByTestId('general-tab').click()
+  await page.getByTestId('advanced-settings-tab').click()
   await page.getByTestId('model-manager-tab').click()
   await expect(modelManagerRow(page, modelId).locator('.status-dot')).toHaveAttribute(
     'data-status',
@@ -2726,7 +3223,7 @@ test('model health remains projected after connection-test feedback is unmounted
   await expect(
     modelManagerRow(page, modelId).getByTestId(`model-test-feedback-${modelId}`),
   ).toContainText('測試失敗：')
-  await page.getByTestId('general-tab').click()
+  await page.getByTestId('advanced-settings-tab').click()
   await page.getByTestId('model-manager-tab').click()
   const failedRow = modelManagerRow(page, modelId)
   await expect(failedRow.locator('.status-dot')).toHaveAttribute('data-status', 'unavailable')
@@ -2914,7 +3411,7 @@ test('an invalidated model refresh cannot overwrite a newer shared health projec
         requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
       ),
   )
-  await page.getByTestId('general-tab').click()
+  await page.getByTestId('advanced-settings-tab').click()
   await page.getByTestId('model-manager-tab').click()
   const row = modelManagerRow(page, 'mock-fast')
   await expect(row.locator('.status-dot')).toHaveAttribute('data-status', 'available')
@@ -3200,11 +3697,14 @@ test('guided CLI preset validates and saves an advanced exact model ID', async (
   await expect(modelManagerRow(page, modelId)).toContainText(
     'Subscription CLI · AGY · agy-exact-x',
   )
-  await page.getByTestId('general-tab').click()
-  await expect(page.getByTestId('blue-model-select').locator(`option[value="${modelId}"]`)).toHaveText(
+  await closeSettings(page)
+  await page.getByTestId('new-case-button').click()
+  await page.getByTestId('mode-select-card-red-blue').getByRole('button', { name: '選擇此模式' }).click()
+  await expect(page.getByTestId('new-case-blue-model-select').locator(`option[value="${modelId}"]`)).toHaveText(
     'Subscription CLI · AGY · agy-exact-x',
   )
-  await page.getByTestId('model-manager-tab').click()
+  await page.getByTestId('new-case-close-button').click()
+  await page.getByTestId('settings-button').click()
   page.once('dialog', (dialog) => dialog.accept())
   await page.getByTestId(`delete-model-button-${modelId}`).click()
   await closeSettings(page)
@@ -3215,10 +3715,6 @@ test('model labels show Provider and exact model across model list and role sele
 }) => {
   await page.goto('/')
   await page.getByTestId('settings-button').click()
-  await expect(page.getByTestId('blue-model-select').locator('option[value="claude-api"]')).toHaveText(
-    'Anthropic · claude-sonnet-4-5',
-  )
-  await page.getByTestId('model-manager-tab').click()
   await expect(modelManagerRow(page, 'qwen27')).toContainText(
     'Custom OpenAI-compatible · bartowski/Qwen_Qwen3.6-27B-GGUF',
   )
@@ -3232,6 +3728,9 @@ test('model labels show Provider and exact model across model list and role sele
     .getByTestId('mode-select-card-red-blue')
     .getByRole('button', { name: '選擇此模式' })
     .click()
+  await expect(
+    page.getByTestId('new-case-blue-model-select').locator('option[value="claude-api"]'),
+  ).toHaveText('Anthropic · claude-sonnet-4-5')
   await expect(
     page.getByTestId('new-case-blue-model-select').locator('option[value="gemini-api"]'),
   ).toHaveText('Gemini · gemini-2.5-pro')
@@ -3457,7 +3956,11 @@ test('saving a recognized markerless CLI preset does not inject cli_provider', a
   await page.getByTestId(`edit-model-button-${modelId}`).click()
   await expect(page.getByTestId('model-form-cli-preset-select')).toHaveValue('claude')
   await expect(page.getByTestId('model-form-cli-model-mode-select')).toHaveValue('default')
+  const defaultUpdate = page.waitForResponse((response) =>
+    response.request().method() === 'PUT' && response.url().endsWith(`/models/${modelId}`),
+  )
   await page.getByTestId('model-form-save').click()
+  expect((await defaultUpdate).ok()).toBe(true)
   expect(updatePayload).toMatchObject({
     command: ['claude', '-p', '{prompt}'],
     extra_body: {},
@@ -3468,7 +3971,11 @@ test('saving a recognized markerless CLI preset does not inject cli_provider', a
   await page.getByTestId(`edit-model-button-${modelId}`).click()
   await page.getByTestId('model-form-cli-model-mode-select').selectOption('exact')
   await page.getByTestId('model-form-cli-exact-model-input').fill('claude-exact-x')
+  const exactUpdate = page.waitForResponse((response) =>
+    response.request().method() === 'PUT' && response.url().endsWith(`/models/${modelId}`),
+  )
   await page.getByTestId('model-form-save').click()
+  expect((await exactUpdate).ok()).toBe(true)
   expect(updatePayload).toMatchObject({
     command: ['claude', '--model', 'claude-exact-x', '-p', '{prompt}'],
     extra_body: { cli_provider: 'claude' },
@@ -3555,37 +4062,24 @@ test('deleting a model that a role has selected falls back to the first remainin
   page,
 }) => {
   await page.goto('/')
-
-  // Role dropdowns exist from page load via the default mode's roster (councilRoles),
-  // with no meeting required - capture the current first option before touching anything,
-  // rather than hardcoding e.g. 'mock-fast', so this doesn't depend on models.yaml's
-  // example content or on other tests' ordering.
   await page.getByTestId('settings-button').click()
-  const blueSelect = page.getByTestId('blue-model-select')
-  const firstModelId = await blueSelect.locator('option').first().getAttribute('value')
-  expect(firstModelId).toBeTruthy()
-
   const modelId = 'e2e-fallback-mock'
-  await page.getByTestId('model-manager-tab').click()
   await page.getByTestId('add-model-button').click()
   await page.getByTestId('model-form-id-input').fill(modelId)
   await page.getByTestId('model-form-save').click()
   await expect(modelManagerRow(page, modelId)).toBeVisible()
-
-  await page.getByTestId('general-tab').click()
-  await blueSelect.selectOption(modelId)
-  await expect(blueSelect).toHaveValue(modelId)
-
-  await page.getByTestId('model-manager-tab').click()
+  await closeSettings(page)
+  const topic = `E2E deleted assigned model ${Date.now()}`
+  await createMeetingViaNewCase(page, topic, { modelAssignments: { Blue: modelId } })
+  await expect(page.getByTestId('seat-model-label-blue')).toContainText(modelId)
+  await page.getByTestId('settings-button').click()
   page.once('dialog', (dialog) => dialog.accept())
   await page.getByTestId(`delete-model-button-${modelId}`).click()
   await expect(modelManagerRow(page, modelId)).toHaveCount(0)
-
-  // useCouncil.ts's sanitize watch (Task 4) clears any role pointing at a now-deleted
-  // model id and falls back to models.value[0] - assert Blue actually moved, not just that
-  // the deleted id disappeared from the option list.
-  await page.getByTestId('general-tab').click()
-  await expect(blueSelect).toHaveValue(firstModelId!)
-
   await closeSettings(page)
+  await page.getByTestId('past-topics-button').click()
+  await page.getByTestId('meeting-list-item').filter({ hasText: topic }).locator('.meeting-item').click()
+  await expect(page.getByTestId('seat-model-label-blue')).toHaveText('Mock · mock-fast')
+  await page.getByTestId('meeting-settings-button').click()
+  await expect(page.getByTestId('assignment-fallback-warning')).toContainText(modelId)
 })

@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import shutil
+import uuid
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -55,6 +57,27 @@ class MeetingRepository:
         if not case_files_path.exists():
             return []
         return json.loads(case_files_path.read_text(encoding="utf-8"))
+
+    def read_case_materials_raw(
+        self, meeting_id: str
+    ) -> list[dict[str, Any]] | dict[str, Any] | None:
+        path = self._case_files_path(meeting_id)
+        if not path.exists():
+            return None
+        return json.loads(path.read_text(encoding="utf-8"))
+
+    def save_case_materials(self, meeting_id: str, materials: dict[str, Any]) -> None:
+        path = self._case_files_path(meeting_id)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        temp_path = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
+        try:
+            temp_path.write_text(
+                json.dumps(materials, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+            os.replace(temp_path, path)
+        finally:
+            temp_path.unlink(missing_ok=True)
 
     def _event_log_path(self, meeting_id: str) -> Path:
         return self._meeting_dir(meeting_id) / "events.jsonl"

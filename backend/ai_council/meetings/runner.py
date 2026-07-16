@@ -3,12 +3,15 @@ from __future__ import annotations
 import re
 import time
 import uuid
+from copy import deepcopy
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any, Callable, Literal, Protocol, TypedDict
 
 from ai_council.meetings.execution_state import ActiveExecutionState, MeetingExecutionStateStore
+from ai_council.meetings.deliberation import DeliberationEpochs
+from ai_council.meetings.input_envelope import CASE_EVIDENCE_BY_ROLE_INPUT
 from ai_council.meetings.repository import MeetingRepository
 from ai_council.meetings.transcript import TranscriptProjector
 from ai_council.models.adapters import AdapterError, ModelRequest, ModelResponse
@@ -28,6 +31,8 @@ REQUIRED_JSON_SCHEMA_HASH = DEFAULT_OUTPUT_SCHEMA_REGISTRY.get(DEFAULT_OUTPUT_SC
 LIFECYCLE_STATUSES = {"cancelled", "closed", "reopened"}
 CASE_FILES_BY_ROLE_INPUT = "__case_files_by_role"
 CASE_FILES_DEFAULT_ROLE = "__default__"
+MATERIALS_REVISION_INPUT = "__materials_revision"
+MATERIALS_REFS_INPUT = "__materials_refs"
 
 
 class ModelAdapter(Protocol):
@@ -57,6 +62,7 @@ class StepDefinition:
     role: str
     template_name: str
     output_schema_id: str = DEFAULT_OUTPUT_SCHEMA_ID
+    semantic_validator: Callable[[dict[str, Any], dict[str, Any] | None], None] | None = None
 
 
 @dataclass(frozen=True)
@@ -168,7 +174,7 @@ class MeetingRunner:
         goal: str,
         model_assignments: dict[str, ModelConfig],
         plan: RelayPlan,
-        inputs: dict[str, str] | None = None,
+        inputs: dict[str, Any] | None = None,
     ) -> None:
         if self._is_terminal(meeting_id):
             return
@@ -195,7 +201,7 @@ class MeetingRunner:
         goal: str,
         model_assignments: dict[str, ModelConfig],
         plan: RelayPlan,
-        inputs: dict[str, str] | None = None,
+        inputs: dict[str, Any] | None = None,
         role_display_names: dict[str, str] | None = None,
     ) -> None:
         failed_event = self._latest_event_for_step(meeting_id, step_id)
@@ -236,7 +242,7 @@ class MeetingRunner:
         failed_event: dict[str, object],
         goal: str,
         model_assignments: dict[str, ModelConfig],
-        inputs: dict[str, str] | None,
+        inputs: dict[str, Any] | None,
         role_display_names: dict[str, str],
     ) -> None:
         role = str(failed_event.get("role", ""))
@@ -246,7 +252,7 @@ class MeetingRunner:
         instruction_event = next(
             (
                 event
-                for event in self.repository.read_events(meeting_id)
+                for event in self._active_events(meeting_id)
                 if event.get("event_id") == instruction_event_id
             ),
             None,
@@ -272,14 +278,7 @@ class MeetingRunner:
             meeting_id=meeting_id,
             goal=goal,
             model_assignments=model_assignments,
-            inputs=self._inputs_for_role(
-                inputs,
-                role,
-                extra={
-                    "instruction": instruction,
-                    "role_display_name": role_display_names.get(role, role),
-                },
-            ),
+            inputs=inputs,
             step=step,
             attempt=int(failed_event.get("attempt", 1)) + 1,
             round_number=int(failed_event.get("round", 1)),
@@ -290,11 +289,21 @@ class MeetingRunner:
                 "in_response_to_event_id": instruction_event_id,
                 **{
                     key: failed_event[key]
-                    for key in ("docket_revision", "issue_id")
+                    for key in (
+                        "docket_revision",
+                        "issue_id",
+                        "case_type",
+                        "role_display",
+                        "phase_display",
+                    )
                     if key in failed_event
                 },
             },
             prior_transcript_override=None,
+            prompt_input_overrides={
+                "instruction": instruction,
+                "role_display_name": role_display_names.get(role, role),
+            },
         )
 
     def respond_as_role(
@@ -307,7 +316,7 @@ class MeetingRunner:
         instruction: str,
         model_assignments: dict[str, ModelConfig],
         plan: RelayPlan,
-        inputs: dict[str, str] | None = None,
+        inputs: dict[str, Any] | None = None,
         context_fields: dict[str, object] | None = None,
     ) -> None:
         if self._is_terminal(meeting_id):
@@ -322,6 +331,14 @@ class MeetingRunner:
             raise ValueError(f"Missing model assignment for role: {role}")
         directed_sequence = self._next_directed_response_number(meeting_id)
         context_fields = context_fields or {}
+        instruction_context_fields = {
+            **context_fields,
+            **(
+                {"role_display": "主席", "phase_display": "主席指示"}
+                if context_fields.get("case_type") in {"civil", "criminal"}
+                else {}
+            ),
+        }
         instruction_event_id = f"{meeting_id}:human-directed-message:{uuid.uuid4().hex}"
         self.repository.append_event(
             meeting_id,
@@ -335,7 +352,8 @@ class MeetingRunner:
                 "interaction_type": "directed-role-instruction",
                 "target_role_id": role,
                 "content": instruction,
-                **context_fields,
+                **self._audit_event_fields(inputs),
+                **instruction_context_fields,
             },
         )
         directed_step = StepDefinition(
@@ -348,14 +366,7 @@ class MeetingRunner:
             meeting_id=meeting_id,
             goal=goal,
             model_assignments=model_assignments,
-            inputs=self._inputs_for_role(
-                inputs,
-                role,
-                extra={
-                    "instruction": instruction,
-                    "role_display_name": role_display_name,
-                },
-            ),
+            inputs=inputs,
             step=directed_step,
             attempt=1,
             round_number=self._next_round_number(meeting_id, plan),
@@ -367,6 +378,10 @@ class MeetingRunner:
                 **context_fields,
             },
             prior_transcript_override=None,
+            prompt_input_overrides={
+                "instruction": instruction,
+                "role_display_name": role_display_name,
+            },
         )
 
     def respond_as_sequence(
@@ -377,7 +392,7 @@ class MeetingRunner:
         roles: list[str],
         model_assignments: dict[str, ModelConfig],
         plan: RelayPlan,
-        inputs: dict[str, str] | None = None,
+        inputs: dict[str, Any] | None = None,
     ) -> None:
         if self._is_terminal(meeting_id):
             return
@@ -425,12 +440,12 @@ class MeetingRunner:
         goal: str,
         model_assignments: dict[str, ModelConfig],
         plan: ParallelPlan,
-        inputs: dict[str, str] | None = None,
+        inputs: dict[str, Any] | None = None,
     ) -> None:
         if self._is_terminal(meeting_id):
             return
         round_number = self._next_parallel_round_number(meeting_id)
-        events = self.repository.read_events(meeting_id)
+        events = self._active_events(meeting_id)
         if self._parallel_synthesis_completed(events, round_number):
             return
         if self._parallel_has_failed_member(events, round_number):
@@ -468,7 +483,7 @@ class MeetingRunner:
         goal: str,
         model_assignments: dict[str, ModelConfig],
         plan: ParallelPlan,
-        inputs: dict[str, str] | None = None,
+        inputs: dict[str, Any] | None = None,
     ) -> None:
         failed_event = self._latest_event_for_step(meeting_id, step_id)
         if not failed_event or failed_event.get("status") != "failed":
@@ -503,7 +518,7 @@ class MeetingRunner:
         self.repository.append_event(
             meeting_id,
             {
-                "event_id": f"{meeting_id}:cancelled",
+                "event_id": self._event_id(meeting_id, f"{meeting_id}:cancelled"),
                 "meeting_id": meeting_id,
                 "step_id": "meeting",
                 "role": "System",
@@ -522,7 +537,7 @@ class MeetingRunner:
         self.repository.append_event(
             meeting_id,
             {
-                "event_id": f"{meeting_id}:closed",
+                "event_id": self._event_id(meeting_id, f"{meeting_id}:closed"),
                 "meeting_id": meeting_id,
                 "step_id": "meeting",
                 "role": "System",
@@ -538,7 +553,7 @@ class MeetingRunner:
         goal: str,
         model_assignments: dict[str, ModelConfig],
         steps: list[StepDefinition],
-        inputs: dict[str, str] | None,
+        inputs: dict[str, Any] | None,
         start_index: int,
         attempt_override: int | None,
         round_number: int,
@@ -567,13 +582,14 @@ class MeetingRunner:
         meeting_id: str,
         goal: str,
         model_assignments: dict[str, ModelConfig],
-        inputs: dict[str, str] | None,
+        inputs: dict[str, Any] | None,
         step: StepDefinition,
         attempt: int,
         round_number: int,
         event_step_id: str | None,
         extra_event_fields: dict[str, object] | None,
         prior_transcript_override: str | None,
+        prompt_input_overrides: dict[str, str] | None = None,
         parse_retries_remaining: int = 1,
     ) -> bool:
         if self._is_terminal(meeting_id):
@@ -581,6 +597,10 @@ class MeetingRunner:
         config = model_assignments[step.role]
         event_step_id = event_step_id or self._event_step_id(step.step_id, round_number)
         extra_event_fields = extra_event_fields or {}
+        extra_event_fields = {
+            **extra_event_fields,
+            **self._audit_event_fields(inputs),
+        }
         output_schema = self.output_schemas.get(step.output_schema_id)
         prompt_metadata = self._prompt_metadata(step.template_name, output_schema)
         prompt = self.prompt_renderer.render(
@@ -591,12 +611,14 @@ class MeetingRunner:
                 prior_transcript_override
                 if prior_transcript_override is not None
                 else self.transcript_projector.project(
-                    self.repository.read_events(meeting_id),
+                    self._active_events(meeting_id),
                     title=goal,
                 )
             ),
             required_json_schema=output_schema.schema,
-            inputs=self._inputs_for_role(inputs, step.role),
+            inputs=self._prompt_inputs_for_role(
+                inputs, step.role, extra=prompt_input_overrides
+            ),
         )
 
         def emit_token_delta(content: str) -> None:
@@ -642,10 +664,19 @@ class MeetingRunner:
                 )
             )
             parsed_output = output_schema.parse(response.raw_output)
+            if step.semantic_validator is not None:
+                try:
+                    step.semantic_validator(parsed_output, inputs)
+                except ValueError as error:
+                    raise OutputParseError(
+                        str(error), raw_output=response.raw_output
+                    ) from error
         except OutputParseError as error:
             self._clear_active_execution(meeting_id)
             failed_event: dict[str, object] = {
-                "event_id": f"{meeting_id}:{event_step_id}:attempt-{attempt}:failed",
+                "event_id": self._event_id(
+                    meeting_id, f"{meeting_id}:{event_step_id}:attempt-{attempt}:failed"
+                ),
                 "meeting_id": meeting_id,
                 "step_id": event_step_id,
                 "base_step_id": step.step_id,
@@ -684,13 +715,16 @@ class MeetingRunner:
                     event_step_id=event_step_id,
                     extra_event_fields=extra_event_fields,
                     prior_transcript_override=prior_transcript_override,
+                    prompt_input_overrides=prompt_input_overrides,
                     parse_retries_remaining=parse_retries_remaining - 1,
                 )
             return False
         except (AdapterError, KeyError) as error:
             self._clear_active_execution(meeting_id)
             failed_event = {
-                "event_id": f"{meeting_id}:{event_step_id}:attempt-{attempt}:failed",
+                "event_id": self._event_id(
+                    meeting_id, f"{meeting_id}:{event_step_id}:attempt-{attempt}:failed"
+                ),
                 "meeting_id": meeting_id,
                 "step_id": event_step_id,
                 "base_step_id": step.step_id,
@@ -719,7 +753,9 @@ class MeetingRunner:
 
         self._clear_active_execution(meeting_id)
         completed_event = {
-            "event_id": f"{meeting_id}:{event_step_id}:attempt-{attempt}:completed",
+            "event_id": self._event_id(
+                meeting_id, f"{meeting_id}:{event_step_id}:attempt-{attempt}:completed"
+            ),
             "meeting_id": meeting_id,
             "step_id": event_step_id,
             "base_step_id": step.step_id,
@@ -756,7 +792,7 @@ class MeetingRunner:
         goal: str,
         model_assignments: dict[str, ModelConfig],
         members: list[ParallelMemberStep],
-        inputs: dict[str, str] | None,
+        inputs: dict[str, Any] | None,
         round_number: int,
         attempt: int,
     ) -> None:
@@ -788,7 +824,7 @@ class MeetingRunner:
         goal: str,
         model_assignments: dict[str, ModelConfig],
         member: ParallelMemberStep,
-        inputs: dict[str, str] | None,
+        inputs: dict[str, Any] | None,
         round_number: int,
         attempt: int,
     ) -> list[dict[str, object]]:
@@ -801,11 +837,11 @@ class MeetingRunner:
             role=member.role,
             goal=goal,
             prior_transcript=self.transcript_projector.project(
-                self.repository.read_events(meeting_id),
+                self._active_events(meeting_id),
                 title=goal,
             ),
             required_json_schema=output_schema.schema,
-            inputs=self._inputs_for_role(
+            inputs=self._prompt_inputs_for_role(
                 inputs,
                 member.role,
                 extra={
@@ -815,6 +851,7 @@ class MeetingRunner:
             ),
         )
         events: list[dict[str, object]] = []
+        audit_event_fields = self._audit_event_fields(inputs)
         for current_attempt in (attempt, attempt + 1):
             if current_attempt != attempt and self._is_terminal(meeting_id):
                 return events
@@ -847,6 +884,7 @@ class MeetingRunner:
                         started_clock=started_clock,
                         prompt_metadata=prompt_metadata,
                     )
+                failure_event.update(audit_event_fields)
                 if self._is_terminal(meeting_id):
                     events.append(self._discarded_terminal_attempt(failure_event))
                     return events
@@ -868,14 +906,16 @@ class MeetingRunner:
                         started_clock=started_clock,
                         prompt_metadata=prompt_metadata,
                     )
+                failure_event.update(audit_event_fields)
                 if self._is_terminal(meeting_id):
                     failure_event = self._discarded_terminal_attempt(failure_event)
                 events.append(failure_event)
                 return events
 
             completed_event: dict[str, object] = {
-                "event_id": (
-                    f"{meeting_id}:{event_step_id}:attempt-{current_attempt}:completed"
+                "event_id": self._event_id(
+                    meeting_id,
+                    f"{meeting_id}:{event_step_id}:attempt-{current_attempt}:completed",
                 ),
                 "meeting_id": meeting_id,
                 "step_id": event_step_id,
@@ -892,6 +932,7 @@ class MeetingRunner:
                 "status": "completed",
                 **self._timing_fields(started_at, started_clock),
             }
+            completed_event.update(audit_event_fields)
             if response.token_usage is not None:
                 completed_event["token_usage"] = response.token_usage
             if self._is_terminal(meeting_id):
@@ -900,9 +941,8 @@ class MeetingRunner:
             return events
         return events
 
-    @classmethod
     def _parallel_member_failure_event(
-        cls,
+        self,
         *,
         meeting_id: str,
         event_step_id: str,
@@ -919,7 +959,9 @@ class MeetingRunner:
         prompt_metadata: dict[str, object],
     ) -> dict[str, object]:
         event: dict[str, object] = {
-            "event_id": f"{meeting_id}:{event_step_id}:attempt-{attempt}:failed",
+            "event_id": self._event_id(
+                meeting_id, f"{meeting_id}:{event_step_id}:attempt-{attempt}:failed"
+            ),
             "meeting_id": meeting_id,
             "step_id": event_step_id,
             "base_step_id": member.step_id,
@@ -930,17 +972,17 @@ class MeetingRunner:
             "adapter": config.adapter,
             "prompt_messages": [{"role": "user", "content": prompt}],
             "status": "failed",
-            "failure_kind": cls._failure_kind(error),
+            "failure_kind": self._failure_kind(error),
             "error": str(error),
             "retry_scheduled": retry_scheduled,
-            **cls._timing_fields(started_at, started_clock),
+            **self._timing_fields(started_at, started_clock),
             **prompt_metadata,
         }
         if isinstance(error, OutputParseError):
             event["raw_output"] = error.raw_output
         if response is not None and response.token_usage is not None:
             event["token_usage"] = response.token_usage
-        cls._add_adapter_excerpts(event, error)
+        self._add_adapter_excerpts(event, error)
         return event
 
     @staticmethod
@@ -994,10 +1036,10 @@ class MeetingRunner:
         goal: str,
         model_assignments: dict[str, ModelConfig],
         plan: ParallelPlan,
-        inputs: dict[str, str] | None,
+        inputs: dict[str, Any] | None,
         round_number: int,
     ) -> None:
-        events = self.repository.read_events(meeting_id)
+        events = self._active_events(meeting_id)
         if self._parallel_synthesis_completed(events, round_number):
             return
         if not all(self._parallel_member_completed(events, member, round_number) for member in plan.members):
@@ -1047,6 +1089,9 @@ class MeetingRunner:
             "adapter": adapter,
             "prompt_messages": [{"role": "user", "content": prompt}],
             "status": "running",
+            "deliberation_epoch_id": DeliberationEpochs.view(
+                self.repository.read_events(meeting_id)
+            ).active_epoch.id,
             **prompt_metadata,
         }
         for key in [
@@ -1059,9 +1104,14 @@ class MeetingRunner:
             "issue_id",
             "issue_phase",
             "courtroom_operation",
+            "materials_revision",
+            "materials_refs",
+            "case_type",
+            "role_display",
+            "phase_display",
         ]:
             value = extra_event_fields.get(key)
-            if isinstance(value, (str, int)):
+            if isinstance(value, (str, int, list)):
                 state[key] = value
         self.execution_state_store.save_active(meeting_id, state)
 
@@ -1081,7 +1131,7 @@ class MeetingRunner:
             "output_schema_hash": output_schema.hash,
         }
 
-    def _inputs_for_role(
+    def _prompt_inputs_for_role(
         self,
         inputs: dict[str, Any] | None,
         role: str,
@@ -1091,7 +1141,13 @@ class MeetingRunner:
         rendered = {
             str(key): str(value)
             for key, value in (inputs or {}).items()
-            if key != CASE_FILES_BY_ROLE_INPUT
+            if key
+            not in {
+                CASE_FILES_BY_ROLE_INPUT,
+                CASE_EVIDENCE_BY_ROLE_INPUT,
+                MATERIALS_REVISION_INPUT,
+                MATERIALS_REFS_INPUT,
+            }
         }
         case_files_by_role = (inputs or {}).get(CASE_FILES_BY_ROLE_INPUT)
         if isinstance(case_files_by_role, dict):
@@ -1101,6 +1157,27 @@ class MeetingRunner:
         if extra:
             rendered.update(extra)
         return rendered
+
+    @staticmethod
+    def _audit_event_fields(inputs: dict[str, Any] | None) -> dict[str, object]:
+        audit: dict[str, object] = {}
+        revision = (inputs or {}).get(MATERIALS_REVISION_INPUT)
+        if isinstance(revision, int):
+            audit["materials_revision"] = revision
+        references = (inputs or {}).get(MATERIALS_REFS_INPUT)
+        if isinstance(references, list):
+            audit["materials_refs"] = deepcopy(references)
+        return audit
+
+    def _active_events(self, meeting_id: str) -> list[dict[str, Any]]:
+        return DeliberationEpochs.view(
+            self.repository.read_events(meeting_id)
+        ).active_events
+
+    def _event_id(self, meeting_id: str, legacy_event_id: str) -> str:
+        return DeliberationEpochs.view(
+            self.repository.read_events(meeting_id)
+        ).event_id(legacy_event_id)
 
     def _is_terminal(self, meeting_id: str) -> bool:
         latest_lifecycle_status = None
@@ -1113,7 +1190,7 @@ class MeetingRunner:
     def _latest_event_for_step(self, meeting_id: str, step_id: str) -> dict[str, object] | None:
         matching_events = [
             event
-            for event in self.repository.read_events(meeting_id)
+            for event in self._active_events(meeting_id)
             if event.get("step_id") == step_id or event.get("base_step_id") == step_id
         ]
         return matching_events[-1] if matching_events else None
@@ -1121,7 +1198,7 @@ class MeetingRunner:
     def _first_incomplete_step_index(
         self, meeting_id: str, round_number: int, steps: list[StepDefinition]
     ) -> int | None:
-        events = self.repository.read_events(meeting_id)
+        events = self._active_events(meeting_id)
         for index, step in enumerate(steps):
             event_step_id = self._event_step_id(step.step_id, round_number)
             matching_events = [event for event in events if event.get("step_id") == event_step_id]
@@ -1135,7 +1212,7 @@ class MeetingRunner:
         final_step_id = plan.steps[-1].step_id
         completed_final_step_events = [
             event
-            for event in self.repository.read_events(meeting_id)
+            for event in self._active_events(meeting_id)
             if event.get("status") == "completed"
             and event.get("base_step_id", event.get("step_id")) == final_step_id
         ]
@@ -1144,7 +1221,7 @@ class MeetingRunner:
     def _next_parallel_round_number(self, meeting_id: str) -> int:
         completed_synthesis_events = [
             event
-            for event in self.repository.read_events(meeting_id)
+            for event in self._active_events(meeting_id)
             if event.get("status") == "completed"
             and event.get("base_step_id", event.get("step_id")) == "synthesis"
         ]
@@ -1193,7 +1270,7 @@ class MeetingRunner:
 
     def _synthesis_inputs(
         self,
-        inputs: dict[str, str] | None,
+        inputs: dict[str, Any] | None,
         events: list[dict[str, object]],
         plan: ParallelPlan,
         round_number: int,
@@ -1272,7 +1349,7 @@ class MeetingRunner:
     def _next_directed_response_number(self, meeting_id: str) -> int:
         directed_events = [
             event
-            for event in self.repository.read_events(meeting_id)
+            for event in self._active_events(meeting_id)
             if event.get("interaction_type") == "directed-role-response"
         ]
         existing_sequences = {
@@ -1285,7 +1362,7 @@ class MeetingRunner:
     def _next_role_sequence_number(self, meeting_id: str) -> int:
         sequence_events = [
             event
-            for event in self.repository.read_events(meeting_id)
+            for event in self._active_events(meeting_id)
             if event.get("interaction_type") == "role-sequence-response"
         ]
         existing_sequences = {

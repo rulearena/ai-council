@@ -3,6 +3,7 @@ import test from 'node:test'
 
 import {
   decisionDisplayLabel,
+  eventRoleDisplayName,
   interactionDisplayLabel,
   roleDisplayName,
   stepDisplayLabel,
@@ -21,6 +22,19 @@ const courtroom = {
     { role: 'Judge', label: '法官判決', template: 'courtroom_verdict' },
   ],
 }
+
+test('legacy courtroom events without snapshots keep original mode catalog labels', () => {
+  const participants = [{ role_id: 'Prosecutor', display_name: '原告代理人' }]
+  const legacy = {
+    role: 'Prosecutor',
+    step_id: 'courtroom-charge',
+    interaction_type: 'courtroom-issue-phase' as const,
+    issue_phase: 'charge' as const,
+  }
+
+  assert.equal(eventRoleDisplayName(courtroom, participants, legacy), '檢察官')
+  assert.equal(interactionDisplayLabel(courtroom, participants, legacy), '檢察官提出爭點主張')
+})
 
 test('courtroom roles and relay step ids use catalog presentation labels', () => {
   const participants = [

@@ -38,6 +38,7 @@ type DraftCaseFile = {
 
 const step = ref<Step>('mode')
 const selectedModeId = ref<string>(DEFAULT_MODE_ID)
+const caseType = ref<'' | 'civil' | 'criminal'>('')
 const selectedMode = computed<ModeDefinition>(
   () => modeCatalog.find((mode) => mode.id === selectedModeId.value) ?? modeCatalog[0],
 )
@@ -132,6 +133,7 @@ watch(
       step.value = 'mode'
       inputValues.value = {}
       caseFiles.value = []
+      caseType.value = ''
       clearMeetingCreationError()
       resetParallelMembers(selectedMode.value)
       resetModelAssignments()
@@ -167,7 +169,7 @@ async function refreshCaseFileLimits(generation: number) {
 }
 
 watch(
-  [title, goal, selectedModeId, inputValues, caseFiles, parallelMemberCount, parallelMembers],
+  [title, goal, selectedModeId, caseType, inputValues, caseFiles, parallelMemberCount, parallelMembers],
   clearMeetingCreationError,
   { deep: true },
 )
@@ -198,6 +200,7 @@ async function submit() {
     { ...inputValues.value },
     buildParticipants(),
     buildCaseFiles(),
+    caseType.value || undefined,
   )
   if (created) emit('close')
 }
@@ -402,6 +405,15 @@ function buildParticipants() {
       <label class="topic-input-row">
         目標
         <textarea v-model="goal" aria-label="目標" />
+      </label>
+
+      <label v-if="selectedMode.id === 'courtroom'" class="topic-input-row">
+        案件類型
+        <select v-model="caseType" aria-label="案件類型" data-testid="courtroom-case-type-select">
+          <option value="" disabled>請選擇民事或刑事</option>
+          <option value="civil">民事</option>
+          <option value="criminal">刑事</option>
+        </select>
       </label>
 
       <label v-for="input in textInputs" :key="input.id" class="topic-input-row">
@@ -637,7 +649,7 @@ function buildParticipants() {
         class="btn btn-primary create-meeting-cta"
         data-testid="create-meeting-button"
         @click="submit"
-        :disabled="loading || caseFileLimitsLoading || !caseFileLimits || !title.trim() || !goal.trim() || hasEmptyRequiredInput || hasIncompleteModelAssignment || hasIncompleteCaseFile || hasOversizedCaseFile || hasOversizedCaseFileTotal"
+        :disabled="loading || caseFileLimitsLoading || !caseFileLimits || !title.trim() || !goal.trim() || (selectedMode.id === 'courtroom' && !caseType) || hasEmptyRequiredInput || hasIncompleteModelAssignment || hasIncompleteCaseFile || hasOversizedCaseFile || hasOversizedCaseFileTotal"
       >
         建立
       </button>

@@ -15,6 +15,7 @@ from fastapi.testclient import TestClient
 
 from ai_council.api import (
     MeetingJobManager,
+    MeetingMetadataStore,
     ModelHealthCheckResult,
     ModelHealthCheckStore,
     create_app,
@@ -22,6 +23,8 @@ from ai_council.api import (
 from ai_council.models.adapters import AdapterError, MockModelAdapter, ModelRequest, ModelResponse
 from ai_council.models.config import ModelConfigRepository
 from ai_council.meetings.repository import MeetingRepository
+from ai_council.meetings.deliberation import DeliberationEpochs, RestartCommand
+from ai_council.meetings.case_materials import CaseMaterials
 
 TEST_BLUE_PROPOSE_TEMPLATE_HASH = "28f2086e8a3af020b64aa6f2b3e3abda9046507388e535b194eb1b9fec80fe7d"
 TEST_OUTPUT_SCHEMA_HASH = "15a45919652be5c70d3fd1690a10d37f876f19a14b2a76cc0f21765def281377"
@@ -61,6 +64,476 @@ def test_case_file_limits_endpoint_reports_default_limits(tmp_path: Path) -> Non
 
     assert response.status_code == 200
     assert response.json() == {"per_file_chars": 50_000, "total_chars": 120_000}
+
+
+def test_meeting_settings_are_saved_atomically_with_scene_and_complete_model_roster(
+    tmp_path: Path,
+) -> None:
+    client = TestClient(
+        create_test_app(
+            tmp_path,
+            models_yaml="""
+models:
+  - id: mock-fast
+    adapter: mock
+  - id: mock-careful
+    adapter: mock
+""".strip(),
+        )
+    )
+    created = client.post(
+        "/meetings", json={"title": "原名稱", "goal": "原目標"}
+    ).json()
+
+    response = client.put(
+        f"/meetings/{created['meeting_id']}/settings",
+        json={
+            "expected_revision": 0,
+            "title": "新名稱",
+            "goal": "新目標",
+            "case_type": None,
+            "scene": "default-chamber",
+            "participant_models": {
+                "Blue": "mock-careful",
+                "Red": "mock-fast",
+                "Judge": "mock-careful",
+            },
+        },
+    )
+
+    assert response.status_code == 200
+    saved = response.json()
+    assert saved["settings_revision"] == 1
+    assert (saved["title"], saved["goal"], saved["scene"]) == (
+        "新名稱",
+        "新目標",
+        "default-chamber",
+    )
+    assert {
+        participant["role_id"]: participant["model_config_id"]
+        for participant in saved["participants"]
+    } == {
+        "Blue": "mock-careful",
+        "Red": "mock-fast",
+        "Judge": "mock-careful",
+    }
+
+
+def test_invalid_meeting_settings_leave_every_field_unchanged(tmp_path: Path) -> None:
+    client = TestClient(create_test_app(tmp_path))
+    created = client.post(
+        "/meetings", json={"title": "原名稱", "goal": "原目標"}
+    ).json()
+    meeting_id = created["meeting_id"]
+
+    rejected = client.put(
+        f"/meetings/{meeting_id}/settings",
+        json={
+            "expected_revision": 0,
+            "title": "不應保存",
+            "goal": "不應保存",
+            "case_type": None,
+            "scene": "not-a-scene",
+            "participant_models": {
+                "Blue": "missing-model",
+                "Red": "mock-fast",
+                "Judge": "mock-fast",
+            },
+        },
+    )
+
+    assert rejected.status_code == 422
+    unchanged = client.get(f"/meetings/{meeting_id}").json()
+    assert unchanged["settings_revision"] == 0
+    assert unchanged["title"] == "原名稱"
+    assert unchanged["goal"] == "原目標"
+    assert unchanged["scene"] == "meeting-room"
+    assert {participant["model_config_id"] for participant in unchanged["participants"]} == {
+        "mock-fast"
+    }
+
+
+def test_meeting_settings_reject_stale_revision_and_confirmed_courtroom_goal_or_type(
+    tmp_path: Path,
+) -> None:
+    client = TestClient(create_test_app(tmp_path))
+    meeting_id = client.post(
+        "/meetings",
+        json={
+            "title": "土地案",
+            "goal": "是否返還土地",
+            "mode_id": "courtroom",
+            "case_type": "civil",
+        },
+    ).json()["meeting_id"]
+    client.put(
+        f"/meetings/{meeting_id}/courtroom/issues",
+        json={"revision": 0, "issues": [{"title": "占有權源"}]},
+    )
+    client.post(
+        f"/meetings/{meeting_id}/courtroom/issues/confirm", json={"revision": 1}
+    )
+    roster = {"Prosecutor": "mock-fast", "Defense": "mock-fast", "Judge": "mock-fast"}
+
+    locked = client.put(
+        f"/meetings/{meeting_id}/settings",
+        json={
+            "expected_revision": 0,
+            "title": "可改名稱",
+            "goal": "改掉目標",
+            "case_type": "criminal",
+            "scene": "courtroom",
+            "participant_models": roster,
+        },
+    )
+    assert locked.status_code == 409
+
+    saved = client.put(
+        f"/meetings/{meeting_id}/settings",
+        json={
+            "expected_revision": 0,
+            "title": "可改名稱",
+            "goal": "是否返還土地",
+            "case_type": "civil",
+            "scene": "courtroom",
+            "participant_models": roster,
+        },
+    )
+    assert saved.status_code == 200
+    stale = client.put(
+        f"/meetings/{meeting_id}/settings",
+        json={
+            "expected_revision": 0,
+            "title": "過期名稱",
+            "goal": "是否返還土地",
+            "case_type": "civil",
+            "scene": "courtroom",
+            "participant_models": roster,
+        },
+    )
+    assert stale.status_code == 409
+    assert client.get(f"/meetings/{meeting_id}").json()["title"] == "可改名稱"
+
+
+def test_meeting_settings_allow_title_change_but_reject_all_changes_while_running(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    entered = threading.Event()
+    release = threading.Event()
+    original_complete = MockModelAdapter.complete
+
+    def slow_complete(self, request):
+        entered.set()
+        release.wait(timeout=3)
+        return original_complete(self, request)
+
+    monkeypatch.setattr(MockModelAdapter, "complete", slow_complete)
+    client = TestClient(create_test_app(tmp_path))
+    meeting_id = client.post(
+        "/meetings", json={"title": "執行中的會議", "goal": "形成建議"}
+    ).json()["meeting_id"]
+    try:
+        response = client.post(f"/meetings/{meeting_id}/start", json={})
+        assert response.status_code == 202
+        assert entered.wait(timeout=2)
+
+        rejected = client.put(
+            f"/meetings/{meeting_id}/settings",
+            json={
+                "expected_revision": 0,
+                "title": "不應保存",
+                "goal": "形成建議",
+                "case_type": None,
+                "scene": "meeting-room",
+                "participant_models": {
+                    "Blue": "mock-fast",
+                    "Red": "mock-fast",
+                    "Judge": "mock-fast",
+                },
+            },
+        )
+
+        assert rejected.status_code == 409
+        unchanged = client.get(f"/meetings/{meeting_id}").json()
+        assert unchanged["title"] == "執行中的會議"
+        assert unchanged["settings_revision"] == 0
+    finally:
+        release.set()
+
+
+def test_atomic_meeting_settings_keep_the_goal_change_audit_after_ai_output(
+    tmp_path: Path,
+) -> None:
+    client = TestClient(create_test_app(tmp_path))
+    meeting_id = client.post(
+        "/meetings", json={"title": "原名稱", "goal": "原目標"}
+    ).json()["meeting_id"]
+    assert client.post(f"/meetings/{meeting_id}/start", json={}).status_code == 202
+    wait_for_activity(client, meeting_id, "completed")
+
+    response = client.put(
+        f"/meetings/{meeting_id}/settings",
+        json={
+            "expected_revision": 0,
+            "title": "新名稱",
+            "goal": "新目標",
+            "case_type": None,
+            "scene": "meeting-room",
+            "participant_models": {
+                "Blue": "mock-fast",
+                "Red": "mock-fast",
+                "Judge": "mock-fast",
+            },
+        },
+    )
+
+    assert response.status_code == 200
+    audit = [
+        event
+        for event in client.get(f"/meetings/{meeting_id}").json()["events"]
+        if event.get("interaction_type") == "meeting-goal-changed"
+    ]
+    assert len(audit) == 1
+    assert audit[0]["content"] == "主席修改會議目標\n舊目標：原目標\n新目標：新目標"
+
+
+@pytest.mark.parametrize("legacy_route", ["details", "participant-models", "case-type"])
+def test_legacy_setting_writes_invalidate_an_atomic_client_revision(
+    tmp_path: Path, legacy_route: str
+) -> None:
+    client = TestClient(create_test_app(tmp_path))
+    courtroom = legacy_route == "case-type"
+    meeting_id = client.post(
+        "/meetings",
+        json={
+            "title": "原名稱",
+            "goal": "原目標",
+            **(
+                {"mode_id": "courtroom", "case_type": "civil"}
+                if courtroom
+                else {}
+            ),
+        },
+    ).json()["meeting_id"]
+    meeting = client.get(f"/meetings/{meeting_id}").json()
+    models = {
+        participant["role_id"]: "mock-fast"
+        for participant in meeting["participants"]
+    }
+    if legacy_route == "details":
+        changed = client.put(
+            f"/meetings/{meeting_id}/details",
+            json={"title": "另一個 client", "goal": "原目標"},
+        )
+    elif legacy_route == "participant-models":
+        changed = client.put(
+            f"/meetings/{meeting_id}/participant-models", json={"models": models}
+        )
+    else:
+        changed = client.put(
+            f"/meetings/{meeting_id}/courtroom/case-type",
+            json={"case_type": "criminal"},
+        )
+    assert changed.status_code == 200
+    assert changed.json()["settings_revision"] == 1
+
+    stale = client.put(
+        f"/meetings/{meeting_id}/settings",
+        json={
+            "expected_revision": 0,
+            "title": "過期覆寫",
+            "goal": "原目標",
+            "case_type": "criminal" if courtroom else None,
+            "scene": "courtroom" if courtroom else "meeting-room",
+            "participant_models": models,
+        },
+    )
+    assert stale.status_code == 409
+
+
+def test_atomic_case_type_change_uses_a_new_epoch_and_archives_the_old_draft(
+    tmp_path: Path,
+) -> None:
+    client = TestClient(create_test_app(tmp_path))
+    meeting_id = client.post(
+        "/meetings",
+        json={
+            "title": "類型切換",
+            "goal": "判斷責任",
+            "mode_id": "courtroom",
+            "case_type": "civil",
+        },
+    ).json()["meeting_id"]
+    client.post(f"/meetings/{meeting_id}/messages", json={"content": "舊輪討論"})
+
+    changed = client.put(
+        f"/meetings/{meeting_id}/settings",
+        json={
+            "expected_revision": 0,
+            "title": "類型切換",
+            "goal": "判斷責任",
+            "case_type": "criminal",
+            "scene": "courtroom",
+            "participant_models": {
+                "Prosecutor": "mock-fast",
+                "Defense": "mock-fast",
+                "Judge": "mock-fast",
+            },
+        },
+    )
+
+    assert changed.status_code == 200
+    assert changed.json()["deliberation"]["active_epoch_number"] == 2
+    epochs = client.get(f"/meetings/{meeting_id}/deliberations").json()["epochs"]
+    assert epochs[0]["event_count"] == 1
+    assert epochs[1]["reason"] == "case_type_changed"
+
+
+def test_deliberation_history_projects_each_epochs_materials_revision_or_null(
+    tmp_path: Path,
+) -> None:
+    client = TestClient(create_test_app(tmp_path))
+    meeting_id = client.post(
+        "/meetings", json={"title": "歷史案卷", "goal": "檢視當時證據"}
+    ).json()["meeting_id"]
+    repository = MeetingRepository(tmp_path / "data")
+    repository.append_event(
+        meeting_id,
+        {
+            "event_id": f"{meeting_id}:old",
+            "meeting_id": meeting_id,
+            "step_id": "old",
+            "role": "Judge",
+            "status": "completed",
+            "materials_revision": 4,
+        },
+    )
+    marker = DeliberationEpochs.restart_marker(
+        meeting_id=meeting_id,
+        events=repository.read_events(meeting_id),
+        command=RestartCommand(scope="all_deliberation", reason="new evidence"),
+        snapshot={"materials_revision": 5},
+    )
+    repository.append_event(meeting_id, marker)
+
+    epochs = client.get(f"/meetings/{meeting_id}/deliberations").json()["epochs"]
+
+    assert [epoch["materials_revision"] for epoch in epochs] == [4, 5]
+
+    legacy_id = client.post(
+        "/meetings", json={"title": "舊資料", "goal": "無 revision"}
+    ).json()["meeting_id"]
+    legacy = client.get(f"/meetings/{legacy_id}/deliberations").json()["epochs"]
+    assert legacy[0]["materials_revision"] is None
+
+
+def test_atomic_goal_change_event_failure_keeps_old_settings_and_is_retryable(
+    tmp_path: Path, monkeypatch
+) -> None:
+    client = TestClient(create_test_app(tmp_path), raise_server_exceptions=False)
+    meeting_id = client.post(
+        "/meetings", json={"title": "原名稱", "goal": "原目標"}
+    ).json()["meeting_id"]
+    assert client.post(f"/meetings/{meeting_id}/start", json={}).status_code == 202
+    wait_for_activity(client, meeting_id, "completed")
+    original_append = MeetingRepository.append_event
+    fail_audit = True
+
+    def fail_goal_audit(self, target_meeting_id, event):
+        if fail_audit and event.get("interaction_type") == "meeting-goal-changed":
+            raise OSError("simulated audit failure")
+        return original_append(self, target_meeting_id, event)
+
+    monkeypatch.setattr(MeetingRepository, "append_event", fail_goal_audit)
+    payload = {
+        "expected_revision": 0,
+        "title": "新名稱",
+        "goal": "新目標",
+        "case_type": None,
+        "scene": "meeting-room",
+        "participant_models": {
+            "Blue": "mock-fast",
+            "Red": "mock-fast",
+            "Judge": "mock-fast",
+        },
+    }
+    failed = client.put(f"/meetings/{meeting_id}/settings", json=payload)
+    still_old = client.get(f"/meetings/{meeting_id}").json()
+    blocked = client.put(
+        f"/meetings/{meeting_id}/tags", json={"tags": ["must-not-pass"]}
+    )
+    fail_audit = False
+    recovered = client.put(f"/meetings/{meeting_id}/settings", json=payload)
+
+    assert failed.status_code == 409
+    assert (still_old["title"], still_old["goal"], still_old["settings_revision"]) == (
+        "原名稱",
+        "原目標",
+        0,
+    )
+    assert blocked.status_code == 409
+    assert recovered.status_code == 200
+    assert recovered.json()["settings_revision"] == 1
+
+
+def test_atomic_settings_finalize_failure_is_reconciled_before_next_transition(
+    tmp_path: Path, monkeypatch
+) -> None:
+    client = TestClient(create_test_app(tmp_path), raise_server_exceptions=False)
+    meeting_id = client.post(
+        "/meetings", json={"title": "原名稱", "goal": "原目標"}
+    ).json()["meeting_id"]
+    assert client.post(f"/meetings/{meeting_id}/start", json={}).status_code == 202
+    wait_for_activity(client, meeting_id, "completed")
+    original_update = MeetingMetadataStore.update
+    fail_finalize = True
+
+    def fail_settings_finalize(self, target_meeting_id, transform):
+        nonlocal fail_finalize
+        current = self.get(target_meeting_id)
+        projected = transform(current)
+        if (
+            fail_finalize
+            and current.get("pending_meeting_settings")
+            and not projected.get("pending_meeting_settings")
+        ):
+            raise OSError("simulated settings finalize failure")
+        return original_update(self, target_meeting_id, transform)
+
+    monkeypatch.setattr(MeetingMetadataStore, "update", fail_settings_finalize)
+    failed = client.put(
+        f"/meetings/{meeting_id}/settings",
+        json={
+            "expected_revision": 0,
+            "title": "新名稱",
+            "goal": "新目標",
+            "case_type": None,
+            "scene": "meeting-room",
+            "participant_models": {
+                "Blue": "mock-fast",
+                "Red": "mock-fast",
+                "Judge": "mock-fast",
+            },
+        },
+    )
+    before_recovery = client.get(f"/meetings/{meeting_id}").json()
+    fail_finalize = False
+    reconciled = client.put(
+        f"/meetings/{meeting_id}/tags", json={"tags": ["after-recovery"]}
+    )
+
+    assert failed.status_code == 409
+    assert before_recovery["title"] == "原名稱"
+    assert reconciled.status_code == 200
+    assert reconciled.json()["title"] == "新名稱"
+    assert reconciled.json()["settings_revision"] == 1
+    audits = [
+        event
+        for event in client.get(f"/meetings/{meeting_id}").json()["events"]
+        if event.get("interaction_type") == "meeting-goal-changed"
+    ]
+    assert len(audits) == 1
 
 
 def test_case_file_limits_endpoint_reports_environment_overrides(
@@ -1531,6 +2004,17 @@ def test_start_returns_while_model_execution_continues_in_background(
         delete_response = client.delete(f"/meetings/{meeting_id}")
         assert delete_response.status_code == 409
         assert delete_response.json()["detail"] == "Cannot delete a running meeting"
+        material_response = client.post(
+            f"/meetings/{meeting_id}/materials/notes",
+            json={
+                "revision": 0,
+                "title": "must wait",
+                "content": "do not race an active prompt",
+                "visible_roles": ["Blue"],
+            },
+        )
+        assert material_response.status_code == 409
+        assert material_response.json()["detail"] == "Meeting is already running"
     finally:
         release_model.set()
         wait_for_activity(client, meeting_id, "completed")
@@ -1735,6 +2219,22 @@ def test_app_startup_marks_leftover_execution_state_failed(tmp_path: Path) -> No
                 "prompt_template_name": "blue_propose",
                 "prompt_template_hash": TEST_BLUE_PROPOSE_TEMPLATE_HASH,
                 "output_schema_hash": TEST_OUTPUT_SCHEMA_HASH,
+                "interaction_type": "directed-role-response",
+                "directed_sequence": 1,
+                "in_response_to_event_id": "chair-instruction-1",
+                "materials_revision": 4,
+                "materials_refs": [
+                    {
+                        "kind": "note",
+                        "id": "case-note-1",
+                        "version": 2,
+                        "status": "active",
+                        "visible_roles": ["Blue"],
+                    }
+                ],
+                "case_type": "civil",
+                "role_display": "被告代理人",
+                "phase_display": "答辯方補充",
             }
         ),
         encoding="utf-8",
@@ -1751,6 +2251,13 @@ def test_app_startup_marks_leftover_execution_state_failed(tmp_path: Path) -> No
     assert meeting["events"][-1]["prompt_template_name"] == "blue_propose"
     assert meeting["events"][-1]["prompt_template_hash"] == TEST_BLUE_PROPOSE_TEMPLATE_HASH
     assert meeting["events"][-1]["output_schema_hash"] == TEST_OUTPUT_SCHEMA_HASH
+    assert meeting["events"][-1]["materials_revision"] == 4
+    assert meeting["events"][-1]["materials_refs"][0]["version"] == 2
+    assert meeting["events"][-1]["interaction_type"] == "directed-role-response"
+    assert meeting["events"][-1]["in_response_to_event_id"] == "chair-instruction-1"
+    assert meeting["events"][-1]["case_type"] == "civil"
+    assert meeting["events"][-1]["role_display"] == "被告代理人"
+    assert meeting["events"][-1]["phase_display"] == "答辯方補充"
     assert meeting["events"][-1]["failure_kind"] == "interrupted"
     assert meeting["events"][-1]["adapter"] == "mock"
     assert meeting["events"][-1]["prompt_messages"] == [
@@ -1762,6 +2269,57 @@ def test_app_startup_marks_leftover_execution_state_failed(tmp_path: Path) -> No
     assert meeting["events"][-1]["retry_scheduled"] is False
     assert "interrupted" in meeting["events"][-1]["error"].lower()
     assert not execution_state_path.exists()
+
+
+def test_crash_recovery_matches_completion_within_execution_epoch(tmp_path: Path) -> None:
+    first_client = TestClient(create_test_app(tmp_path))
+    meeting_id = first_client.post(
+        "/meetings", json={"title": "Epoch crash", "goal": "recover current epoch"}
+    ).json()["meeting_id"]
+    repository = MeetingRepository(tmp_path / "data")
+    repository.append_event(
+        meeting_id,
+        {
+            "event_id": f"{meeting_id}:blue-propose:attempt-1:completed",
+            "meeting_id": meeting_id,
+            "step_id": "blue-propose",
+            "base_step_id": "blue-propose",
+            "round": 1,
+            "role": "Blue",
+            "attempt": 1,
+            "status": "completed",
+        },
+    )
+    marker = DeliberationEpochs.restart_marker(
+        meeting_id=meeting_id,
+        events=repository.read_events(meeting_id),
+        command=RestartCommand(scope="all_deliberation", reason="new epoch"),
+    )
+    repository.append_event(meeting_id, marker)
+    execution_state_path = tmp_path / "data" / "meetings" / meeting_id / "execution.json"
+    execution_state_path.write_text(
+        json.dumps(
+            {
+                "meeting_id": meeting_id,
+                "step_id": "blue-propose",
+                "base_step_id": "blue-propose",
+                "round": 1,
+                "role": "Blue",
+                "attempt": 1,
+                "model_config_id": "mock-fast",
+                "status": "running",
+                "deliberation_epoch_id": marker["epoch_id"],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    restarted_client = TestClient(create_test_app(tmp_path))
+    meeting = restarted_client.get(f"/meetings/{meeting_id}").json()
+
+    assert meeting["events"][-1]["failure_kind"] == "interrupted"
+    assert meeting["events"][-1]["deliberation_epoch_id"] == marker["epoch_id"]
+    assert meeting["events"][-1]["event_id"].startswith(f"{marker['epoch_id']}:")
 
 
 def test_start_ignores_incomplete_legacy_request_model_assignments(tmp_path: Path) -> None:
@@ -1820,6 +2378,42 @@ def test_list_meetings_without_query_returns_everything(tmp_path: Path) -> None:
     response = client.get("/meetings")
 
     assert len(response.json()) == 2
+
+
+def test_list_meetings_uses_lightweight_material_summaries_without_projecting_content(
+    tmp_path: Path, monkeypatch
+) -> None:
+    client = TestClient(create_test_app(tmp_path))
+    meeting_id = client.post(
+        "/meetings",
+        json={
+            "title": "大型案卷",
+            "goal": "只列摘要",
+            "case_files": [{
+                "title": "大型證據",
+                "content": "CONTENT-MUST-NOT-BE-PROJECTED",
+                "visible_roles": ["Judge"],
+            }],
+        },
+    ).json()["meeting_id"]
+
+    monkeypatch.setattr(
+        CaseMaterials,
+        "view",
+        lambda *_args, **_kwargs: pytest.fail("list endpoint must not build full materials view"),
+    )
+    response = client.get("/meetings")
+
+    assert response.status_code == 200
+    listed = next(item for item in response.json() if item["meeting_id"] == meeting_id)
+    assert listed["materials_revision"] == 0
+    assert listed["case_materials_summary"] == {
+        "revision": 0,
+        "active_evidence_count": 1,
+        "active_note_count": 0,
+        "pending_impact": None,
+    }
+    assert "CONTENT-MUST-NOT-BE-PROJECTED" not in response.text
 
 
 def test_meeting_activity_status_projects_failed_latest_step(tmp_path: Path) -> None:
@@ -3005,7 +3599,7 @@ def test_create_meeting_with_courtroom_mode(tmp_path: Path) -> None:
 
     response = client.post(
         "/meetings",
-        json={"title": "法庭審理案例", "goal": "法庭審理案例", "mode_id": "courtroom"},
+        json={"title": "法庭審理案例", "goal": "法庭審理案例", "mode_id": "courtroom", "case_type": "civil"},
     )
 
     assert response.status_code == 200
@@ -3023,6 +3617,7 @@ def test_create_meeting_stores_and_returns_case_files(tmp_path: Path) -> None:
             "title": "事故覆盤",
             "goal": "事故覆盤",
             "mode_id": "courtroom",
+                "case_type": "civil",
             "case_files": [
                 {
                     "title": "事故時間線",
@@ -3066,6 +3661,12 @@ def test_create_meeting_stores_and_returns_case_files(tmp_path: Path) -> None:
         (1, "[證物一]"),
         (2, "[證物二]"),
     ]
+    metadata = json.loads(
+        (stored_path.parent / "metadata.json").read_text(encoding="utf-8")
+    )
+    assert "case_files" not in metadata
+    assert "case_file_count" not in metadata
+    assert "case_materials_revision" not in metadata
 
     fetched = client.get(f"/meetings/{meeting_id}").json()
     assert [(item["evidence_index"], item["citation_anchor"]) for item in fetched["case_files"]] == [
@@ -3087,6 +3688,7 @@ def test_get_meeting_derives_evidence_anchors_for_legacy_case_files_without_rewr
             "title": "舊案卷",
             "goal": "舊案卷",
             "mode_id": "courtroom",
+                "case_type": "civil",
             "case_files": [
                 {
                     "title": "事故時間線",
@@ -3102,13 +3704,12 @@ def test_get_meeting_derives_evidence_anchors_for_legacy_case_files_without_rewr
         },
     ).json()["meeting_id"]
     meeting_dir = tmp_path / "data" / "meetings" / meeting_id
-    for path in (meeting_dir / "metadata.json", meeting_dir / "case_files.json"):
-        legacy = json.loads(path.read_text(encoding="utf-8"))
-        items = legacy["case_files"] if path.name == "metadata.json" else legacy
-        for item in items:
-            item.pop("evidence_index")
-            item.pop("citation_anchor")
-        path.write_text(json.dumps(legacy, ensure_ascii=False), encoding="utf-8")
+    case_file_path = meeting_dir / "case_files.json"
+    legacy = json.loads(case_file_path.read_text(encoding="utf-8"))
+    for item in legacy:
+        item.pop("evidence_index")
+        item.pop("citation_anchor")
+    case_file_path.write_text(json.dumps(legacy, ensure_ascii=False), encoding="utf-8")
 
     fetched = client.get(f"/meetings/{meeting_id}")
 
@@ -3117,12 +3718,12 @@ def test_get_meeting_derives_evidence_anchors_for_legacy_case_files_without_rewr
     expected = [(1, "[證物一]"), (2, "[證物二]")]
     assert [(item["evidence_index"], item["citation_anchor"]) for item in body["case_files"]] == expected
     listed = next(item for item in client.get("/meetings").json() if item["meeting_id"] == meeting_id)
-    assert [
-        (item["evidence_index"], item["citation_anchor"])
-        for item in listed["case_files"]
-    ] == expected
+    assert listed["case_files"] == []
+    assert listed["case_materials_summary"]["active_evidence_count"] == 2
     assert "evidence_index" not in (meeting_dir / "case_files.json").read_text(encoding="utf-8")
-    assert "evidence_index" not in (meeting_dir / "metadata.json").read_text(encoding="utf-8")
+    metadata = json.loads((meeting_dir / "metadata.json").read_text(encoding="utf-8"))
+    assert "case_files" not in metadata
+    assert "case_file_count" not in metadata
 
 
 def test_create_meeting_rejects_case_files_for_unknown_roles(tmp_path: Path) -> None:
@@ -3135,6 +3736,7 @@ def test_create_meeting_rejects_case_files_for_unknown_roles(tmp_path: Path) -> 
             "title": "事故覆盤",
             "goal": "事故覆盤",
             "mode_id": "courtroom",
+                "case_type": "civil",
             "case_files": [
                 {
                     "title": "藍軍不屬於法庭",
@@ -3376,6 +3978,7 @@ def test_create_meeting_rejects_participant_role_not_in_mode(tmp_path: Path) -> 
             "title": "T",
             "goal": "T",
             "mode_id": "courtroom",
+                "case_type": "civil",
             "participants": [{"role_id": "Blue", "model_config_id": "mock-fast"}],
         },
     )
@@ -3394,6 +3997,7 @@ def test_create_meeting_stores_participant_models(tmp_path: Path) -> None:
             "title": "T",
             "goal": "T",
             "mode_id": "courtroom",
+                "case_type": "civil",
             "participants": [
                 {"role_id": "Prosecutor", "model_config_id": "mock-fast"},
                 {"role_id": "Defense", "model_config_id": "mock-fast"},
@@ -3581,6 +4185,7 @@ def test_create_meeting_rejects_unknown_participant_model(tmp_path: Path) -> Non
             "title": "T",
             "goal": "T",
             "mode_id": "courtroom",
+                "case_type": "civil",
             "participants": [{"role_id": "Prosecutor", "model_config_id": "nope"}],
         },
     )
@@ -3743,7 +4348,7 @@ def test_generic_start_cannot_bypass_courtroom_issue_workflow(tmp_path: Path) ->
     client = TestClient(app)
     meeting_id = client.post(
         "/meetings",
-        json={"title": "法庭審理", "goal": "法庭審理", "mode_id": "courtroom"},
+        json={"title": "法庭審理", "goal": "法庭審理", "mode_id": "courtroom", "case_type": "civil"},
     ).json()["meeting_id"]
 
     response = client.post(
@@ -3850,7 +4455,7 @@ def test_courtroom_start_request_models_cannot_bypass_issue_workflow(tmp_path: P
     client = TestClient(app)
     meeting_id = client.post(
         "/meetings",
-        json={"title": "法庭審理", "goal": "法庭審理", "mode_id": "courtroom"},
+        json={"title": "法庭審理", "goal": "法庭審理", "mode_id": "courtroom", "case_type": "civil"},
     ).json()["meeting_id"]
 
     response = client.post(
@@ -3904,6 +4509,7 @@ def test_case_files_reach_only_visible_role_prompts(tmp_path: Path) -> None:
             "title": "事故覆盤",
             "goal": "事故覆盤",
             "mode_id": "courtroom",
+                "case_type": "civil",
             "case_files": [
                 {
                     "title": "檢方事故時間線",
@@ -3944,6 +4550,104 @@ def test_case_files_reach_only_visible_role_prompts(tmp_path: Path) -> None:
         assert "不可假造不存在的證物錨點" in prompt
 
 
+def test_api_projects_legacy_case_files_to_structured_evidence_for_final_and_retry(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    original_complete = MockModelAdapter.complete
+    final_reference = "[證物二]"
+
+    def controlled_complete(
+        self: MockModelAdapter, request: ModelRequest
+    ) -> ModelResponse:
+        if request.output_schema_id != "courtroom-civil-final/v1":
+            return original_complete(self, request)
+        return ModelResponse(raw_output=json.dumps({
+            "summary": "部分勝訴",
+            "claims": [{
+                "claim": "損害賠償新臺幣十萬元",
+                "outcome": "upheld",
+                "reasoning": "依引用證物認定新臺幣十萬元",
+                "evidence_refs": [final_reference],
+                "relief": {
+                    "obligation": "給付新臺幣十萬元",
+                    "monetary_amount": "新臺幣十萬元",
+                    "calculation_basis": "依引用證物所載金額計算",
+                },
+            }],
+            "unresolved_questions": [],
+        }, ensure_ascii=False))
+
+    monkeypatch.setattr(MockModelAdapter, "complete", controlled_complete)
+    client = TestClient(create_test_app(tmp_path))
+    meeting_id = client.post(
+        "/meetings",
+        json={
+            "title": "結構化證物金額歸屬",
+            "goal": "判斷損害賠償",
+            "mode_id": "courtroom",
+            "case_type": "civil",
+            "case_files": [
+                {
+                    "title": "收據",
+                    "content": "正文提到[證物二]後有新臺幣十萬元",
+                    "visible_roles": ["Judge"],
+                },
+                {
+                    "title": "契約",
+                    "content": "本證物沒有記載金額",
+                    "visible_roles": ["Judge"],
+                },
+            ],
+        },
+    ).json()["meeting_id"]
+    assert isinstance(
+        MeetingRepository(tmp_path / "data").read_case_materials_raw(meeting_id),
+        list,
+    )
+    run_single_courtroom_issue(client, meeting_id, "損害金額")
+
+    assert client.post(
+        f"/meetings/{meeting_id}/courtroom/final-verdict"
+    ).status_code == 202
+    failed = wait_for_activity(client, meeting_id, "failed")
+    failed_event = failed["events"][-1]
+    assert failed_event["failure_kind"] == "parse_error"
+    assert failed_event["raw_output"]
+
+    final_reference = "[證物一]"
+    assert client.post(
+        f"/meetings/{meeting_id}/steps/{failed_event['step_id']}/retry",
+        json={},
+    ).status_code == 202
+    completed = wait_for_activity(client, meeting_id, "completed")
+    final_event = completed["events"][-1]
+    assert final_event["status"] == "completed"
+    assert final_event["materials_refs"] == [
+        {
+            "kind": "evidence",
+            "id": completed["case_files"][0]["id"],
+            "version": 1,
+            "status": "active",
+            "visible_roles": ["Judge"],
+            "evidence_index": 1,
+            "citation_anchor": "[證物一]",
+        },
+        {
+            "kind": "evidence",
+            "id": completed["case_files"][1]["id"],
+            "version": 1,
+            "status": "active",
+            "visible_roles": ["Judge"],
+            "evidence_index": 2,
+            "citation_anchor": "[證物二]",
+        },
+    ]
+    assert "__case_evidence_by_role" not in json.dumps(
+        completed["events"], ensure_ascii=False
+    )
+
+
 def test_roles_without_visible_case_files_receive_citation_rules_without_evidence_leakage(
     tmp_path: Path,
 ) -> None:
@@ -3955,6 +4659,7 @@ def test_roles_without_visible_case_files_receive_citation_rules_without_evidenc
             "title": "限制案卷可見範圍",
             "goal": "限制案卷可見範圍",
             "mode_id": "courtroom",
+                "case_type": "civil",
             "case_files": [
                 {
                     "title": "裁判密件",
@@ -4148,7 +4853,7 @@ def test_respond_as_role_accepts_mode_roles(tmp_path: Path) -> None:
     client = TestClient(app)
     meeting_id = client.post(
         "/meetings",
-        json={"title": "法庭審理", "goal": "法庭審理", "mode_id": "courtroom"},
+        json={"title": "法庭審理", "goal": "法庭審理", "mode_id": "courtroom", "case_type": "civil"},
     ).json()["meeting_id"]
     assert client.put(
         f"/meetings/{meeting_id}/courtroom/issues",
@@ -4171,8 +4876,8 @@ def test_respond_as_role_accepts_mode_roles(tmp_path: Path) -> None:
         raise AssertionError("Courtroom issue arguments did not complete")
 
     response = client.post(
-        f"/meetings/{meeting_id}/roles/Prosecutor/respond",
-        json={"instruction": "請整理目前控方主張"},
+        f"/meetings/{meeting_id}/roles/Defense/respond",
+        json={"instruction": "請補充目前答辯"},
     )
     assert response.status_code == 202
     deadline = time.monotonic() + 5
@@ -4183,7 +4888,7 @@ def test_respond_as_role_accepts_mode_roles(tmp_path: Path) -> None:
         time.sleep(0.01)
     else:
         raise AssertionError("Directed response did not complete")
-    assert events[-1]["step_id"] == "directed-1-prosecutor-response"
+    assert events[-1]["step_id"] == "directed-1-defense-response"
 
     rejected = client.post(
         f"/meetings/{meeting_id}/roles/Blue/respond",
@@ -4251,6 +4956,990 @@ def test_local_frontend_origin_can_call_api(tmp_path: Path) -> None:
     assert response.headers["access-control-allow-origin"] == "http://localhost:5173"
 
 
+def test_restart_archives_live_events_and_exposes_epoch_transcripts(tmp_path: Path) -> None:
+    client = TestClient(create_test_app(tmp_path))
+    meeting_id = client.post(
+        "/meetings", json={"title": "重新審議", "goal": "選出方案"}
+    ).json()["meeting_id"]
+    assert client.post(f"/meetings/{meeting_id}/start", json={}).status_code == 202
+    first = wait_for_activity(client, meeting_id, "completed")
+    old_event_ids = [event["event_id"] for event in first["events"]]
+
+    restarted = client.post(
+        f"/meetings/{meeting_id}/deliberations/restart",
+        json={"scope": "all_deliberation", "reason": "改用新的審議方向"},
+    )
+
+    assert restarted.status_code == 200
+    assert restarted.json()["events"] == []
+    assert restarted.json()["deliberation"]["active_epoch_number"] == 2
+    history = client.get(f"/meetings/{meeting_id}/deliberations").json()
+    assert [epoch["event_count"] for epoch in history["epochs"]] == [4, 0]
+    assert history["epochs"][1]["reason"] == "改用新的審議方向"
+    current_transcript = client.get(f"/meetings/{meeting_id}/transcript.md").text
+    first_transcript = client.get(
+        f"/meetings/{meeting_id}/transcript.md", params={"epoch": history["epochs"][0]["id"]}
+    ).text
+    all_transcript = client.get(
+        f"/meetings/{meeting_id}/transcript.md", params={"epoch": "all"}
+    ).text
+    assert "blue-propose" not in current_transcript
+    assert "Mock response" in first_transcript
+    assert "改用新的審議方向" in all_transcript
+    raw = MeetingRepository(tmp_path / "data").read_events(meeting_id)
+    assert [event["event_id"] for event in raw[:4]] == old_event_ids
+    assert len(raw) == 5
+
+
+def test_restart_requires_idle_open_meeting_valid_reason_and_compatible_scope(
+    tmp_path: Path,
+) -> None:
+    client = TestClient(create_test_app(tmp_path))
+    meeting_id = client.post(
+        "/meetings", json={"title": "重開 gate", "goal": "檢查 gate"}
+    ).json()["meeting_id"]
+
+    blank = client.post(
+        f"/meetings/{meeting_id}/deliberations/restart",
+        json={"scope": "all_deliberation", "reason": " "},
+    )
+    wrong_scope = client.post(
+        f"/meetings/{meeting_id}/deliberations/restart",
+        json={"scope": "current_issue", "reason": "重跑", "issue_id": "issue-1"},
+    )
+    assert client.post(f"/meetings/{meeting_id}/close").status_code == 200
+    terminal = client.post(
+        f"/meetings/{meeting_id}/deliberations/restart",
+        json={"scope": "all_deliberation", "reason": "重跑"},
+    )
+
+    assert blank.status_code == 422
+    assert wrong_scope.status_code == 400
+    assert terminal.status_code == 409
+    assert "reopen" in terminal.json()["detail"].lower()
+    assert client.post(f"/meetings/{meeting_id}/reopen").status_code == 200
+    assert client.post(
+        f"/meetings/{meeting_id}/deliberations/restart",
+        json={"scope": "all_deliberation", "reason": "重跑"},
+    ).status_code == 200
+
+
+def test_restart_new_run_uses_unique_event_ids_and_excludes_archived_prompt(
+    tmp_path: Path,
+) -> None:
+    client = TestClient(create_test_app(tmp_path))
+    meeting_id = client.post(
+        "/meetings", json={"title": "Prompt isolation", "goal": "測試隔離"}
+    ).json()["meeting_id"]
+    assert client.post(f"/meetings/{meeting_id}/start", json={}).status_code == 202
+    old = wait_for_activity(client, meeting_id, "completed")["events"]
+    assert client.post(
+        f"/meetings/{meeting_id}/messages", json={"content": "ARCHIVED_SECRET"}
+    ).status_code == 200
+    assert client.post(
+        f"/meetings/{meeting_id}/deliberations/restart",
+        json={"scope": "all_deliberation", "reason": "fresh"},
+    ).status_code == 200
+    assert client.post(f"/meetings/{meeting_id}/start", json={}).status_code == 202
+    new = wait_for_activity(client, meeting_id, "completed")["events"]
+
+    assert {event["event_id"] for event in old}.isdisjoint(
+        event["event_id"] for event in new
+    )
+    assert all("ARCHIVED_SECRET" not in event["prompt_messages"][0]["content"] for event in new)
+
+
+def test_courtroom_restart_scopes_preserve_only_the_promised_state(tmp_path: Path) -> None:
+    client = TestClient(create_test_app(tmp_path))
+    meeting_id = client.post(
+        "/meetings",
+        json={"title": "法院重審", "goal": "逐點判斷", "mode_id": "courtroom", "case_type": "civil"},
+    ).json()["meeting_id"]
+    assert client.put(
+        f"/meetings/{meeting_id}/courtroom/issues",
+        json={"revision": 0, "issues": [{"title": "爭點一"}, {"title": "爭點二"}]},
+    ).status_code == 200
+    assert client.post(
+        f"/meetings/{meeting_id}/courtroom/issues/confirm", json={"revision": 1}
+    ).status_code == 200
+    for issue_id in ("issue-1", "issue-2"):
+        assert client.post(
+            f"/meetings/{meeting_id}/courtroom/issues/{issue_id}/arguments"
+        ).status_code == 202
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline:
+            meeting = client.get(f"/meetings/{meeting_id}").json()
+            issue = next(item for item in meeting["courtroom"]["issues"] if item["id"] == issue_id)
+            if issue["status"] == "awaiting-ruling":
+                break
+            time.sleep(0.01)
+        assert client.post(
+            f"/meetings/{meeting_id}/courtroom/issues/{issue_id}/ruling"
+        ).status_code == 202
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline:
+            meeting = client.get(f"/meetings/{meeting_id}").json()
+            issue = next(item for item in meeting["courtroom"]["issues"] if item["id"] == issue_id)
+            if issue["status"] == "ruled":
+                break
+            time.sleep(0.01)
+
+    current = client.post(
+        f"/meetings/{meeting_id}/deliberations/restart",
+        json={"scope": "current_issue", "reason": "重審第二點", "issue_id": "issue-2"},
+    )
+    assert current.status_code == 200
+    assert [item["status"] for item in current.json()["courtroom"]["issues"]] == [
+        "ruled",
+        "pending",
+    ]
+    assert current.json()["courtroom"]["final_status"] == "not-ready"
+
+    all_restart = client.post(
+        f"/meetings/{meeting_id}/deliberations/restart",
+        json={"scope": "all_deliberation", "reason": "全案重審"},
+    )
+    assert all_restart.status_code == 200
+    assert [item["status"] for item in all_restart.json()["courtroom"]["issues"]] == [
+        "pending",
+        "pending",
+    ]
+
+    rebuilt = client.post(
+        f"/meetings/{meeting_id}/deliberations/restart",
+        json={"scope": "rebuild_issues", "reason": "重新整理爭點"},
+    )
+    assert rebuilt.status_code == 200
+    assert rebuilt.json()["courtroom"]["status"] == "not-configured"
+    assert client.put(
+        f"/meetings/{meeting_id}/details",
+        json={"title": "法院重審", "goal": "更新後的目標"},
+    ).status_code == 200
+
+
+def test_archived_failure_cannot_be_retried(tmp_path: Path, monkeypatch) -> None:
+    original_complete = MockModelAdapter.complete
+    failed_once = False
+
+    def fail_once(self, request):
+        nonlocal failed_once
+        if not failed_once:
+            failed_once = True
+            raise AdapterError("old failure")
+        return original_complete(self, request)
+
+    monkeypatch.setattr(MockModelAdapter, "complete", fail_once)
+    client = TestClient(create_test_app(tmp_path))
+    meeting_id = client.post(
+        "/meetings", json={"title": "Retry isolation", "goal": "測試"}
+    ).json()["meeting_id"]
+    assert client.post(f"/meetings/{meeting_id}/start", json={}).status_code == 202
+    failed = wait_for_activity(client, meeting_id, "failed")["events"][-1]
+    assert client.post(
+        f"/meetings/{meeting_id}/deliberations/restart",
+        json={"scope": "all_deliberation", "reason": "discard failure"},
+    ).status_code == 200
+
+    retry = client.post(f"/meetings/{meeting_id}/steps/{failed['step_id']}/retry", json={})
+
+    assert retry.status_code == 400
+    assert "not failed" in retry.json()["detail"].lower()
+
+
+def test_restart_event_write_failure_leaves_execution_safely_blocked(
+    tmp_path: Path, monkeypatch
+) -> None:
+    app = create_test_app(tmp_path)
+    client = TestClient(app, raise_server_exceptions=False)
+    meeting_id = client.post(
+        "/meetings", json={"title": "Fault ordering", "goal": "never run half reset"}
+    ).json()["meeting_id"]
+    original_append = MeetingRepository.append_event
+    fail_append = True
+
+    def fail_marker(self, target_meeting_id, event):
+        if fail_append and event.get("interaction_type") == "deliberation-epoch-start":
+            raise OSError("simulated journal failure")
+        return original_append(self, target_meeting_id, event)
+
+    monkeypatch.setattr(MeetingRepository, "append_event", fail_marker)
+    failed = client.post(
+        f"/meetings/{meeting_id}/deliberations/restart",
+        json={"scope": "all_deliberation", "reason": "fault test"},
+    )
+    blocked = client.post(f"/meetings/{meeting_id}/start", json={})
+    mutation = client.put(
+        f"/meetings/{meeting_id}/details",
+        json={"title": "must not change", "goal": "must not change"},
+    )
+    fail_append = False
+    recovered = client.post(
+        f"/meetings/{meeting_id}/deliberations/restart",
+        json={"scope": "all_deliberation", "reason": "fault retry"},
+    )
+
+    assert failed.status_code == 500
+    assert blocked.status_code == 409
+    assert mutation.status_code == 409
+    assert recovered.status_code == 200
+    assert recovered.json()["deliberation"]["active_epoch_number"] == 2
+    assert recovered.json()["title"] == "Fault ordering"
+    assert "retried" in blocked.json()["detail"].lower()
+    raw_events = MeetingRepository(tmp_path / "data").read_events(meeting_id)
+    assert len(raw_events) == 1
+    assert raw_events[0]["restart_reason"] == "fault retry"
+
+
+def test_pending_completed_restart_reconciles_before_mutation_and_rebuild_is_not_lost(
+    tmp_path: Path, monkeypatch
+) -> None:
+    app = create_test_app(tmp_path)
+    client = TestClient(app, raise_server_exceptions=False)
+    meeting_id = client.post(
+        "/meetings",
+        json={"title": "Pending rebuild", "goal": "rebuild", "mode_id": "courtroom", "case_type": "civil"},
+    ).json()["meeting_id"]
+    assert client.put(
+        f"/meetings/{meeting_id}/courtroom/issues",
+        json={"revision": 0, "issues": [{"title": "old issue"}]},
+    ).status_code == 200
+    original_update = MeetingMetadataStore.update
+    fail_finalize = True
+
+    def fail_final_metadata_write(self, target_meeting_id, transform):
+        nonlocal fail_finalize
+        current = self.get(target_meeting_id)
+        projected = transform(current)
+        if (
+            fail_finalize
+            and current.get("pending_deliberation_restart")
+            and not projected.get("pending_deliberation_restart")
+        ):
+            raise OSError("simulated metadata finalize failure")
+        return original_update(self, target_meeting_id, transform)
+
+    monkeypatch.setattr(MeetingMetadataStore, "update", fail_final_metadata_write)
+    failed = client.post(
+        f"/meetings/{meeting_id}/deliberations/restart",
+        json={"scope": "rebuild_issues", "reason": "fault after marker"},
+    )
+    fail_finalize = False
+
+    stale_docket_mutation = client.put(
+        f"/meetings/{meeting_id}/courtroom/issues",
+        json={"revision": 1, "issues": [{"title": "must not silently survive"}]},
+    )
+    meeting = client.get(f"/meetings/{meeting_id}").json()
+
+    assert failed.status_code == 500
+    assert stale_docket_mutation.status_code == 409
+    assert meeting["courtroom"]["status"] == "not-configured"
+    assert "pending_deliberation_restart" not in meeting
+
+
+def test_case_type_change_marker_failure_blocks_mutations_and_retry_keeps_full_snapshot(
+    tmp_path: Path, monkeypatch
+) -> None:
+    client = TestClient(create_test_app(tmp_path), raise_server_exceptions=False)
+    meeting_id = client.post(
+        "/meetings",
+        json={"title": "案件類型切換", "goal": "中立整理", "mode_id": "courtroom", "case_type": "civil"},
+    ).json()["meeting_id"]
+    assert client.put(
+        f"/meetings/{meeting_id}/courtroom/issues",
+        json={"revision": 0, "issues": [{"title": "舊爭點草稿"}]},
+    ).status_code == 200
+    assert client.post(
+        f"/meetings/{meeting_id}/messages", json={"content": "主席舊輪指示"}
+    ).status_code == 200
+    original_append = MeetingRepository.append_event
+    fail_marker = True
+
+    def fail_epoch_marker(self, target_meeting_id, event):
+        if fail_marker and event.get("interaction_type") == "deliberation-epoch-start":
+            raise OSError("simulated case-type marker failure")
+        return original_append(self, target_meeting_id, event)
+
+    monkeypatch.setattr(MeetingRepository, "append_event", fail_epoch_marker)
+    failed = client.put(
+        f"/meetings/{meeting_id}/courtroom/case-type", json={"case_type": "criminal"}
+    )
+    blocked = client.put(
+        f"/meetings/{meeting_id}/details", json={"title": "不應更新", "goal": "不應更新"}
+    )
+    fail_marker = False
+    wrong_selection = client.put(
+        f"/meetings/{meeting_id}/courtroom/case-type", json={"case_type": "civil"}
+    )
+    recovered = client.put(
+        f"/meetings/{meeting_id}/courtroom/case-type", json={"case_type": "criminal"}
+    )
+
+    assert failed.status_code == 409
+    assert blocked.status_code == 409
+    assert wrong_selection.status_code == 409
+    assert recovered.status_code == 200
+    assert recovered.json()["case_type"] == "criminal"
+    marker = MeetingRepository(tmp_path / "data").read_events(meeting_id)[-1]
+    assert marker["interaction_type"] == "deliberation-epoch-start"
+    assert marker["snapshot"] == {
+        "goal": "中立整理",
+        "courtroom_docket": {
+            "schema_version": 1,
+            "revision": 1,
+            "confirmed": False,
+            "next_issue_number": 2,
+            "issues": [{"id": "issue-1", "title": "舊爭點草稿"}],
+        },
+        "models": [
+            {"role_id": "Prosecutor", "model_config_id": "mock-fast"},
+            {"role_id": "Defense", "model_config_id": "mock-fast"},
+            {"role_id": "Judge", "model_config_id": "mock-fast"},
+        ],
+        "materials_revision": 0,
+        "from_case_type": "civil",
+        "to_case_type": "criminal",
+    }
+
+
+def test_case_type_change_metadata_failure_reconciles_completed_marker(
+    tmp_path: Path, monkeypatch
+) -> None:
+    client = TestClient(create_test_app(tmp_path), raise_server_exceptions=False)
+    meeting_id = client.post(
+        "/meetings",
+        json={"title": "類型 finalize", "goal": "測試", "mode_id": "courtroom", "case_type": "civil"},
+    ).json()["meeting_id"]
+    client.post(f"/meetings/{meeting_id}/messages", json={"content": "觸發新 epoch"})
+    original_update = MeetingMetadataStore.update
+    fail_finalize = True
+
+    def fail_case_type_finalize(self, target_meeting_id, transform):
+        nonlocal fail_finalize
+        current = self.get(target_meeting_id)
+        projected = transform(current)
+        if (
+            fail_finalize
+            and current.get("pending_meeting_settings")
+            and not projected.get("pending_meeting_settings")
+        ):
+            raise OSError("simulated case-type metadata finalize failure")
+        return original_update(self, target_meeting_id, transform)
+
+    monkeypatch.setattr(MeetingMetadataStore, "update", fail_case_type_finalize)
+    failed = client.put(
+        f"/meetings/{meeting_id}/courtroom/case-type", json={"case_type": "criminal"}
+    )
+    fail_finalize = False
+    reconciled = client.put(
+        f"/meetings/{meeting_id}/courtroom/case-type", json={"case_type": "criminal"}
+    )
+
+    assert failed.status_code == 409
+    assert reconciled.status_code == 200
+    assert reconciled.json()["case_type"] == "criminal"
+    assert reconciled.json()["deliberation"]["active_epoch_number"] == 2
+
+
+def test_case_type_change_pending_metadata_failure_writes_no_marker_and_is_retryable(
+    tmp_path: Path, monkeypatch
+) -> None:
+    client = TestClient(create_test_app(tmp_path), raise_server_exceptions=False)
+    meeting_id = client.post(
+        "/meetings",
+        json={"title": "pending fault", "goal": "測試", "mode_id": "courtroom", "case_type": "civil"},
+    ).json()["meeting_id"]
+    client.post(f"/meetings/{meeting_id}/messages", json={"content": "既有討論"})
+    original_update = MeetingMetadataStore.update
+    fail_pending = True
+
+    def fail_pending_metadata_write(self, target_meeting_id, transform):
+        nonlocal fail_pending
+        current = self.get(target_meeting_id)
+        projected = transform(current)
+        if fail_pending and projected.get("pending_meeting_settings"):
+            raise OSError("simulated pending metadata failure")
+        return original_update(self, target_meeting_id, transform)
+
+    monkeypatch.setattr(MeetingMetadataStore, "update", fail_pending_metadata_write)
+    failed = client.put(
+        f"/meetings/{meeting_id}/courtroom/case-type", json={"case_type": "criminal"}
+    )
+    fail_pending = False
+    recovered = client.put(
+        f"/meetings/{meeting_id}/courtroom/case-type", json={"case_type": "criminal"}
+    )
+
+    assert failed.status_code == 409
+    assert recovered.status_code == 200
+    assert recovered.json()["case_type"] == "criminal"
+    markers = [
+        event
+        for event in MeetingRepository(tmp_path / "data").read_events(meeting_id)
+        if event.get("interaction_type") == "deliberation-epoch-start"
+    ]
+    assert len(markers) == 1
+
+
+def test_legacy_courtroom_transcript_keeps_catalog_label_after_explicit_civil_selection(
+    tmp_path: Path,
+) -> None:
+    client = TestClient(create_test_app(tmp_path))
+    meeting_id = client.post(
+        "/meetings",
+        json={"title": "舊法院", "goal": "舊流程", "mode_id": "courtroom", "case_type": "criminal"},
+    ).json()["meeting_id"]
+    MeetingMetadataStore(tmp_path / "data").update(
+        meeting_id,
+        lambda current: {key: value for key, value in current.items() if key != "case_type"},
+    )
+    MeetingRepository(tmp_path / "data").append_event(
+        meeting_id,
+        {
+            "event_id": f"{meeting_id}:legacy-charge",
+            "meeting_id": meeting_id,
+            "step_id": "courtroom-charge",
+            "role": "Prosecutor",
+            "status": "completed",
+            "interaction_type": "courtroom-issue-phase",
+            "issue_phase": "charge",
+            "parsed_output": {"summary": "舊檢察官主張"},
+        },
+    )
+
+    assert client.put(
+        f"/meetings/{meeting_id}/courtroom/case-type", json={"case_type": "civil"}
+    ).status_code == 200
+    transcript = client.get(f"/meetings/{meeting_id}/transcript.md?epoch=all")
+
+    assert transcript.status_code == 200
+    assert "## 檢察官" in transcript.text
+    assert "## 原告代理人" not in transcript.text
+
+
+def test_restart_rejects_a_truly_inflight_meeting(
+    tmp_path: Path, monkeypatch
+) -> None:
+    release = threading.Event()
+    started = threading.Event()
+    original_complete = MockModelAdapter.complete
+
+    def pause_first_argument(self, request):
+        started.set()
+        release.wait(timeout=3)
+        return original_complete(self, request)
+
+    monkeypatch.setattr(MockModelAdapter, "complete", pause_first_argument)
+    client = TestClient(create_test_app(tmp_path))
+    meeting_id = client.post(
+        "/meetings",
+        json={"title": "Active issue", "goal": "one at a time", "mode_id": "courtroom", "case_type": "civil"},
+    ).json()["meeting_id"]
+    assert client.put(
+        f"/meetings/{meeting_id}/courtroom/issues",
+        json={"revision": 0, "issues": [{"title": "one"}, {"title": "two"}]},
+    ).status_code == 200
+    assert client.post(
+        f"/meetings/{meeting_id}/courtroom/issues/confirm", json={"revision": 1}
+    ).status_code == 200
+    assert client.post(
+        f"/meetings/{meeting_id}/courtroom/issues/issue-1/arguments"
+    ).status_code == 202
+    assert started.wait(timeout=2)
+
+    wrong = client.post(
+        f"/meetings/{meeting_id}/deliberations/restart",
+        json={"scope": "all_deliberation", "reason": "must wait"},
+    )
+    release.set()
+    wait_for_activity(client, meeting_id, "completed")
+
+    assert wrong.status_code == 409
+    assert "running" in wrong.json()["detail"].lower()
+
+
+def test_restart_rejects_non_active_issue_after_an_issue_has_started(tmp_path: Path) -> None:
+    client = TestClient(create_test_app(tmp_path))
+    meeting_id = client.post(
+        "/meetings",
+        json={"title": "Issue identity", "goal": "one at a time", "mode_id": "courtroom", "case_type": "civil"},
+    ).json()["meeting_id"]
+    assert client.put(
+        f"/meetings/{meeting_id}/courtroom/issues",
+        json={"revision": 0, "issues": [{"title": "one"}, {"title": "two"}]},
+    ).status_code == 200
+    assert client.post(
+        f"/meetings/{meeting_id}/courtroom/issues/confirm", json={"revision": 1}
+    ).status_code == 200
+    assert client.post(
+        f"/meetings/{meeting_id}/courtroom/issues/issue-1/arguments"
+    ).status_code == 202
+    meeting = wait_for_activity(client, meeting_id, "completed")
+    assert meeting["courtroom"]["current_issue_id"] == "issue-1"
+
+    wrong = client.post(
+        f"/meetings/{meeting_id}/deliberations/restart",
+        json={"scope": "current_issue", "reason": "wrong issue", "issue_id": "issue-2"},
+    )
+
+    assert wrong.status_code == 409
+    assert "active courtroom issue" in wrong.json()["detail"].lower()
+
+
+def test_every_non_courtroom_mode_can_restart_without_changing_case_files(
+    tmp_path: Path,
+) -> None:
+    client = TestClient(create_test_app(tmp_path))
+    modes = [mode for mode in client.get("/modes").json() if mode["id"] != "courtroom"]
+    assert {mode["category"] for mode in modes} == {"relay", "parallel"}
+
+    for mode in modes:
+        meeting = client.post(
+            "/meetings",
+            json={
+                "title": f"restart {mode['id']}",
+                "goal": "restart safely",
+                "mode_id": mode["id"],
+                "inputs": {item["id"]: "test" for item in mode["inputs"]},
+            },
+        ).json()
+        meeting_id = meeting["meeting_id"]
+
+        restarted = client.post(
+            f"/meetings/{meeting_id}/deliberations/restart",
+            json={"scope": "all_deliberation", "reason": "mode coverage"},
+        )
+
+        assert restarted.status_code == 200, mode["id"]
+
+    evidence_meeting = client.post(
+        "/meetings",
+        json={
+            "title": "same evidence",
+            "goal": "preserve evidence",
+            "mode_id": "red-blue",
+            "case_files": [
+                {
+                    "title": "same evidence",
+                    "content": "byte-for-byte",
+                    "visible_roles": ["Blue"],
+                }
+            ],
+        },
+    ).json()
+    evidence_meeting_id = evidence_meeting["meeting_id"]
+    case_file_path = (
+        tmp_path / "data" / "meetings" / evidence_meeting_id / "case_files.json"
+    )
+    before_bytes = case_file_path.read_bytes()
+    before_manifest = client.get(
+        f"/meetings/{evidence_meeting_id}"
+    ).json()["case_files"]
+
+    restarted = client.post(
+        f"/meetings/{evidence_meeting_id}/deliberations/restart",
+        json={"scope": "all_deliberation", "reason": "evidence identity"},
+    )
+
+    assert restarted.status_code == 200
+    assert restarted.json()["case_files"] == before_manifest
+    assert case_file_path.read_bytes() == before_bytes
+
+
+def test_case_material_http_mutations_upgrade_legacy_and_preserve_versions(
+    tmp_path: Path,
+) -> None:
+    client = TestClient(create_test_app(tmp_path))
+    meeting_id = client.post(
+        "/meetings",
+        json={
+            "title": "Versioned evidence",
+            "goal": "inspect evidence",
+            "mode_id": "courtroom",
+                "case_type": "civil",
+            "case_files": [
+                {
+                    "title": "Legacy exhibit",
+                    "content": "legacy body",
+                    "visible_roles": ["Judge"],
+                }
+            ],
+        },
+    ).json()["meeting_id"]
+    path = tmp_path / "data" / "meetings" / meeting_id / "case_files.json"
+    metadata_path = path.with_name("metadata.json")
+    legacy_bytes = path.read_bytes()
+    metadata_bytes = metadata_path.read_bytes()
+
+    legacy = client.get(f"/meetings/{meeting_id}/materials")
+    assert legacy.status_code == 200
+    assert legacy.json()["schema_version"] == 1
+    assert path.read_bytes() == legacy_bytes
+
+    added = client.post(
+        f"/meetings/{meeting_id}/materials/evidence",
+        json={
+            "revision": 0,
+            "title": "New exhibit",
+            "content": "version one",
+            "visible_roles": ["Defense", "Judge"],
+        },
+    )
+    assert added.status_code == 200
+    assert added.json()["revision"] == 1
+    assert added.json()["evidence"][1]["citation_anchor"] == "[證物二]"
+    evidence_id = added.json()["evidence"][1]["id"]
+
+    versioned = client.post(
+        f"/meetings/{meeting_id}/materials/evidence/{evidence_id}/versions",
+        json={
+            "revision": 1,
+            "title": "New exhibit corrected",
+            "content": "version two",
+            "visible_roles": ["Prosecutor"],
+        },
+    )
+    assert versioned.status_code == 200
+    assert versioned.json()["evidence"][1]["active_version"] == 2
+    assert versioned.json()["evidence"][1]["versions"][0]["visible_roles"] == [
+        "Defense",
+        "Judge",
+    ]
+    assert versioned.json()["evidence"][1]["versions"][1]["visible_roles"] == [
+        "Prosecutor"
+    ]
+
+    stale = client.post(
+        f"/meetings/{meeting_id}/materials/evidence/{evidence_id}/deactivate",
+        json={"revision": 1},
+    )
+    deactivated = client.post(
+        f"/meetings/{meeting_id}/materials/evidence/{evidence_id}/deactivate",
+        json={"revision": 2},
+    )
+    reactivated = client.post(
+        f"/meetings/{meeting_id}/materials/evidence/{evidence_id}/reactivate",
+        json={"revision": 3},
+    )
+
+    assert stale.status_code == 409
+    assert deactivated.json()["evidence"][1]["status"] == "inactive"
+    assert reactivated.json()["evidence"][1]["status"] == "active"
+    historical = client.get(
+        f"/meetings/{meeting_id}/materials", params={"revision": 1}
+    )
+    assert historical.status_code == 200
+    assert historical.json()["revision"] == 1
+    assert historical.json()["evidence"][1]["active_version"] == 1
+    assert historical.json()["evidence"][1]["versions"][-1]["visible_roles"] == [
+        "Defense",
+        "Judge",
+    ]
+    history = reactivated.json()["revision_history"]
+    assert [entry["revision"] for entry in history] == [0, 1, 2, 3, 4]
+    assert "content" not in json.dumps(history)
+    assert metadata_path.read_bytes() == metadata_bytes
+
+
+def test_case_notes_and_promoted_chair_message_are_versioned_without_event_rewrite(
+    tmp_path: Path,
+) -> None:
+    client = TestClient(create_test_app(tmp_path))
+    meeting_id = client.post(
+        "/meetings", json={"title": "Case notes", "goal": "remember facts"}
+    ).json()["meeting_id"]
+    source = client.post(
+        f"/meetings/{meeting_id}/messages",
+        json={"content": "The parties agree the inspection happened on Monday."},
+    ).json()
+    events_path = tmp_path / "data" / "meetings" / meeting_id / "events.jsonl"
+    source_bytes = events_path.read_bytes()
+
+    promoted = client.post(
+        f"/meetings/{meeting_id}/messages/{source['event_id']}/promote-to-note",
+        json={
+            "revision": 0,
+            "title": "Agreed inspection date",
+            "visible_roles": ["Blue", "Red", "Judge"],
+        },
+    )
+    assert promoted.status_code == 200
+    assert events_path.read_bytes() == source_bytes
+    note = promoted.json()["notes"][0]
+    assert note["versions"][0]["content"] == source["content"]
+    assert note["versions"][0]["source_event_id"] == source["event_id"]
+
+    updated = client.post(
+        f"/meetings/{meeting_id}/materials/notes/{note['id']}/versions",
+        json={
+            "revision": 1,
+            "title": "Agreed inspection",
+            "content": "Inspection was Monday at 10:00.",
+            "visible_roles": ["Judge"],
+        },
+    )
+    assert updated.status_code == 200
+    assert updated.json()["notes"][0]["active_version"] == 2
+    assert updated.json()["notes"][0]["versions"][0]["source_event_id"] == source["event_id"]
+
+    deactivated = client.post(
+        f"/meetings/{meeting_id}/materials/notes/{note['id']}/deactivate",
+        json={"revision": 2},
+    )
+    reactivated = client.post(
+        f"/meetings/{meeting_id}/materials/notes/{note['id']}/reactivate",
+        json={"revision": 3},
+    )
+    assert deactivated.json()["notes"][0]["status"] == "inactive"
+    assert reactivated.json()["notes"][0]["status"] == "active"
+
+
+def test_active_materials_reach_prompts_inactive_versions_do_not_and_restart_clears_gate(
+    tmp_path: Path,
+) -> None:
+    client = TestClient(create_test_app(tmp_path))
+    meeting_id = client.post(
+        "/meetings",
+        json={
+            "title": "Prompt materials",
+            "goal": "use current facts",
+            "case_files": [
+                {
+                    "title": "Active exhibit",
+                    "content": "ACTIVE_EVIDENCE",
+                    "visible_roles": ["Blue"],
+                },
+                {
+                    "title": "Inactive exhibit",
+                    "content": "INACTIVE_EVIDENCE",
+                    "visible_roles": ["Blue"],
+                },
+            ],
+        },
+    ).json()["meeting_id"]
+    deactivated = client.post(
+        f"/meetings/{meeting_id}/materials/evidence/case-file-2/deactivate",
+        json={"revision": 0},
+    )
+    assert deactivated.status_code == 200
+    note = client.post(
+        f"/meetings/{meeting_id}/materials/notes",
+        json={
+            "revision": 1,
+            "title": "Binding fact",
+            "content": "PERSISTENT_CASE_NOTE",
+            "visible_roles": ["Blue"],
+        },
+    )
+    assert note.status_code == 200
+    assert client.post(f"/meetings/{meeting_id}/start", json={}).status_code == 202
+    completed = wait_for_activity(client, meeting_id, "completed")
+    blue_prompt = completed["events"][0]["prompt_messages"][0]["content"]
+    assert "ACTIVE_EVIDENCE" in blue_prompt
+    assert "PERSISTENT_CASE_NOTE" in blue_prompt
+    assert "INACTIVE_EVIDENCE" not in blue_prompt
+    assert {event["materials_revision"] for event in completed["events"]} == {2}
+    assert {
+        reference["id"]
+        for reference in completed["events"][0]["materials_refs"]
+    } == {"case-file-1", "case-note-1"}
+
+    changed = client.post(
+        f"/meetings/{meeting_id}/materials/notes",
+        json={
+            "revision": 2,
+            "title": "Late fact",
+            "content": "LATE_CASE_NOTE",
+            "visible_roles": ["Blue", "Red", "Judge"],
+        },
+    )
+    assert changed.status_code == 200
+    assert changed.json()["pending_impact"]["deliberation_epoch_id"] == "epoch-1"
+
+    blocked = [
+        client.post(f"/meetings/{meeting_id}/start", json={}),
+        client.post(
+            f"/meetings/{meeting_id}/roles/Blue/respond",
+            json={"instruction": "answer despite changed evidence"},
+        ),
+        client.post(
+            f"/meetings/{meeting_id}/sequences", json={"roles": ["Blue", "Red"]}
+        ),
+        client.post(f"/meetings/{meeting_id}/steps/missing/retry", json={}),
+    ]
+    assert {response.status_code for response in blocked} == {409}
+    assert all("materials changed" in response.json()["detail"].lower() for response in blocked)
+
+    material_bytes = (
+        tmp_path / "data" / "meetings" / meeting_id / "case_files.json"
+    ).read_bytes()
+    restarted = client.post(
+        f"/meetings/{meeting_id}/deliberations/restart",
+        json={"scope": "all_deliberation", "reason": "acknowledge new evidence"},
+    )
+    assert restarted.status_code == 200
+    assert client.get(f"/meetings/{meeting_id}/materials").json()["pending_impact"] is None
+    assert (
+        tmp_path / "data" / "meetings" / meeting_id / "case_files.json"
+    ).read_bytes() == material_bytes
+    raw = MeetingRepository(tmp_path / "data").read_events(meeting_id)
+    assert raw[-1]["snapshot"]["materials_revision"] == 3
+    assert client.post(f"/meetings/{meeting_id}/start", json={}).status_code == 202
+    wait_for_activity(client, meeting_id, "completed")
+
+
+def test_pending_material_impact_blocks_every_courtroom_ai_entrypoint(tmp_path: Path) -> None:
+    client = TestClient(create_test_app(tmp_path))
+    meeting_id = client.post(
+        "/meetings",
+        json={"title": "Court material gate", "goal": "block all", "mode_id": "courtroom", "case_type": "civil"},
+    ).json()["meeting_id"]
+    MeetingRepository(tmp_path / "data").append_event(
+        meeting_id,
+        {
+            "event_id": "existing-ai-output",
+            "meeting_id": meeting_id,
+            "step_id": "courtroom-draft-r1",
+            "base_step_id": "courtroom-issue-draft",
+            "role": "Judge",
+            "attempt": 1,
+            "status": "completed",
+            "interaction_type": "courtroom-issue-draft",
+        },
+    )
+    assert client.post(
+        f"/meetings/{meeting_id}/materials/notes",
+        json={
+            "revision": 0,
+            "title": "changed fact",
+            "content": "new fact",
+            "visible_roles": ["Judge"],
+        },
+    ).status_code == 200
+
+    responses = [
+        client.post(
+            f"/meetings/{meeting_id}/courtroom/issues/draft", json={"revision": 0}
+        ),
+        client.post(f"/meetings/{meeting_id}/courtroom/issues/issue-1/arguments"),
+        client.post(f"/meetings/{meeting_id}/courtroom/issues/issue-1/ruling"),
+        client.post(f"/meetings/{meeting_id}/courtroom/final-verdict"),
+        client.post(
+            f"/meetings/{meeting_id}/roles/Judge/respond",
+            json={"instruction": "judge now"},
+        ),
+        client.post(f"/meetings/{meeting_id}/steps/missing/retry", json={}),
+    ]
+
+    assert {response.status_code for response in responses} == {409}
+    assert all("materials changed" in response.json()["detail"].lower() for response in responses)
+
+
+def test_inactive_note_is_excluded_from_prompt_and_inactive_version_waits_until_reactivation(
+    tmp_path: Path,
+) -> None:
+    client = TestClient(create_test_app(tmp_path))
+    meeting_id = client.post(
+        "/meetings", json={"title": "inactive notes", "goal": "ignore inactive"}
+    ).json()["meeting_id"]
+    created = client.post(
+        f"/meetings/{meeting_id}/materials/notes",
+        json={
+            "revision": 0,
+            "title": "temporary",
+            "content": "INACTIVE_NOTE_CONTENT",
+            "visible_roles": ["Blue"],
+        },
+    ).json()
+    note_id = created["notes"][0]["id"]
+    assert client.post(
+        f"/meetings/{meeting_id}/materials/notes/{note_id}/deactivate",
+        json={"revision": 1},
+    ).status_code == 200
+    assert client.post(f"/meetings/{meeting_id}/start", json={}).status_code == 202
+    meeting = wait_for_activity(client, meeting_id, "completed")
+    assert all(
+        "INACTIVE_NOTE_CONTENT" not in event["prompt_messages"][0]["content"]
+        for event in meeting["events"]
+    )
+
+    versioned = client.post(
+        f"/meetings/{meeting_id}/materials/notes/{note_id}/versions",
+        json={
+            "revision": 2,
+            "title": "still inactive",
+            "content": "NEW_INACTIVE_NOTE",
+            "visible_roles": ["Red"],
+        },
+    )
+    assert versioned.status_code == 200
+    assert versioned.json()["pending_impact"] is None
+    reactivated = client.post(
+        f"/meetings/{meeting_id}/materials/notes/{note_id}/reactivate",
+        json={"revision": 3},
+    )
+    assert reactivated.status_code == 200
+    assert reactivated.json()["pending_impact"] is not None
+
+
+def test_carried_ruling_counts_as_active_ai_output_and_keeps_material_references(
+    tmp_path: Path,
+) -> None:
+    client = TestClient(create_test_app(tmp_path))
+    meeting_id = client.post(
+        "/meetings",
+        json={"title": "carried ruling", "goal": "preserve ruling", "mode_id": "courtroom", "case_type": "civil"},
+    ).json()["meeting_id"]
+    repository = MeetingRepository(tmp_path / "data")
+    repository.append_event(
+        meeting_id,
+        {
+            "event_id": "ruling-issue-1",
+            "meeting_id": meeting_id,
+            "step_id": "ruling-issue-1",
+            "role": "Judge",
+            "attempt": 1,
+            "status": "completed",
+            "interaction_type": "courtroom-issue-phase",
+            "issue_id": "issue-1",
+            "issue_phase": "ruling",
+            "materials_revision": 5,
+            "materials_refs": [
+                {
+                    "kind": "evidence",
+                    "id": "case-file-1",
+                    "version": 2,
+                    "status": "active",
+                    "visible_roles": ["Judge"],
+                }
+            ],
+        },
+    )
+    marker = DeliberationEpochs.restart_marker(
+        meeting_id=meeting_id,
+        events=repository.read_events(meeting_id),
+        command=RestartCommand(
+            scope="current_issue", reason="retry issue two", issue_id="issue-2"
+        ),
+    )
+    repository.append_event(meeting_id, marker)
+
+    carried = DeliberationEpochs.view(repository.read_events(meeting_id)).workflow_events[0]
+    assert carried["materials_revision"] == 5
+    assert carried["materials_refs"][0]["version"] == 2
+    changed = client.post(
+        f"/meetings/{meeting_id}/materials/notes",
+        json={
+            "revision": 0,
+            "title": "new fact",
+            "content": "changes carried judgment context",
+            "visible_roles": ["Judge"],
+        },
+    )
+    assert changed.status_code == 200
+    assert changed.json()["pending_impact"]["deliberation_epoch_id"] == marker["epoch_id"]
+
+
 def test_alternate_local_frontend_origin_can_call_api(tmp_path: Path) -> None:
     app = create_test_app(tmp_path)
     client = TestClient(app)
@@ -4284,6 +5973,18 @@ RELAY_PROMPT_TEMPLATES = [
     "courtroom_issue_rebuttal",
     "courtroom_issue_ruling",
     "courtroom_final_verdict",
+    "courtroom_civil_issue_draft",
+    "courtroom_civil_proponent_statement",
+    "courtroom_civil_respondent_defense",
+    "courtroom_civil_limited_rebuttal",
+    "courtroom_civil_issue_ruling",
+    "courtroom_civil_final_verdict",
+    "courtroom_criminal_issue_draft",
+    "courtroom_criminal_proponent_statement",
+    "courtroom_criminal_respondent_defense",
+    "courtroom_criminal_limited_rebuttal",
+    "courtroom_criminal_issue_ruling",
+    "courtroom_criminal_final_verdict",
     "debate_statement_pro",
     "debate_statement_con",
     "debate_cross_pro",
@@ -4340,9 +6041,12 @@ models:
             content += " {{ fanout_outputs }}"
         if template == "directed_role_response":
             content += " {{ role_display_name }} {{ instruction }}"
-        if template.startswith("courtroom_issue_"):
+        if template.startswith("courtroom_issue_") or (
+            template.startswith(("courtroom_civil_", "courtroom_criminal_"))
+            and not template.endswith(("issue_draft", "final_verdict"))
+        ):
             content += " {{ current_issue }}"
-        if template == "courtroom_final_verdict":
+        if template == "courtroom_final_verdict" or template.endswith(("civil_final_verdict", "criminal_final_verdict")):
             content += " {{ issue_rulings }}"
         (prompt_dir / f"{template}.md").write_text(content, encoding="utf-8")
     return create_app(

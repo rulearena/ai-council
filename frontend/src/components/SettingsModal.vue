@@ -1,160 +1,33 @@
 <script setup lang="ts">
-import { computed, inject, ref, watch } from 'vue'
+import { inject, ref, watch } from 'vue'
 import { councilKey } from '../composables/useCouncil'
-import { councilRoles, formatDateTime, roleClass, roleColor, roleColorVars, roleIcon } from '../composables/useCouncil'
-import RoleSilhouette from './RoleSilhouette.vue'
-import { useScenePreference } from '../scenes'
 import Modal from './Modal.vue'
 import ModelManagerPanel from './ModelManagerPanel.vue'
-import { modelDisplayLabel } from '../providers'
-import { roleDisplayName, statusDisplayLabel } from '../presentation'
-import { activeMode } from '../composables/useCouncil'
 
 const props = defineProps<{ show: boolean }>()
 defineEmits<{ close: [] }>()
+const { devMode } = inject(councilKey)!
+const activeTab = ref<'models' | 'advanced'>('models')
 
-const store = inject(councilKey)!
-const {
-  models,
-  selectedMeeting,
-  selectedModels,
-  modelTestResults,
-  devMode,
-  testSelectedModel,
-  updateSelectedModel,
-  assignmentUpdateError,
-  loading,
-} = store
-
-const assignmentWarnings = computed(() =>
-  (selectedMeeting.value?.participants ?? []).filter(
-    (participant) => participant.model_assignment_warning,
-  ),
-)
-const participants = computed(() => selectedMeeting.value?.participants ?? [])
-const displayRole = (role: string) => roleDisplayName(activeMode.value, participants.value, role)
-
-const { scenes, currentScene, setScene } = useScenePreference()
-// Reads currentScene (not the persisted selectedSceneId) so the dropdown always matches
-// what the stage is actually showing, including while a mode's default_scene override is
-// in play - selecting an option here calls setScene(), which clears any override, so the
-// picker never lags behind a manual pick either.
-const sceneModel = computed({
-  get: () => currentScene.value.id,
-  set: (id: string) => setScene(id),
+watch(() => props.show, (show) => {
+  if (show) activeTab.value = 'models'
 })
-
-type SettingsTab = 'general' | 'models'
-const activeTab = ref<SettingsTab>('general')
-
-// Resetting on close unmounts ModelManagerPanel immediately, invalidating any pending
-// row-level test feedback. It also means every reopen starts from 一般 rather than
-// silently keeping the previously active tab.
-watch(
-  () => props.show,
-  () => {
-    activeTab.value = 'general'
-  },
-)
 </script>
 
 <template>
   <Modal :show="show" title="系統設定" test-id="settings-modal" close-test-id="settings-close-button" @close="$emit('close')">
+    <p class="scope-hint">這裡只管理所有會議共用的 Provider 與模型。單場會議資料請使用上方的會議次導覽。</p>
     <div class="settings-tabs">
-      <button
-        type="button"
-        class="btn btn-ghost btn-sm settings-tab-button"
-        :class="{ active: activeTab === 'general' }"
-        data-testid="general-tab"
-        @click="activeTab = 'general'"
-      >
-        一般
-      </button>
-      <button
-        type="button"
-        class="btn btn-ghost btn-sm settings-tab-button"
-        :class="{ active: activeTab === 'models' }"
-        data-testid="model-manager-tab"
-        @click="activeTab = 'models'"
-      >
-        模型管理
-      </button>
+      <button type="button" class="btn btn-ghost btn-sm settings-tab-button" :class="{ active: activeTab === 'models' }" data-testid="model-manager-tab" @click="activeTab = 'models'">Provider 與模型</button>
+      <button type="button" class="btn btn-ghost btn-sm settings-tab-button" :class="{ active: activeTab === 'advanced' }" data-testid="advanced-settings-tab" @click="activeTab = 'advanced'">進階功能</button>
     </div>
-
     <ModelManagerPanel v-if="show && activeTab === 'models'" />
-
-    <template v-else>
-    <section class="settings-scene-row">
-      <label class="scene-picker">
-        場景
-        <select v-model="sceneModel" data-testid="scene-select">
-          <option v-for="scene in scenes" :key="scene.id" :value="scene.id">{{ scene.label }}</option>
-        </select>
-      </label>
-    </section>
-
-    <!-- One model-slot per active-mode role (councilRoles), not a hardcoded
-         Blue/Red/Judge triple - a mode with a different roster renders however many
-         slots it has, each colored from that role's catalog color (roleColorVars). -->
-    <section class="settings-role-grid">
-      <label v-for="role in councilRoles" :key="role" class="model-slot" :class="roleClass(role)" :style="roleColorVars(role)">
-        <span class="role-badge" :class="roleClass(role)" :style="roleColorVars(role)" data-testid="role-badge">
-          <img v-if="roleIcon(role)" :src="roleIcon(role)" class="role-icon" :alt="role" />
-          <RoleSilhouette v-else :color="roleColor(role)" :size="20" />
-          {{ displayRole(role) }}
-        </span>
-        <span class="model-control">
-          <select
-            :value="selectedModels[role]"
-            :data-testid="`${role.toLowerCase()}-model-select`"
-            :disabled="loading"
-            @change="updateSelectedModel(role, ($event.target as HTMLSelectElement).value)"
-          >
-            <option v-for="model in models" :key="model.id" :value="model.id">{{ modelDisplayLabel(model) }}</option>
-          </select>
-          <button
-            type="button"
-            class="btn btn-secondary btn-sm"
-            :data-testid="`test-${role.toLowerCase()}-model-button`"
-            @click="testSelectedModel(role)"
-            :disabled="loading || !selectedModels[role]"
-          >
-            測試
-          </button>
-        </span>
-      </label>
-    </section>
-
-    <div
-      v-if="assignmentWarnings.length"
-      class="error"
-      data-testid="assignment-fallback-warning"
-      role="alert"
-    >
-      <p v-for="participant in assignmentWarnings" :key="participant.role_id">
-        {{ displayRole(participant.role_id) }}：{{ participant.model_assignment_warning }}
-      </p>
-    </div>
-
-    <p v-if="assignmentUpdateError" class="error" data-testid="assignment-update-error" role="alert">
-      {{ assignmentUpdateError }}
-    </p>
-
-    <section class="model-test-status" data-testid="model-test-status">
-      <span v-for="role in councilRoles" :key="role">
-        <i class="status-dot" :data-status="modelTestResults[role].status" aria-hidden="true"></i>
-        {{ displayRole(role) }}：{{ statusDisplayLabel(modelTestResults[role].status) }}
-        <small v-if="modelTestResults[role].testedAt">測試 {{ formatDateTime(modelTestResults[role].testedAt) }}</small>
-        <em v-if="modelTestResults[role].error">{{ modelTestResults[role].error }}</em>
-      </span>
-    </section>
-
-    <section class="dev-mode-row">
+    <section v-else class="dev-mode-row">
       <label class="dev-mode-toggle">
         <input type="checkbox" v-model="devMode" data-testid="dev-mode-toggle" />
-        開發者模式（在議事紀錄中顯示 Debug 面板）
+        顯示事件原始資料
       </label>
+      <p>預設關閉。只影響議事紀錄畫面，不會改變 AI 的提示詞、模型或執行方式。</p>
     </section>
-    </template>
   </Modal>
 </template>

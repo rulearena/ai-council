@@ -28,6 +28,9 @@ export type PresentationEvent = {
     | 'meeting-goal-changed'
   target_role_id?: string
   issue_phase?: 'charge' | 'defense' | 'rebuttal' | 'ruling'
+  case_type?: 'civil' | 'criminal'
+  role_display?: string
+  phase_display?: string
   status?: string
 }
 
@@ -70,9 +73,12 @@ export function interactionDisplayLabel(
   participants: PresentationParticipant[],
   event: PresentationEvent,
 ): string | null {
-  const roleName = roleDisplayName(mode, participants, event.role)
+  const roleName = eventRoleDisplayName(mode, participants, event)
   if (event.interaction_type === 'directed-role-instruction' && event.target_role_id) {
-    return `主席追問${roleDisplayName(mode, participants, event.target_role_id)}`
+    const targetRole = mode.id === 'courtroom' && !event.case_type
+      ? mode.roles.find((role) => role.id === event.target_role_id)?.name ?? event.target_role_id
+      : roleDisplayName(mode, participants, event.target_role_id)
+    return `主席追問${targetRole}`
   }
   if (event.interaction_type === 'directed-role-response') return `${roleName}回應主席追問`
   if (event.interaction_type === 'role-sequence-response') return `${roleName}依序回應`
@@ -84,10 +90,25 @@ export function interactionDisplayLabel(
       charge: '檢察官提出爭點主張',
       defense: '辯護律師針對爭點答辯',
       rebuttal: '檢察官針對爭點反駁',
-      ruling: '法官作成爭點裁定',
+      ruling: '法官判斷此爭點',
     } as Record<string, string>)[event.issue_phase ?? ''] ?? '爭點審理'
   }
   return null
+}
+
+export function eventRoleDisplayName(
+  mode: PresentationMode,
+  participants: PresentationParticipant[],
+  event: PresentationEvent,
+): string {
+  if (event.role_display) return event.role_display
+  if (event.role === 'Human' || event.role === 'System') {
+    return roleDisplayName(mode, participants, event.role)
+  }
+  if (mode.id === 'courtroom') {
+    return mode.roles.find((role) => role.id === event.role)?.name ?? event.role
+  }
+  return roleDisplayName(mode, participants, event.role)
 }
 
 export function stepDisplayLabel(
@@ -95,6 +116,7 @@ export function stepDisplayLabel(
   participants: PresentationParticipant[],
   event: PresentationEvent,
 ): string {
+  if (event.phase_display) return event.phase_display
   const interactionLabel = interactionDisplayLabel(mode, participants, event)
   if (interactionLabel) return interactionLabel
   if (event.role === 'Human') return event.step_id === 'human-correction' ? '主席訂正' : '主席發言'

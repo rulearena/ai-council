@@ -21,6 +21,12 @@ class MeetingTransitionCoordinator:
     def __init__(self) -> None:
         self._locks: dict[str, _LockEntry] = {}
         self._locks_guard = threading.Lock()
+        self._before_transition: Callable[[str, str | None], None] | None = None
+
+    def set_before_transition(
+        self, callback: Callable[[str, str | None], None]
+    ) -> None:
+        self._before_transition = callback
 
     @property
     def registry_size(self) -> int:
@@ -28,12 +34,14 @@ class MeetingTransitionCoordinator:
             return len(self._locks)
 
     @contextmanager
-    def guard(self, meeting_id: str) -> Iterator[None]:
+    def guard(self, meeting_id: str, *, operation: str | None = None) -> Iterator[None]:
         with self._locks_guard:
             entry = self._locks.setdefault(meeting_id, _LockEntry())
             entry.users += 1
         try:
             with entry.lock:
+                if self._before_transition is not None:
+                    self._before_transition(meeting_id, operation)
                 yield
         finally:
             with self._locks_guard:
@@ -44,7 +52,7 @@ class MeetingTransitionCoordinator:
     def synchronized(self, function: Callable[..., Any]) -> Callable[..., Any]:
         @wraps(function)
         def guarded(meeting_id: str, *args: Any, **kwargs: Any) -> Any:
-            with self.guard(meeting_id):
+            with self.guard(meeting_id, operation=function.__name__):
                 return function(meeting_id, *args, **kwargs)
 
         # FastAPI inspects the wrapper in this module. Resolve postponed annotations

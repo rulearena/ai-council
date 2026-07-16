@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, Literal
 
 from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
@@ -25,10 +25,25 @@ from ai_council.meetings.execution_state import (
     MeetingExecutionStateStore,
     interrupted_execution_event,
 )
+from ai_council.meetings.case_materials import (
+    CaseMaterialConflict,
+    CaseMaterialLimits as VersionedCaseMaterialLimits,
+    CaseMaterials,
+    CaseMaterialsView,
+    CaseMaterialValidationError,
+)
+from ai_council.meetings.deliberation import (
+    DeliberationEpochs,
+    RestartCommand,
+)
 from ai_council.meetings.courtroom import (
     CourtroomWorkflowError,
     CourtroomWorkflowService,
     project_courtroom,
+)
+from ai_council.meetings.case_profiles import (
+    CourtroomCaseProfile,
+    CourtroomCaseProfileError,
 )
 from ai_council.meetings.coordination import MeetingTransitionCoordinator
 from ai_council.meetings.assignments import (
@@ -44,9 +59,12 @@ from ai_council.meetings.modes import (
     relay_plan,
 )
 from ai_council.meetings.repository import MeetingRepository
+from ai_council.meetings.input_envelope import CASE_EVIDENCE_BY_ROLE_INPUT
 from ai_council.meetings.runner import (
     CASE_FILES_BY_ROLE_INPUT,
     CASE_FILES_DEFAULT_ROLE,
+    MATERIALS_REVISION_INPUT,
+    MATERIALS_REFS_INPUT,
     latest_unresolved_fixed_relay_failure,
     MeetingRunner,
     RunnerAdapters,
@@ -140,6 +158,7 @@ class CreateMeetingRequest(BaseModel):
     participants: list[MeetingParticipantRequest] = Field(default_factory=list)
     inputs: dict[str, str] = Field(default_factory=dict)
     case_files: list[CaseFileRequest] = Field(default_factory=list)
+    case_type: Literal["civil", "criminal"] | None = None
 
     @field_validator("title", "goal")
     @classmethod
@@ -163,6 +182,23 @@ class UpdateMeetingDetailsRequest(BaseModel):
         return stripped
 
 
+class UpdateMeetingSettingsRequest(BaseModel):
+    expected_revision: int = Field(ge=0)
+    title: str
+    goal: str
+    case_type: Literal["civil", "criminal"] | None = None
+    scene: Literal["meeting-room", "courtroom", "default-chamber"]
+    participant_models: dict[str, str]
+
+    @field_validator("title", "goal")
+    @classmethod
+    def require_non_blank(cls, value: str) -> str:
+        stripped = value.strip()
+        if not stripped:
+            raise ValueError("must not be blank")
+        return stripped
+
+
 class CourtroomIssueRequest(BaseModel):
     id: str | None = None
     title: str
@@ -175,6 +211,41 @@ class ReplaceCourtroomIssuesRequest(BaseModel):
 
 class CourtroomRevisionRequest(BaseModel):
     revision: int = Field(ge=0)
+
+
+class CourtroomCaseTypeRequest(BaseModel):
+    case_type: Literal["civil", "criminal"]
+
+
+class RestartDeliberationRequest(BaseModel):
+    scope: Literal["current_issue", "all_deliberation", "rebuild_issues"]
+    reason: str
+    issue_id: str | None = None
+
+    @field_validator("reason")
+    @classmethod
+    def require_restart_reason(cls, value: str) -> str:
+        stripped = value.strip()
+        if not stripped:
+            raise ValueError("must not be blank")
+        return stripped
+
+
+class CaseMaterialContentRequest(BaseModel):
+    revision: int = Field(ge=0)
+    title: str
+    content: str
+    visible_roles: list[str]
+
+
+class CaseMaterialStatusRequest(BaseModel):
+    revision: int = Field(ge=0)
+
+
+class PromoteCaseNoteRequest(BaseModel):
+    revision: int = Field(ge=0)
+    title: str
+    visible_roles: list[str]
 
 
 class StartMeetingRequest(BaseModel):
@@ -302,6 +373,7 @@ def create_app(
     data_path = Path(data_dir)
     metadata_store = MeetingMetadataStore(data_path)
     repository = MeetingRepository(data_path)
+    case_materials = CaseMaterials(repository)
     courtroom_workflow = CourtroomWorkflowService(metadata_store, repository)
     execution_state_store = MeetingExecutionStateStore(data_path)
     model_repository = ModelConfigRepository(model_config_path)
@@ -337,6 +409,74 @@ def create_app(
     projector = TranscriptProjector()
     jobs = MeetingJobManager()
     meeting_transitions = MeetingTransitionCoordinator()
+
+    def reconcile_pending_restart(meeting_id: str, operation: str | None) -> None:
+        metadata = metadata_store.get(meeting_id)
+        pending_settings = metadata.get("pending_meeting_settings")
+        if isinstance(pending_settings, dict):
+            if operation in {
+                "update_meeting_settings",
+                "update_meeting_details",
+                "update_courtroom_case_type",
+            }:
+                return
+            event_ids = {
+                str(event.get("event_id"))
+                for event in repository.read_events(meeting_id)
+            }
+            required = {
+                str(event.get("event_id"))
+                for event in pending_settings.get("events", [])
+                if isinstance(event, dict)
+            }
+            if not required.issubset(event_ids):
+                raise HTTPException(
+                    status_code=409,
+                    detail="Meeting settings update must be retried before changing the meeting",
+                )
+            try:
+                metadata_store.update(
+                    meeting_id,
+                    finalize_pending_meeting_settings,
+                )
+            except OSError as error:
+                raise HTTPException(
+                    status_code=409,
+                    detail="Meeting settings metadata is pending recovery",
+                ) from error
+            metadata = metadata_store.get(meeting_id)
+        pending = metadata.get("pending_deliberation_restart")
+        if not isinstance(pending, dict) or operation in {
+            "restart_deliberation",
+            "update_courtroom_case_type",
+        }:
+            return
+        marker = next(
+            (
+                event
+                for event in reversed(repository.read_events(meeting_id))
+                if event.get("interaction_type") == "deliberation-epoch-start"
+                and event.get("epoch_id") == pending.get("epoch_id")
+            ),
+            None,
+        )
+        if marker is None:
+            raise HTTPException(
+                status_code=409,
+                detail="Deliberation restart must be retried before changing the meeting",
+            )
+        try:
+            metadata_store.update(
+                meeting_id,
+                lambda current: finalize_deliberation_restart_metadata(current, marker),
+            )
+        except OSError as error:
+            raise HTTPException(
+                status_code=409,
+                detail="Deliberation restart metadata is pending recovery",
+            ) from error
+
+    meeting_transitions.set_before_transition(reconcile_pending_restart)
     model_health = ModelHealthCheckStore()
     model_health_checker = ModelHealthChecker(model_repository, model_adapters, model_health)
     model_write_lock = threading.Lock()
@@ -489,6 +629,16 @@ def create_app(
                 status_code=400,
                 detail=f"Mode is not yet supported: {mode.id}",
             )
+        if mode.id == "courtroom" and request.case_type is None:
+            raise HTTPException(
+                status_code=422,
+                detail="Courtroom case type must be explicitly selected",
+            )
+        if mode.id != "courtroom" and request.case_type is not None:
+            raise HTTPException(
+                status_code=400,
+                detail="Case type is only available for courtroom meetings",
+            )
         participants = normalize_participants(mode, request.participants, model_repository)
         case_files = normalize_case_files(mode, participants, request.case_files, limits)
 
@@ -518,18 +668,25 @@ def create_app(
             "mode_id": mode.id,
             "participants": participants,
             "inputs": request.inputs,
-            "case_files": case_file_manifest(case_files),
+            "settings_revision": 0,
+            "scene": mode.default_scene,
         }
+        if request.case_type is not None:
+            metadata["case_type"] = request.case_type
         metadata_store.save(metadata)
         if case_files:
             repository.save_case_files(meeting_id, case_files)
-        return project_meeting_summary(
-            metadata,
-            [],
-            mode=mode,
-            model_pricing={},
-            meeting_assignments=meeting_assignments,
-        )
+        return {
+            **project_meeting_summary(
+                metadata,
+                [],
+                mode=mode,
+                model_pricing={},
+                meeting_assignments=meeting_assignments,
+            ),
+            "case_files": case_file_manifest(case_files),
+            "materials_revision": 0,
+        }
 
     @app.get("/meetings")
     def list_meetings(q: str | None = None) -> list[dict[str, Any]]:
@@ -549,26 +706,44 @@ def create_app(
             mode = modes_by_id.get(mode_id) or modes_by_id.get(DEFAULT_MODE_ID)
             if mode is None:
                 raise HTTPException(status_code=500, detail=f"Missing default mode: {DEFAULT_MODE_ID}")
+            material_summary = case_materials.summary(meeting_id)
             summaries.append(
-                project_meeting_summary(
-                    metadata,
-                    events,
-                    mode=mode,
-                    model_pricing=pricing,
-                    meeting_assignments=meeting_assignments,
-                    activity_status=live_activity_status(events, jobs.is_running(meeting_id), mode),
-                )
+                {
+                    **project_meeting_summary(
+                        metadata,
+                        events,
+                        mode=mode,
+                        model_pricing=pricing,
+                        meeting_assignments=meeting_assignments,
+                        activity_status=live_activity_status(
+                            DeliberationEpochs.view(events).active_events,
+                            jobs.is_running(meeting_id),
+                            mode,
+                        ),
+                    ),
+                    "case_materials_summary": {
+                        "revision": material_summary.revision,
+                        "active_evidence_count": material_summary.active_evidence_count,
+                        "active_note_count": material_summary.active_note_count,
+                        "pending_impact": material_summary.pending_impact,
+                    },
+                    "materials_revision": material_summary.revision,
+                }
             )
         return summaries
 
     @app.get("/meetings/{meeting_id}")
     def get_meeting(meeting_id: str) -> dict[str, Any]:
         metadata = metadata_store.get(meeting_id)
-        events = repository.read_events(meeting_id)
+        all_events = repository.read_events(meeting_id)
+        deliberation = DeliberationEpochs.view(all_events)
+        events = deliberation.active_events
+        workflow_events = deliberation.workflow_events
+        material_view = case_materials.view(meeting_id)
         return {
             **project_meeting_summary(
                 metadata,
-                events,
+                all_events,
                 mode=meeting_mode(mode_catalog, metadata),
                 model_pricing=model_pricing_by_id(model_repository),
                 meeting_assignments=meeting_assignments,
@@ -577,10 +752,454 @@ def create_app(
                     jobs.is_running(meeting_id),
                     meeting_mode(mode_catalog, metadata),
                 ),
+                live_events=events,
+                workflow_events=workflow_events,
             ),
             "events": project_events(events),
-            "case_files": project_case_files(repository.read_case_files(meeting_id)),
+            "case_files": active_case_evidence_projection(material_view),
+            "case_materials": project_case_materials(
+                material_view, active_epoch_id=deliberation.active_epoch.id
+            ),
         }
+
+    def validate_material_roles(
+        metadata: dict[str, Any], visible_roles: list[str]
+    ) -> None:
+        mode = meeting_mode(mode_catalog, metadata)
+        allowed = {
+            str(participant["role_id"])
+            for participant in project_participants(mode, metadata)
+        }
+        requested = [role.strip() for role in visible_roles if role.strip()]
+        if not requested:
+            raise HTTPException(
+                status_code=400,
+                detail="Material requires at least one visible role",
+            )
+        unknown = sorted(set(requested) - allowed)
+        if unknown:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Unknown material visible role: {', '.join(unknown)}",
+            )
+
+    def material_change_impact(meeting_id: str) -> dict[str, Any] | None:
+        deliberation = DeliberationEpochs.view(repository.read_events(meeting_id))
+        has_ai_output = any(
+            event.get("role") not in {"Human", "System"}
+            and event.get("status") == "completed"
+            for event in deliberation.workflow_events
+        )
+        if not has_ai_output:
+            return None
+        return {
+            "deliberation_epoch_id": deliberation.active_epoch.id,
+            "reason": "prompt_material_changed_after_ai_output",
+        }
+
+    def versioned_limits() -> VersionedCaseMaterialLimits:
+        return VersionedCaseMaterialLimits(
+            per_item_chars=limits.per_file_chars,
+            total_chars=limits.total_chars,
+        )
+
+    def perform_material_mutation(
+        meeting_id: str,
+        operation: Callable[[dict[str, Any], dict[str, Any] | None], CaseMaterialsView],
+    ) -> dict[str, Any]:
+        reject_running_meeting(jobs, meeting_id)
+        metadata = metadata_store.get(meeting_id)
+        try:
+            view = operation(metadata, material_change_impact(meeting_id))
+        except CaseMaterialConflict as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+        except CaseMaterialValidationError as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
+        active_epoch_id = DeliberationEpochs.view(
+            repository.read_events(meeting_id)
+        ).active_epoch.id
+        return project_case_materials(view, active_epoch_id=active_epoch_id)
+
+    @app.get("/meetings/{meeting_id}/materials")
+    def get_case_materials(
+        meeting_id: str, revision: int | None = None
+    ) -> dict[str, Any]:
+        metadata_store.get(meeting_id)
+        active_epoch_id = DeliberationEpochs.view(
+            repository.read_events(meeting_id)
+        ).active_epoch.id
+        try:
+            view = (
+                case_materials.view(meeting_id)
+                if revision is None
+                else case_materials.view_at_revision(meeting_id, revision)
+            )
+        except CaseMaterialValidationError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        return project_case_materials(view, active_epoch_id=active_epoch_id)
+
+    @app.post("/meetings/{meeting_id}/materials/evidence")
+    @meeting_transitions.synchronized
+    def add_case_evidence(
+        meeting_id: str, request: CaseMaterialContentRequest
+    ) -> dict[str, Any]:
+        def operation(metadata: dict[str, Any], impact: dict[str, Any] | None) -> CaseMaterialsView:
+            validate_material_roles(metadata, request.visible_roles)
+            return case_materials.add_evidence(
+                meeting_id,
+                expected_revision=request.revision,
+                title=request.title,
+                content=request.content,
+                visible_roles=request.visible_roles,
+                limits=versioned_limits(),
+                impact=impact,
+            )
+
+        return perform_material_mutation(meeting_id, operation)
+
+    @app.post("/meetings/{meeting_id}/materials/evidence/{evidence_id}/versions")
+    @meeting_transitions.synchronized
+    def add_case_evidence_version(
+        meeting_id: str,
+        evidence_id: str,
+        request: CaseMaterialContentRequest,
+    ) -> dict[str, Any]:
+        def operation(metadata: dict[str, Any], impact: dict[str, Any] | None) -> CaseMaterialsView:
+            validate_material_roles(metadata, request.visible_roles)
+            return case_materials.add_evidence_version(
+                meeting_id,
+                evidence_id,
+                expected_revision=request.revision,
+                title=request.title,
+                content=request.content,
+                visible_roles=request.visible_roles,
+                limits=versioned_limits(),
+                impact=impact,
+            )
+
+        return perform_material_mutation(meeting_id, operation)
+
+    def set_case_evidence_status(
+        meeting_id: str,
+        evidence_id: str,
+        request: CaseMaterialStatusRequest,
+        *,
+        active: bool,
+    ) -> dict[str, Any]:
+        return perform_material_mutation(
+            meeting_id,
+            lambda _metadata, impact: case_materials.set_evidence_active(
+                meeting_id,
+                evidence_id,
+                active=active,
+                expected_revision=request.revision,
+                limits=versioned_limits(),
+                impact=impact,
+            ),
+        )
+
+    @app.post("/meetings/{meeting_id}/materials/evidence/{evidence_id}/deactivate")
+    @meeting_transitions.synchronized
+    def deactivate_case_evidence(
+        meeting_id: str, evidence_id: str, request: CaseMaterialStatusRequest
+    ) -> dict[str, Any]:
+        return set_case_evidence_status(
+            meeting_id, evidence_id, request, active=False
+        )
+
+    @app.post("/meetings/{meeting_id}/materials/evidence/{evidence_id}/reactivate")
+    @meeting_transitions.synchronized
+    def reactivate_case_evidence(
+        meeting_id: str, evidence_id: str, request: CaseMaterialStatusRequest
+    ) -> dict[str, Any]:
+        return set_case_evidence_status(
+            meeting_id, evidence_id, request, active=True
+        )
+
+    @app.post("/meetings/{meeting_id}/materials/notes")
+    @meeting_transitions.synchronized
+    def add_case_note(
+        meeting_id: str, request: CaseMaterialContentRequest
+    ) -> dict[str, Any]:
+        def operation(metadata: dict[str, Any], impact: dict[str, Any] | None) -> CaseMaterialsView:
+            validate_material_roles(metadata, request.visible_roles)
+            return case_materials.add_note(
+                meeting_id,
+                expected_revision=request.revision,
+                title=request.title,
+                content=request.content,
+                visible_roles=request.visible_roles,
+                limits=versioned_limits(),
+                impact=impact,
+            )
+
+        return perform_material_mutation(meeting_id, operation)
+
+    @app.post("/meetings/{meeting_id}/materials/notes/{note_id}/versions")
+    @meeting_transitions.synchronized
+    def add_case_note_version(
+        meeting_id: str,
+        note_id: str,
+        request: CaseMaterialContentRequest,
+    ) -> dict[str, Any]:
+        def operation(metadata: dict[str, Any], impact: dict[str, Any] | None) -> CaseMaterialsView:
+            validate_material_roles(metadata, request.visible_roles)
+            return case_materials.add_note_version(
+                meeting_id,
+                note_id,
+                expected_revision=request.revision,
+                title=request.title,
+                content=request.content,
+                visible_roles=request.visible_roles,
+                limits=versioned_limits(),
+                impact=impact,
+            )
+
+        return perform_material_mutation(meeting_id, operation)
+
+    def set_case_note_status(
+        meeting_id: str,
+        note_id: str,
+        request: CaseMaterialStatusRequest,
+        *,
+        active: bool,
+    ) -> dict[str, Any]:
+        return perform_material_mutation(
+            meeting_id,
+            lambda _metadata, impact: case_materials.set_note_active(
+                meeting_id,
+                note_id,
+                active=active,
+                expected_revision=request.revision,
+                limits=versioned_limits(),
+                impact=impact,
+            ),
+        )
+
+    @app.post("/meetings/{meeting_id}/materials/notes/{note_id}/deactivate")
+    @meeting_transitions.synchronized
+    def deactivate_case_note(
+        meeting_id: str, note_id: str, request: CaseMaterialStatusRequest
+    ) -> dict[str, Any]:
+        return set_case_note_status(meeting_id, note_id, request, active=False)
+
+    @app.post("/meetings/{meeting_id}/materials/notes/{note_id}/reactivate")
+    @meeting_transitions.synchronized
+    def reactivate_case_note(
+        meeting_id: str, note_id: str, request: CaseMaterialStatusRequest
+    ) -> dict[str, Any]:
+        return set_case_note_status(meeting_id, note_id, request, active=True)
+
+    @app.post("/meetings/{meeting_id}/messages/{event_id}/promote-to-note")
+    @meeting_transitions.synchronized
+    def promote_message_to_case_note(
+        meeting_id: str,
+        event_id: str,
+        request: PromoteCaseNoteRequest,
+    ) -> dict[str, Any]:
+        metadata = metadata_store.get(meeting_id)
+        validate_material_roles(metadata, request.visible_roles)
+        source = next(
+            (
+                event
+                for event in active_meeting_events(repository, meeting_id)
+                if event.get("event_id") == event_id
+            ),
+            None,
+        )
+        if (
+            source is None
+            or source.get("role") != "Human"
+            or source.get("status") != "completed"
+            or not str(source.get("content", "")).strip()
+        ):
+            raise HTTPException(
+                status_code=400,
+                detail="Only an active completed chairman message can become a case note",
+            )
+        return perform_material_mutation(
+            meeting_id,
+            lambda _metadata, impact: case_materials.add_note(
+                meeting_id,
+                expected_revision=request.revision,
+                title=request.title,
+                content=str(source["content"]),
+                visible_roles=request.visible_roles,
+                source_event_id=event_id,
+                limits=versioned_limits(),
+                impact=impact,
+            ),
+        )
+
+    @app.get("/meetings/{meeting_id}/deliberations")
+    def get_deliberations(meeting_id: str) -> dict[str, Any]:
+        metadata_store.get(meeting_id)
+        view = DeliberationEpochs.view(repository.read_events(meeting_id))
+        return {
+            "active_epoch_id": view.active_epoch.id,
+            "active_epoch_number": view.active_epoch.number,
+            "epochs": [
+                {
+                    "id": epoch.id,
+                    "number": epoch.number,
+                    "reason": epoch.reason,
+                    "scope": epoch.scope,
+                    "issue_id": epoch.issue_id,
+                    "implicit": epoch.implicit,
+                    "event_count": len(epoch.events),
+                    "materials_revision": epoch_materials_revision(epoch),
+                }
+                for epoch in view.epochs
+            ],
+        }
+
+    @app.post("/meetings/{meeting_id}/deliberations/restart")
+    @meeting_transitions.synchronized
+    def restart_deliberation(
+        meeting_id: str,
+        request: RestartDeliberationRequest,
+    ) -> dict[str, Any]:
+        reject_running_meeting(jobs, meeting_id)
+        metadata = metadata_store.get(meeting_id)
+        pending_restart = metadata.get("pending_deliberation_restart")
+        if isinstance(pending_restart, dict):
+            raw_events = repository.read_events(meeting_id)
+            completed_marker = next(
+                (
+                    event
+                    for event in reversed(raw_events)
+                    if event.get("interaction_type") == "deliberation-epoch-start"
+                    and event.get("epoch_id") == pending_restart.get("epoch_id")
+                ),
+                None,
+            )
+            if completed_marker is not None:
+                metadata_store.update(
+                    meeting_id,
+                    lambda current: finalize_deliberation_restart_metadata(
+                        current, completed_marker
+                    ),
+                )
+                return get_meeting(meeting_id)
+            metadata = metadata_store.update(
+                meeting_id,
+                lambda current: {
+                    key: value
+                    for key, value in current.items()
+                    if key != "pending_deliberation_restart"
+                },
+            )
+        lifecycle = latest_lifecycle_status(repository.read_events(meeting_id))
+        if lifecycle in {"closed", "cancelled"}:
+            raise HTTPException(
+                status_code=409,
+                detail="Reopen the terminal meeting before restarting deliberation",
+            )
+        mode = meeting_mode(mode_catalog, metadata)
+        try:
+            command = RestartCommand(
+                scope=request.scope,
+                reason=request.reason,
+                issue_id=request.issue_id,
+            )
+        except ValueError as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
+        all_events = repository.read_events(meeting_id)
+        deliberation = DeliberationEpochs.view(all_events)
+        if mode.id != "courtroom" and command.scope != "all_deliberation":
+            raise HTTPException(
+                status_code=400,
+                detail="This restart scope is only available for courtroom meetings",
+            )
+        if mode.id == "courtroom" and command.scope == "current_issue":
+            docket = metadata.get("courtroom_docket")
+            known_issue_ids = {
+                str(issue.get("id"))
+                for issue in (docket or {}).get("issues", [])
+                if isinstance(issue, dict)
+            }
+            if not isinstance(docket, dict) or not docket.get("confirmed"):
+                raise HTTPException(status_code=409, detail="Courtroom issues must be confirmed")
+            if command.issue_id not in known_issue_ids:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Unknown courtroom issue: {command.issue_id}",
+                )
+            courtroom = project_courtroom(
+                metadata, deliberation.workflow_events
+            )
+            active_issue_id = courtroom.get("current_issue_id") if courtroom else None
+            if active_issue_id is not None and command.issue_id != active_issue_id:
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        f"Restart target must match the active courtroom issue: "
+                        f"{active_issue_id}"
+                    ),
+                )
+        snapshot = {
+            "goal": metadata.get("goal"),
+            "mode_id": mode.id,
+            "participants": metadata.get("participants") or [],
+            "courtroom_docket": metadata.get("courtroom_docket"),
+            "materials_revision": case_materials.view(meeting_id).revision,
+        }
+        marker = DeliberationEpochs.restart_marker(
+            meeting_id=meeting_id,
+            events=all_events,
+            command=command,
+            snapshot=snapshot,
+        )
+        pending = {
+            "epoch_id": marker["epoch_id"],
+            "scope": command.scope,
+            "reason": command.reason,
+        }
+        metadata_store.update(
+            meeting_id,
+            lambda current: {**current, "pending_deliberation_restart": pending},
+        )
+        repository.append_event(meeting_id, marker)
+
+        metadata_store.update(
+            meeting_id,
+            lambda current: finalize_deliberation_restart_metadata(current, marker),
+        )
+        return get_meeting(meeting_id)
+
+    @app.put("/meetings/{meeting_id}/courtroom/case-type")
+    @meeting_transitions.synchronized
+    def update_courtroom_case_type(
+        meeting_id: str,
+        request: CourtroomCaseTypeRequest,
+    ) -> dict[str, Any]:
+        reject_running_meeting(jobs, meeting_id)
+        reject_terminal_meeting(repository, meeting_id)
+        metadata = metadata_store.get(meeting_id)
+        if metadata.get("mode_id") != "courtroom":
+            raise HTTPException(
+                status_code=400,
+                detail="Case type is only available for courtroom meetings",
+            )
+        mode = meeting_mode(mode_catalog, metadata)
+        participants = meeting_assignments.project(
+            metadata,
+            project_participants(mode, metadata),
+        )
+        return update_meeting_settings(
+            meeting_id,
+            UpdateMeetingSettingsRequest(
+                expected_revision=int(metadata.get("settings_revision", 0)),
+                title=meeting_title(metadata),
+                goal=str(metadata.get("goal") or ""),
+                case_type=request.case_type,
+                scene=metadata.get("scene", mode.default_scene),
+                participant_models={
+                    str(item["role_id"]): str(item["model_config_id"])
+                    for item in participants
+                },
+            ),
+        )
 
     @app.put("/meetings/{meeting_id}/courtroom/issues")
     @meeting_transitions.synchronized
@@ -639,6 +1258,7 @@ def create_app(
             meeting_id,
             metadata_store=metadata_store,
             repository=repository,
+            case_materials=case_materials,
             mode_catalog=mode_catalog,
             meeting_assignments=meeting_assignments,
         )
@@ -670,12 +1290,13 @@ def create_app(
             meeting_id,
             metadata_store=metadata_store,
             repository=repository,
+            case_materials=case_materials,
             mode_catalog=mode_catalog,
             meeting_assignments=meeting_assignments,
         )
         try:
             courtroom_workflow.validate_arguments(
-                metadata, repository.read_events(meeting_id), issue_id
+                metadata, workflow_meeting_events(repository, meeting_id), issue_id
             )
         except CourtroomWorkflowError as error:
             raise HTTPException(status_code=error.status_code, detail=error.detail) from error
@@ -703,12 +1324,13 @@ def create_app(
             meeting_id,
             metadata_store=metadata_store,
             repository=repository,
+            case_materials=case_materials,
             mode_catalog=mode_catalog,
             meeting_assignments=meeting_assignments,
         )
         try:
             courtroom_workflow.validate_ruling(
-                metadata, repository.read_events(meeting_id), issue_id
+                metadata, workflow_meeting_events(repository, meeting_id), issue_id
             )
         except CourtroomWorkflowError as error:
             raise HTTPException(status_code=error.status_code, detail=error.detail) from error
@@ -733,11 +1355,14 @@ def create_app(
             meeting_id,
             metadata_store=metadata_store,
             repository=repository,
+            case_materials=case_materials,
             mode_catalog=mode_catalog,
             meeting_assignments=meeting_assignments,
         )
         try:
-            courtroom_workflow.validate_final(metadata, repository.read_events(meeting_id))
+            courtroom_workflow.validate_final(
+                metadata, workflow_meeting_events(repository, meeting_id)
+            )
         except CourtroomWorkflowError as error:
             raise HTTPException(status_code=error.status_code, detail=error.detail) from error
         if not jobs.start(
@@ -761,33 +1386,216 @@ def create_app(
     ) -> dict[str, Any]:
         reject_running_meeting(jobs, meeting_id)
         current_metadata = metadata_store.get(meeting_id)
-        current_docket = current_metadata.get("courtroom_docket")
-        if (
-            current_metadata.get("mode_id") == "courtroom"
-            and isinstance(current_docket, dict)
-            and current_docket.get("confirmed")
-            and request.goal != current_metadata.get("goal")
-        ):
+        mode = meeting_mode(mode_catalog, current_metadata)
+        participants = meeting_assignments.project(
+            current_metadata,
+            project_participants(mode, current_metadata),
+        )
+        return update_meeting_settings(
+            meeting_id,
+            UpdateMeetingSettingsRequest(
+                expected_revision=int(current_metadata.get("settings_revision", 0)),
+                title=request.title,
+                goal=request.goal,
+                case_type=current_metadata.get("case_type"),
+                scene=current_metadata.get("scene", mode.default_scene),
+                participant_models={
+                    str(item["role_id"]): str(item["model_config_id"])
+                    for item in participants
+                },
+            ),
+        )
+
+    @app.put("/meetings/{meeting_id}/settings")
+    @meeting_transitions.synchronized
+    def update_meeting_settings(
+        meeting_id: str,
+        request: UpdateMeetingSettingsRequest,
+    ) -> dict[str, Any]:
+        """Replace meeting settings through a recoverable metadata/event commit."""
+        reject_running_meeting(jobs, meeting_id)
+        current = metadata_store.get(meeting_id)
+        pending = current.get("pending_meeting_settings")
+        recovered_pending = False
+        if isinstance(pending, dict):
+            target = pending.get("target")
+            requested_target = {
+                "title": request.title,
+                "goal": request.goal,
+                "scene": request.scene,
+                "case_type": request.case_type,
+                "settings_revision": request.expected_revision + 1,
+            }
+            pending_models = {
+                str(item.get("role_id")): item.get("model_config_id")
+                for item in (target or {}).get("participants", [])
+                if isinstance(item, dict)
+            }
+            if not isinstance(target, dict) or any(
+                target.get(key) != value for key, value in requested_target.items()
+            ) or pending_models != request.participant_models:
+                raise HTTPException(
+                    status_code=409,
+                    detail="Retry the same pending meeting settings update",
+                )
+            existing_event_ids = {
+                str(event.get("event_id"))
+                for event in repository.read_events(meeting_id)
+            }
+            try:
+                for event in pending.get("events", []):
+                    if (
+                        isinstance(event, dict)
+                        and str(event.get("event_id")) not in existing_event_ids
+                    ):
+                        repository.append_event(meeting_id, event)
+                current = metadata_store.update(
+                    meeting_id, finalize_pending_meeting_settings
+                )
+                recovered_pending = True
+            except OSError as error:
+                raise HTTPException(
+                    status_code=409,
+                    detail="Meeting settings update is pending recovery; retry the same save",
+                ) from error
+
+        mode = meeting_mode(mode_catalog, current)
+        if recovered_pending:
+            recovered_events = repository.read_events(meeting_id)
+            return project_meeting_summary(
+                current,
+                recovered_events,
+                mode=mode,
+                model_pricing=model_pricing_by_id(model_repository),
+                meeting_assignments=meeting_assignments,
+                activity_status=live_activity_status(
+                    DeliberationEpochs.view(recovered_events).active_events,
+                    jobs.is_running(meeting_id),
+                    mode,
+                ),
+            )
+        role_ids = [
+            str(participant["role_id"])
+            for participant in project_participants(mode, current)
+        ]
+        requested_roles = set(request.participant_models)
+        expected_roles = set(role_ids)
+        if requested_roles != expected_roles:
+            missing = sorted(expected_roles - requested_roles)
+            extra = sorted(requested_roles - expected_roles)
+            details = []
+            if missing:
+                details.append(f"missing roles: {', '.join(missing)}")
+            if extra:
+                details.append(f"unknown roles: {', '.join(extra)}")
+            raise HTTPException(
+                status_code=400,
+                detail="Participant model roster mismatch; " + "; ".join(details),
+            )
+        known_models = {model.id for model in model_repository.list_models()}
+        unknown_models = sorted(set(request.participant_models.values()) - known_models)
+        if unknown_models:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Unknown model: {unknown_models[0]}",
+            )
+        if mode.id == "courtroom" and request.case_type is None:
+            raise HTTPException(
+                status_code=400,
+                detail="Courtroom case type must be explicitly selected",
+            )
+        if mode.id != "courtroom" and request.case_type is not None:
+            raise HTTPException(
+                status_code=400,
+                detail="Case type is only available for courtroom meetings",
+            )
+        docket = current.get("courtroom_docket")
+        confirmed = isinstance(docket, dict) and bool(docket.get("confirmed"))
+        if confirmed and request.goal != current.get("goal"):
             raise HTTPException(
                 status_code=409,
                 detail="Courtroom goal is read-only after issues are confirmed",
             )
-        prior_events = repository.read_events(meeting_id)
-        previous_goal = current_metadata.get("goal")
+        if (
+            confirmed
+            and current.get("case_type") is not None
+            and request.case_type != current.get("case_type")
+        ):
+            raise HTTPException(
+                status_code=409,
+                detail="Confirmed courtroom case type is read-only",
+            )
 
-        def replace_details(current: dict[str, Any]) -> dict[str, Any]:
-            updated = {**current, "title": request.title, "goal": request.goal}
-            updated.pop("topic", None)
-            return updated
+        revision = int(current.get("settings_revision", 0))
+        if revision != request.expected_revision:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "Stale meeting settings revision: "
+                    f"expected {revision}, got {request.expected_revision}"
+                ),
+            )
+        stored = {
+            str(item.get("role_id")): item
+            for item in (current.get("participants") or [])
+            if isinstance(item, dict)
+        }
+        target: dict[str, Any] = {
+            "title": request.title,
+            "goal": request.goal,
+            "scene": request.scene,
+            "participants": [
+                {
+                    **stored.get(role_id, {"role_id": role_id}),
+                    "model_config_id": request.participant_models[role_id],
+                }
+                for role_id in role_ids
+            ],
+            "settings_revision": revision + 1,
+        }
+        remove = ["topic"]
+        if mode.id == "courtroom":
+            target["case_type"] = request.case_type
+        else:
+            remove.append("case_type")
 
-        metadata = metadata_store.update(meeting_id, replace_details)
-        if request.goal != previous_goal and any(
+        events_to_append: list[dict[str, Any]] = []
+        all_events = repository.read_events(meeting_id)
+        case_type_changed = (
+            mode.id == "courtroom"
+            and not confirmed
+            and current.get("case_type") != request.case_type
+        )
+        if case_type_changed and DeliberationEpochs.view(all_events).active_events:
+            marker = DeliberationEpochs.restart_marker(
+                meeting_id=meeting_id,
+                events=all_events,
+                command=RestartCommand(
+                    scope="all_deliberation",
+                    reason="case_type_changed",
+                ),
+                snapshot={
+                    "goal": current.get("goal"),
+                    "courtroom_docket": current.get("courtroom_docket"),
+                    "models": current.get("participants") or [],
+                    "materials_revision": case_materials.view(meeting_id).revision,
+                    "from_case_type": current.get("case_type"),
+                    "to_case_type": request.case_type,
+                },
+            )
+            events_to_append.append(marker)
+            target["deliberation_epoch_id"] = marker["epoch_id"]
+            target["deliberation_epoch_number"] = marker["epoch_number"]
+            remove.append("courtroom_docket")
+        elif case_type_changed and isinstance(current.get("courtroom_docket"), dict):
+            remove.append("courtroom_docket")
+
+        if request.goal != current.get("goal") and any(
             event.get("role") not in {"Human", "System"}
             and event.get("status") == "completed"
-            for event in prior_events
+            for event in DeliberationEpochs.view(all_events).active_events
         ):
-            repository.append_event(
-                meeting_id,
+            events_to_append.append(
                 {
                     "event_id": f"{meeting_id}:goal-changed:{uuid.uuid4().hex}",
                     "meeting_id": meeting_id,
@@ -796,24 +1604,65 @@ def create_app(
                     "attempt": 1,
                     "status": "completed",
                     "interaction_type": "meeting-goal-changed",
-                    "previous_goal": previous_goal,
+                    "previous_goal": current.get("goal"),
                     "goal": request.goal,
                     "content": (
                         "主席修改會議目標\n"
-                        f"舊目標：{previous_goal}\n"
+                        f"舊目標：{current.get('goal')}\n"
                         f"新目標：{request.goal}"
                     ),
-                },
+                }
+            )
+        if events_to_append:
+            pending_update = {
+                "target": target,
+                "remove": remove,
+                "events": events_to_append,
+            }
+            try:
+                metadata_store.update(
+                    meeting_id,
+                    lambda metadata: {
+                        **metadata,
+                        "pending_meeting_settings": pending_update,
+                    },
+                )
+                for event in events_to_append:
+                    repository.append_event(meeting_id, event)
+                metadata = metadata_store.update(
+                    meeting_id, finalize_pending_meeting_settings
+                )
+            except OSError as error:
+                raise HTTPException(
+                    status_code=409,
+                    detail="Meeting settings update is pending recovery; retry the same save",
+                ) from error
+        else:
+            metadata = metadata_store.update(
+                meeting_id,
+                lambda existing: finalize_pending_meeting_settings(
+                    {
+                        **existing,
+                        "pending_meeting_settings": {
+                            "target": target,
+                            "remove": remove,
+                            "events": [],
+                        },
+                    }
+                ),
             )
         events = repository.read_events(meeting_id)
-        mode = meeting_mode(mode_catalog, metadata)
         return project_meeting_summary(
             metadata,
             events,
             mode=mode,
             model_pricing=model_pricing_by_id(model_repository),
             meeting_assignments=meeting_assignments,
-            activity_status=live_activity_status(events, jobs.is_running(meeting_id), mode),
+            activity_status=live_activity_status(
+                DeliberationEpochs.view(events).active_events,
+                jobs.is_running(meeting_id),
+                mode,
+            ),
         )
 
     @app.put("/meetings/{meeting_id}/tags")
@@ -832,7 +1681,7 @@ def create_app(
             model_pricing=model_pricing_by_id(model_repository),
             meeting_assignments=meeting_assignments,
             activity_status=live_activity_status(
-                events,
+                DeliberationEpochs.view(events).active_events,
                 jobs.is_running(meeting_id),
                 meeting_mode(mode_catalog, metadata),
             ),
@@ -857,7 +1706,7 @@ def create_app(
             model_pricing=model_pricing_by_id(model_repository),
             meeting_assignments=meeting_assignments,
             activity_status=live_activity_status(
-                events,
+                DeliberationEpochs.view(events).active_events,
                 jobs.is_running(meeting_id),
                 meeting_mode(mode_catalog, metadata),
             ),
@@ -876,19 +1725,37 @@ def create_app(
             str(participant["role_id"])
             for participant in project_participants(mode, metadata)
         ]
-        try:
-            metadata = meeting_assignments.replace(meeting_id, role_ids, request.models)
-        except AssignmentValidationError as error:
-            status_code = 404 if str(error).startswith("Unknown model:") else 400
-            raise HTTPException(status_code=status_code, detail=str(error)) from error
-        events = repository.read_events(meeting_id)
-        return project_meeting_summary(
-            metadata,
-            events,
-            mode=mode,
-            model_pricing=model_pricing_by_id(model_repository),
-            meeting_assignments=meeting_assignments,
-            activity_status=live_activity_status(events, jobs.is_running(meeting_id), mode),
+        expected_roles = set(role_ids)
+        requested_roles = set(request.models)
+        if requested_roles != expected_roles:
+            missing = sorted(expected_roles - requested_roles)
+            extra = sorted(requested_roles - expected_roles)
+            details = []
+            if missing:
+                details.append(f"missing roles: {', '.join(missing)}")
+            if extra:
+                details.append(f"unknown roles: {', '.join(extra)}")
+            raise HTTPException(
+                status_code=400,
+                detail="Participant model roster mismatch; " + "; ".join(details),
+            )
+        known_models = {model.id for model in model_repository.list_models()}
+        unknown_models = sorted(set(request.models.values()) - known_models)
+        if unknown_models:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Unknown model: {unknown_models[0]}",
+            )
+        return update_meeting_settings(
+            meeting_id,
+            UpdateMeetingSettingsRequest(
+                expected_revision=int(metadata.get("settings_revision", 0)),
+                title=meeting_title(metadata),
+                goal=str(metadata.get("goal") or ""),
+                case_type=metadata.get("case_type"),
+                scene=metadata.get("scene", mode.default_scene),
+                participant_models=request.models,
+            ),
         )
 
     @app.post("/meetings/{meeting_id}/start", status_code=202)
@@ -897,8 +1764,15 @@ def create_app(
         metadata = metadata_store.get(meeting_id)
         require_meeting_goal(metadata)
         reject_terminal_meeting(repository, meeting_id)
+        material_view = require_case_materials_ready(
+            repository, case_materials, meeting_id
+        )
         mode = meeting_mode(mode_catalog, metadata)
         if mode.id == "courtroom":
+            try:
+                CourtroomCaseProfile.for_metadata(metadata)
+            except CourtroomCaseProfileError as error:
+                raise HTTPException(status_code=409, detail=str(error)) from error
             raise HTTPException(
                 status_code=409,
                 detail="Use the courtroom issue workflow to start arguments",
@@ -915,7 +1789,7 @@ def create_app(
                 mode=mode,
                 metadata=metadata,
                 model_assignments=model_assignments,
-                inputs=meeting_inputs_for_runner(metadata, repository.read_case_files(meeting_id)),
+                inputs=material_inputs_for_runner(metadata, material_view),
             ),
         ):
             raise HTTPException(status_code=409, detail="Meeting is already running")
@@ -998,7 +1872,7 @@ def create_app(
         original_event = next(
             (
                 event
-                for event in repository.read_events(meeting_id)
+                for event in active_meeting_events(repository, meeting_id)
                 if event.get("event_id") == event_id
             ),
             None,
@@ -1035,6 +1909,9 @@ def create_app(
         metadata = metadata_store.get(meeting_id)
         require_meeting_goal(metadata)
         reject_terminal_meeting(repository, meeting_id)
+        material_view = require_case_materials_ready(
+            repository, case_materials, meeting_id
+        )
         mode = meeting_mode(mode_catalog, metadata)
         if mode.category != "relay":
             raise HTTPException(
@@ -1042,9 +1919,13 @@ def create_app(
                 detail=f"Mode does not support directed responses: {mode.id}",
             )
         plan = relay_plan(mode)
-        events = repository.read_events(meeting_id)
+        events = workflow_meeting_events(repository, meeting_id)
         directed_context: dict[str, object] = {}
         if mode.id == "courtroom":
+            try:
+                profile = CourtroomCaseProfile.for_metadata(metadata)
+            except CourtroomCaseProfileError as error:
+                raise HTTPException(status_code=409, detail=str(error)) from error
             courtroom = courtroom_workflow.project(metadata, events)
             if (
                 courtroom is None
@@ -1059,9 +1940,17 @@ def create_app(
                         "issue arguments complete and before its ruling"
                     ),
                 )
+            if role != "Defense":
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Directed courtroom supplements are only available for {profile.role_display('Defense')}",
+                )
             directed_context = {
                 "docket_revision": int(courtroom["revision"]),
                 "issue_id": str(courtroom["current_issue_id"]),
+                "case_type": profile.case_type,
+                "role_display": profile.role_display(role),
+                "phase_display": "答辯方補充",
             }
         else:
             failed = latest_unresolved_fixed_relay_failure(events, plan)
@@ -1092,7 +1981,7 @@ def create_app(
             plan,
             role_display_name,
             resolved_meeting_models(meeting_assignments, metadata, mode),
-            meeting_inputs_for_runner(metadata, repository.read_case_files(meeting_id)),
+            material_inputs_for_runner(metadata, material_view),
             directed_context,
         )
 
@@ -1195,8 +2084,15 @@ def create_app(
         metadata = metadata_store.get(meeting_id)
         require_meeting_goal(metadata)
         reject_terminal_meeting(repository, meeting_id)
+        material_view = require_case_materials_ready(
+            repository, case_materials, meeting_id
+        )
         mode = meeting_mode(mode_catalog, metadata)
         if mode.id == "courtroom":
+            try:
+                CourtroomCaseProfile.for_metadata(metadata)
+            except CourtroomCaseProfileError as error:
+                raise HTTPException(status_code=409, detail=str(error)) from error
             raise HTTPException(
                 status_code=409,
                 detail="Role sequences cannot bypass the courtroom issue workflow",
@@ -1205,7 +2101,7 @@ def create_app(
             raise HTTPException(status_code=400, detail=f"Mode does not support role sequences: {mode.id}")
         plan = relay_plan(mode)
         failed = latest_unresolved_fixed_relay_failure(
-            repository.read_events(meeting_id),
+            active_meeting_events(repository, meeting_id),
             plan,
         )
         if failed is not None:
@@ -1236,7 +2132,7 @@ def create_app(
                     status_code=400,
                     detail=f"Missing model assignment for role: {role}",
                 )
-        inputs = meeting_inputs_for_runner(metadata, repository.read_case_files(meeting_id))
+        inputs = material_inputs_for_runner(metadata, material_view)
         if not jobs.start(
             meeting_id,
             lambda: runner.respond_as_sequence(
@@ -1260,6 +2156,9 @@ def create_app(
         metadata = metadata_store.get(meeting_id)
         require_meeting_goal(metadata)
         reject_terminal_meeting(repository, meeting_id)
+        material_view = require_case_materials_ready(
+            repository, case_materials, meeting_id
+        )
         mode = meeting_mode(mode_catalog, metadata)
         model_assignments = resolved_meeting_models(
             meeting_assignments,
@@ -1276,7 +2175,7 @@ def create_app(
             for participant in participants
         }
         if mode.id != "courtroom":
-            retry_events = repository.read_events(meeting_id)
+            retry_events = active_meeting_events(repository, meeting_id)
             retry_matching = [
                 event for event in retry_events if event.get("step_id") == step_id
             ]
@@ -1306,7 +2205,7 @@ def create_app(
                             f"{retry_base_step_id}"
                         ),
                     )
-        retry_events = repository.read_events(meeting_id)
+        retry_events = active_meeting_events(repository, meeting_id)
         retry_matching = [event for event in retry_events if event.get("step_id") == step_id]
         retry_failed = retry_matching[-1] if retry_matching else None
         if (
@@ -1346,15 +2245,17 @@ def create_app(
                 )
         try:
             if mode.id == "courtroom":
-                events = repository.read_events(meeting_id)
+                try:
+                    CourtroomCaseProfile.for_metadata(metadata)
+                except CourtroomCaseProfileError as error:
+                    raise CourtroomWorkflowError(str(error)) from error
+                events = workflow_meeting_events(repository, meeting_id)
                 matching = [event for event in events if event.get("step_id") == step_id]
                 failed = matching[-1] if matching else None
                 if failed is None or failed.get("status") != "failed":
                     raise CourtroomWorkflowError(f"Step is not failed: {step_id}", 400)
                 interaction_type = failed.get("interaction_type")
-                retry_inputs = meeting_inputs_for_runner(
-                    metadata, repository.read_case_files(meeting_id)
-                )
+                retry_inputs = material_inputs_for_runner(metadata, material_view)
                 if interaction_type in {
                     "courtroom-issue-draft",
                     "courtroom-issue-phase",
@@ -1387,12 +2288,15 @@ def create_app(
                                 fresh_metadata = metadata_store.get(meeting_id)
                                 require_meeting_goal(fresh_metadata)
                                 reject_terminal_meeting(repository, meeting_id)
+                                fresh_material_view = require_case_materials_ready(
+                                    repository, case_materials, meeting_id
+                                )
                                 fresh_mode = meeting_mode(mode_catalog, fresh_metadata)
                                 if fresh_mode.id != "courtroom":
                                     raise CourtroomWorkflowError(
                                         "Directed response retry is only available in courtroom mode"
                                     )
-                                fresh_events = repository.read_events(meeting_id)
+                                fresh_events = workflow_meeting_events(repository, meeting_id)
                                 fresh_matching = [
                                     event
                                     for event in fresh_events
@@ -1438,9 +2342,8 @@ def create_app(
                                     fresh_metadata,
                                     fresh_mode,
                                 )
-                                fresh_inputs = meeting_inputs_for_runner(
-                                    fresh_metadata,
-                                    repository.read_case_files(meeting_id),
+                                fresh_inputs = material_inputs_for_runner(
+                                    fresh_metadata, fresh_material_view
                                 )
                         except Exception as error:
                             record_stale_courtroom_operation(
@@ -1463,10 +2366,7 @@ def create_app(
                 if not jobs.start(meeting_id, operation):
                     raise CourtroomWorkflowError("Meeting is already running")
                 return JSONResponse(status_code=202, content={"status": "running"})
-            retry_inputs = meeting_inputs_for_runner(
-                metadata,
-                repository.read_case_files(meeting_id),
-            )
+            retry_inputs = material_inputs_for_runner(metadata, material_view)
             if mode.category == "relay":
                 operation = lambda: runner.retry_failed_step(
                     meeting_id=meeting_id,
@@ -1493,7 +2393,11 @@ def create_app(
             raise HTTPException(status_code=error.status_code, detail=error.detail) from error
         except ValueError as error:
             raise HTTPException(status_code=400, detail=str(error)) from error
-        return {"status": project_activity_status(repository.read_events(meeting_id))}
+        return {
+            "status": project_activity_status(
+                active_meeting_events(repository, meeting_id)
+            )
+        }
 
     @app.post("/meetings/{meeting_id}/steps/{step_id}/retry", status_code=202)
     def retry_step(
@@ -1505,21 +2409,39 @@ def create_app(
             return perform_step_retry(meeting_id, step_id, request)
 
     @app.get("/meetings/{meeting_id}/transcript.md")
-    def get_transcript(meeting_id: str) -> PlainTextResponse:
+    def get_transcript(meeting_id: str, epoch: str = "current") -> PlainTextResponse:
         metadata = metadata_store.get(meeting_id)
         mode = meeting_mode(mode_catalog, metadata)
-        events = repository.read_events(meeting_id)
-        role_labels, step_labels = transcript_presentation_labels(
-            mode,
-            project_participants(mode, metadata),
-            events,
-        )
-        transcript = projector.project(
-            events,
-            title=meeting_title(metadata),
-            role_labels=role_labels,
-            step_labels=step_labels,
-        )
+        view = DeliberationEpochs.view(repository.read_events(meeting_id))
+
+        def render(events: list[dict[str, Any]], title: str) -> str:
+            role_labels, step_labels = transcript_presentation_labels(
+                mode,
+                project_participants(mode, metadata),
+                events,
+            )
+            return projector.project(
+                events,
+                title=title,
+                role_labels=role_labels,
+                step_labels=step_labels,
+            )
+
+        if epoch == "current":
+            transcript = render(view.active_events, meeting_title(metadata))
+        elif epoch == "all":
+            sections = [f"# {meeting_title(metadata)} — 完整審議歷史\n"]
+            for item in view.epochs:
+                sections.append(f"\n## 審議輪次 {item.number}\n")
+                if item.reason:
+                    sections.append(f"\n**重開原因：** {item.reason}\n")
+                sections.append("\n" + render(item.events, f"審議輪次 {item.number}"))
+            transcript = "".join(sections)
+        else:
+            selected = next((item for item in view.epochs if item.id == epoch), None)
+            if selected is None:
+                raise HTTPException(status_code=404, detail=f"Unknown deliberation epoch: {epoch}")
+            transcript = render(selected.events, meeting_title(metadata))
         return PlainTextResponse(transcript, media_type="text/markdown")
 
     @app.websocket("/meetings/{meeting_id}/events")
@@ -1527,7 +2449,8 @@ def create_app(
         metadata = metadata_store.get(meeting_id)
         mode = meeting_mode(mode_catalog, metadata)
         await websocket.accept()
-        events = repository.read_events(meeting_id)
+        view = DeliberationEpochs.view(repository.read_events(meeting_id))
+        events = view.active_events
         activity_status = live_activity_status(events, jobs.is_running(meeting_id), mode)
         try:
             await websocket.send_json(
@@ -1539,29 +2462,44 @@ def create_app(
                 }
             )
             event_count = len(events)
+            epoch_id = view.active_epoch.id
             stream_cursor = stream_bus.cursor(meeting_id)
             while True:
                 try:
                     await asyncio.wait_for(websocket.receive_text(), timeout=0.1)
                 except TimeoutError:
                     pass
-                events = repository.read_events(meeting_id)
+                view = DeliberationEpochs.view(repository.read_events(meeting_id))
+                events = view.active_events
                 stream_events = stream_bus.events_since(meeting_id, stream_cursor)
                 next_activity_status = live_activity_status(events, jobs.is_running(meeting_id), mode)
+                epoch_changed = view.active_epoch.id != epoch_id
                 if (
                     len(events) != event_count
                     or stream_events
                     or next_activity_status != activity_status
+                    or epoch_changed
                 ):
-                    await websocket.send_json(
-                        {
-                            "type": "update",
-                            "events": project_events(events[event_count:]),
-                            "stream_events": stream_events,
-                            "activity_status": next_activity_status,
-                        }
-                    )
+                    if epoch_changed:
+                        await websocket.send_json(
+                            {
+                                "type": "snapshot",
+                                "events": project_events(events),
+                                "stream_events": [],
+                                "activity_status": next_activity_status,
+                            }
+                        )
+                    else:
+                        await websocket.send_json(
+                            {
+                                "type": "update",
+                                "events": project_events(events[event_count:]),
+                                "stream_events": stream_events,
+                                "activity_status": next_activity_status,
+                            }
+                        )
                     event_count = len(events)
+                    epoch_id = view.active_epoch.id
                     stream_cursor += len(stream_events)
                     activity_status = next_activity_status
         except (WebSocketDisconnect, RuntimeError):
@@ -1837,24 +2775,158 @@ def project_case_files(case_files: list[dict[str, Any]]) -> list[dict[str, Any]]
     return projected
 
 
+def project_case_materials(
+    view: CaseMaterialsView, *, active_epoch_id: str
+) -> dict[str, Any]:
+    def project_version(version: Any) -> dict[str, Any]:
+        return {
+            "version": version.version,
+            "title": version.title,
+            "content": version.content,
+            "visible_roles": list(version.visible_roles),
+            "size": version.size,
+            "created_at": version.created_at,
+            "source_event_id": version.source_event_id,
+        }
+
+    impact = view.pending_impact
+    effective_impact = (
+        impact
+        if impact is not None and impact.get("deliberation_epoch_id") == active_epoch_id
+        else None
+    )
+    return {
+        "schema_version": view.schema_version,
+        "revision": view.revision,
+        "pending_impact": effective_impact,
+        "evidence": [
+            {
+                "id": item.id,
+                "evidence_index": item.evidence_index,
+                "citation_anchor": item.citation_anchor,
+                "status": item.status,
+                "active_version": item.active_version,
+                "versions": [project_version(version) for version in item.versions],
+            }
+            for item in view.evidence
+        ],
+        "notes": [
+            {
+                "id": item.id,
+                "status": item.status,
+                "active_version": item.active_version,
+                "versions": [project_version(version) for version in item.versions],
+            }
+            for item in view.notes
+        ],
+        "revision_history": [
+            {
+                "revision": item.revision,
+                "parent_revision": item.parent_revision,
+                "transition": item.transition,
+                "created_at": item.created_at,
+                "evidence": item.evidence,
+                "notes": item.notes,
+            }
+            for item in view.revision_history
+        ],
+    }
+
+
+def active_case_material_prompt_items(view: CaseMaterialsView) -> list[dict[str, Any]]:
+    items: list[dict[str, Any]] = []
+    for evidence in view.evidence:
+        if evidence.status != "active":
+            continue
+        version = next(
+            version
+            for version in evidence.versions
+            if version.version == evidence.active_version
+        )
+        items.append(
+            {
+                "kind": "evidence",
+                "id": evidence.id,
+                "evidence_index": evidence.evidence_index,
+                "citation_anchor": evidence.citation_anchor,
+                "version": evidence.active_version,
+                "title": version.title,
+                "content": version.content,
+                "visible_roles": list(version.visible_roles),
+                "size": version.size,
+            }
+        )
+    for note in view.notes:
+        if note.status != "active":
+            continue
+        version = next(
+            version for version in note.versions if version.version == note.active_version
+        )
+        items.append(
+            {
+                "kind": "note",
+                "id": note.id,
+                "title": version.title,
+                "content": version.content,
+                "visible_roles": list(version.visible_roles),
+                "size": version.size,
+            }
+        )
+    return items
+
+
+def active_case_evidence_projection(view: CaseMaterialsView) -> list[dict[str, Any]]:
+    return [
+        {key: value for key, value in item.items() if key not in {"kind", "version"}}
+        for item in active_case_material_prompt_items(view)
+        if item["kind"] == "evidence"
+    ]
+
+
 def meeting_inputs_for_runner(
     metadata: dict[str, Any],
     case_files: list[dict[str, Any]],
+    *,
+    materials_revision: int | None = None,
 ) -> dict[str, Any]:
     inputs: dict[str, Any] = dict(metadata.get("inputs") or {})
+    inputs.pop(CASE_FILES_BY_ROLE_INPUT, None)
+    inputs[CASE_EVIDENCE_BY_ROLE_INPUT] = case_evidence_by_role(case_files)
     if case_files:
         inputs[CASE_FILES_BY_ROLE_INPUT] = case_files_by_role(case_files)
+    if materials_revision is not None:
+        inputs[MATERIALS_REVISION_INPUT] = materials_revision
+    return inputs
+
+
+def material_inputs_for_runner(
+    metadata: dict[str, Any], view: CaseMaterialsView
+) -> dict[str, Any]:
+    inputs = meeting_inputs_for_runner(
+        metadata,
+        active_case_material_prompt_items(view),
+        materials_revision=view.revision,
+    )
+    latest = view.revision_history[-1]
+    inputs[MATERIALS_REFS_INPUT] = [
+        reference
+        for reference in [*latest.evidence, *latest.notes]
+        if reference["status"] == "active"
+    ]
     return inputs
 
 
 def case_files_by_role(case_files: list[dict[str, Any]]) -> dict[str, str]:
     grouped: dict[str, list[str]] = {}
-    for item in project_case_files(case_files):
+    for item in case_files:
         title = str(item.get("title", "")).strip()
         content = str(item.get("content", ""))
         if not title or not content.strip():
             continue
-        block = f"### {item['citation_anchor']} {title}\n{content}"
+        if item.get("kind") == "note":
+            block = f"### 案件備註：{title}\n{content}"
+        else:
+            block = f"### {item['citation_anchor']} {title}\n{content}"
         for role in item.get("visible_roles") or []:
             grouped.setdefault(str(role), []).append(block)
     instruction = (
@@ -1867,6 +2939,42 @@ def case_files_by_role(case_files: list[dict[str, Any]]) -> dict[str, str]:
     }
     rendered[CASE_FILES_DEFAULT_ROLE] = instruction
     return rendered
+
+
+def case_evidence_by_role(
+    case_files: list[dict[str, Any]],
+) -> dict[str, list[dict[str, Any]]]:
+    grouped: dict[str, list[dict[str, Any]]] = {}
+    for item in case_files:
+        if item.get("kind") != "evidence":
+            continue
+        block = {
+            "id": item["id"],
+            "citation_anchor": item["citation_anchor"],
+            "version": item["version"],
+            "content": item["content"],
+        }
+        for role in item.get("visible_roles") or []:
+            grouped.setdefault(str(role), []).append(block.copy())
+    return grouped
+
+
+def require_case_materials_ready(
+    repository: MeetingRepository,
+    materials: CaseMaterials,
+    meeting_id: str,
+) -> CaseMaterialsView:
+    view = materials.view(meeting_id)
+    impact = view.pending_impact
+    active_epoch_id = DeliberationEpochs.view(
+        repository.read_events(meeting_id)
+    ).active_epoch.id
+    if impact is not None and impact.get("deliberation_epoch_id") == active_epoch_id:
+        raise HTTPException(
+            status_code=409,
+            detail="Case materials changed; restart deliberation before AI execution",
+        )
+    return view
 
 
 def validate_participant_ids(
@@ -1951,17 +3059,28 @@ def project_participants(mode: ModeDefinition, metadata: dict[str, Any]) -> list
         if isinstance(item, dict)
     }
     projected = []
+    courtroom_profile = None
+    if mode.id == "courtroom":
+        try:
+            courtroom_profile = CourtroomCaseProfile.for_metadata(metadata)
+        except CourtroomCaseProfileError:
+            pass
     for role in mode.roles:
         entry = stored.get(role.id, {})
+        role_name = (
+            courtroom_profile.role_display(role.id)
+            if courtroom_profile is not None
+            else role.name
+        )
         projected.append(
             {
                 "role_id": role.id,
-                "name": role.name,
+                "name": role_name,
                 "color": role.color,
                 "kind": role.kind,
                 "portrait": role.portrait,
                 "model_config_id": entry.get("model_config_id"),
-                "display_name": entry.get("display_name") or role.name,
+                "display_name": entry.get("display_name") or role_name,
                 "instance_prompt": entry.get("instance_prompt"),
             }
         )
@@ -2060,23 +3179,31 @@ def courtroom_operation_context(
     *,
     metadata_store: MeetingMetadataStore,
     repository: MeetingRepository,
+    case_materials: CaseMaterials,
     mode_catalog: ModeCatalogRepository,
     meeting_assignments: MeetingModelAssignments,
 ) -> tuple[dict[str, Any], ModeDefinition, dict[str, ModelConfig], dict[str, Any]]:
     metadata = metadata_store.get(meeting_id)
     require_meeting_goal(metadata)
     reject_terminal_meeting(repository, meeting_id)
+    material_view = require_case_materials_ready(
+        repository, case_materials, meeting_id
+    )
     mode = meeting_mode(mode_catalog, metadata)
     if mode.id != "courtroom":
         raise HTTPException(
             status_code=400,
             detail="Courtroom workflow is only available for courtroom meetings",
         )
+    try:
+        CourtroomCaseProfile.for_metadata(metadata)
+    except CourtroomCaseProfileError as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
     return (
         metadata,
         mode,
         resolved_meeting_models(meeting_assignments, metadata, mode),
-        meeting_inputs_for_runner(metadata, repository.read_case_files(meeting_id)),
+        material_inputs_for_runner(metadata, material_view),
     )
 
 
@@ -2233,15 +3360,16 @@ def transcript_presentation_labels(
     events: list[dict[str, Any]],
 ) -> tuple[dict[str, str], dict[str, str]]:
     role_labels = {role.id: role.name for role in mode.roles}
-    role_labels.update(
-        {
-            str(participant["role_id"]): str(
-                participant.get("display_name") or role_labels.get(str(participant["role_id"]))
-                or participant["role_id"]
-            )
-            for participant in participants
-        }
-    )
+    if mode.id != "courtroom":
+        role_labels.update(
+            {
+                str(participant["role_id"]): str(
+                    participant.get("display_name") or role_labels.get(str(participant["role_id"]))
+                    or participant["role_id"]
+                )
+                for participant in participants
+            }
+        )
     role_labels["Human"] = "主席"
     role_labels["System"] = "系統"
 
@@ -2281,6 +3409,11 @@ def transcript_presentation_labels(
 
 
 def require_meeting_goal(metadata: dict[str, Any]) -> str:
+    if metadata.get("pending_deliberation_restart"):
+        raise HTTPException(
+            status_code=409,
+            detail="Deliberation restart must recover before execution",
+        )
     goal = metadata.get("goal")
     if not isinstance(goal, str) or not goal.strip():
         raise HTTPException(
@@ -2288,6 +3421,66 @@ def require_meeting_goal(metadata: dict[str, Any]) -> str:
             detail="Meeting goal must be set before execution",
         )
     return goal
+
+
+def active_meeting_events(
+    repository: MeetingRepository, meeting_id: str
+) -> list[dict[str, Any]]:
+    return DeliberationEpochs.view(repository.read_events(meeting_id)).active_events
+
+
+def workflow_meeting_events(
+    repository: MeetingRepository, meeting_id: str
+) -> list[dict[str, Any]]:
+    return DeliberationEpochs.view(repository.read_events(meeting_id)).workflow_events
+
+
+def epoch_materials_revision(epoch: Any) -> int | None:
+    if isinstance(epoch.marker, dict):
+        snapshot = epoch.marker.get("snapshot")
+        if isinstance(snapshot, dict) and isinstance(snapshot.get("materials_revision"), int):
+            return snapshot["materials_revision"]
+    return next(
+        (
+            event["materials_revision"]
+            for event in reversed(epoch.events)
+            if isinstance(event.get("materials_revision"), int)
+        ),
+        None,
+    )
+
+
+def finalize_deliberation_restart_metadata(
+    metadata: dict[str, Any], marker: dict[str, Any]
+) -> dict[str, Any]:
+    updated = dict(metadata)
+    updated.pop("pending_deliberation_restart", None)
+    updated["deliberation_epoch_id"] = marker["epoch_id"]
+    updated["deliberation_epoch_number"] = marker["epoch_number"]
+    snapshot = marker.get("snapshot")
+    if (
+        marker.get("restart_reason") == "case_type_changed"
+        and isinstance(snapshot, dict)
+        and snapshot.get("to_case_type") in {"civil", "criminal"}
+    ):
+        updated["case_type"] = snapshot["to_case_type"]
+        updated.pop("courtroom_docket", None)
+    if marker.get("restart_scope") == "rebuild_issues":
+        updated.pop("courtroom_docket", None)
+    return updated
+
+
+def finalize_pending_meeting_settings(metadata: dict[str, Any]) -> dict[str, Any]:
+    """Publish a journal-backed settings update after all audit events exist."""
+    pending = metadata.get("pending_meeting_settings")
+    if not isinstance(pending, dict) or not isinstance(pending.get("target"), dict):
+        return metadata
+    updated = {**metadata, **pending["target"]}
+    for key in pending.get("remove", []):
+        if isinstance(key, str):
+            updated.pop(key, None)
+    updated.pop("pending_meeting_settings", None)
+    return updated
 
 
 def recover_interrupted_executions(
@@ -2305,9 +3498,19 @@ def _step_has_finished(
     events: list[dict[str, Any]],
     state: ActiveExecutionState,
 ) -> bool:
+    execution_epoch_id = state.get("deliberation_epoch_id")
+    if execution_epoch_id:
+        view = DeliberationEpochs.view(events)
+        execution_epoch = next(
+            (epoch for epoch in view.epochs if epoch.id == execution_epoch_id),
+            None,
+        )
+        candidate_events = execution_epoch.events if execution_epoch is not None else []
+    else:
+        candidate_events = events
     matching_events = [
         event
-        for event in events
+        for event in candidate_events
         if event.get("step_id") == state["step_id"]
         and event.get("attempt") == state["attempt"]
         and event.get("status") in {"completed", "failed"}
@@ -2427,10 +3630,15 @@ def project_meeting_summary(
     meeting_assignments: MeetingModelAssignments,
     model_pricing: dict[str, ConfigModelPricing | None] | None = None,
     activity_status: str | None = None,
+    live_events: list[dict[str, Any]] | None = None,
+    workflow_events: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
+    deliberation = DeliberationEpochs.view(events)
+    live_events = deliberation.active_events if live_events is None else live_events
+    workflow_events = deliberation.workflow_events if workflow_events is None else workflow_events
     created_at = metadata.get("created_at", "")
     updated_at = str(events[-1].get("created_at", created_at)) if events else created_at
-    latest_event = events[-1] if events else None
+    latest_event = live_events[-1] if live_events else None
     projected_metadata = {key: value for key, value in metadata.items() if key != "topic"}
     goal = metadata.get("goal")
     has_goal = isinstance(goal, str) and bool(goal.strip())
@@ -2439,10 +3647,12 @@ def project_meeting_summary(
         "title": meeting_title(metadata),
         "goal": goal if has_goal else None,
         "requires_goal": not has_goal,
+        "settings_revision": int(metadata.get("settings_revision", 0)),
+        "scene": str(metadata.get("scene") or mode.default_scene),
         "created_at": created_at,
         "updated_at": updated_at,
         "status": project_meeting_status(events),
-        "activity_status": activity_status or project_activity_status(events),
+        "activity_status": activity_status or project_activity_status(live_events),
         "last_step_id": latest_event.get("step_id") if latest_event else None,
         "token_usage": project_token_usage(events),
         "estimated_cost": project_estimated_cost(events, model_pricing or {}),
@@ -2455,7 +3665,12 @@ def project_meeting_summary(
             events=events,
         ),
         "case_files": case_file_manifest(metadata.get("case_files") or []),
-        "courtroom": project_courtroom(metadata, events),
+        "courtroom": project_courtroom(metadata, workflow_events),
+        "deliberation": {
+            "active_epoch_id": deliberation.active_epoch.id,
+            "active_epoch_number": deliberation.active_epoch.number,
+            "epoch_count": len(deliberation.epochs),
+        },
     }
 
 

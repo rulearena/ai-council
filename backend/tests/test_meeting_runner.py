@@ -11,6 +11,7 @@ from threading import Event, Lock, Thread
 import pytest
 
 from ai_council.meetings.modes import ModeCatalogRepository, relay_plan
+from ai_council.meetings.deliberation import DeliberationEpochs, RestartCommand
 from ai_council.meetings.repository import MeetingRepository
 from ai_council.meetings.runner import (
     MeetingRunner,
@@ -932,7 +933,25 @@ def test_retry_failed_directed_response_reuses_instruction_linkage_and_generic_p
     inputs = {
         "__case_files_by_role": {
             "Defense": "[證物二] 遺產稅繳納紀錄",
-        }
+        },
+        "__case_evidence_by_role": {
+            "Defense": [{
+                "id": "internal-envelope-only",
+                "citation_anchor": "[證物二]",
+                "version": 3,
+                "content": "遺產稅繳納紀錄",
+            }],
+        },
+        "__materials_revision": 7,
+        "__materials_refs": [
+            {
+                "kind": "evidence",
+                "id": "case-file-2",
+                "version": 3,
+                "status": "active",
+                "visible_roles": ["Defense"],
+            }
+        ],
     }
 
     runner.respond_as_role(
@@ -974,6 +993,9 @@ def test_retry_failed_directed_response_reuses_instruction_linkage_and_generic_p
     assert {event["in_response_to_event_id"] for event in responses} == {
         instructions[0]["event_id"]
     }
+    assert instructions[0]["materials_revision"] == 7
+    assert {event["materials_revision"] for event in responses} == {7}
+    assert {event["materials_refs"][0]["version"] for event in responses} == {3}
     assert responses[-1]["step_id"] == "directed-1-defense-response"
     assert responses[-1]["base_step_id"] == "defense-response"
     retry_prompt = adapter.requests[-1].prompt
@@ -981,6 +1003,8 @@ def test_retry_failed_directed_response_reuses_instruction_linkage_and_generic_p
     assert "[證物二] 遺產稅繳納紀錄" in retry_prompt
     assert "請針對遺產稅因果關係補充答辯" in retry_prompt
     assert "PHASE-ONLY" not in retry_prompt
+    assert "__case_evidence_by_role" not in json.dumps(events, ensure_ascii=False)
+    assert "internal-envelope-only" not in json.dumps(events, ensure_ascii=False)
 
 
 @pytest.mark.parametrize("failure_kind", ["timeout", "interrupted"])
@@ -1922,6 +1946,52 @@ def test_parallel_runner_completes_fanout_then_synthesis(tmp_path: Path) -> None
     assert "Member-1" in synthesis_prompt
     assert "Continue" in synthesis_prompt
     assert {event["output_schema_id"] for event in completed} == {"role-output/v1"}
+
+
+def test_parallel_restart_synthesis_uses_only_active_epoch_members(tmp_path: Path) -> None:
+    old_output = json.dumps(
+        {"summary": "ARCHIVED_MEMBER", "arguments": [], "risks": [], "recommendation": "old"}
+    )
+    new_output = json.dumps(
+        {"summary": "ACTIVE_MEMBER", "arguments": [], "risks": [], "recommendation": "new"}
+    )
+    runner = build_runner(
+        tmp_path,
+        adapter=FakeAdapter([old_output] * 4 + [new_output] * 4),
+        templates=("brainstorm_member", "brainstorm_synthesis"),
+        extra_placeholders=" {{ instance_prompt }} {{ fanout_outputs }}",
+    )
+    assignments = parallel_model_assignments()
+    runner.start_parallel(
+        plan=PARALLEL_PLAN,
+        meeting_id="meeting-1",
+        goal="first",
+        model_assignments=assignments,
+    )
+    raw = runner.repository.read_events("meeting-1")
+    runner.repository.append_event(
+        "meeting-1",
+        DeliberationEpochs.restart_marker(
+            meeting_id="meeting-1",
+            events=raw,
+            command=RestartCommand(scope="all_deliberation", reason="fresh synthesis"),
+        ),
+    )
+
+    runner.start_parallel(
+        plan=PARALLEL_PLAN,
+        meeting_id="meeting-1",
+        goal="second",
+        model_assignments=assignments,
+    )
+
+    active = DeliberationEpochs.view(
+        runner.repository.read_events("meeting-1")
+    ).active_events
+    synthesis_prompt = active[-1]["prompt_messages"][0]["content"]
+    assert active[-1]["step_id"] == "synthesis-1"
+    assert "ACTIVE_MEMBER" in synthesis_prompt
+    assert "ARCHIVED_MEMBER" not in synthesis_prompt
 
 
 def test_parallel_fanout_and_synthesis_use_their_step_output_schemas(tmp_path: Path) -> None:
