@@ -5,6 +5,8 @@ from decimal import Decimal
 import re
 from typing import Mapping
 
+from ai_council.meetings.input_envelope import CASE_EVIDENCE_BY_ROLE_INPUT
+
 from ai_council.meetings.legal_semantics import (
     contains_concrete_penalty,
     money_values,
@@ -113,9 +115,9 @@ class CourtroomCaseProfile:
             if contains_concrete_penalty(parsed):
                 raise ValueError("Criminal verdict must not state a concrete penalty")
             return
-        by_role = (inputs or {}).get("__case_files_by_role")
-        judge_evidence = str(by_role.get("Judge", "")) if isinstance(by_role, dict) else ""
-        visible_anchors = set(re.findall(r"\[證物[^\]]+\]", judge_evidence))
+        evidence_by_anchor = _judge_evidence_by_anchor(inputs)
+        judge_evidence = "\n".join(evidence_by_anchor.values())
+        visible_anchors = set(evidence_by_anchor)
         referenced_anchors = set(re.findall(r"\[證物[^\]]+\]", visible_text))
         if not referenced_anchors.issubset(visible_anchors):
             raise ValueError("Civil verdict cites unknown or invisible evidence")
@@ -140,16 +142,18 @@ class CourtroomCaseProfile:
                 calculation_basis.strip()
             )
             if normalized_refs and has_calculation:
-                claim_evidence = _evidence_for_anchors(judge_evidence, normalized_refs)
-                top_level_supports.append(money_values(claim_evidence))
+                top_level_supports.append(
+                    _money_for_anchors(evidence_by_anchor, normalized_refs)
+                )
             if not claim_money:
                 continue
             if not normalized_refs or not has_calculation:
                 raise ValueError(
                     "Civil monetary claim is not supported without evidence_refs and calculation_basis"
                 )
-            claim_evidence = _evidence_for_anchors(judge_evidence, normalized_refs)
-            if not claim_money.issubset(money_values(claim_evidence)):
+            if not claim_money.issubset(
+                _money_for_anchors(evidence_by_anchor, normalized_refs)
+            ):
                 raise ValueError(
                     "Civil verdict monetary amount is not supported by the claim's visible evidence"
                 )
@@ -187,16 +191,76 @@ def _structured_money_values(value: object) -> set[tuple[str, Decimal]]:
     return values
 
 
-def _evidence_for_anchors(evidence: str, anchors: list[str]) -> str:
-    """Return only evidence sections explicitly referenced by one claim."""
-    matches = list(re.finditer(r"\[證物[^\]]+\]", evidence))
-    selected: list[str] = []
-    allowed = set(anchors)
-    for index, match in enumerate(matches):
-        end = matches[index + 1].start() if index + 1 < len(matches) else len(evidence)
-        if match.group(0) in allowed:
-            selected.append(evidence[match.start():end])
-    return "\n".join(selected)
+def _judge_evidence_by_anchor(
+    inputs: dict[str, object] | None,
+) -> dict[str, str]:
+    structured_by_role = (inputs or {}).get(CASE_EVIDENCE_BY_ROLE_INPUT)
+    if structured_by_role is not None:
+        if not isinstance(structured_by_role, dict):
+            raise ValueError(
+                "Civil verdict received an invalid structured evidence envelope"
+            )
+        blocks = structured_by_role.get("Judge", [])
+        if not isinstance(blocks, list):
+            raise ValueError(
+                "Civil verdict received an invalid structured evidence envelope"
+            )
+        evidence: dict[str, str] = {}
+        for block in blocks:
+            if not isinstance(block, dict):
+                raise ValueError(
+                    "Civil verdict received an invalid structured evidence envelope"
+                )
+            anchor = block.get("citation_anchor")
+            evidence_id = block.get("id")
+            version = block.get("version")
+            content = block.get("content")
+            if (
+                not isinstance(anchor, str)
+                or re.fullmatch(r"\[證物[^\[\]\n]+\]", anchor) is None
+                or not isinstance(evidence_id, str)
+                or not evidence_id.strip()
+                or not isinstance(version, int)
+                or isinstance(version, bool)
+                or version < 1
+                or not isinstance(content, str)
+                or anchor in evidence
+            ):
+                raise ValueError(
+                    "Civil verdict received an invalid structured evidence envelope"
+                )
+            evidence[anchor] = content
+        return evidence
+
+    rendered_by_role = (inputs or {}).get("__case_files_by_role")
+    rendered = (
+        str(rendered_by_role.get("Judge", ""))
+        if isinstance(rendered_by_role, dict)
+        else ""
+    )
+    headings = list(
+        re.finditer(
+            r"^### (\[證物[^\[\]\n]+\])(?: [^\n]*)?\n",
+            rendered,
+            re.MULTILINE,
+        )
+    )
+    evidence = {}
+    for index, heading in enumerate(headings):
+        anchor = heading.group(1)
+        if anchor in evidence:
+            raise ValueError(
+                "Civil verdict received ambiguous legacy evidence headings"
+            )
+        end = headings[index + 1].start() if index + 1 < len(headings) else len(rendered)
+        evidence[anchor] = rendered[heading.end():end]
+    return evidence
+
+
+def _money_for_anchors(
+    evidence_by_anchor: dict[str, str], anchors: list[str]
+) -> set[tuple[str, Decimal]]:
+    return money_values("\n".join(evidence_by_anchor[anchor] for anchor in anchors))
 
 
 def _visible_strings(value: object) -> list[str]:

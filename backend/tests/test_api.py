@@ -4550,6 +4550,100 @@ def test_case_files_reach_only_visible_role_prompts(tmp_path: Path) -> None:
         assert "不可假造不存在的證物錨點" in prompt
 
 
+def test_civil_final_and_retry_ground_money_in_structured_visible_evidence(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    original_complete = MockModelAdapter.complete
+    final_reference = "[證物二]"
+
+    def controlled_complete(
+        self: MockModelAdapter, request: ModelRequest
+    ) -> ModelResponse:
+        if request.output_schema_id != "courtroom-civil-final/v1":
+            return original_complete(self, request)
+        return ModelResponse(raw_output=json.dumps({
+            "summary": "部分勝訴",
+            "claims": [{
+                "claim": "損害賠償新臺幣十萬元",
+                "outcome": "upheld",
+                "reasoning": "依引用證物認定新臺幣十萬元",
+                "evidence_refs": [final_reference],
+                "relief": {
+                    "obligation": "給付新臺幣十萬元",
+                    "monetary_amount": "新臺幣十萬元",
+                    "calculation_basis": "依引用證物所載金額計算",
+                },
+            }],
+            "unresolved_questions": [],
+        }, ensure_ascii=False))
+
+    monkeypatch.setattr(MockModelAdapter, "complete", controlled_complete)
+    client = TestClient(create_test_app(tmp_path))
+    meeting_id = client.post(
+        "/meetings",
+        json={
+            "title": "結構化證物金額歸屬",
+            "goal": "判斷損害賠償",
+            "mode_id": "courtroom",
+            "case_type": "civil",
+            "case_files": [
+                {
+                    "title": "收據",
+                    "content": "正文提到[證物二]後有新臺幣十萬元",
+                    "visible_roles": ["Judge"],
+                },
+                {
+                    "title": "契約",
+                    "content": "本證物沒有記載金額",
+                    "visible_roles": ["Judge"],
+                },
+            ],
+        },
+    ).json()["meeting_id"]
+    run_single_courtroom_issue(client, meeting_id, "損害金額")
+
+    assert client.post(
+        f"/meetings/{meeting_id}/courtroom/final-verdict"
+    ).status_code == 202
+    failed = wait_for_activity(client, meeting_id, "failed")
+    failed_event = failed["events"][-1]
+    assert failed_event["failure_kind"] == "parse_error"
+    assert failed_event["raw_output"]
+
+    final_reference = "[證物一]"
+    assert client.post(
+        f"/meetings/{meeting_id}/steps/{failed_event['step_id']}/retry",
+        json={},
+    ).status_code == 202
+    completed = wait_for_activity(client, meeting_id, "completed")
+    final_event = completed["events"][-1]
+    assert final_event["status"] == "completed"
+    assert final_event["materials_refs"] == [
+        {
+            "kind": "evidence",
+            "id": completed["case_files"][0]["id"],
+            "version": 1,
+            "status": "active",
+            "visible_roles": ["Judge"],
+            "evidence_index": 1,
+            "citation_anchor": "[證物一]",
+        },
+        {
+            "kind": "evidence",
+            "id": completed["case_files"][1]["id"],
+            "version": 1,
+            "status": "active",
+            "visible_roles": ["Judge"],
+            "evidence_index": 2,
+            "citation_anchor": "[證物二]",
+        },
+    ]
+    assert "__case_evidence_by_role" not in json.dumps(
+        completed["events"], ensure_ascii=False
+    )
+
+
 def test_roles_without_visible_case_files_receive_citation_rules_without_evidence_leakage(
     tmp_path: Path,
 ) -> None:

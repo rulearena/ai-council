@@ -48,4 +48,3 @@ Canonical contract: `spec.md` §15 #88；`.scratch/deliberation-lifecycle-ux/PRD
 - 不用多個 immediate-save requests 模擬 atomic save。
 - 不讓 history browsing 污染 live state。
 - 不把 meeting-scoped 選項留在全域系統設定。
-

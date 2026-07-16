@@ -934,6 +934,14 @@ def test_retry_failed_directed_response_reuses_instruction_linkage_and_generic_p
         "__case_files_by_role": {
             "Defense": "[證物二] 遺產稅繳納紀錄",
         },
+        "__case_evidence_by_role": {
+            "Defense": [{
+                "id": "internal-envelope-only",
+                "citation_anchor": "[證物二]",
+                "version": 3,
+                "content": "遺產稅繳納紀錄",
+            }],
+        },
         "__materials_revision": 7,
         "__materials_refs": [
             {
@@ -995,6 +1003,8 @@ def test_retry_failed_directed_response_reuses_instruction_linkage_and_generic_p
     assert "[證物二] 遺產稅繳納紀錄" in retry_prompt
     assert "請針對遺產稅因果關係補充答辯" in retry_prompt
     assert "PHASE-ONLY" not in retry_prompt
+    assert "__case_evidence_by_role" not in json.dumps(events, ensure_ascii=False)
+    assert "internal-envelope-only" not in json.dumps(events, ensure_ascii=False)
 
 
 @pytest.mark.parametrize("failure_kind", ["timeout", "interrupted"])

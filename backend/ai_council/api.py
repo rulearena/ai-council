@@ -59,6 +59,7 @@ from ai_council.meetings.modes import (
     relay_plan,
 )
 from ai_council.meetings.repository import MeetingRepository
+from ai_council.meetings.input_envelope import CASE_EVIDENCE_BY_ROLE_INPUT
 from ai_council.meetings.runner import (
     CASE_FILES_BY_ROLE_INPUT,
     CASE_FILES_DEFAULT_ROLE,
@@ -2848,6 +2849,7 @@ def active_case_material_prompt_items(view: CaseMaterialsView) -> list[dict[str,
                 "id": evidence.id,
                 "evidence_index": evidence.evidence_index,
                 "citation_anchor": evidence.citation_anchor,
+                "version": evidence.active_version,
                 "title": version.title,
                 "content": version.content,
                 "visible_roles": list(version.visible_roles),
@@ -2875,7 +2877,7 @@ def active_case_material_prompt_items(view: CaseMaterialsView) -> list[dict[str,
 
 def active_case_evidence_projection(view: CaseMaterialsView) -> list[dict[str, Any]]:
     return [
-        {key: value for key, value in item.items() if key != "kind"}
+        {key: value for key, value in item.items() if key not in {"kind", "version"}}
         for item in active_case_material_prompt_items(view)
         if item["kind"] == "evidence"
     ]
@@ -2888,6 +2890,8 @@ def meeting_inputs_for_runner(
     materials_revision: int | None = None,
 ) -> dict[str, Any]:
     inputs: dict[str, Any] = dict(metadata.get("inputs") or {})
+    inputs.pop(CASE_FILES_BY_ROLE_INPUT, None)
+    inputs[CASE_EVIDENCE_BY_ROLE_INPUT] = case_evidence_by_role(case_files)
     if case_files:
         inputs[CASE_FILES_BY_ROLE_INPUT] = case_files_by_role(case_files)
     if materials_revision is not None:
@@ -2935,6 +2939,24 @@ def case_files_by_role(case_files: list[dict[str, Any]]) -> dict[str, str]:
     }
     rendered[CASE_FILES_DEFAULT_ROLE] = instruction
     return rendered
+
+
+def case_evidence_by_role(
+    case_files: list[dict[str, Any]],
+) -> dict[str, list[dict[str, Any]]]:
+    grouped: dict[str, list[dict[str, Any]]] = {}
+    for item in case_files:
+        if item.get("kind") != "evidence":
+            continue
+        block = {
+            "id": item["id"],
+            "citation_anchor": item["citation_anchor"],
+            "version": item["version"],
+            "content": item["content"],
+        }
+        for role in item.get("visible_roles") or []:
+            grouped.setdefault(str(role), []).append(block.copy())
+    return grouped
 
 
 def require_case_materials_ready(

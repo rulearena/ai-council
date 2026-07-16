@@ -48,4 +48,3 @@ Courtroom 由使用者明示選擇民事或刑事，使用正確角色、三段�
 - 不用 title/goal/events 推論 case type。
 - 不複製 civil/criminal 成兩個 modes。
 - 不改 internal role IDs 或 retroactively relabel 舊 events。
-

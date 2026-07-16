@@ -46,4 +46,3 @@ Canonical contract: `spec.md` §15 #88；`.scratch/deliberation-lifecycle-ux/PRD
 - 不把 evidence 內容同時寫 metadata 與 materials file。
 - 不因 restart 複製證據。
 - 不 hard-delete 或靜默覆寫版本。
-

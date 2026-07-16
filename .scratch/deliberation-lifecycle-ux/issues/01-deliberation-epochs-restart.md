@@ -48,4 +48,3 @@ Canonical contract: `spec.md` §15 #88；`.scratch/deliberation-lifecycle-ux/PRD
 - 不把 raw repository 改成隱式只回 active events。
 - 不 hard-delete、重寫或複製歷史 events/evidence。
 - 不建立第二套 meeting lock。
-

@@ -278,7 +278,7 @@ def test_civil_verdict_bare_amount_is_checked_but_bare_evidence_quantity_is_not_
                     },
                 }],
             },
-            {"__case_files_by_role": {"Judge": "[證物一] 持有100萬股"}},
+            {"__case_files_by_role": {"Judge": "### [證物一] 股權資料\n持有100萬股"}},
         )
 
 
@@ -332,7 +332,7 @@ def test_civil_general_prose_bare_magnitude_accepts_equal_evidence_money() -> No
                 },
             }],
         },
-        {"__case_files_by_role": {"Judge": "[證物一] 價款100萬"}},
+        {"__case_files_by_role": {"Judge": "### [證物一] 價款資料\n價款100萬"}},
     )
 
 
@@ -365,7 +365,7 @@ def test_civil_bare_monetary_amount_is_validated_against_strict_evidence(
                 },
             }],
         },
-        {"__case_files_by_role": {"Judge": "[證物一] 價金一百萬元"}},
+        {"__case_files_by_role": {"Judge": "### [證物一] 價金資料\n價金一百萬元"}},
     )
 
 
@@ -426,6 +426,84 @@ def test_civil_claim_money_must_be_supported_by_that_claims_visible_evidence() -
                 }
             },
         )
+
+
+def test_civil_claim_money_uses_structured_evidence_instead_of_body_anchor_text() -> None:
+    profile = CourtroomCaseProfile.for_type("civil")
+    inputs = {
+        "__case_files_by_role": {
+            "Judge": (
+                "### [證物一] 收據\n正文提到[證物二]後有新臺幣十萬元\n"
+                "### [證物二] 契約\n無金額"
+            ),
+        },
+        "__case_evidence_by_role": {
+            "Judge": [
+                {
+                    "id": "evidence-1",
+                    "citation_anchor": "[證物一]",
+                    "version": 1,
+                    "content": "正文提到[證物二]後有新臺幣十萬元",
+                },
+                {
+                    "id": "evidence-2",
+                    "citation_anchor": "[證物二]",
+                    "version": 1,
+                    "content": "無金額",
+                },
+            ],
+        },
+    }
+    claim = {
+        "title": "損害賠償新臺幣十萬元",
+        "evidence_refs": ["[證物二]"],
+        "relief": {
+            "monetary_amount": None,
+            "calculation_basis": "依引用證物加總",
+        },
+    }
+
+    with pytest.raises(ValueError, match="not supported"):
+        profile.validate_final_semantics(
+            {"summary": "部分勝訴", "claims": [claim]},
+            inputs,
+        )
+
+    claim["evidence_refs"] = ["[證物一]"]
+    profile.validate_final_semantics(
+        {"summary": "部分勝訴", "claims": [claim]},
+        inputs,
+    )
+
+
+def test_civil_legacy_evidence_fallback_only_recognizes_exact_rendered_headings() -> None:
+    profile = CourtroomCaseProfile.for_type("civil")
+    inputs = {
+        "__case_files_by_role": {
+            "Judge": (
+                "### [證物一] 收據\n正文提到[證物二]後有新臺幣十萬元\n"
+                "### [證物二] 契約\n無金額"
+            ),
+        },
+    }
+    claim = {
+        "title": "損害賠償新臺幣十萬元",
+        "evidence_refs": ["[證物二]"],
+        "relief": {
+            "monetary_amount": None,
+            "calculation_basis": "依引用證物加總",
+        },
+    }
+
+    with pytest.raises(ValueError, match="not supported"):
+        profile.validate_final_semantics(
+            {"summary": "部分勝訴", "claims": [claim]}, inputs
+        )
+
+    claim["evidence_refs"] = ["[證物一]"]
+    profile.validate_final_semantics(
+        {"summary": "部分勝訴", "claims": [claim]}, inputs
+    )
 
 
 def test_civil_top_level_money_requires_explicitly_linked_claim_support() -> None:

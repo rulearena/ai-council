@@ -11,6 +11,7 @@ from typing import Any, Callable, Literal, Protocol, TypedDict
 
 from ai_council.meetings.execution_state import ActiveExecutionState, MeetingExecutionStateStore
 from ai_council.meetings.deliberation import DeliberationEpochs
+from ai_council.meetings.input_envelope import CASE_EVIDENCE_BY_ROLE_INPUT
 from ai_council.meetings.repository import MeetingRepository
 from ai_council.meetings.transcript import TranscriptProjector
 from ai_council.models.adapters import AdapterError, ModelRequest, ModelResponse
@@ -1143,6 +1144,7 @@ class MeetingRunner:
             if key
             not in {
                 CASE_FILES_BY_ROLE_INPUT,
+                CASE_EVIDENCE_BY_ROLE_INPUT,
                 MATERIALS_REVISION_INPUT,
                 MATERIALS_REFS_INPUT,
             }
