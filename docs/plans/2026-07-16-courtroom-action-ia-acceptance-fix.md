@@ -1,6 +1,6 @@
 # Backlog #88 Acceptance 修補計畫：法院設定與主席動作 IA
 
-Status: approved / ready
+Status: implemented / awaiting acceptance
 
 ## Goal
 
