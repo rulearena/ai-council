@@ -31,8 +31,9 @@ Blocked by: none
   `cases`；external `--basetemp` 在 collect-only CLI probe 以 exit 0 被接受。
 - Green：`backend/conftest.py` 的 `pytest_configure(tryfirst=True)` 在 builtin
   tmpdir factory 設定前完成路徑驗證，default／explicit inside／external rejection
-  三個 CLI regression tests 通過。外部 rejection 在 collection 前回傳 UsageError，
-  且已授權 exact path 在 probe 前後皆不存在。
+  三個 CLI regression tests 通過。持久化 rejection test 在真 worktree 內建立 nested
+  fake checkout，並將 candidate 放在 fake checkout 外、真 worktree 內；CLI 在
+  collection 前回傳 UsageError，candidate 前後皆不存在，不引用 workspace 外路徑。
 - Checkout isolation：runtime root 由目前 conftest 實體路徑解析，因此 worktree
   probe 寫入該 worktree 自己的 `.scratch/pytest-runtime/`。
 - Full gate：`600 passed`（原基線 597 + 新增 3）。
