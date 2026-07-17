@@ -3625,6 +3625,12 @@ def live_meeting_snapshot(
         # the Future is done all operation writes are complete, so one fresh read gives
         # callers the matching settled event snapshot.
         events = repository.read_events(meeting_id)
+        verified_running, verified_revision = jobs.lifecycle_state(meeting_id)
+        if verified_running or verified_revision != revision_after:
+            # A second lifecycle transition overlapped the bounded reread. Publishing
+            # that snapshot as settled would repeat the same torn-read bug; mark it
+            # running so the frontend performs a fresh poll instead of looping here.
+            is_running = True
     active_events = DeliberationEpochs.view(events).active_events
     return events, live_activity_status(active_events, is_running, mode)
 

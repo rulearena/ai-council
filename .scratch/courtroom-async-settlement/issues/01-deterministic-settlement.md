@@ -83,3 +83,9 @@ Blocked by: none
 - Review-fix targeted：backend settlement 4 passed；job lifecycle／既有 WebSocket 7 passed；
   frontend unit 50 passed；build 通過；雙爭點與刑事 courtroom Chromium 2 passed，
   另一次雙爭點 Chromium 1 passed。
+- Second review fix：補讀期間仍可能完整跑完下一個 job。Back-to-back regression 舊版
+  將只含第一個 completed event 的補讀誤標 `completed`；現在補讀後再驗一次 lifecycle
+  state。若仍 running 或 revision 再變，有限次補讀立即以 `activity_status=running`
+  發布，交給 frontend 下一輪 polling，不使用 loop、sleep 或長鎖。直接 manager contract
+  tests 同時固定 accepted start 才增 revision、running rejected start 不增、done callback
+  不得移除較新的 job，以及 exception finish 保留 revision。相關 targeted 8 passed。

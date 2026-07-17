@@ -2730,6 +2730,172 @@ def test_live_snapshot_reloads_when_a_whole_job_finishes_during_the_event_read()
     assert repository.read_count == 2
 
 
+def test_live_snapshot_stays_running_when_another_job_finishes_during_the_reread() -> None:
+    meeting_id = "meeting-back-to-back"
+    completed_events = [
+        {
+            "event_id": f"{meeting_id}:completed-{index}",
+            "meeting_id": meeting_id,
+            "step_id": f"courtroom-step-{index}",
+            "role": "Judge",
+            "status": "completed",
+            "interaction_type": "courtroom-final-verdict",
+        }
+        for index in (1, 2)
+    ]
+
+    class ObservableJobManager(MeetingJobManager):
+        def __init__(self) -> None:
+            super().__init__()
+            self.released = [threading.Event(), threading.Event()]
+            self.finish_count = 0
+
+        def _finish(self, finished_meeting_id: str, completed: Future[None]) -> None:
+            super()._finish(finished_meeting_id, completed)
+            self.released[self.finish_count].set()
+            self.finish_count += 1
+
+    class CompleteOneJobPerRead:
+        def __init__(self, manager: ObservableJobManager) -> None:
+            self.manager = manager
+            self.events: list[dict[str, object]] = []
+            self.read_count = 0
+
+        def read_events(self, requested_meeting_id: str) -> list[dict[str, object]]:
+            assert requested_meeting_id == meeting_id
+            snapshot = list(self.events)
+            if self.read_count < 2:
+                operation_index = self.read_count
+                self.read_count += 1
+                assert self.manager.start(
+                    meeting_id,
+                    lambda: self.events.append(completed_events[operation_index]),
+                )
+                assert self.manager.released[operation_index].wait(timeout=2)
+            else:
+                self.read_count += 1
+            return snapshot
+
+    manager = ObservableJobManager()
+    repository = CompleteOneJobPerRead(manager)
+    mode = ModeDefinition(
+        id="courtroom",
+        name="Courtroom",
+        category="relay",
+        tagline="",
+        when_to_use="",
+        sop=[],
+        default_scene="courtroom",
+        inputs=[],
+        roles=[],
+    )
+
+    first_events, first_status = live_meeting_snapshot(  # type: ignore[arg-type]
+        repository, manager, meeting_id, mode
+    )
+
+    assert first_events == [completed_events[0]]
+    assert first_status == "running"
+    assert repository.read_count == 2
+
+    settled_events, settled_status = live_meeting_snapshot(  # type: ignore[arg-type]
+        repository, manager, meeting_id, mode
+    )
+    assert settled_events == completed_events
+    assert settled_status == "completed"
+
+
+def test_job_lifecycle_revision_changes_only_for_an_accepted_start() -> None:
+    entered = threading.Event()
+    release = threading.Event()
+    finished = threading.Event()
+
+    class ObservableJobManager(MeetingJobManager):
+        def _finish(self, meeting_id: str, completed: Future[None]) -> None:
+            super()._finish(meeting_id, completed)
+            finished.set()
+
+    def operation() -> None:
+        entered.set()
+        assert release.wait(timeout=2)
+
+    manager = ObservableJobManager()
+    assert manager.lifecycle_state("meeting-revision") == (False, 0)
+    assert manager.start("meeting-revision", operation)
+    assert entered.wait(timeout=2)
+    assert manager.lifecycle_state("meeting-revision") == (True, 1)
+
+    assert not manager.start("meeting-revision", lambda: None)
+    assert manager.lifecycle_state("meeting-revision") == (True, 1)
+
+    release.set()
+    assert finished.wait(timeout=2)
+    assert manager.lifecycle_state("meeting-revision") == (False, 1)
+
+
+def test_done_job_callback_cannot_remove_a_newer_job_or_its_revision() -> None:
+    release_first = threading.Event()
+    first_finish_entered = threading.Event()
+    allow_first_finish = threading.Event()
+    release_second = threading.Event()
+    second_finished = threading.Event()
+
+    class OrderedJobManager(MeetingJobManager):
+        def __init__(self) -> None:
+            super().__init__()
+            self.finish_count = 0
+
+        def _finish(self, meeting_id: str, completed: Future[None]) -> None:
+            self.finish_count += 1
+            if self.finish_count == 1:
+                first_finish_entered.set()
+                assert allow_first_finish.wait(timeout=2)
+            super()._finish(meeting_id, completed)
+            if self.finish_count == 2:
+                second_finished.set()
+
+    def first_operation() -> None:
+        assert release_first.wait(timeout=2)
+
+    def second_operation() -> None:
+        assert release_second.wait(timeout=2)
+
+    manager = OrderedJobManager()
+    assert manager.start("meeting-replacement", first_operation)
+    release_first.set()
+    assert first_finish_entered.wait(timeout=2)
+    assert manager.lifecycle_state("meeting-replacement") == (False, 1)
+
+    assert manager.start("meeting-replacement", second_operation)
+    assert manager.lifecycle_state("meeting-replacement") == (True, 2)
+    allow_first_finish.set()
+    assert manager.lifecycle_state("meeting-replacement") == (True, 2)
+
+    release_second.set()
+    assert second_finished.wait(timeout=2)
+    assert manager.lifecycle_state("meeting-replacement") == (False, 2)
+
+
+def test_exception_finish_preserves_the_accepted_job_revision(caplog) -> None:
+    finished = threading.Event()
+
+    class ObservableJobManager(MeetingJobManager):
+        def _finish(self, meeting_id: str, completed: Future[None]) -> None:
+            super()._finish(meeting_id, completed)
+            finished.set()
+
+    def fail() -> None:
+        raise RuntimeError("expected test failure")
+
+    manager = ObservableJobManager()
+    with caplog.at_level("ERROR", logger="ai_council.api"):
+        assert manager.start("meeting-exception-revision", fail)
+        assert finished.wait(timeout=2)
+
+    assert manager.lifecycle_state("meeting-exception-revision") == (False, 1)
+    assert "Background meeting job failed unexpectedly" in caplog.text
+
+
 def test_update_meeting_tags_replaces_tag_list(tmp_path: Path) -> None:
     app = create_test_app(tmp_path)
     client = TestClient(app)
