@@ -1,6 +1,6 @@
 # Pytest workspace temporary-directory guard
 
-Status: approved
+Status: implemented / awaiting acceptance
 
 ## 目的
 

@@ -8,6 +8,7 @@ backend/.venv/
 
 .scratch/*.png
 .scratch/local-executor-canary/sandboxes/
+.scratch/pytest-runtime/
 
 frontend/.cache/
 frontend/dist/

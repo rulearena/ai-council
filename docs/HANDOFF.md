@@ -25,7 +25,7 @@
 | Deliberation Lifecycle & Courtroom Workspace | `3551665` | append-only 審議輪次與三種法院重開、版本化證據／案件備註、民刑事 case profile 與安全 final schema、原子 meeting settings、歷史案卷與 responsive workspace（實作計畫：`docs/plans/2026-07-15-deliberation-lifecycle-ux.md`） |
 | Courtroom Async Settlement | `eaa059f`–`b6b2432` | GET／WebSocket 一致 live snapshot、per-meeting lifecycle revision、frontend settlement generation guard 與 deterministic ordering tests（實作計畫：`docs/plans/2026-07-17-courtroom-async-settlement.md`） |
 
-**目前驗收基線（任何改動後不得低於此）**：後端 `pytest` **597 passed**；frontend unit **50 passed**；前端 `npm run build` 綠；Chromium e2e **90/90 passed**。Backlog #89 已以 deterministic lifecycle ordering tests 修復原法院 async completion race，並通過 direct Chromium arguments → ruling → final without reload smoke。
+**目前驗收基線（任何改動後不得低於此）**：後端 `pytest` **600 passed**；frontend unit **50 passed**；前端 `npm run build` 綠；Chromium e2e **90/90 passed**。Backlog #89 已以 deterministic lifecycle ordering tests 修復原法院 async completion race，並通過 direct Chromium arguments → ruling → final without reload smoke。
 
 ## 2. Agent 開發佇列與目前核准批次
 
@@ -81,7 +81,7 @@ Backlog 89「法院非同步完成狀態收斂」已實作、通過 Standards／
 
 ## 4. 開發環境
 
-- 後端測試：`cd backend && .venv/bin/python -m pytest tests/ -q`（venv 在主 repo `backend/.venv`；worktree 沒有 venv——pytest `pythonpath=["."]` 會 import 執行目錄的程式碼，所以**在 worktree 的 backend 目錄下用主 repo 的 venv 跑**即測 worktree 的碼）。
+- 後端測試：`cd backend && .venv/bin/python -m pytest tests/ -q`（venv 在主 repo `backend/.venv`；worktree 沒有 venv——pytest `pythonpath=["."]` 會 import 執行目錄的程式碼，所以**在 worktree 的 backend 目錄下用主 repo 的 venv 跑**即測 worktree 的碼）。`backend/conftest.py` 會把 pytest／Python tempfile 固定在目前 checkout 的 `.scratch/pytest-runtime/`；明示的 workspace 外 `--basetemp` 會在 collection 前拒絕。這是 repository safety guard，不可移除或繞過。
 - **已知 flake（backlog 76）**：已於 2026-07-13 將 `test_api.py` 的 `wait_for_activity` deadline 放寬到 5s；若全套仍有單一 activity timeout，先單獨重跑再判斷。
 - e2e：`playwright.config.ts` 無 webServer，baseURL 吃 `E2E_BASE_URL`（預設 3009）。**主 repo 的 3009/5009 常被使用者的 dev server 佔用**——一律用空閒 port 自起：
   所有測試資料必須留在 workspace 內；不得使用 `mktemp -d`、`/tmp` 或其他 workspace 外路徑。每次以新的 repo-local 目錄執行，完成後只清理該目錄：
