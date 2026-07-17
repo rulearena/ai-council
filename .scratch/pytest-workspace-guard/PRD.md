@@ -18,5 +18,5 @@ Status: implemented / awaiting acceptance
 ## 驗證
 
 - CLI/default probe 驗證 `tmp_path`、`TMPDIR`、`tempfile.gettempdir()` 都在 checkout 內。
-- CLI/external basetemp red-green probe 使用 Human Owner 已授權的確切外部 pytest temp path，guard 必須拒絕且路徑保持不存在。
+- CLI/external basetemp probe 在真 workspace 內建立 nested fake checkout；candidate 位於 fake checkout 外但仍在真 workspace 內，guard 必須拒絕且 candidate 保持不存在。
 - 完整 backend suite 通過，且未顯式設定 TMPDIR 時仍不建立 workspace 外 pytest artifacts。

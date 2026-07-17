@@ -13,8 +13,8 @@ Blocked by: none
 ## 禁止事項
 
 - 不讀取、列出或建立其他 workspace 外路徑。
-- external rejection probe 只可引用 Human Owner 已授權並已刪除的確切路徑：
-  `/private/var/folders/6_/g4v6317d6j5djb3gdllp9_nm0000gn/T/pytest-of-chrischiu/`。
+- external-to-checkout rejection probe 必須完全留在真 workspace 內，以 nested fake
+  checkout 驗證 containment，不得保存或引用任何個人系統路徑。
 - 不以 agent 記憶或文件提醒作為唯一防護。
 - 不改 application runtime 的 tempfile policy。
 - 不修改 `config/models.yaml.example`。
@@ -38,9 +38,10 @@ Blocked by: none
   probe 寫入該 worktree 自己的 `.scratch/pytest-runtime/`。
 - Full gate：`600 passed`（原基線 597 + 新增 3）。
 - Safety incident：首次 red subprocess 雖設定 local `TMPDIR`，但 driver 尚未先建立
-  該目錄，Python 因而 fallback 到 `/private/tmp/pytest-of-chrischiu/`。Executor
-  未讀取、列出或刪除該未授權路徑；已向 Orchestrator 揭露，並修正 driver 在每次
-  subprocess 前建立 local system temp。後續所有 probe 均保持 checkout-local。
-- Independent review：Standards PASS、Spec PASS；Reviewer 的 unset
+  該目錄，Python 因而 fallback 到 system-managed external temp。Executor 未讀取、
+  列出或刪除該未授權內容；已向 Orchestrator 揭露，並修正 driver 在每次 subprocess
+  前建立 local system temp。後續所有 probe 均保持 checkout-local。
+- Independent review：Spec PASS；Reviewer 的 unset
   `TMPDIR`／`TMP`／`TEMP`、default、explicit-inside 與 repo-root cwd probes 均解析
-  到目前 worktree。工具無 Terra selector，使用 assigned runtime。
+  到目前 worktree。Standards 要求移除 repository 中殘留的個人外部路徑後再複驗。
+  工具無 Terra selector，使用 assigned runtime。
