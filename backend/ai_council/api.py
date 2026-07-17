@@ -3615,13 +3615,15 @@ def live_meeting_snapshot(
     mode: ModeDefinition,
 ) -> tuple[list[dict[str, Any]], str]:
     """Read events and job state without publishing a torn settled projection."""
-    was_running = jobs.is_running(meeting_id)
+    was_running, revision_before = jobs.lifecycle_state(meeting_id)
     events = repository.read_events(meeting_id)
-    is_running = jobs.is_running(meeting_id)
-    if was_running and not is_running:
+    is_running, revision_after = jobs.lifecycle_state(meeting_id)
+    if not is_running and (was_running or revision_before != revision_after):
         # The operation may append its final events between the first read and the
-        # lifecycle check. Once the Future is done all operation writes are complete,
-        # so one fresh read gives callers the matching settled event snapshot.
+        # lifecycle check. The revision also catches a whole fast operation that starts
+        # and finishes between two otherwise identical non-running observations. Once
+        # the Future is done all operation writes are complete, so one fresh read gives
+        # callers the matching settled event snapshot.
         events = repository.read_events(meeting_id)
     active_events = DeliberationEpochs.view(events).active_events
     return events, live_activity_status(active_events, is_running, mode)
@@ -3896,6 +3898,7 @@ class MeetingJobManager:
     def __init__(self) -> None:
         self._executor = ThreadPoolExecutor(max_workers=4, thread_name_prefix="ai-council")
         self._running: dict[str, Future[None]] = {}
+        self._lifecycle_revisions: dict[str, int] = {}
         self._lock = threading.Lock()
 
     def start(self, meeting_id: str, operation: Callable[[], None]) -> bool:
@@ -3905,13 +3908,22 @@ class MeetingJobManager:
                 return False
             future = self._executor.submit(operation)
             self._running[meeting_id] = future
+            self._lifecycle_revisions[meeting_id] = (
+                self._lifecycle_revisions.get(meeting_id, 0) + 1
+            )
         future.add_done_callback(lambda completed: self._finish(meeting_id, completed))
         return True
 
     def is_running(self, meeting_id: str) -> bool:
+        return self.lifecycle_state(meeting_id)[0]
+
+    def lifecycle_state(self, meeting_id: str) -> tuple[bool, int]:
         with self._lock:
             future = self._running.get(meeting_id)
-            return future is not None and not future.done()
+            return (
+                future is not None and not future.done(),
+                self._lifecycle_revisions.get(meeting_id, 0),
+            )
 
     def _finish(self, meeting_id: str, completed: Future[None]) -> None:
         if not completed.cancelled() and completed.exception() is not None:

@@ -71,3 +71,15 @@ Blocked by: none
   暫存目錄；Executor 未讀取、列出或清理外部內容。發現後所有 pytest gate 改用
   worktree `.scratch/courtroom-async-settlement/pytest-*` 的明示 `TMPDIR`，並在完成後
   精確清理 repo-local artifacts。
+- Review fix：雙 boolean snapshot 仍可能漏掉 `false → start/finish → false` 的 ABA。
+  `MeetingJobManager.lifecycle_state()` 現在在同一 lock 回傳 running 與每場成功 start
+  才遞增的 revision；non-running 且 revision 改變時必須重讀 events。Regression 以
+  completion callback 控制整個 job 在單次 read 內完成，舊版穩定得到 `events=[]`、
+  `reads=1`，修復後取得 completed event、`reads=2`。
+- Spec seams：新增 controlled WebSocket test，禁止 completed frame 只含部分 arguments；
+  新增 arguments／ruling／final 三次 job release 後 public action/final projection test；
+  frontend `waitForSettledProjection()` 以 injected wait/load/isCurrent 驗證 running 會繼續、
+  late older refresh 不得發布，並由 `useCouncil` 的 settlement generation 使用。
+- Review-fix targeted：backend settlement 4 passed；job lifecycle／既有 WebSocket 7 passed；
+  frontend unit 50 passed；build 通過；雙爭點與刑事 courtroom Chromium 2 passed，
+  另一次雙爭點 Chromium 1 passed。

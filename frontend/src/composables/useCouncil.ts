@@ -7,6 +7,7 @@ import { applyModeScene } from '../scenes'
 import { roleDisplayName } from '../presentation'
 import { canLeaveMeetingSettings } from '../meetingSettingsNavigation'
 import { projectOperationStatusText } from '../operationStatus'
+import { waitForSettledProjection } from '../meetingSettlement'
 import {
   chairmanActionBlockReason,
   chairmanActionOptions,
@@ -274,6 +275,7 @@ export function useCouncil() {
   let assignmentSaveGeneration = 0
   let meetingSelectionGeneration = 0
   let meetingOutputGeneration = 0
+  let meetingSettlementGeneration = 0
 
   // event_ids this session has already processed for the currently-open meeting - lets
   // the WS handler tell a genuinely new event apart from one merely being resent (every
@@ -596,6 +598,7 @@ export function useCouncil() {
   }
 
   async function openMeeting(meetingId: string) {
+    ++meetingSettlementGeneration
     const selectionGeneration = ++meetingSelectionGeneration
     ++meetingOutputGeneration
     // Only reset the queue when actually switching meetings. requestSelectedRoleResponse /
@@ -809,27 +812,29 @@ export function useCouncil() {
     // Completion events can be broadcast while the backend job still owns its running
     // slot. Poll the read projection until that slot is released so workflow-only
     // fields (courtroom status/actions/rulings) become visible without a page reload.
-    for (let attempt = 0; attempt < 3600; attempt += 1) {
-      await new Promise((resolve) => setTimeout(resolve, 250))
-      if (selectedMeeting.value?.meeting_id !== meetingId) return
-      try {
-        const refreshed = await getMeeting(meetingId)
-        if (selectedMeeting.value?.meeting_id !== meetingId) return
-        if (refreshed.activity_status === 'running') continue
-        selectedMeeting.value = refreshed
-        const generation = ++meetingOutputGeneration
-        const refreshedTranscript = await getTranscript(meetingId)
-        if (generation !== meetingOutputGeneration || selectedMeeting.value?.meeting_id !== meetingId) return
-        transcript.value = refreshedTranscript
-        const refreshedMeetings = await getMeetings()
-        if (generation !== meetingOutputGeneration || selectedMeeting.value?.meeting_id !== meetingId) return
-        meetings.value = refreshedMeetings
-        return
-      } catch (caught) {
-        if (selectedMeeting.value?.meeting_id !== meetingId) return
-        error.value = caught instanceof Error ? caught.message : String(caught)
-        return
-      }
+    const settlementGeneration = ++meetingSettlementGeneration
+    const isCurrent = () => (
+      settlementGeneration === meetingSettlementGeneration &&
+      selectedMeeting.value?.meeting_id === meetingId
+    )
+    try {
+      const refreshed = await waitForSettledProjection({
+        load: () => getMeeting(meetingId),
+        wait: () => new Promise((resolve) => setTimeout(resolve, 250)),
+        isCurrent,
+      })
+      if (!refreshed || !isCurrent()) return
+      selectedMeeting.value = refreshed
+      const generation = ++meetingOutputGeneration
+      const refreshedTranscript = await getTranscript(meetingId)
+      if (generation !== meetingOutputGeneration || !isCurrent()) return
+      transcript.value = refreshedTranscript
+      const refreshedMeetings = await getMeetings()
+      if (generation !== meetingOutputGeneration || !isCurrent()) return
+      meetings.value = refreshedMeetings
+    } catch (caught) {
+      if (!isCurrent()) return
+      error.value = caught instanceof Error ? caught.message : String(caught)
     }
   }
 
