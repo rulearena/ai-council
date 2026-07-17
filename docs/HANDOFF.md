@@ -42,7 +42,7 @@ Backlog 86「會議名稱／AI 目標、中文呈現與定向追問 UX」已實�
 
 Backlog 87「主席操作整合、會議資訊編輯與逐一爭點法院流程」已實作並通過 Standards/Spec 雙軸 review、完整驗收與 direct browser smoke，狀態為 `implemented / awaiting acceptance`。主席從同一 composer 選擇補充／全體／定向回應；title 在 idle 可編輯，courtroom goal 在爭點確認後唯讀。Courtroom 必須先編修確認 docket，之後依檢察官 → 辯護律師 → 檢察官反駁逐點攻防，每個 ruling 與 next issue 都由主席明示推進，全部裁定完成後才可 final verdict。執行計畫：`docs/plans/2026-07-14-chairman-courtroom-flow.md`；ticket：`.scratch/chairman-courtroom-flow/`。
 
-Backlog 88「審議生命週期、案卷版本與民刑事法院體驗重整」已完成 Human Owner 驗收退回的 action IA 修補並再次通過 Standards/Spec 雙軸 review，狀態為 `implemented / awaiting acceptance`。舊法院案件類型只從會議設定原子儲存；法院 composer 不再顯示語意不實的「請全體回應」；正式流程使用短 CTA 與明確等待狀態，結案／取消 lifecycle 不會被 workflow 文案覆蓋。所有 mode 的 epoch、案卷版本、民刑事 profile 與歷史 revision 契約維持不變。執行計畫：`docs/plans/2026-07-15-deliberation-lifecycle-ux.md`、`docs/plans/2026-07-16-courtroom-action-ia-acceptance-fix.md`；ticket：`.scratch/deliberation-lifecycle-ux/`。驗收期間另發現且在 main 重現的法院 async refresh race 已記錄為 backlog #89，未納入本批。
+Backlog 88「審議生命週期、案卷版本與民刑事法院體驗重整」已完成 Human Owner 驗收退回的 action IA 修補並再次通過 Standards/Spec 雙軸 review，Human Owner 於 2026-07-17 驗收通過，狀態為 `accepted / done`。舊法院案件類型只從會議設定原子儲存；法院 composer 不再顯示語意不實的「請全體回應」；正式流程使用短 CTA 與明確等待狀態，結案／取消 lifecycle 不會被 workflow 文案覆蓋。所有 mode 的 epoch、案卷版本、民刑事 profile 與歷史 revision 契約維持不變。執行計畫：`docs/plans/2026-07-15-deliberation-lifecycle-ux.md`、`docs/plans/2026-07-16-courtroom-action-ia-acceptance-fix.md`；ticket：`.scratch/deliberation-lifecycle-ux/`。驗收期間另發現且在 main 重現的法院 async refresh race 已記錄為 backlog #89，未納入本批。
 
 已完成的 Evidence to Verdict 範圍：
 
@@ -118,5 +118,5 @@ Backlog 88「審議生命週期、案卷版本與民刑事法院體驗重整」�
 - Backlog 85 已實作、雙軸 review、291 backend／12 unit／build／69 Chromium 與 direct browser smoke 通過，等待 Human Owner acceptance。
 - Backlog 86 已實作、雙軸 review、305 backend／19 unit／build／71 Chromium 與 direct browser smoke 通過，等待 Human Owner acceptance。
 - Backlog 87 已實作、雙軸 review、345 backend／35 unit／build／77 Chromium 與 direct browser smoke 通過，狀態為 `implemented / awaiting acceptance`。
-- Backlog 88 acceptance 修補已實作並再次通過雙軸 review、589 backend／48 unit／build、相關 targeted Chromium 與 direct browser smoke；完整 Chromium 受 main 可重現的 backlog #89 race 影響為 89/90，狀態為 `implemented / awaiting acceptance`。
+- Backlog 88 acceptance 修補已實作並再次通過雙軸 review、589 backend／48 unit／build、相關 targeted Chromium 與 direct browser smoke；Human Owner 於 2026-07-17 驗收通過，狀態為 `accepted / done`。完整 Chromium 仍受 main 可重現的 backlog #89 race 影響為 89/90。
 - 使用者已裁定：個人版不做多人/帳號（backlog 有註記）；案卷 Phase 2/RAG 仍延後到 backlog 79。
