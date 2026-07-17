@@ -1,7 +1,7 @@
 # 01 — Deterministic courtroom settlement
 
 Type: task
-Status: implemented / awaiting review
+Status: implemented / awaiting acceptance
 Blocked by: none
 
 ## 目標
@@ -62,8 +62,8 @@ Blocked by: none
   從 running 轉為 released，先重讀完整 events 才發布 non-running projection。
   沒有增加 timeout、production sleep、coordinator 長鎖、event schema 或 courtroom
   state machine 變更。
-- Frontend production 無修改：既有 generation／meeting-id guards 未出現反證；
-  backend public seam 已精確捕捉並修復 torn projection。
+- 初次修復未修改 frontend production；Spec review 後補上最小 settlement coordinator，
+  只負責 running／settled 與 request generation freshness，不推導 courtroom action。
 - Commit：`eaa059ff51b950a43f368edcc5561205b9aef8ef`；另以 follow-up test commit
   將 harness 的 polling wait 改為 job completion callback。
 - 執行環境揭露：工具無模型 selector，使用 assigned runtime 以 Executor 身分完成。
@@ -89,3 +89,9 @@ Blocked by: none
   發布，交給 frontend 下一輪 polling，不使用 loop、sleep 或長鎖。直接 manager contract
   tests 同時固定 accepted start 才增 revision、running rejected start 不增、done callback
   不得移除較新的 job，以及 exception finish 保留 revision。相關 targeted 8 passed。
+- 最終獨立 review：Standards PASS、Spec PASS；工具無 Terra selector，兩位 Reviewer
+  均使用 assigned runtime，與 Executor 分離。
+- Post-review gates：backend 597 passed；frontend unit 50 passed；build 通過；完整
+  Chromium 90/90；direct Chromium 由 UI 實際完成 arguments → ruling → final，輸出
+  `DIRECT_SMOKE_OK arguments->ruling->final without reload`。所有 repo-local runtime、
+  pytest、Playwright、build artifacts 與 node_modules symlink 已精確清理。
