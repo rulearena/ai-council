@@ -1,7 +1,7 @@
 # 01 — Deterministic courtroom settlement
 
 Type: task
-Status: implemented / awaiting acceptance
+Status: accepted / done
 Blocked by: none
 
 ## 目標

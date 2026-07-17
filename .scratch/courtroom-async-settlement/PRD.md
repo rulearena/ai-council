@@ -1,6 +1,6 @@
 # Backlog #89：法院非同步完成狀態收斂
 
-Status: implemented / awaiting acceptance
+Status: accepted / done
 
 ## 問題
 
