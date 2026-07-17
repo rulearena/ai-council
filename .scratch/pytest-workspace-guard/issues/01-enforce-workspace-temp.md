@@ -41,7 +41,12 @@ Blocked by: none
   該目錄，Python 因而 fallback 到 system-managed external temp。Executor 未讀取、
   列出或刪除該未授權內容；已向 Orchestrator 揭露，並修正 driver 在每次 subprocess
   前建立 local system temp。後續所有 probe 均保持 checkout-local。
-- Independent review：Spec PASS；Reviewer 的 unset
+- Independent review：Standards PASS、Spec PASS；Reviewer 的 unset
   `TMPDIR`／`TMP`／`TEMP`、default、explicit-inside 與 repo-root cwd probes 均解析
-  到目前 worktree。Standards 要求移除 repository 中殘留的個人外部路徑後再複驗。
-  工具無 Terra selector，使用 assigned runtime。
+  到目前 worktree。Portable nested-checkout rejection probe 複驗通過，repository
+  不保存 username、個人外部路徑或淘汰 probe 描述。工具無 Terra selector，使用
+  assigned runtime。
+- Post-merge：main 未設定 `TMPDIR`／`--basetemp` 直接執行完整 backend；第一次為
+  既有 0.5 秒 startup health-check 負載門檻單一失敗，該案例單跑通過，第二次完整
+  suite `600 passed`。實際 pytest runtime 全部位於 main `.scratch/pytest-runtime/`，
+  完成後已精確清理；feature worktree／branch 亦已移除。
