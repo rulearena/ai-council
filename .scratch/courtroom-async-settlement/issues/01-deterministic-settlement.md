@@ -64,7 +64,8 @@ Blocked by: none
   state machine 變更。
 - Frontend production 無修改：既有 generation／meeting-id guards 未出現反證；
   backend public seam 已精確捕捉並修復 torn projection。
-- Commit：`eaa059ff51b950a43f368edcc5561205b9aef8ef`。
+- Commit：`eaa059ff51b950a43f368edcc5561205b9aef8ef`；另以 follow-up test commit
+  將 harness 的 polling wait 改為 job completion callback。
 - 執行環境揭露：工具無模型 selector，使用 assigned runtime 以 Executor 身分完成。
 - 測試環境違規：最初數次 pytest 未明示 `TMPDIR`，pytest 自動在 workspace 外建立
   暫存目錄；Executor 未讀取、列出或清理外部內容。發現後所有 pytest gate 改用

@@ -7,7 +7,7 @@ import threading
 import time
 import urllib.error
 import urllib.parse
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import Future, ThreadPoolExecutor
 from pathlib import Path
 
 import pytest
@@ -4474,10 +4474,12 @@ def test_courtroom_get_does_not_report_settled_from_an_incomplete_event_snapshot
     first_phase_written = threading.Event()
     release_remaining_phases = threading.Event()
     final_phase_written = threading.Event()
+    job_released = threading.Event()
     original_complete = MockModelAdapter.complete
     original_append = MeetingRepository.append_event
     original_read = MeetingRepository.read_events
     original_is_running = MeetingJobManager.is_running
+    original_finish = MeetingJobManager._finish
     model_call_count = 0
     stale_reader_thread: int | None = None
 
@@ -4520,16 +4522,23 @@ def test_courtroom_get_does_not_report_settled_from_an_incomplete_event_snapshot
         meeting_id: str,
     ) -> bool:
         if stale_reader_thread == threading.get_ident():
-            deadline = time.monotonic() + 2
-            while original_is_running(self, meeting_id) and time.monotonic() < deadline:
-                threading.Event().wait(0.001)
+            assert job_released.wait(timeout=2)
             assert not original_is_running(self, meeting_id)
         return original_is_running(self, meeting_id)
+
+    def track_job_release(
+        self: MeetingJobManager,
+        meeting_id: str,
+        completed: Future[None],
+    ) -> None:
+        original_finish(self, meeting_id, completed)
+        job_released.set()
 
     monkeypatch.setattr(MockModelAdapter, "complete", controlled_complete)
     monkeypatch.setattr(MeetingRepository, "append_event", tracked_append)
     monkeypatch.setattr(MeetingRepository, "read_events", release_after_snapshot)
     monkeypatch.setattr(MeetingJobManager, "is_running", wait_for_release_before_reporting_status)
+    monkeypatch.setattr(MeetingJobManager, "_finish", track_job_release)
 
     client = TestClient(create_test_app(tmp_path))
     meeting_id = client.post(
