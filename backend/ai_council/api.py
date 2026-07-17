@@ -735,7 +735,13 @@ def create_app(
     @app.get("/meetings/{meeting_id}")
     def get_meeting(meeting_id: str) -> dict[str, Any]:
         metadata = metadata_store.get(meeting_id)
-        all_events = repository.read_events(meeting_id)
+        mode = meeting_mode(mode_catalog, metadata)
+        all_events, activity_status = live_meeting_snapshot(
+            repository,
+            jobs,
+            meeting_id,
+            mode,
+        )
         deliberation = DeliberationEpochs.view(all_events)
         events = deliberation.active_events
         workflow_events = deliberation.workflow_events
@@ -744,14 +750,10 @@ def create_app(
             **project_meeting_summary(
                 metadata,
                 all_events,
-                mode=meeting_mode(mode_catalog, metadata),
+                mode=mode,
                 model_pricing=model_pricing_by_id(model_repository),
                 meeting_assignments=meeting_assignments,
-                activity_status=live_activity_status(
-                    events,
-                    jobs.is_running(meeting_id),
-                    meeting_mode(mode_catalog, metadata),
-                ),
+                activity_status=activity_status,
                 live_events=events,
                 workflow_events=workflow_events,
             ),
@@ -2449,9 +2451,14 @@ def create_app(
         metadata = metadata_store.get(meeting_id)
         mode = meeting_mode(mode_catalog, metadata)
         await websocket.accept()
-        view = DeliberationEpochs.view(repository.read_events(meeting_id))
+        all_events, activity_status = live_meeting_snapshot(
+            repository,
+            jobs,
+            meeting_id,
+            mode,
+        )
+        view = DeliberationEpochs.view(all_events)
         events = view.active_events
-        activity_status = live_activity_status(events, jobs.is_running(meeting_id), mode)
         try:
             await websocket.send_json(
                 {
@@ -2469,10 +2476,15 @@ def create_app(
                     await asyncio.wait_for(websocket.receive_text(), timeout=0.1)
                 except TimeoutError:
                     pass
-                view = DeliberationEpochs.view(repository.read_events(meeting_id))
+                all_events, next_activity_status = live_meeting_snapshot(
+                    repository,
+                    jobs,
+                    meeting_id,
+                    mode,
+                )
+                view = DeliberationEpochs.view(all_events)
                 events = view.active_events
                 stream_events = stream_bus.events_since(meeting_id, stream_cursor)
-                next_activity_status = live_activity_status(events, jobs.is_running(meeting_id), mode)
                 epoch_changed = view.active_epoch.id != epoch_id
                 if (
                     len(events) != event_count
@@ -3594,6 +3606,25 @@ def live_activity_status(
     if projected in {"closed", "cancelled"}:
         return projected
     return "running" if is_running else projected
+
+
+def live_meeting_snapshot(
+    repository: MeetingRepository,
+    jobs: MeetingJobManager,
+    meeting_id: str,
+    mode: ModeDefinition,
+) -> tuple[list[dict[str, Any]], str]:
+    """Read events and job state without publishing a torn settled projection."""
+    was_running = jobs.is_running(meeting_id)
+    events = repository.read_events(meeting_id)
+    is_running = jobs.is_running(meeting_id)
+    if was_running and not is_running:
+        # The operation may append its final events between the first read and the
+        # lifecycle check. Once the Future is done all operation writes are complete,
+        # so one fresh read gives callers the matching settled event snapshot.
+        events = repository.read_events(meeting_id)
+    active_events = DeliberationEpochs.view(events).active_events
+    return events, live_activity_status(active_events, is_running, mode)
 
 
 def project_activity_status_for_mode(

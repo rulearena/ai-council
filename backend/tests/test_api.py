@@ -4467,6 +4467,104 @@ def test_courtroom_start_request_models_cannot_bypass_issue_workflow(tmp_path: P
     assert client.get(f"/meetings/{meeting_id}").json()["events"] == []
 
 
+def test_courtroom_get_does_not_report_settled_from_an_incomplete_event_snapshot(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    first_phase_written = threading.Event()
+    release_remaining_phases = threading.Event()
+    final_phase_written = threading.Event()
+    original_complete = MockModelAdapter.complete
+    original_append = MeetingRepository.append_event
+    original_read = MeetingRepository.read_events
+    original_is_running = MeetingJobManager.is_running
+    model_call_count = 0
+    stale_reader_thread: int | None = None
+
+    def controlled_complete(self: MockModelAdapter, request: ModelRequest) -> ModelResponse:
+        nonlocal model_call_count
+        model_call_count += 1
+        if model_call_count > 1:
+            assert release_remaining_phases.wait(timeout=2)
+        return original_complete(self, request)
+
+    def tracked_append(
+        self: MeetingRepository,
+        meeting_id: str,
+        event: dict[str, object],
+    ) -> None:
+        original_append(self, meeting_id, event)
+        if event.get("issue_phase") == "charge":
+            first_phase_written.set()
+        if event.get("issue_phase") == "rebuttal":
+            final_phase_written.set()
+
+    def release_after_snapshot(
+        self: MeetingRepository,
+        meeting_id: str,
+    ) -> list[dict[str, object]]:
+        nonlocal stale_reader_thread
+        events = original_read(self, meeting_id)
+        if (
+            first_phase_written.is_set()
+            and not release_remaining_phases.is_set()
+            and not threading.current_thread().name.startswith("ai-council")
+        ):
+            stale_reader_thread = threading.get_ident()
+            release_remaining_phases.set()
+            assert final_phase_written.wait(timeout=2)
+        return events
+
+    def wait_for_release_before_reporting_status(
+        self: MeetingJobManager,
+        meeting_id: str,
+    ) -> bool:
+        if stale_reader_thread == threading.get_ident():
+            deadline = time.monotonic() + 2
+            while original_is_running(self, meeting_id) and time.monotonic() < deadline:
+                threading.Event().wait(0.001)
+            assert not original_is_running(self, meeting_id)
+        return original_is_running(self, meeting_id)
+
+    monkeypatch.setattr(MockModelAdapter, "complete", controlled_complete)
+    monkeypatch.setattr(MeetingRepository, "append_event", tracked_append)
+    monkeypatch.setattr(MeetingRepository, "read_events", release_after_snapshot)
+    monkeypatch.setattr(MeetingJobManager, "is_running", wait_for_release_before_reporting_status)
+
+    client = TestClient(create_test_app(tmp_path))
+    meeting_id = client.post(
+        "/meetings",
+        json={
+            "title": "Deterministic settlement",
+            "goal": "Project the next action",
+            "mode_id": "courtroom",
+            "case_type": "civil",
+        },
+    ).json()["meeting_id"]
+    assert client.put(
+        f"/meetings/{meeting_id}/courtroom/issues",
+        json={"revision": 0, "issues": [{"title": "責任是否成立"}]},
+    ).status_code == 200
+    assert client.post(
+        f"/meetings/{meeting_id}/courtroom/issues/confirm",
+        json={"revision": 1},
+    ).status_code == 200
+    assert client.post(
+        f"/meetings/{meeting_id}/courtroom/issues/issue-1/arguments"
+    ).status_code == 202
+    assert first_phase_written.wait(timeout=2)
+
+    projected = client.get(f"/meetings/{meeting_id}").json()
+
+    assert projected["activity_status"] == "completed"
+    assert projected["courtroom"]["issues"][0]["status"] == "awaiting-ruling"
+    assert projected["courtroom"]["available_actions"] == [
+        "submit-ruling",
+        "add-note",
+        "directed-response",
+    ]
+
+
 def test_debate_inputs_reach_prompts(tmp_path: Path) -> None:
     app = create_test_app(tmp_path)
     client = TestClient(app)
