@@ -1,7 +1,7 @@
 # 01 — Enforce workspace-local pytest temp
 
 Type: task
-Status: awaiting review
+Status: implemented / awaiting acceptance
 Blocked by: none
 
 ## TDD seams
@@ -40,3 +40,6 @@ Blocked by: none
   該目錄，Python 因而 fallback 到 `/private/tmp/pytest-of-chrischiu/`。Executor
   未讀取、列出或刪除該未授權路徑；已向 Orchestrator 揭露，並修正 driver 在每次
   subprocess 前建立 local system temp。後續所有 probe 均保持 checkout-local。
+- Independent review：Standards PASS、Spec PASS；Reviewer 的 unset
+  `TMPDIR`／`TMP`／`TEMP`、default、explicit-inside 與 repo-root cwd probes 均解析
+  到目前 worktree。工具無 Terra selector，使用 assigned runtime。
