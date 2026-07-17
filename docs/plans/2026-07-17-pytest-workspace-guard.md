@@ -5,7 +5,7 @@ Fixed point: `bbccf47`
 ## Slice 1 — CLI red loop
 
 - 以目前 pytest CLI 實際印出 `tmp_path` 與 `tempfile.gettempdir()`。
-- 使用已授權確切外部路徑證明現況接受 external `--basetemp`。
+- 在真 workspace 內建立 nested fake checkout，證明現況接受 fake checkout 外的 `--basetemp`，不得接觸任何 workspace 外路徑。
 
 ## Slice 2 — Repository guard
 
