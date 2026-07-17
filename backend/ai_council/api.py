@@ -735,7 +735,13 @@ def create_app(
     @app.get("/meetings/{meeting_id}")
     def get_meeting(meeting_id: str) -> dict[str, Any]:
         metadata = metadata_store.get(meeting_id)
-        all_events = repository.read_events(meeting_id)
+        mode = meeting_mode(mode_catalog, metadata)
+        all_events, activity_status = live_meeting_snapshot(
+            repository,
+            jobs,
+            meeting_id,
+            mode,
+        )
         deliberation = DeliberationEpochs.view(all_events)
         events = deliberation.active_events
         workflow_events = deliberation.workflow_events
@@ -744,14 +750,10 @@ def create_app(
             **project_meeting_summary(
                 metadata,
                 all_events,
-                mode=meeting_mode(mode_catalog, metadata),
+                mode=mode,
                 model_pricing=model_pricing_by_id(model_repository),
                 meeting_assignments=meeting_assignments,
-                activity_status=live_activity_status(
-                    events,
-                    jobs.is_running(meeting_id),
-                    meeting_mode(mode_catalog, metadata),
-                ),
+                activity_status=activity_status,
                 live_events=events,
                 workflow_events=workflow_events,
             ),
@@ -2449,9 +2451,14 @@ def create_app(
         metadata = metadata_store.get(meeting_id)
         mode = meeting_mode(mode_catalog, metadata)
         await websocket.accept()
-        view = DeliberationEpochs.view(repository.read_events(meeting_id))
+        all_events, activity_status = live_meeting_snapshot(
+            repository,
+            jobs,
+            meeting_id,
+            mode,
+        )
+        view = DeliberationEpochs.view(all_events)
         events = view.active_events
-        activity_status = live_activity_status(events, jobs.is_running(meeting_id), mode)
         try:
             await websocket.send_json(
                 {
@@ -2469,10 +2476,15 @@ def create_app(
                     await asyncio.wait_for(websocket.receive_text(), timeout=0.1)
                 except TimeoutError:
                     pass
-                view = DeliberationEpochs.view(repository.read_events(meeting_id))
+                all_events, next_activity_status = live_meeting_snapshot(
+                    repository,
+                    jobs,
+                    meeting_id,
+                    mode,
+                )
+                view = DeliberationEpochs.view(all_events)
                 events = view.active_events
                 stream_events = stream_bus.events_since(meeting_id, stream_cursor)
-                next_activity_status = live_activity_status(events, jobs.is_running(meeting_id), mode)
                 epoch_changed = view.active_epoch.id != epoch_id
                 if (
                     len(events) != event_count
@@ -3596,6 +3608,33 @@ def live_activity_status(
     return "running" if is_running else projected
 
 
+def live_meeting_snapshot(
+    repository: MeetingRepository,
+    jobs: MeetingJobManager,
+    meeting_id: str,
+    mode: ModeDefinition,
+) -> tuple[list[dict[str, Any]], str]:
+    """Read events and job state without publishing a torn settled projection."""
+    was_running, revision_before = jobs.lifecycle_state(meeting_id)
+    events = repository.read_events(meeting_id)
+    is_running, revision_after = jobs.lifecycle_state(meeting_id)
+    if not is_running and (was_running or revision_before != revision_after):
+        # The operation may append its final events between the first read and the
+        # lifecycle check. The revision also catches a whole fast operation that starts
+        # and finishes between two otherwise identical non-running observations. Once
+        # the Future is done all operation writes are complete, so one fresh read gives
+        # callers the matching settled event snapshot.
+        events = repository.read_events(meeting_id)
+        verified_running, verified_revision = jobs.lifecycle_state(meeting_id)
+        if verified_running or verified_revision != revision_after:
+            # A second lifecycle transition overlapped the bounded reread. Publishing
+            # that snapshot as settled would repeat the same torn-read bug; mark it
+            # running so the frontend performs a fresh poll instead of looping here.
+            is_running = True
+    active_events = DeliberationEpochs.view(events).active_events
+    return events, live_activity_status(active_events, is_running, mode)
+
+
 def project_activity_status_for_mode(
     events: list[dict[str, Any]],
     mode: ModeDefinition | None,
@@ -3865,6 +3904,7 @@ class MeetingJobManager:
     def __init__(self) -> None:
         self._executor = ThreadPoolExecutor(max_workers=4, thread_name_prefix="ai-council")
         self._running: dict[str, Future[None]] = {}
+        self._lifecycle_revisions: dict[str, int] = {}
         self._lock = threading.Lock()
 
     def start(self, meeting_id: str, operation: Callable[[], None]) -> bool:
@@ -3874,13 +3914,22 @@ class MeetingJobManager:
                 return False
             future = self._executor.submit(operation)
             self._running[meeting_id] = future
+            self._lifecycle_revisions[meeting_id] = (
+                self._lifecycle_revisions.get(meeting_id, 0) + 1
+            )
         future.add_done_callback(lambda completed: self._finish(meeting_id, completed))
         return True
 
     def is_running(self, meeting_id: str) -> bool:
+        return self.lifecycle_state(meeting_id)[0]
+
+    def lifecycle_state(self, meeting_id: str) -> tuple[bool, int]:
         with self._lock:
             future = self._running.get(meeting_id)
-            return future is not None and not future.done()
+            return (
+                future is not None and not future.done(),
+                self._lifecycle_revisions.get(meeting_id, 0),
+            )
 
     def _finish(self, meeting_id: str, completed: Future[None]) -> None:
         if not completed.cancelled() and completed.exception() is not None:

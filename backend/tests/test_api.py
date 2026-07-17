@@ -7,7 +7,7 @@ import threading
 import time
 import urllib.error
 import urllib.parse
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import Future, ThreadPoolExecutor
 from pathlib import Path
 
 import pytest
@@ -19,12 +19,14 @@ from ai_council.api import (
     ModelHealthCheckResult,
     ModelHealthCheckStore,
     create_app,
+    live_meeting_snapshot,
 )
 from ai_council.models.adapters import AdapterError, MockModelAdapter, ModelRequest, ModelResponse
 from ai_council.models.config import ModelConfigRepository
 from ai_council.meetings.repository import MeetingRepository
 from ai_council.meetings.deliberation import DeliberationEpochs, RestartCommand
 from ai_council.meetings.case_materials import CaseMaterials
+from ai_council.meetings.modes import ModeDefinition
 
 TEST_BLUE_PROPOSE_TEMPLATE_HASH = "28f2086e8a3af020b64aa6f2b3e3abda9046507388e535b194eb1b9fec80fe7d"
 TEST_OUTPUT_SCHEMA_HASH = "15a45919652be5c70d3fd1690a10d37f876f19a14b2a76cc0f21765def281377"
@@ -2672,6 +2674,228 @@ def test_background_job_manager_observes_unexpected_future_exceptions(caplog) ->
     assert "sensitive provider output" not in caplog.text
 
 
+def test_live_snapshot_reloads_when_a_whole_job_finishes_during_the_event_read() -> None:
+    meeting_id = "meeting-aba"
+    completed_event = {
+        "event_id": f"{meeting_id}:final",
+        "meeting_id": meeting_id,
+        "step_id": "courtroom-r1-final-verdict",
+        "role": "Judge",
+        "status": "completed",
+        "interaction_type": "courtroom-final-verdict",
+    }
+
+    class ObservableJobManager(MeetingJobManager):
+        def __init__(self) -> None:
+            super().__init__()
+            self.released = threading.Event()
+
+        def _finish(self, finished_meeting_id: str, completed: Future[None]) -> None:
+            super()._finish(finished_meeting_id, completed)
+            self.released.set()
+
+    class CompleteJobDuringRead:
+        def __init__(self, manager: ObservableJobManager) -> None:
+            self.manager = manager
+            self.events: list[dict[str, object]] = []
+            self.read_count = 0
+
+        def read_events(self, requested_meeting_id: str) -> list[dict[str, object]]:
+            assert requested_meeting_id == meeting_id
+            self.read_count += 1
+            snapshot = list(self.events)
+            if self.read_count == 1:
+                assert self.manager.start(meeting_id, lambda: self.events.append(completed_event))
+                assert self.manager.released.wait(timeout=2)
+            return snapshot
+
+    manager = ObservableJobManager()
+    repository = CompleteJobDuringRead(manager)
+    mode = ModeDefinition(
+        id="courtroom",
+        name="Courtroom",
+        category="relay",
+        tagline="",
+        when_to_use="",
+        sop=[],
+        default_scene="courtroom",
+        inputs=[],
+        roles=[],
+    )
+
+    events, status = live_meeting_snapshot(repository, manager, meeting_id, mode)  # type: ignore[arg-type]
+
+    assert events == [completed_event]
+    assert status == "completed"
+    assert repository.read_count == 2
+
+
+def test_live_snapshot_stays_running_when_another_job_finishes_during_the_reread() -> None:
+    meeting_id = "meeting-back-to-back"
+    completed_events = [
+        {
+            "event_id": f"{meeting_id}:completed-{index}",
+            "meeting_id": meeting_id,
+            "step_id": f"courtroom-step-{index}",
+            "role": "Judge",
+            "status": "completed",
+            "interaction_type": "courtroom-final-verdict",
+        }
+        for index in (1, 2)
+    ]
+
+    class ObservableJobManager(MeetingJobManager):
+        def __init__(self) -> None:
+            super().__init__()
+            self.released = [threading.Event(), threading.Event()]
+            self.finish_count = 0
+
+        def _finish(self, finished_meeting_id: str, completed: Future[None]) -> None:
+            super()._finish(finished_meeting_id, completed)
+            self.released[self.finish_count].set()
+            self.finish_count += 1
+
+    class CompleteOneJobPerRead:
+        def __init__(self, manager: ObservableJobManager) -> None:
+            self.manager = manager
+            self.events: list[dict[str, object]] = []
+            self.read_count = 0
+
+        def read_events(self, requested_meeting_id: str) -> list[dict[str, object]]:
+            assert requested_meeting_id == meeting_id
+            snapshot = list(self.events)
+            if self.read_count < 2:
+                operation_index = self.read_count
+                self.read_count += 1
+                assert self.manager.start(
+                    meeting_id,
+                    lambda: self.events.append(completed_events[operation_index]),
+                )
+                assert self.manager.released[operation_index].wait(timeout=2)
+            else:
+                self.read_count += 1
+            return snapshot
+
+    manager = ObservableJobManager()
+    repository = CompleteOneJobPerRead(manager)
+    mode = ModeDefinition(
+        id="courtroom",
+        name="Courtroom",
+        category="relay",
+        tagline="",
+        when_to_use="",
+        sop=[],
+        default_scene="courtroom",
+        inputs=[],
+        roles=[],
+    )
+
+    first_events, first_status = live_meeting_snapshot(  # type: ignore[arg-type]
+        repository, manager, meeting_id, mode
+    )
+
+    assert first_events == [completed_events[0]]
+    assert first_status == "running"
+    assert repository.read_count == 2
+
+    settled_events, settled_status = live_meeting_snapshot(  # type: ignore[arg-type]
+        repository, manager, meeting_id, mode
+    )
+    assert settled_events == completed_events
+    assert settled_status == "completed"
+
+
+def test_job_lifecycle_revision_changes_only_for_an_accepted_start() -> None:
+    entered = threading.Event()
+    release = threading.Event()
+    finished = threading.Event()
+
+    class ObservableJobManager(MeetingJobManager):
+        def _finish(self, meeting_id: str, completed: Future[None]) -> None:
+            super()._finish(meeting_id, completed)
+            finished.set()
+
+    def operation() -> None:
+        entered.set()
+        assert release.wait(timeout=2)
+
+    manager = ObservableJobManager()
+    assert manager.lifecycle_state("meeting-revision") == (False, 0)
+    assert manager.start("meeting-revision", operation)
+    assert entered.wait(timeout=2)
+    assert manager.lifecycle_state("meeting-revision") == (True, 1)
+
+    assert not manager.start("meeting-revision", lambda: None)
+    assert manager.lifecycle_state("meeting-revision") == (True, 1)
+
+    release.set()
+    assert finished.wait(timeout=2)
+    assert manager.lifecycle_state("meeting-revision") == (False, 1)
+
+
+def test_done_job_callback_cannot_remove_a_newer_job_or_its_revision() -> None:
+    release_first = threading.Event()
+    first_finish_entered = threading.Event()
+    allow_first_finish = threading.Event()
+    release_second = threading.Event()
+    second_finished = threading.Event()
+
+    class OrderedJobManager(MeetingJobManager):
+        def __init__(self) -> None:
+            super().__init__()
+            self.finish_count = 0
+
+        def _finish(self, meeting_id: str, completed: Future[None]) -> None:
+            self.finish_count += 1
+            if self.finish_count == 1:
+                first_finish_entered.set()
+                assert allow_first_finish.wait(timeout=2)
+            super()._finish(meeting_id, completed)
+            if self.finish_count == 2:
+                second_finished.set()
+
+    def first_operation() -> None:
+        assert release_first.wait(timeout=2)
+
+    def second_operation() -> None:
+        assert release_second.wait(timeout=2)
+
+    manager = OrderedJobManager()
+    assert manager.start("meeting-replacement", first_operation)
+    release_first.set()
+    assert first_finish_entered.wait(timeout=2)
+    assert manager.lifecycle_state("meeting-replacement") == (False, 1)
+
+    assert manager.start("meeting-replacement", second_operation)
+    assert manager.lifecycle_state("meeting-replacement") == (True, 2)
+    allow_first_finish.set()
+    assert manager.lifecycle_state("meeting-replacement") == (True, 2)
+
+    release_second.set()
+    assert second_finished.wait(timeout=2)
+    assert manager.lifecycle_state("meeting-replacement") == (False, 2)
+
+
+def test_exception_finish_preserves_the_accepted_job_revision(caplog) -> None:
+    finished = threading.Event()
+
+    class ObservableJobManager(MeetingJobManager):
+        def _finish(self, meeting_id: str, completed: Future[None]) -> None:
+            super()._finish(meeting_id, completed)
+            finished.set()
+
+    def fail() -> None:
+        raise RuntimeError("expected test failure")
+
+    manager = ObservableJobManager()
+    with caplog.at_level("ERROR", logger="ai_council.api"):
+        assert manager.start("meeting-exception-revision", fail)
+        assert finished.wait(timeout=2)
+
+    assert manager.lifecycle_state("meeting-exception-revision") == (False, 1)
+    assert "Background meeting job failed unexpectedly" in caplog.text
+
+
 def test_update_meeting_tags_replaces_tag_list(tmp_path: Path) -> None:
     app = create_test_app(tmp_path)
     client = TestClient(app)
@@ -4465,6 +4689,248 @@ def test_courtroom_start_request_models_cannot_bypass_issue_workflow(tmp_path: P
 
     assert response.status_code == 409
     assert client.get(f"/meetings/{meeting_id}").json()["events"] == []
+
+
+def test_courtroom_get_does_not_report_settled_from_an_incomplete_event_snapshot(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    first_phase_written = threading.Event()
+    release_remaining_phases = threading.Event()
+    job_released = threading.Event()
+    original_complete = MockModelAdapter.complete
+    original_append = MeetingRepository.append_event
+    original_read = MeetingRepository.read_events
+    original_finish = MeetingJobManager._finish
+    model_call_count = 0
+
+    def controlled_complete(self: MockModelAdapter, request: ModelRequest) -> ModelResponse:
+        nonlocal model_call_count
+        model_call_count += 1
+        if model_call_count > 1:
+            assert release_remaining_phases.wait(timeout=2)
+        return original_complete(self, request)
+
+    def tracked_append(
+        self: MeetingRepository,
+        meeting_id: str,
+        event: dict[str, object],
+    ) -> None:
+        original_append(self, meeting_id, event)
+        if event.get("issue_phase") == "charge":
+            first_phase_written.set()
+
+    def release_after_snapshot(
+        self: MeetingRepository,
+        meeting_id: str,
+    ) -> list[dict[str, object]]:
+        events = original_read(self, meeting_id)
+        if (
+            first_phase_written.is_set()
+            and not release_remaining_phases.is_set()
+            and not threading.current_thread().name.startswith("ai-council")
+        ):
+            release_remaining_phases.set()
+            assert job_released.wait(timeout=2)
+        return events
+
+    def track_job_release(
+        self: MeetingJobManager,
+        meeting_id: str,
+        completed: Future[None],
+    ) -> None:
+        original_finish(self, meeting_id, completed)
+        job_released.set()
+
+    monkeypatch.setattr(MockModelAdapter, "complete", controlled_complete)
+    monkeypatch.setattr(MeetingRepository, "append_event", tracked_append)
+    monkeypatch.setattr(MeetingRepository, "read_events", release_after_snapshot)
+    monkeypatch.setattr(MeetingJobManager, "_finish", track_job_release)
+
+    client = TestClient(create_test_app(tmp_path))
+    meeting_id = client.post(
+        "/meetings",
+        json={
+            "title": "Deterministic settlement",
+            "goal": "Project the next action",
+            "mode_id": "courtroom",
+            "case_type": "civil",
+        },
+    ).json()["meeting_id"]
+    assert client.put(
+        f"/meetings/{meeting_id}/courtroom/issues",
+        json={"revision": 0, "issues": [{"title": "責任是否成立"}]},
+    ).status_code == 200
+    assert client.post(
+        f"/meetings/{meeting_id}/courtroom/issues/confirm",
+        json={"revision": 1},
+    ).status_code == 200
+    assert client.post(
+        f"/meetings/{meeting_id}/courtroom/issues/issue-1/arguments"
+    ).status_code == 202
+    assert first_phase_written.wait(timeout=2)
+
+    projected = client.get(f"/meetings/{meeting_id}").json()
+
+    assert projected["activity_status"] == "completed"
+    assert projected["courtroom"]["issues"][0]["status"] == "awaiting-ruling"
+    assert projected["courtroom"]["available_actions"] == [
+        "submit-ruling",
+        "add-note",
+        "directed-response",
+    ]
+
+
+def test_courtroom_websocket_does_not_publish_completed_with_partial_arguments(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    first_phase_written = threading.Event()
+    release_remaining_phases = threading.Event()
+    job_released = threading.Event()
+    original_complete = MockModelAdapter.complete
+    original_append = MeetingRepository.append_event
+    original_read = MeetingRepository.read_events
+    original_finish = MeetingJobManager._finish
+    model_call_count = 0
+
+    def controlled_complete(self: MockModelAdapter, request: ModelRequest) -> ModelResponse:
+        nonlocal model_call_count
+        model_call_count += 1
+        if model_call_count > 1:
+            assert release_remaining_phases.wait(timeout=2)
+        return original_complete(self, request)
+
+    def tracked_append(
+        self: MeetingRepository,
+        meeting_id: str,
+        event: dict[str, object],
+    ) -> None:
+        original_append(self, meeting_id, event)
+        if event.get("issue_phase") == "charge":
+            first_phase_written.set()
+
+    def release_after_websocket_snapshot(
+        self: MeetingRepository,
+        meeting_id: str,
+    ) -> list[dict[str, object]]:
+        events = original_read(self, meeting_id)
+        if (
+            first_phase_written.is_set()
+            and not release_remaining_phases.is_set()
+            and not threading.current_thread().name.startswith("ai-council")
+        ):
+            release_remaining_phases.set()
+            assert job_released.wait(timeout=2)
+        return events
+
+    def track_job_release(
+        self: MeetingJobManager,
+        meeting_id: str,
+        completed: Future[None],
+    ) -> None:
+        original_finish(self, meeting_id, completed)
+        job_released.set()
+
+    monkeypatch.setattr(MockModelAdapter, "complete", controlled_complete)
+    monkeypatch.setattr(MeetingRepository, "append_event", tracked_append)
+    monkeypatch.setattr(MeetingRepository, "read_events", release_after_websocket_snapshot)
+    monkeypatch.setattr(MeetingJobManager, "_finish", track_job_release)
+
+    client = TestClient(create_test_app(tmp_path))
+    meeting_id = client.post(
+        "/meetings",
+        json={
+            "title": "WebSocket settlement",
+            "goal": "Project all argument phases",
+            "mode_id": "courtroom",
+            "case_type": "civil",
+        },
+    ).json()["meeting_id"]
+    assert client.put(
+        f"/meetings/{meeting_id}/courtroom/issues",
+        json={"revision": 0, "issues": [{"title": "責任是否成立"}]},
+    ).status_code == 200
+    assert client.post(
+        f"/meetings/{meeting_id}/courtroom/issues/confirm",
+        json={"revision": 1},
+    ).status_code == 200
+
+    with client.websocket_connect(f"/meetings/{meeting_id}/events") as websocket:
+        assert websocket.receive_json()["activity_status"] == "idle"
+        assert client.post(
+            f"/meetings/{meeting_id}/courtroom/issues/issue-1/arguments"
+        ).status_code == 202
+        streamed_events: list[dict[str, object]] = []
+        while True:
+            update = websocket.receive_json()
+            streamed_events.extend(update["events"])
+            if update["activity_status"] == "completed":
+                break
+
+    assert [
+        event.get("issue_phase")
+        for event in streamed_events
+        if event.get("status") == "completed"
+    ] == ["charge", "defense", "rebuttal"]
+
+
+def test_courtroom_each_job_release_projects_its_next_public_action(tmp_path: Path) -> None:
+    client = TestClient(create_test_app(tmp_path))
+    meeting_id = client.post(
+        "/meetings",
+        json={
+            "title": "Every courtroom settlement",
+            "goal": "Reach the final verdict",
+            "mode_id": "courtroom",
+            "case_type": "civil",
+        },
+    ).json()["meeting_id"]
+    assert client.put(
+        f"/meetings/{meeting_id}/courtroom/issues",
+        json={"revision": 0, "issues": [{"title": "責任是否成立"}]},
+    ).status_code == 200
+    assert client.post(
+        f"/meetings/{meeting_id}/courtroom/issues/confirm",
+        json={"revision": 1},
+    ).status_code == 200
+
+    def run_and_wait(path: str) -> dict[str, object]:
+        with client.websocket_connect(f"/meetings/{meeting_id}/events") as websocket:
+            websocket.receive_json()
+            assert client.post(path).status_code == 202
+            update = websocket.receive_json()
+            while update["activity_status"] != "completed":
+                update = websocket.receive_json()
+        return client.get(f"/meetings/{meeting_id}").json()
+
+    after_arguments = run_and_wait(
+        f"/meetings/{meeting_id}/courtroom/issues/issue-1/arguments"
+    )
+    assert after_arguments["courtroom"]["issues"][0]["status"] == "awaiting-ruling"
+    assert after_arguments["courtroom"]["available_actions"] == [
+        "submit-ruling",
+        "add-note",
+        "directed-response",
+    ]
+
+    after_ruling = run_and_wait(
+        f"/meetings/{meeting_id}/courtroom/issues/issue-1/ruling"
+    )
+    assert after_ruling["courtroom"]["issues"][0]["status"] == "ruled"
+    assert after_ruling["courtroom"]["final_status"] == "ready"
+    assert after_ruling["courtroom"]["available_actions"] == ["final-verdict"]
+
+    after_final = run_and_wait(f"/meetings/{meeting_id}/courtroom/final-verdict")
+    assert after_final["courtroom"]["final_status"] == "completed"
+    assert after_final["courtroom"]["available_actions"] == []
+    final_event = next(
+        event
+        for event in reversed(after_final["events"])
+        if event.get("interaction_type") == "courtroom-final-verdict"
+    )
+    assert final_event["output_schema_id"] == "courtroom-civil-final/v1"
+    assert final_event["parsed_output"]["summary"]
 
 
 def test_debate_inputs_reach_prompts(tmp_path: Path) -> None:

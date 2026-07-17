@@ -23,8 +23,9 @@
 | Meeting UX Contract | `f6c3499`–`c18cf21` | `title`／AI `goal` 分離、舊 meeting 明示遷移 gate、集中式繁中 presentation、title + ID copy 與可追溯定向角色追問（實作計畫：`docs/plans/2026-07-14-meeting-ux-contract.md`） |
 | Chairman & Courtroom Issue Flow | `2bb78af`–`15867f4` | 統一主席 composer、title/goal 編輯與鎖定、精確主 CTA、逐一爭點攻防／裁定／最終判決、legacy courtroom gate 與 per-meeting transition coordinator（實作計畫：`docs/plans/2026-07-14-chairman-courtroom-flow.md`） |
 | Deliberation Lifecycle & Courtroom Workspace | `3551665` | append-only 審議輪次與三種法院重開、版本化證據／案件備註、民刑事 case profile 與安全 final schema、原子 meeting settings、歷史案卷與 responsive workspace（實作計畫：`docs/plans/2026-07-15-deliberation-lifecycle-ux.md`） |
+| Courtroom Async Settlement | `eaa059f`–`b6b2432` | GET／WebSocket 一致 live snapshot、per-meeting lifecycle revision、frontend settlement generation guard 與 deterministic ordering tests（實作計畫：`docs/plans/2026-07-17-courtroom-async-settlement.md`） |
 
-**目前驗收基線（任何改動後不得低於此）**：後端 `pytest` **589 passed**；frontend unit **48 passed**；前端 `npm run build` 綠；Chromium e2e **90 cases**。法院 async completion 有 baseline race（backlog #89）：#88 acceptance 修補的相關 targeted Chromium 與 direct browser 綠；完整 suite 兩次各 89/90，main 固定點相同壓力 10 次重現 4 次。
+**目前驗收基線（任何改動後不得低於此）**：後端 `pytest` **597 passed**；frontend unit **50 passed**；前端 `npm run build` 綠；Chromium e2e **90/90 passed**。Backlog #89 已以 deterministic lifecycle ordering tests 修復原法院 async completion race，並通過 direct Chromium arguments → ruling → final without reload smoke。
 
 ## 2. Agent 開發佇列與目前核准批次
 
@@ -43,6 +44,8 @@ Backlog 86「會議名稱／AI 目標、中文呈現與定向追問 UX」已實�
 Backlog 87「主席操作整合、會議資訊編輯與逐一爭點法院流程」已實作並通過 Standards/Spec 雙軸 review、完整驗收與 direct browser smoke，狀態為 `implemented / awaiting acceptance`。主席從同一 composer 選擇補充／全體／定向回應；title 在 idle 可編輯，courtroom goal 在爭點確認後唯讀。Courtroom 必須先編修確認 docket，之後依檢察官 → 辯護律師 → 檢察官反駁逐點攻防，每個 ruling 與 next issue 都由主席明示推進，全部裁定完成後才可 final verdict。執行計畫：`docs/plans/2026-07-14-chairman-courtroom-flow.md`；ticket：`.scratch/chairman-courtroom-flow/`。
 
 Backlog 88「審議生命週期、案卷版本與民刑事法院體驗重整」已完成 Human Owner 驗收退回的 action IA 修補並再次通過 Standards/Spec 雙軸 review，Human Owner 於 2026-07-17 驗收通過，狀態為 `accepted / done`。舊法院案件類型只從會議設定原子儲存；法院 composer 不再顯示語意不實的「請全體回應」；正式流程使用短 CTA 與明確等待狀態，結案／取消 lifecycle 不會被 workflow 文案覆蓋。所有 mode 的 epoch、案卷版本、民刑事 profile 與歷史 revision 契約維持不變。執行計畫：`docs/plans/2026-07-15-deliberation-lifecycle-ux.md`、`docs/plans/2026-07-16-courtroom-action-ia-acceptance-fix.md`；ticket：`.scratch/deliberation-lifecycle-ux/`。驗收期間另發現且在 main 重現的法院 async refresh race 已記錄為 backlog #89，未納入本批。
+
+Backlog 89「法院非同步完成狀態收斂」已實作、通過 Standards／Spec 雙軸獨立 review、597 backend／50 frontend unit／build／90 Chromium 與 direct browser smoke，狀態為 `implemented / awaiting acceptance`。根因是 API 可能把較舊部分 events 與已 release job state 組成 torn settled projection；GET 與 WebSocket 現共用 lifecycle-revision snapshot，重疊 job ordering 不穩定時只發布 running，frontend 以 settlement generation 防止舊 refresh 覆寫。沒有改 courtroom state machine、event schema、timeout 或歷史 events。執行計畫：`docs/plans/2026-07-17-courtroom-async-settlement.md`；ticket：`.scratch/courtroom-async-settlement/`。
 
 已完成的 Evidence to Verdict 範圍：
 
@@ -118,5 +121,6 @@ Backlog 88「審議生命週期、案卷版本與民刑事法院體驗重整」�
 - Backlog 85 已實作、雙軸 review、291 backend／12 unit／build／69 Chromium 與 direct browser smoke 通過，等待 Human Owner acceptance。
 - Backlog 86 已實作、雙軸 review、305 backend／19 unit／build／71 Chromium 與 direct browser smoke 通過，等待 Human Owner acceptance。
 - Backlog 87 已實作、雙軸 review、345 backend／35 unit／build／77 Chromium 與 direct browser smoke 通過，狀態為 `implemented / awaiting acceptance`。
-- Backlog 88 acceptance 修補已實作並再次通過雙軸 review、589 backend／48 unit／build、相關 targeted Chromium 與 direct browser smoke；Human Owner 於 2026-07-17 驗收通過，狀態為 `accepted / done`。完整 Chromium 仍受 main 可重現的 backlog #89 race 影響為 89/90。
+- Backlog 88 acceptance 修補已實作並再次通過雙軸 review；Human Owner 於 2026-07-17 驗收通過，狀態為 `accepted / done`。
+- Backlog 89 已實作、雙軸 review、597 backend／50 unit／build／90 Chromium 與 direct browser smoke 通過，狀態為 `implemented / awaiting acceptance`。
 - 使用者已裁定：個人版不做多人/帳號（backlog 有註記）；案卷 Phase 2/RAG 仍延後到 backlog 79。
