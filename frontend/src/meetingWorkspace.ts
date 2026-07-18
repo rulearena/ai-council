@@ -98,3 +98,385 @@ export function materialImpactGuidance(modeId: string): string {
     ? '為避免新舊證據混用，目前已暫停 AI 與法官判斷。請到「流程操作」選擇重開目前爭點、重開全部審議或重新整理爭點。'
     : '為避免新舊資料混用，目前已暫停 AI。請到「流程操作」輸入原因並重開全部審議。'
 }
+
+type WorkspaceParticipant = {
+  role_id: string
+  display_name?: string | null
+  name?: string | null
+}
+
+type WorkspaceEvent = {
+  event_id: string
+  meeting_id: string
+  step_id: string
+  base_step_id?: string
+  role: string
+  attempt: number
+  status: string
+  round?: number
+  content?: string
+  created_at?: string
+  error?: string
+  failure_kind?: string
+  issue_id?: string
+  issue_phase?: 'charge' | 'defense' | 'rebuttal' | 'ruling'
+  interaction_type?: string
+  parsed_output?: { summary?: string } | null
+  raw_output?: string
+}
+
+type WorkspaceCourtroom = {
+  status: string
+  issues: Array<{
+    id: string
+    title: string
+    position: number
+    status: string
+    ruling?: unknown
+    failed_step_id?: string
+    failed_phase?: string
+    failed_phase_display?: string
+    failure_kind?: string
+  }>
+  current_issue_id: string | null
+  final_status: string
+  available_actions: string[]
+  case_type: 'civil' | 'criminal' | null
+  requires_case_type: boolean
+}
+
+export type WorkspaceProjectionMeeting = {
+  meeting_id: string
+  mode_id: string
+  activity_status: string
+  participants: WorkspaceParticipant[]
+  events?: WorkspaceEvent[]
+  courtroom: WorkspaceCourtroom | null
+}
+
+export type WorkspaceProjectionMode = {
+  id: string
+  category: string
+  roles: Array<{ id: string; name: string }>
+  steps?: Array<{ role: string; label: string; template: string }>
+  fanout?: { role: string; label: string }
+  synthesis?: { role: string; label: string }
+}
+
+export type WorkspaceMessage = {
+  id: string
+  order: number
+  event: WorkspaceEvent
+  kind: 'human' | 'ai' | 'synthesizer' | 'failed' | 'system'
+  roleId: string
+  roleName: string
+  content: string
+  createdAt: string | null
+  issueId: string | null
+}
+
+export type WorkspaceRole = {
+  roleId: string
+  name: string
+  state: 'waiting' | 'thinking' | 'completed' | 'failed'
+  latestMessageId: string | null
+}
+
+export type ConversationWorkspaceProjection = {
+  family: 'conversation'
+  meetingId: string
+  messages: WorkspaceMessage[]
+  roles: WorkspaceRole[]
+  parallel: null | {
+    completed: number
+    total: number
+    synthesis: 'waiting' | 'running' | 'blocked' | 'completed' | 'failed'
+  }
+  capabilities: {
+    addNote: true
+    openMaterials: true
+    requestAll: true
+    directedRoleIds: string[]
+  }
+}
+
+export type CourtHearingIssueGroup = {
+  issue: WorkspaceCourtroom['issues'][number]
+  messages: WorkspaceMessage[]
+  phases: Array<{
+    phase: NonNullable<WorkspaceEvent['issue_phase']>
+    messages: WorkspaceMessage[]
+  }>
+  otherMessages: WorkspaceMessage[]
+}
+
+export type CourtHearingWorkspaceProjection = {
+  family: 'court-hearing'
+  meetingId: string
+  roles: WorkspaceRole[]
+  issues: CourtHearingIssueGroup[]
+  ungroupedMessages: WorkspaceMessage[]
+  availableActions: string[]
+  capabilities: {
+    addNote: boolean
+    openMaterials: true
+    directedRoleIds: string[]
+    formalActions: string[]
+  }
+}
+
+export type MeetingWorkspaceProjection =
+  | ConversationWorkspaceProjection
+  | CourtHearingWorkspaceProjection
+
+function participantName(
+  participant: WorkspaceParticipant,
+  mode: WorkspaceProjectionMode,
+): string {
+  return participant.display_name?.trim()
+    || participant.name?.trim()
+    || mode.roles.find((role) => role.id === participant.role_id)?.name
+    || participant.role_id
+}
+
+function messageKind(event: WorkspaceEvent, mode: WorkspaceProjectionMode): WorkspaceMessage['kind'] {
+  if (event.status === 'failed') return 'failed'
+  if (event.role === 'Human') return 'human'
+  if (event.role === 'System') return 'system'
+  if (mode.synthesis && (
+    event.role === mode.synthesis.role
+    || event.step_id.startsWith('synthesis-')
+    || event.base_step_id?.startsWith('synthesis-')
+  )) return 'synthesizer'
+  return 'ai'
+}
+
+function messageContent(event: WorkspaceEvent): string {
+  return event.content
+    ?? event.parsed_output?.summary
+    ?? event.raw_output
+    ?? event.error
+    ?? ''
+}
+
+function projectMessages(
+  meeting: WorkspaceProjectionMeeting,
+  mode: WorkspaceProjectionMode,
+): WorkspaceMessage[] {
+  const names = new Map(
+    meeting.participants.map((participant) => [participant.role_id, participantName(participant, mode)]),
+  )
+  return (meeting.events ?? []).map((event, order) => ({
+    id: event.event_id,
+    order,
+    event,
+    kind: messageKind(event, mode),
+    roleId: event.role,
+    roleName: event.role === 'Human'
+      ? '主席'
+      : event.role === 'System' ? '系統' : names.get(event.role) ?? event.role,
+    content: messageContent(event),
+    createdAt: event.created_at ?? null,
+    issueId: event.issue_id ?? null,
+  }))
+}
+
+function projectRoles(
+  meeting: WorkspaceProjectionMeeting,
+  mode: WorkspaceProjectionMode,
+  messages: WorkspaceMessage[],
+  thinkingRoleIds: string[],
+): WorkspaceRole[] {
+  const thinking = new Set(thinkingRoleIds)
+  return meeting.participants.map((participant) => {
+    const latest = lastMessageForRole(messages, participant.role_id)
+    const state = latest?.kind === 'failed'
+      ? 'failed'
+      : thinking.has(participant.role_id)
+        ? 'thinking'
+        : latest ? 'completed' : 'waiting'
+    return {
+      roleId: participant.role_id,
+      name: participantName(participant, mode),
+      state,
+      latestMessageId: latest?.id ?? null,
+    }
+  })
+}
+
+function lastMessageForRole(
+  messages: WorkspaceMessage[],
+  roleId: string,
+): WorkspaceMessage | undefined {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    if (messages[index]?.roleId === roleId) return messages[index]
+  }
+  return undefined
+}
+
+function latestRoundMemberEvents(
+  events: WorkspaceEvent[],
+  memberRoleIds: Set<string>,
+): WorkspaceEvent[] {
+  const memberEvents = events.filter((event) => memberRoleIds.has(event.role))
+  if (!memberEvents.length) return []
+  const round = Math.max(...memberEvents.map((event) => event.round ?? 1))
+  const latest = new Map<string, WorkspaceEvent>()
+  for (const event of memberEvents) {
+    if ((event.round ?? 1) !== round) continue
+    const previous = latest.get(event.role)
+    if (!previous || event.attempt >= previous.attempt) latest.set(event.role, event)
+  }
+  return [...latest.values()]
+}
+
+function projectParallel(
+  meeting: WorkspaceProjectionMeeting,
+  mode: WorkspaceProjectionMode,
+): ConversationWorkspaceProjection['parallel'] {
+  if (mode.category !== 'parallel' || !mode.fanout) return null
+  const memberRoleIds = new Set(
+    meeting.participants
+      .map((participant) => participant.role_id)
+      .filter((roleId) => roleId === mode.fanout?.role || roleId.startsWith(`${mode.fanout?.role}-`)),
+  )
+  const latestMembers = latestRoundMemberEvents(meeting.events ?? [], memberRoleIds)
+  const currentRound = latestMembers.length
+    ? Math.max(...latestMembers.map((event) => event.round ?? 1))
+    : null
+  const completed = latestMembers.filter((event) => event.status === 'completed').length
+  const hasFailedMember = latestMembers.some((event) => event.status === 'failed')
+  const synthesisEvents = (meeting.events ?? []).filter((event) =>
+    (event.step_id.startsWith('synthesis-') || event.base_step_id?.startsWith('synthesis-'))
+    && (currentRound === null || (event.round ?? 1) === currentRound),
+  )
+  const latestSynthesis = synthesisEvents.at(-1)
+  const synthesis = latestSynthesis?.status === 'completed'
+    ? 'completed'
+    : latestSynthesis?.status === 'failed'
+      ? 'failed'
+      : latestSynthesis
+        ? 'running'
+        : hasFailedMember
+          ? 'blocked'
+          : completed === memberRoleIds.size && memberRoleIds.size > 0 && meeting.activity_status === 'running'
+            ? 'running'
+            : 'waiting'
+  return { completed, total: memberRoleIds.size, synthesis }
+}
+
+export function projectMeetingWorkspace(input: {
+  meeting: WorkspaceProjectionMeeting
+  mode: WorkspaceProjectionMode
+  thinkingRoleIds?: string[]
+}): MeetingWorkspaceProjection {
+  const messages = projectMessages(input.meeting, input.mode)
+  const roles = projectRoles(
+    input.meeting,
+    input.mode,
+    messages,
+    input.thinkingRoleIds ?? [],
+  )
+  if (input.meeting.mode_id === 'courtroom' && input.meeting.courtroom) {
+    const courtroom = input.meeting.courtroom
+    const issueIds = new Set(courtroom.issues.map((issue) => issue.id))
+    const availableActions = [...courtroom.available_actions]
+    const issueGroup = (issue: WorkspaceCourtroom['issues'][number]): CourtHearingIssueGroup => {
+      const issueMessages = messages.filter((message) => message.issueId === issue.id)
+      const phaseOrder: Array<NonNullable<WorkspaceEvent['issue_phase']>> = []
+      const byPhase = new Map<NonNullable<WorkspaceEvent['issue_phase']>, WorkspaceMessage[]>()
+      for (const message of issueMessages) {
+        const phase = message.event.issue_phase
+        if (!phase) continue
+        if (!byPhase.has(phase)) {
+          phaseOrder.push(phase)
+          byPhase.set(phase, [])
+        }
+        byPhase.get(phase)?.push(message)
+      }
+      return {
+        issue,
+        messages: issueMessages,
+        phases: phaseOrder.map((phase) => ({ phase, messages: byPhase.get(phase) ?? [] })),
+        otherMessages: issueMessages.filter((message) => !message.event.issue_phase),
+      }
+    }
+    return {
+      family: 'court-hearing',
+      meetingId: input.meeting.meeting_id,
+      roles,
+      issues: courtroom.issues.map(issueGroup),
+      ungroupedMessages: messages.filter((message) => !message.issueId || !issueIds.has(message.issueId)),
+      availableActions,
+      capabilities: {
+        addNote: availableActions.includes('add-note'),
+        openMaterials: true,
+        directedRoleIds: availableActions.includes('directed-response')
+          ? input.meeting.participants.map((participant) => participant.role_id)
+          : [],
+        formalActions: availableActions,
+      },
+    }
+  }
+  return {
+    family: 'conversation',
+    meetingId: input.meeting.meeting_id,
+    messages,
+    roles,
+    parallel: projectParallel(input.meeting, input.mode),
+    capabilities: {
+      addNote: true,
+      openMaterials: true,
+      requestAll: true,
+      directedRoleIds: input.mode.category === 'relay'
+        ? input.meeting.participants.map((participant) => participant.role_id)
+        : [],
+    },
+  }
+}
+
+export type WorkspaceRoleFilter = {
+  meetingId: string
+  roleId: string
+}
+
+export function nextWorkspaceRoleFilter(
+  previous: WorkspaceRoleFilter | null,
+  meetingId: string,
+  roleId?: string,
+): WorkspaceRoleFilter | null {
+  if (!roleId) return null
+  if (previous?.meetingId === meetingId && previous.roleId === roleId) return null
+  return { meetingId, roleId }
+}
+
+function allWorkspaceMessages(workspace: MeetingWorkspaceProjection): WorkspaceMessage[] {
+  if (workspace.family === 'conversation') return workspace.messages
+  return [
+    ...workspace.ungroupedMessages,
+    ...workspace.issues.flatMap((group) => group.messages),
+  ].sort((left, right) => left.order - right.order)
+}
+
+export function latestWorkspaceMessageTarget(
+  workspace: MeetingWorkspaceProjection,
+  filter: WorkspaceRoleFilter | null,
+): string | null {
+  if (!filter || filter.meetingId !== workspace.meetingId) return null
+  return lastMessageForRole(allWorkspaceMessages(workspace), filter.roleId)?.id ?? null
+}
+
+export type MessageClampPolicy = {
+  collapsible: boolean
+  collapsedByDefault: boolean
+  lineClamp: 3
+}
+
+export function messageClampPolicy(content: string): MessageClampPolicy {
+  const collapsible = content.length > 240 || content.split(/\r?\n/).length > 3
+  return {
+    collapsible,
+    collapsedByDefault: collapsible,
+    lineClamp: 3,
+  }
+}

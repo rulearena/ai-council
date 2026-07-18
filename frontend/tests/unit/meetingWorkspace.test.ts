@@ -5,8 +5,12 @@ import {
   buildMeetingSettingsPayload,
   hydrateMeetingSettingsDraft,
   isMeetingSettingsDirty,
+  latestWorkspaceMessageTarget,
   materialImpactGuidance,
+  messageClampPolicy,
   nextHistorySelection,
+  nextWorkspaceRoleFilter,
+  projectMeetingWorkspace,
   validateMeetingSettingsDraft,
 } from '../../src/meetingWorkspace.ts'
 
@@ -86,4 +90,226 @@ test('material impact guidance only offers restart scopes available to the meeti
     materialImpactGuidance('courtroom'),
     '為避免新舊證據混用，目前已暫停 AI 與法官判斷。請到「流程操作」選擇重開目前爭點、重開全部審議或重新整理爭點。',
   )
+})
+
+const brainstormMode = {
+  id: 'brainstorm',
+  category: 'parallel',
+  roles: [{ id: 'Moderator', name: '主持人' }],
+  fanout: { role: 'Member', label: '委員發想' },
+  synthesis: { role: 'Moderator', label: '主持人彙整' },
+}
+
+const brainstormMeeting = {
+  meeting_id: 'meeting-parallel',
+  mode_id: 'brainstorm',
+  activity_status: 'running' as const,
+  participants: [
+    { role_id: 'Member-1', display_name: '委員 1' },
+    { role_id: 'Member-2', display_name: '委員 2' },
+    { role_id: 'Member-3', display_name: '委員 3' },
+    { role_id: 'Moderator', display_name: '主持人' },
+  ],
+  courtroom: null,
+  events: [
+    {
+      event_id: 'human-1', meeting_id: 'meeting-parallel', step_id: 'human-message',
+      role: 'Human', attempt: 1, status: 'completed', content: '請分析方案',
+    },
+    {
+      event_id: 'member-3', meeting_id: 'meeting-parallel', step_id: 'fanout-1-member-3',
+      base_step_id: 'member-3', round: 1, role: 'Member-3', attempt: 1,
+      status: 'completed', parsed_output: { summary: '第三位先完成', arguments: [], risks: [], recommendation: '採用' },
+    },
+    {
+      event_id: 'member-1', meeting_id: 'meeting-parallel', step_id: 'fanout-1-member-1',
+      base_step_id: 'member-1', round: 1, role: 'Member-1', attempt: 1,
+      status: 'completed', parsed_output: { summary: '第一位後完成', arguments: [], risks: [], recommendation: '保留' },
+    },
+    {
+      event_id: 'member-2-failed', meeting_id: 'meeting-parallel', step_id: 'fanout-1-member-2',
+      base_step_id: 'member-2', round: 1, role: 'Member-2', attempt: 1,
+      status: 'failed', error: '連線失敗', failure_kind: 'adapter_error' as const,
+    },
+  ],
+}
+
+test('conversation projection preserves saved arrival order and exposes parallel progress', () => {
+  const workspace = projectMeetingWorkspace({
+    meeting: brainstormMeeting,
+    mode: brainstormMode,
+    thinkingRoleIds: ['Member-2'],
+  })
+
+  assert.equal(workspace.family, 'conversation')
+  assert.deepEqual(workspace.messages.map((message) => [message.id, message.kind]), [
+    ['human-1', 'human'],
+    ['member-3', 'ai'],
+    ['member-1', 'ai'],
+    ['member-2-failed', 'failed'],
+  ])
+  assert.deepEqual(workspace.parallel, {
+    completed: 2,
+    total: 3,
+    synthesis: 'blocked',
+  })
+  assert.deepEqual(
+    workspace.roles.map((role) => [role.roleId, role.state]),
+    [
+      ['Member-1', 'completed'],
+      ['Member-2', 'failed'],
+      ['Member-3', 'completed'],
+      ['Moderator', 'waiting'],
+    ],
+  )
+})
+
+test('workspace role filters find the latest saved message and reset on meeting switch', () => {
+  const workspace = projectMeetingWorkspace({ meeting: brainstormMeeting, mode: brainstormMode })
+  const selected = nextWorkspaceRoleFilter(null, 'meeting-parallel', 'Member-3')
+
+  assert.deepEqual(selected, { meetingId: 'meeting-parallel', roleId: 'Member-3' })
+  assert.equal(latestWorkspaceMessageTarget(workspace, selected), 'member-3')
+  assert.equal(
+    nextWorkspaceRoleFilter(selected, 'meeting-other', undefined),
+    null,
+  )
+  assert.equal(latestWorkspaceMessageTarget(workspace, {
+    meetingId: 'meeting-other',
+    roleId: 'Member-3',
+  }), null)
+})
+
+test('long message clamp policy is deterministic and keeps short messages open', () => {
+  assert.deepEqual(messageClampPolicy('短回應'), {
+    collapsible: false,
+    collapsedByDefault: false,
+    lineClamp: 3,
+  })
+  assert.deepEqual(messageClampPolicy('a'.repeat(241)), {
+    collapsible: true,
+    collapsedByDefault: true,
+    lineClamp: 3,
+  })
+  assert.equal(messageClampPolicy('1\n2\n3\n4').collapsible, true)
+})
+
+test('completed synthesis is a final distinct message after every parallel member', () => {
+  const workspace = projectMeetingWorkspace({
+    mode: brainstormMode,
+    meeting: {
+      ...brainstormMeeting,
+      activity_status: 'completed',
+      events: [
+        ...brainstormMeeting.events.slice(0, 3),
+        {
+          event_id: 'member-2', meeting_id: 'meeting-parallel', step_id: 'fanout-1-member-2',
+          base_step_id: 'member-2', round: 1, role: 'Member-2', attempt: 2,
+          status: 'completed', parsed_output: { summary: '重試完成', arguments: [], risks: [], recommendation: '採用' },
+        },
+        {
+          event_id: 'synthesis', meeting_id: 'meeting-parallel', step_id: 'synthesis-1',
+          round: 1, role: 'Moderator', attempt: 1, status: 'completed',
+          parsed_output: { summary: '最終彙整', arguments: [], risks: [], recommendation: '執行' },
+        },
+      ],
+    },
+  })
+
+  assert.equal(workspace.family, 'conversation')
+  assert.equal(workspace.messages.at(-1)?.kind, 'synthesizer')
+  assert.deepEqual(workspace.parallel, { completed: 3, total: 3, synthesis: 'completed' })
+})
+
+test('a new parallel round does not reuse the previous round synthesis state', () => {
+  const previousRound = [
+    ...brainstormMeeting.events.slice(0, 3),
+    {
+      event_id: 'member-2', meeting_id: 'meeting-parallel', step_id: 'fanout-1-member-2',
+      base_step_id: 'member-2', round: 1, role: 'Member-2', attempt: 1,
+      status: 'completed', parsed_output: { summary: '第二位', arguments: [], risks: [], recommendation: '採用' },
+    },
+    {
+      event_id: 'synthesis-1', meeting_id: 'meeting-parallel', step_id: 'synthesis-1',
+      round: 1, role: 'Moderator', attempt: 1, status: 'completed',
+      parsed_output: { summary: '第一輪彙整', arguments: [], risks: [], recommendation: '執行' },
+    },
+  ]
+  const workspace = projectMeetingWorkspace({
+    mode: brainstormMode,
+    meeting: {
+      ...brainstormMeeting,
+      events: [
+        ...previousRound,
+        {
+          event_id: 'round-2-member-3', meeting_id: 'meeting-parallel', step_id: 'fanout-2-member-3',
+          base_step_id: 'member-3', round: 2, role: 'Member-3', attempt: 1,
+          status: 'completed', parsed_output: { summary: '第二輪先完成', arguments: [], risks: [], recommendation: '採用' },
+        },
+      ],
+    },
+    thinkingRoleIds: ['Member-1', 'Member-2'],
+  })
+
+  assert.equal(workspace.family, 'conversation')
+  assert.deepEqual(workspace.parallel, { completed: 1, total: 3, synthesis: 'waiting' })
+  assert.deepEqual(
+    workspace.roles.slice(0, 3).map((role) => role.state),
+    ['thinking', 'thinking', 'completed'],
+  )
+})
+
+test('court hearing groups saved events by backend issue and phase and passes actions through', () => {
+  const workspace = projectMeetingWorkspace({
+    mode: {
+      id: 'courtroom', category: 'relay',
+      roles: [
+        { id: 'Prosecutor', name: '檢察官' },
+        { id: 'Defense', name: '辯護律師' },
+        { id: 'Judge', name: '法官' },
+      ],
+    },
+    meeting: {
+      meeting_id: 'meeting-court', mode_id: 'courtroom', activity_status: 'idle',
+      participants: [
+        { role_id: 'Prosecutor', display_name: '原告代理人' },
+        { role_id: 'Defense', display_name: '被告代理人' },
+        { role_id: 'Judge', display_name: '法官' },
+      ],
+      courtroom: {
+        status: 'confirmed', current_issue_id: 'issue-1', final_status: 'not-ready',
+        available_actions: ['submit-ruling', 'add-note'], case_type: 'civil',
+        requires_case_type: false,
+        issues: [{ id: 'issue-1', title: '被告有無占有權源？', position: 1, status: 'awaiting-ruling' }],
+      },
+      events: [
+        {
+          event_id: 'charge', meeting_id: 'meeting-court', step_id: 'courtroom-charge',
+          role: 'Prosecutor', attempt: 1, status: 'completed', issue_id: 'issue-1',
+          issue_phase: 'charge', interaction_type: 'courtroom-issue-phase', content: '原告主張',
+        },
+        {
+          event_id: 'defense', meeting_id: 'meeting-court', step_id: 'courtroom-defense',
+          role: 'Defense', attempt: 1, status: 'completed', issue_id: 'issue-1',
+          issue_phase: 'defense', interaction_type: 'courtroom-issue-phase', content: '被告答辯',
+        },
+        {
+          event_id: 'note', meeting_id: 'meeting-court', step_id: 'human-message',
+          role: 'Human', attempt: 1, status: 'completed', content: '主席補充',
+        },
+      ],
+    },
+  })
+
+  assert.equal(workspace.family, 'court-hearing')
+  assert.deepEqual(workspace.availableActions, ['submit-ruling', 'add-note'])
+  assert.deepEqual(
+    workspace.issues[0]?.phases.map((phase) => [phase.phase, phase.messages.map((message) => message.id)]),
+    [
+      ['charge', ['charge']],
+      ['defense', ['defense']],
+    ],
+  )
+  assert.deepEqual(workspace.ungroupedMessages.map((message) => message.id), ['note'])
+  assert.deepEqual(workspace.capabilities.directedRoleIds, [])
 })

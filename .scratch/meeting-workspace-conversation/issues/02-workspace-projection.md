@@ -1,7 +1,7 @@
 # 02 — Meeting workspace projection interface
 
 Type: task
-Status: ready
+Status: done
 Blocked by: 01
 
 ## 目標
@@ -19,3 +19,11 @@ Blocked by: 01
 ## 完成條件
 
 - public pure seam tests 先紅後綠；型別檢查與 unit suite 綠。
+
+## 完成證據
+
+- `projectMeetingWorkspace()` 以 discriminated `conversation | court-hearing` view model 保留 event 寫入順序，投影角色狀態、parallel k/N／彙整狀態與 backend 法院 capabilities。
+- 角色 filter 以 meeting id 隔離，latest target 只對當前 meeting 生效；長文收合政策為可單測 pure function。
+- 法院 events 依 backend issue 與 phase 分組，`available_actions` 原樣透傳，未新增 frontend state machine。
+- Red：新 public exports 缺失、Court Hearing `phases` 缺失、新 parallel round 誤用上輪 synthesis 均曾產生原因明確的 failing tests。
+- Green：`npm run test:unit` → 56 passed；`npm run build` → `vue-tsc --noEmit` 與 Vite build 通過。
