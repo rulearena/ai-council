@@ -1,7 +1,7 @@
 # 03 — A3-1 Conversation workspace
 
 Type: task
-Status: implemented
+Status: resolved
 Blocked by: 02
 
 ## 目標

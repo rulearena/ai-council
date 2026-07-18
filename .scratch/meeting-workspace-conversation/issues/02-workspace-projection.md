@@ -1,7 +1,7 @@
 # 02 — Meeting workspace projection interface
 
 Type: task
-Status: done
+Status: resolved
 Blocked by: 01
 
 ## 目標

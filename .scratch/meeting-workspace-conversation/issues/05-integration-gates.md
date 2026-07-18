@@ -1,7 +1,7 @@
 # 05 — Responsive integration, review and delivery
 
 Type: task
-Status: implemented / awaiting review
+Status: resolved
 Blocked by: 03, 04
 
 ## 目標

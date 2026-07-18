@@ -1,4 +1,4 @@
-# 交接文件（2026-07-16，Codex）
+# 交接文件（2026-07-18，Codex）
 
 > 給接手開發的 agent（Codex 或任何新 session）。讀完本檔 + 引用的 spec 章節即可接續，不需要舊對話脈絡。
 
@@ -24,8 +24,9 @@
 | Chairman & Courtroom Issue Flow | `2bb78af`–`15867f4` | 統一主席 composer、title/goal 編輯與鎖定、精確主 CTA、逐一爭點攻防／裁定／最終判決、legacy courtroom gate 與 per-meeting transition coordinator（實作計畫：`docs/plans/2026-07-14-chairman-courtroom-flow.md`） |
 | Deliberation Lifecycle & Courtroom Workspace | `3551665` | append-only 審議輪次與三種法院重開、版本化證據／案件備註、民刑事 case profile 與安全 final schema、原子 meeting settings、歷史案卷與 responsive workspace（實作計畫：`docs/plans/2026-07-15-deliberation-lifecycle-ux.md`） |
 | Courtroom Async Settlement | `eaa059f`–`b6b2432` | GET／WebSocket 一致 live snapshot、per-meeting lifecycle revision、frontend settlement generation guard 與 deterministic ordering tests（實作計畫：`docs/plans/2026-07-17-courtroom-async-settlement.md`） |
+| Meeting Workspace Conversation | `018df1f`–`ef3c430` | A3-1 時間序工作區、relay／parallel 共用 Conversation、Court Hearing 爭點視圖、parallel arrival-order 即時保存與 terminal 原子 publish（實作計畫：`docs/plans/2026-07-18-meeting-workspace-conversation.md`） |
 
-**目前驗收基線（任何改動後不得低於此）**：後端 `pytest` **600 passed**；frontend unit **50 passed**；前端 `npm run build` 綠；Chromium e2e **90/90 passed**。Backlog #89 已以 deterministic lifecycle ordering tests 修復原法院 async completion race，並通過 direct Chromium arguments → ruling → final without reload smoke。
+**目前驗收基線（任何改動後不得低於此）**：後端 `pytest` **605 passed**；frontend unit **61 passed**；前端 `npm run build` 綠；Chromium e2e **94/94 passed**。Backlog #90 已通過 Standards／Spec 雙軸獨立 review，並以 direct Chromium 實際完成建立會議 → 主席補充 → AI 回合 → 角色篩選 → 長文展開 → 案卷 drawer。
 
 ## 2. Agent 開發佇列與目前核准批次
 
@@ -47,6 +48,8 @@ Backlog 88「審議生命週期、案卷版本與民刑事法院體驗重整」�
 
 Backlog 89「法院非同步完成狀態收斂」已實作、通過 Standards／Spec 雙軸獨立 review、597 backend／50 frontend unit／build／90 Chromium 與 direct browser smoke，Human Owner 於 2026-07-17 使用既有土地糾紛案件驗收通過，狀態為 `accepted / done`。根因是 API 可能把較舊部分 events 與已 release job state 組成 torn settled projection；GET 與 WebSocket 現共用 lifecycle-revision snapshot，重疊 job ordering 不穩定時只發布 running，frontend 以 settlement generation 防止舊 refresh 覆寫。沒有改 courtroom state machine、event schema、timeout 或歷史 events。執行計畫：`docs/plans/2026-07-17-courtroom-async-settlement.md`；ticket：`.scratch/courtroom-async-settlement/`。
 
+Backlog 90「會議工作區與時間序對話介面」已實作、通過 Standards／Spec 雙軸獨立 review、605 backend／61 frontend unit／build／94 Chromium 與 direct Chromium smoke，狀態為 `implemented / awaiting acceptance`。Relay／parallel 共用 A3-1 Conversation workspace；parallel 依真正完成順序即時 append，reload 保持順序，同輪成員共享 frozen context且全員完成後才 synthesis。法院以 Court Hearing 按爭點／階段呈現，正式 CTA 仍只讀 backend `available_actions`。取消與 completed publish 現由 repository per-meeting atomic boundary 線性化，不會出現 terminal 後 completed output。執行計畫：`docs/plans/2026-07-18-meeting-workspace-conversation.md`；ticket：`.scratch/meeting-workspace-conversation/`。自由聊天室模式已另記為 backlog #91，未納入本批。
+
 已完成的 Evidence to Verdict 範圍：
 
 1. backlog 80：證據編號與引用錨點。——已完成（2026-07-13，`96cd1d9` / `837b6d8`）
@@ -61,7 +64,8 @@ Backlog 89「法院非同步完成狀態收斂」已實作、通過 Standards／
 
 - **模式是設定不是程式碼**：`config/modes.yaml`（六模式）→ `backend/ai_council/meetings/modes.py`（`ModeCatalogRepository` + `relay_plan()`/`parallel_plan()`）。relay step_id 慣例 = template 名把 `_` 換 `-`；parallel fanout step_id = `fanout-{round}-member-{k}`，base_step_id = `member-{k}`，synthesis step_id = `synthesis-{round}`。role sequence 仍使用角色原 phase template；單一 directed response 改用共用 `directed_role_response` prompt，step_id 保持 `directed-N-{role}-response`。
 - **相容鐵則**：events.jsonl 既有 step_id（`blue-propose`、`round-N-*`、`directed-N-*`、`sequence-N-*`）不可變；無 `mode_id` 的舊會議投影為 red-blue；共用 output schema（spec §8）不變。守門測試：`backend/tests/test_mode_catalog.py::test_repo_modes_yaml_is_loadable`。
-- **Runner**：relay 公開方法收 `plan: RelayPlan` + `inputs`（API 層用 `meeting_mode()` → `relay_plan(mode)` 解析）。relay round 計數 = `plan.steps[-1].step_id` 完成次數。parallel 走 `MeetingRunner.start_parallel()` / `retry_failed_parallel_step()` + `ParallelPlan`；fanout adapter calls 併發，事件按 member index 寫入，member failure 投影 `waiting`，retry 成功且全員完成後觸發 synthesis。`ParallelPlan.anonymize_synthesis_inputs` 開啟時，synthesis prompt 的 `prior_transcript` 會清空，僅透過匿名化 `fanout_outputs` 讀成員結果。
+- **Runner**：relay 公開方法收 `plan: RelayPlan` + `inputs`（API 層用 `meeting_mode()` → `relay_plan(mode)` 解析）。relay round 計數 = `plan.steps[-1].step_id` 完成次數。parallel 走 `MeetingRunner.start_parallel()` / `retry_failed_parallel_step()` + `ParallelPlan`；fanout 啟動前凍結同一 active transcript，adapter calls 併發，runner 以實際完成順序逐組 append，member failure 投影 `waiting`，retry 成功且全員完成後觸發 synthesis。`ParallelPlan.anonymize_synthesis_inputs` 開啟時，synthesis prompt 的 `prior_transcript` 會清空，僅透過匿名化 `fanout_outputs` 讀成員結果。所有 event append/read 共用 repository per-meeting RLock；completed model output 必須用 `append_event_if()` 在同一 critical section 判斷 terminal 並發布。
+- **Meeting workspace presentation**：非 courtroom mode 使用同一 Conversation workspace，保存順序就是顯示順序；relay queue 只有目前角色 thinking，parallel running snapshot 則依 current round events 推導所有未完成成員。Courtroom 使用 Court Hearing presentation，frontend 只依 backend issues／phase／`available_actions` 分組與顯示，不自建法院 state machine。原場景只保留為次要可收合狀態視圖。
 - **模型寫入紀律**（§17 實作）：所有 models.yaml 寫入走 `model_write_lock`（存在性檢查+寫入+health clear 同鎖）；health store 有 generation token——**generation 取值必須在讀 model config 之前**（先取 gen → 讀 config → 檢查 → record(gen)，過期即丟棄）；`_write_config` 是 temp+rename 原子寫。
 - **422 契約**：/models 寫入路徑的驗證錯誤（含 pydantic 層）統一 `[{"field", "message"}]`，前端 `ApiError.detail` 依 field 對應表單欄位。
 - **Meeting model assignment**：participant metadata 是新 meeting 的唯一 assignment SoT；`PUT /meetings/{id}/participant-models` 完整替換 roster。Runner 的 start/respond/sequence/retry 只讀後端 resolved snapshot；legacy request `models` 不具權威。舊 meeting 的 event/default recovery 與 deleted-model fallback 只在 read time 投影，不寫 metadata/events。
@@ -123,4 +127,6 @@ Backlog 89「法院非同步完成狀態收斂」已實作、通過 Standards／
 - Backlog 87 已實作、雙軸 review、345 backend／35 unit／build／77 Chromium 與 direct browser smoke 通過，狀態為 `implemented / awaiting acceptance`。
 - Backlog 88 acceptance 修補已實作並再次通過雙軸 review；Human Owner 於 2026-07-17 驗收通過，狀態為 `accepted / done`。
 - Backlog 89 已實作、雙軸 review、597 backend／50 unit／build／90 Chromium、direct browser smoke 與 Human Owner 驗收通過，狀態為 `accepted / done`。
+- Backlog 90 已實作、雙軸 review、605 backend／61 unit／build／94 Chromium 與 direct Chromium smoke 通過，狀態為 `implemented / awaiting acceptance`。
+- Backlog 91 自由聊天室模式已記錄但尚未核准實作。
 - 使用者已裁定：個人版不做多人/帳號（backlog 有註記）；案卷 Phase 2/RAG 仍延後到 backlog 79。
