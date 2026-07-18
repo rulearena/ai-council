@@ -1654,6 +1654,84 @@ def test_parallel_cancel_after_members_complete_does_not_start_synthesis(
     assert all(event["step_id"] != "synthesis-1" for event in events)
 
 
+def test_parallel_terminal_at_publish_boundary_discards_completed_member_groups_in_member_order(
+    tmp_path: Path,
+) -> None:
+    all_groups_built = Event()
+    release_publish = Event()
+    built_lock = Lock()
+    built_count = 0
+
+    class PublishBoundaryRunner(MeetingRunner):
+        def _build_parallel_member_events(self, **kwargs):  # type: ignore[no-untyped-def]
+            nonlocal built_count
+            events = super()._build_parallel_member_events(**kwargs)
+            with built_lock:
+                built_count += 1
+                if built_count == len(PARALLEL_PLAN.members):
+                    all_groups_built.set()
+            assert release_publish.wait(timeout=5)
+            return events
+
+    repository = MeetingRepository(tmp_path / "data")
+    prompt_dir = tmp_path / "prompts"
+    prompt_dir.mkdir()
+    for template in ("brainstorm_member", "brainstorm_synthesis"):
+        (prompt_dir / f"{template}.md").write_text(
+            "{{ role }} {{ goal }} {{ prior_transcript }} "
+            "{{ required_json_schema }} {{ fanout_outputs }}",
+            encoding="utf-8",
+        )
+    runner = PublishBoundaryRunner(
+        repository=repository,
+        prompt_renderer=PromptRenderer(prompt_dir),
+        adapters=RunnerAdapters(by_name={"mock": FakeAdapter([VALID_OUTPUT] * 3)}),
+    )
+    run_error: list[BaseException] = []
+
+    def run_parallel() -> None:
+        try:
+            runner.start_parallel(
+                plan=PARALLEL_PLAN,
+                meeting_id="meeting-1",
+                goal="publish boundary cancellation",
+                model_assignments=parallel_model_assignments(),
+            )
+        except BaseException as error:  # pragma: no cover - asserted below
+            run_error.append(error)
+
+    worker = Thread(target=run_parallel)
+    worker.start()
+    assert all_groups_built.wait(timeout=5)
+    repository.append_event(
+        "meeting-1",
+        {
+            "event_id": "meeting-1:cancelled",
+            "meeting_id": "meeting-1",
+            "step_id": "meeting",
+            "role": "System",
+            "attempt": 1,
+            "status": "cancelled",
+        },
+    )
+    release_publish.set()
+    worker.join(timeout=5)
+
+    assert not worker.is_alive()
+    assert run_error == []
+    events = repository.read_events("meeting-1")
+    assert events[0]["status"] == "cancelled"
+    diagnostics = events[1:]
+    assert [event["base_step_id"] for event in diagnostics] == [
+        "member-1",
+        "member-2",
+        "member-3",
+    ]
+    assert all(event["status"] == "failed" for event in diagnostics)
+    assert all(event["failure_kind"] == "interrupted" for event in diagnostics)
+    assert all(event["result_discarded"] is True for event in diagnostics)
+    assert all(event["retry_scheduled"] is False for event in diagnostics)
+
 def test_parallel_cancel_records_each_started_member_in_deterministic_order(
     tmp_path: Path,
 ) -> None:

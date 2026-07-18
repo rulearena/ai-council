@@ -138,7 +138,6 @@ test('conversation projection preserves saved arrival order and exposes parallel
   const workspace = projectMeetingWorkspace({
     meeting: brainstormMeeting,
     mode: brainstormMode,
-    thinkingRoleIds: ['Member-2'],
   })
 
   assert.equal(workspace.family, 'conversation')
@@ -162,6 +161,115 @@ test('conversation projection preserves saved arrival order and exposes parallel
       ['Moderator', 'waiting'],
     ],
   )
+})
+
+test('parallel running projection derives incomplete members from the round after reload', () => {
+  const workspace = projectMeetingWorkspace({
+    meeting: brainstormMeeting,
+    mode: brainstormMode,
+    thinkingRoleIds: [],
+  })
+
+  assert.equal(workspace.family, 'conversation')
+  assert.deepEqual(
+    workspace.roles.map((role) => [role.roleId, role.state]),
+    [
+      ['Member-1', 'completed'],
+      ['Member-2', 'failed'],
+      ['Member-3', 'completed'],
+      ['Moderator', 'waiting'],
+    ],
+  )
+
+  const partial = projectMeetingWorkspace({
+    meeting: {
+      ...brainstormMeeting,
+      events: brainstormMeeting.events.filter((event) => event.role !== 'Member-3'),
+    },
+    mode: brainstormMode,
+    thinkingRoleIds: [],
+  })
+  assert.equal(partial.family, 'conversation')
+  assert.deepEqual(
+    partial.roles.map((role) => [role.roleId, role.state]),
+    [
+      ['Member-1', 'completed'],
+      ['Member-2', 'failed'],
+      ['Member-3', 'thinking'],
+      ['Moderator', 'waiting'],
+    ],
+  )
+
+  const retry = projectMeetingWorkspace({
+    meeting: brainstormMeeting,
+    mode: brainstormMode,
+    thinkingRoleIds: ['Member-2'],
+  })
+  assert.equal(retry.family, 'conversation')
+  assert.equal(retry.roles.find((role) => role.roleId === 'Member-2')?.state, 'thinking')
+})
+
+test('parallel synthesis role becomes thinking only after every member completes', () => {
+  const workspace = projectMeetingWorkspace({
+    mode: brainstormMode,
+    meeting: {
+      ...brainstormMeeting,
+      events: [
+        ...brainstormMeeting.events.slice(0, 3),
+        {
+          event_id: 'member-2', meeting_id: 'meeting-parallel', step_id: 'fanout-1-member-2',
+          base_step_id: 'member-2', round: 1, role: 'Member-2', attempt: 2,
+          status: 'completed', parsed_output: { summary: '重試完成', arguments: [], risks: [], recommendation: '採用' },
+        },
+      ],
+    },
+    thinkingRoleIds: [],
+  })
+
+  assert.equal(workspace.family, 'conversation')
+  assert.deepEqual(workspace.roles.map((role) => role.state), [
+    'completed', 'completed', 'completed', 'thinking',
+  ])
+})
+
+test('relay queue projects only its first role as thinking and overrides stale failures', () => {
+  const workspace = projectMeetingWorkspace({
+    mode: {
+      id: 'red-blue', category: 'relay',
+      roles: [
+        { id: 'Blue', name: '藍軍', kind: 'member' },
+        { id: 'Red', name: '紅軍', kind: 'member' },
+        { id: 'Judge', name: '裁判', kind: 'adjudicator' },
+      ],
+      steps: [
+        { role: 'Blue', label: '藍軍提案', template: 'blue_propose' },
+        { role: 'Red', label: '紅軍質疑', template: 'red_critique' },
+      ],
+    },
+    meeting: {
+      meeting_id: 'meeting-relay', mode_id: 'red-blue', activity_status: 'running',
+      courtroom: null,
+      participants: [
+        { role_id: 'Blue' }, { role_id: 'Red' }, { role_id: 'Judge' },
+      ],
+      events: [
+        {
+          event_id: 'blue-old-failure', meeting_id: 'meeting-relay', step_id: 'blue-propose',
+          role: 'Blue', attempt: 1, status: 'failed', error: '舊失敗',
+        },
+        {
+          event_id: 'red-old-complete', meeting_id: 'meeting-relay', step_id: 'red-critique',
+          role: 'Red', attempt: 1, status: 'completed', content: '舊回應',
+        },
+      ],
+    },
+    thinkingRoleIds: ['Blue', 'Red', 'Blue', 'Judge'],
+  })
+
+  assert.equal(workspace.family, 'conversation')
+  assert.deepEqual(workspace.roles.map((role) => role.state), [
+    'thinking', 'waiting', 'waiting',
+  ])
 })
 
 test('conversation messages format every structured role-output field without exposing raw JSON', () => {
@@ -255,6 +363,51 @@ test('completed synthesis is a final distinct message after every parallel membe
   assert.equal(workspace.family, 'conversation')
   assert.equal(workspace.messages.at(-1)?.kind, 'synthesizer')
   assert.deepEqual(workspace.parallel, { completed: 3, total: 3, synthesis: 'completed' })
+})
+
+test('parallel round changes only when running follows a completed synthesis with a new instruction', () => {
+  const finishedEvents = [
+    ...brainstormMeeting.events.slice(0, 3),
+    {
+      event_id: 'member-2', meeting_id: 'meeting-parallel', step_id: 'fanout-1-member-2',
+      base_step_id: 'member-2', round: 1, role: 'Member-2', attempt: 2,
+      status: 'completed', parsed_output: { summary: '重試完成', arguments: [], risks: [], recommendation: '採用' },
+    },
+    {
+      event_id: 'synthesis', meeting_id: 'meeting-parallel', step_id: 'synthesis-1',
+      round: 1, role: 'Moderator', attempt: 1, status: 'completed',
+      parsed_output: { summary: '最終彙整', arguments: [], risks: [], recommendation: '執行' },
+    },
+  ]
+  const finishing = projectMeetingWorkspace({
+    mode: brainstormMode,
+    meeting: { ...brainstormMeeting, activity_status: 'running', events: finishedEvents },
+  })
+  assert.equal(finishing.family, 'conversation')
+  assert.deepEqual(finishing.parallel, { completed: 3, total: 3, synthesis: 'completed' })
+  assert.deepEqual(finishing.roles.map((role) => role.state), [
+    'completed', 'completed', 'completed', 'completed',
+  ])
+
+  const nextRound = projectMeetingWorkspace({
+    mode: brainstormMode,
+    meeting: {
+      ...brainstormMeeting,
+      activity_status: 'running',
+      events: [
+        ...finishedEvents,
+        {
+          event_id: 'human-2', meeting_id: 'meeting-parallel', step_id: 'human-message',
+          role: 'Human', attempt: 1, status: 'completed', content: '請開始新一輪',
+        },
+      ],
+    },
+  })
+  assert.equal(nextRound.family, 'conversation')
+  assert.deepEqual(nextRound.parallel, { completed: 0, total: 3, synthesis: 'waiting' })
+  assert.deepEqual(nextRound.roles.map((role) => role.state), [
+    'thinking', 'thinking', 'thinking', 'waiting',
+  ])
 })
 
 test('a new parallel round does not reuse the previous round synthesis state', () => {

@@ -131,7 +131,9 @@ test('conversation workspace collapses long messages, filters roles, and stays u
   await expect(humanMessage.locator('.workspace-message-content')).not.toHaveClass(/collapsed/)
 
   await page.getByTestId('start-meeting-button').click()
-  await expect(page.getByTestId('operation-status')).toContainText('狀態：已完成', { timeout: 15000 })
+  const visibleStatus = page.getByTestId('workspace-operation-status')
+  await expect(visibleStatus).toBeVisible()
+  await expect(visibleStatus).toContainText('已完成', { timeout: 15000 })
   await page.getByTestId('role-seat-blue').click()
   await expect(page.getByTestId('workspace-clear-role-filter')).toBeVisible()
   const filteredMessages = page.getByTestId('workspace-message')
@@ -158,7 +160,9 @@ test('parallel and relay meetings use the same conversation workspace with paral
   await expect(page.getByTestId('workspace-parallel-progress')).toContainText('0／5 位完成')
 
   await page.getByTestId('start-meeting-button').click()
-  await expect(page.getByTestId('operation-status')).toContainText('狀態：已完成', { timeout: 15000 })
+  const visibleStatus = page.getByTestId('workspace-operation-status')
+  await expect(visibleStatus).toBeVisible()
+  await expect(visibleStatus).toContainText('已完成', { timeout: 15000 })
   await expect(page.getByTestId('workspace-parallel-progress')).toContainText('5／5 位完成')
   await expect(page.getByTestId('workspace-parallel-progress')).toContainText('彙整：已完成')
   await expect(page.locator('.workspace-message-synthesizer')).toHaveCount(1)

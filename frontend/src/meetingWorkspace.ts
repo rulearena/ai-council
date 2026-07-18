@@ -332,14 +332,36 @@ function projectRoles(
   messages: WorkspaceMessage[],
   thinkingRoleIds: string[],
 ): WorkspaceRole[] {
-  const thinking = new Set(thinkingRoleIds)
+  const queued = new Map<string, number>()
+  thinkingRoleIds.forEach((roleId, index) => {
+    if (!queued.has(roleId)) queued.set(roleId, index)
+  })
+  const parallel = parallelRoundState(meeting, mode)
   return meeting.participants.map((participant) => {
     const latest = lastMessageForRole(messages, participant.role_id)
-    const state = latest?.kind === 'failed'
-      ? 'failed'
-      : thinking.has(participant.role_id)
+    let state: WorkspaceRole['state']
+    if (mode.category !== 'parallel' && queued.has(participant.role_id)) {
+      state = queued.get(participant.role_id) === 0 ? 'thinking' : 'waiting'
+    } else if (parallel?.memberRoleIds.has(participant.role_id)) {
+      const current = parallel.latestMembers.get(participant.role_id)
+      state = queued.has(participant.role_id)
         ? 'thinking'
-        : latest ? 'completed' : 'waiting'
+        : current?.status === 'completed'
+          ? 'completed'
+          : current?.status === 'failed'
+            ? 'failed'
+            : meeting.activity_status === 'running' ? 'thinking' : 'waiting'
+    } else if (parallel && participant.role_id === mode.synthesis?.role) {
+      state = parallel.latestSynthesis?.status === 'completed'
+        ? 'completed'
+        : parallel.latestSynthesis?.status === 'failed' && !queued.has(participant.role_id)
+          ? 'failed'
+          : meeting.activity_status === 'running' && parallel.completed === parallel.memberRoleIds.size
+            ? 'thinking'
+            : 'waiting'
+    } else {
+      state = latest?.kind === 'failed' ? 'failed' : latest ? 'completed' : 'waiting'
+    }
     return {
       roleId: participant.role_id,
       name: participantName(participant, mode),
@@ -359,28 +381,12 @@ function lastMessageForRole(
   return undefined
 }
 
-function latestRoundMemberEvents(
-  events: WorkspaceEvent[],
-  memberRoleIds: Set<string>,
-): WorkspaceEvent[] {
-  const memberEvents = events.filter((event) => memberRoleIds.has(event.role))
-  if (!memberEvents.length) return []
-  const round = Math.max(...memberEvents.map((event) => event.round ?? 1))
-  const latest = new Map<string, WorkspaceEvent>()
-  for (const event of memberEvents) {
-    if ((event.round ?? 1) !== round) continue
-    const previous = latest.get(event.role)
-    if (!previous || event.attempt >= previous.attempt) latest.set(event.role, event)
-  }
-  return [...latest.values()]
-}
-
-function projectParallel(
+function parallelMemberRoleIds(
   meeting: WorkspaceProjectionMeeting,
   mode: WorkspaceProjectionMode,
-): ConversationWorkspaceProjection['parallel'] {
-  if (mode.category !== 'parallel' || !mode.fanout) return null
-  const memberRoleIds = new Set(
+): Set<string> {
+  if (mode.category !== 'parallel' || !mode.fanout) return new Set()
+  return new Set(
     meeting.participants
       .filter((participant) => {
         const kind = participant.kind ?? mode.roles.find((role) => role.id === participant.role_id)?.kind
@@ -391,29 +397,80 @@ function projectParallel(
       })
       .map((participant) => participant.role_id),
   )
-  const latestMembers = latestRoundMemberEvents(meeting.events ?? [], memberRoleIds)
-  const currentRound = latestMembers.length
-    ? Math.max(...latestMembers.map((event) => event.round ?? 1))
-    : null
-  const completed = latestMembers.filter((event) => event.status === 'completed').length
-  const hasFailedMember = latestMembers.some((event) => event.status === 'failed')
-  const synthesisEvents = (meeting.events ?? []).filter((event) =>
+}
+
+function parallelRoundState(
+  meeting: WorkspaceProjectionMeeting,
+  mode: WorkspaceProjectionMode,
+): null | {
+  memberRoleIds: Set<string>
+  latestMembers: Map<string, WorkspaceEvent>
+  latestSynthesis: WorkspaceEvent | undefined
+  completed: number
+  hasFailedMember: boolean
+} {
+  if (mode.category !== 'parallel' || !mode.fanout) return null
+  const memberRoleIds = parallelMemberRoleIds(meeting, mode)
+  const events = meeting.events ?? []
+  const memberEvents = events.filter((event) => memberRoleIds.has(event.role))
+  const latestMemberRound = memberEvents.length
+    ? Math.max(...memberEvents.map((event) => event.round ?? 1))
+    : 1
+  let latestCompletedSynthesisIndex = -1
+  for (let index = events.length - 1; index >= 0; index -= 1) {
+    const event = events[index]
+    if (event && (
+      event.step_id.startsWith('synthesis-') || event.base_step_id?.startsWith('synthesis-')
+    ) && (event.round ?? 1) === latestMemberRound && event.status === 'completed') {
+      latestCompletedSynthesisIndex = index
+      break
+    }
+  }
+  // A running snapshot can briefly contain the just-completed synthesis while the job
+  // settles. Only a later chairman instruction identifies a genuinely new parallel round.
+  const hasNewRoundInstruction = latestCompletedSynthesisIndex >= 0
+    && events.slice(latestCompletedSynthesisIndex + 1).some((event) => event.role === 'Human')
+  const round = meeting.activity_status === 'running' && hasNewRoundInstruction
+    ? latestMemberRound + 1
+    : latestMemberRound
+  const latest = new Map<string, WorkspaceEvent>()
+  for (const event of memberEvents) {
+    if ((event.round ?? 1) !== round) continue
+    const previous = latest.get(event.role)
+    if (!previous || event.attempt >= previous.attempt) latest.set(event.role, event)
+  }
+  const synthesisEvents = events.filter((event) =>
     (event.step_id.startsWith('synthesis-') || event.base_step_id?.startsWith('synthesis-'))
-    && (currentRound === null || (event.round ?? 1) === currentRound),
+    && (event.round ?? 1) === round,
   )
   const latestSynthesis = synthesisEvents.at(-1)
-  const synthesis = latestSynthesis?.status === 'completed'
+  return {
+    memberRoleIds,
+    latestMembers: latest,
+    latestSynthesis,
+    completed: [...latest.values()].filter((event) => event.status === 'completed').length,
+    hasFailedMember: [...latest.values()].some((event) => event.status === 'failed'),
+  }
+}
+
+function projectParallel(
+  meeting: WorkspaceProjectionMeeting,
+  mode: WorkspaceProjectionMode,
+): ConversationWorkspaceProjection['parallel'] {
+  const parallel = parallelRoundState(meeting, mode)
+  if (!parallel) return null
+  const synthesis = parallel.latestSynthesis?.status === 'completed'
     ? 'completed'
-    : latestSynthesis?.status === 'failed'
+    : parallel.latestSynthesis?.status === 'failed'
       ? 'failed'
-      : latestSynthesis
+      : parallel.latestSynthesis
         ? 'running'
-        : hasFailedMember
+        : parallel.hasFailedMember
           ? 'blocked'
-          : completed === memberRoleIds.size && memberRoleIds.size > 0 && meeting.activity_status === 'running'
+          : parallel.completed === parallel.memberRoleIds.size && parallel.memberRoleIds.size > 0 && meeting.activity_status === 'running'
             ? 'running'
             : 'waiting'
-  return { completed, total: memberRoleIds.size, synthesis }
+  return { completed: parallel.completed, total: parallel.memberRoleIds.size, synthesis }
 }
 
 export function projectMeetingWorkspace(input: {

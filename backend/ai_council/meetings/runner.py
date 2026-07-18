@@ -829,10 +829,36 @@ class MeetingRunner:
             for future in as_completed(futures):
                 member = futures[future]
                 events = future.result()
-                if any(event.get("result_discarded") is True for event in events):
+                terminal_at_publish = self._is_terminal(meeting_id)
+                if terminal_at_publish:
+                    # Completed output is not transcript-visible until publish, so it
+                    # cannot cross a terminal marker. Finished failure diagnostics keep
+                    # their original classification and are still ordered below.
+                    events = [
+                        event
+                        if event.get("result_discarded") is True
+                        or event.get("status") != "completed"
+                        else self._discarded_terminal_attempt(event)
+                        for event in events
+                    ]
+                if terminal_at_publish or any(
+                    event.get("result_discarded") is True for event in events
+                ):
                     discarded_groups.append((member.index, events))
                     continue
-                for event in events:
+                for position, event in enumerate(events):
+                    if self._is_terminal(meeting_id):
+                        discarded_groups.append((
+                            member.index,
+                            [
+                                remaining
+                                if remaining.get("result_discarded") is True
+                                or remaining.get("status") != "completed"
+                                else self._discarded_terminal_attempt(remaining)
+                                for remaining in events[position:]
+                            ],
+                        ))
+                        break
                     self.repository.append_event(meeting_id, event)
         for _, events in sorted(discarded_groups):
             for event in events:

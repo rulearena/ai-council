@@ -31,3 +31,11 @@ Blocked by: 03, 04
 - Playwright backend／frontend 皆使用 worktree 內 `.scratch/e2e-runtime-ticket05-*`、獨立 8327/3327 與 8328/3328 ports；完成後停止服務並清理這兩個確切 runtime 目錄。
 - 本 runtime 沒有可呼叫的 in-app browser session，因此無法另做交互式 direct-browser smoke；實際 Chromium 瀏覽器驗證由 94 個 Playwright flows 完成。
 - 環境未提供模型 selector；Executor 使用 assigned runtime，無法指定 `gpt-5.6-luna`。
+
+## Review 修正
+
+- Standards／Spec review 發現 parallel future 已建立 completed group、但尚未 publish 前 meeting 轉 terminal 的邊界。新 deterministic test 用 barrier 在三個 future 全部產出後插入 cancel marker，無 sleep；publisher 現在每個 group／event append 前重驗 terminal，completed result 轉為 interrupted diagnostic，已完成的 parse／adapter failure diagnostic 保留原始分類，terminal 後 diagnostics 依 member index 排序。
+- Pure workspace projection 現在使用 mode topology、保留重複角色的 queue 第一出現順序、current parallel round attempts 與 activity status：relay 只有 queue 第一位 thinking，其餘 waiting；parallel 未完成成員在 running snapshot／reload 為 thinking，早失敗成員不會讓其他成員變 waiting，全員完成後才輪到 synthesizer thinking；pending retry 優先於舊 failed event。
+- 新 workspace Playwright 改為驗證可見 `workspace-operation-status`，並先斷言元件可見；舊 `operation-status` 僅保留 legacy compatibility flows。
+- Review 提及 Conversation／Court Hearing shell 結構重複；本輪不做大量元件重構，避免在驗收前擴大 regression surface，後續僅在有第三個 presentation family 或 shell 已實質漂移時再抽取。
+- Review-fix 驗證：backend parallel cancel／retry／anonymization／arrival targeted 12 passed；backend full 603 passed；frontend unit 61 passed；build 通過；targeted Chromium 8 passed；full Chromium 94 passed；最後 round-boundary 精確化後 parallel Chromium 1 passed。所有 runtime 位於 worktree `.scratch/`，服務已停止並清理確切目錄。
