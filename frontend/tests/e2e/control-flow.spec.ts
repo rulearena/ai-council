@@ -107,6 +107,12 @@ test('conversation workspace keeps the role rail, chronological feed, and compos
 
   await page.getByTestId('workspace-open-materials').click()
   await expect(page.getByTestId('case-materials-drawer')).toBeVisible()
+  await page.getByTestId('case-materials-close-button').click()
+
+  await page.reload()
+  await page.getByTestId('past-topics-button').click()
+  await page.getByTestId('meeting-list-item').filter({ hasText: topic }).locator('.meeting-item').click()
+  await expect(page.getByTestId('workspace-message-feed')).toContainText('先確認本次討論的判斷標準。')
 })
 
 test('conversation workspace collapses long messages, filters roles, and stays usable at 375px', async ({
@@ -156,6 +162,26 @@ test('parallel and relay meetings use the same conversation workspace with paral
   await expect(page.getByTestId('workspace-parallel-progress')).toContainText('5／5 位完成')
   await expect(page.getByTestId('workspace-parallel-progress')).toContainText('彙整：已完成')
   await expect(page.locator('.workspace-message-synthesizer')).toHaveCount(1)
+  const savedOrder = await page.locator('.workspace-message-ai, .workspace-message-synthesizer').evaluateAll(
+    (messages) => messages.map((message) => ({
+      role: message.getAttribute('data-role'),
+      synthesis: message.classList.contains('workspace-message-synthesizer'),
+    })),
+  )
+  expect(savedOrder.length).toBe(6)
+  expect(savedOrder.at(-1)?.synthesis).toBe(true)
+
+  await page.reload()
+  await page.getByTestId('past-topics-button').click()
+  await page.getByTestId('meeting-list-item').filter({ hasText: topic }).locator('.meeting-item').click()
+  await expect(page.getByTestId('workspace-parallel-progress')).toContainText('5／5 位完成')
+  const reloadedOrder = await page.locator('.workspace-message-ai, .workspace-message-synthesizer').evaluateAll(
+    (messages) => messages.map((message) => ({
+      role: message.getAttribute('data-role'),
+      synthesis: message.classList.contains('workspace-message-synthesizer'),
+    })),
+  )
+  expect(reloadedOrder).toEqual(savedOrder)
 })
 
 test('court hearing workspace groups issue phases and keeps formal actions out of the composer', async ({
@@ -685,11 +711,10 @@ test('run actions omit frontend model maps and rely on the meeting assignment', 
 
   await page.getByTestId('start-meeting-button').click()
   await expect(page.getByTestId('operation-status')).toContainText('狀態：已完成')
-  await openRoleDrawer(page, 'blue')
-  await page.getByTestId('role-instruction-input').fill('請說明目前最小可行方案')
-  await page.getByTestId('request-blue-response-button').click()
+  await page.getByTestId('chairman-action-select').selectOption('role:Blue')
+  await page.getByTestId('chair-message-input').fill('請說明目前最小可行方案')
+  await page.getByTestId('send-chair-message-button').click()
   await expect(page.getByTestId('operation-status')).toContainText('狀態：已完成')
-  await closeRoleDrawer(page)
   await openAdvancedOptions(page)
   await page.getByTestId('run-sequence-button').click()
   await expect(page.getByTestId('operation-status')).toContainText('狀態：已完成')
@@ -832,10 +857,12 @@ async function closeAdvancedOptions(page: Page) {
   await expect(page.getByTestId('advanced-options-panel')).not.toBeVisible()
 }
 
-test('keeps the council stage centered with no horizontal scroll', async ({ page }) => {
+test('keeps the conversation workspace centered with no horizontal scroll', async ({ page }) => {
   await page.goto('/')
+  await createMeetingViaNewCase(page, `E2E workspace width ${Date.now()}`)
 
-  await expect(page.getByTestId('council-stage')).toBeVisible()
+  await expect(page.getByTestId('conversation-workspace')).toBeVisible()
+  await expect(page.getByTestId('workspace-role-rail')).toBeVisible()
   await expect(page.getByTestId('role-seat-chairman')).toBeVisible()
   await expect(page.getByTestId('role-seat-blue')).toBeVisible()
   await expect(page.getByTestId('role-seat-red')).toBeVisible()
@@ -913,10 +940,7 @@ test('user can run a mock meeting and add chair feedback', async ({ page }) => {
   // The role queue is pushed synchronously before the network call, so the Blue seat
   // flips to "thinking" the instant the button is clicked - not racy.
   await expect(page.getByTestId('role-seat-blue')).toHaveAttribute('data-status', 'thinking')
-  await expect(page.getByTestId('role-seat-red')).toHaveAttribute('data-status', 'waiting')
-
   await expect(page.getByTestId('operation-status')).toContainText('狀態：執行中')
-  await expect(page.getByTestId('start-meeting-button')).toContainText('執行中…')
 
   await expect(page.getByTestId('operation-status')).toContainText('狀態：已完成')
   await expect(page.getByTestId('operation-status')).toContainText('最後步驟：裁判裁決')
@@ -924,25 +948,17 @@ test('user can run a mock meeting and add chair feedback', async ({ page }) => {
   await expect(page.getByTestId('role-seat-red')).toHaveAttribute('data-status', 'completed')
   await expect(page.getByTestId('role-seat-judge')).toHaveAttribute('data-status', 'completed')
 
-  await openRoleDrawer(page, 'judge')
-  await expect(page.getByTestId('role-output-panel')).toContainText('角色回應')
-  await expect(page.getByTestId('role-output-panel')).toContainText('裁判裁決')
-  await expect(page.getByTestId('role-output-panel')).toContainText('建議處置')
-  await expect(page.getByTestId('rich-verdict-decision')).toContainText(
-    '有條件核准',
-  )
-  await expect(page.getByTestId('rich-verdict-findings')).toContainText('Mock finding')
-  await expect(page.getByTestId('rich-verdict-findings')).toContainText('[證物一]')
-  await expect(page.getByTestId('rich-verdict-conditions')).toContainText('Verify the result.')
-  await expect(page.getByTestId('rich-verdict-unresolved')).toContainText(
-    'Is more evidence available?',
-  )
-  const outputRoleBadge = page.getByTestId('role-output-panel').getByTestId('role-badge')
-  await expect(outputRoleBadge.locator('img')).toHaveAttribute('alt', '裁判')
-  await expect(outputRoleBadge).toHaveClass(/role-judge/)
-  await closeRoleDrawer(page)
+  await page.getByTestId('role-seat-judge').click()
+  await expect(page.getByTestId('workspace-message-feed')).toContainText('裁判')
+  await expect(page.getByTestId('workspace-message-feed')).toContainText('裁決')
+  await expect(page.getByTestId('workspace-message-feed')).toContainText('有條件核准')
+  await expect(page.getByTestId('workspace-message-feed')).toContainText('Mock finding')
+  await expect(page.getByTestId('workspace-message-feed')).toContainText('[證物一]')
+  await expect(page.getByTestId('workspace-message-feed')).toContainText('Verify the result.')
+  await expect(page.getByTestId('workspace-message-feed')).toContainText('Is more evidence available?')
+  await page.getByTestId('workspace-clear-role-filter').click()
 
-  await expect(page.getByTestId('start-meeting-button')).toContainText('開始新回合')
+  await expect(page.getByTestId('start-meeting-button')).toHaveCount(0)
 
   await page.getByTestId('chair-message-input').fill('主席補充：請先限制在一週可以完成的方案。')
   await page.getByTestId('send-chair-message-button').click()
@@ -969,19 +985,14 @@ test('user can run a mock meeting and add chair feedback', async ({ page }) => {
   await expect(page.getByTestId('chairman-history-list')).toContainText('（訂正）')
   await closeRoleDrawer(page)
 
-  await openRoleDrawer(page, 'blue')
-  await expect(page.getByTestId('request-blue-response-button')).toBeDisabled()
-  await page
-    .getByTestId('role-instruction-input')
-    .fill('請針對一週內可完成的最小可行方案補充說明')
-  await page.getByTestId('request-blue-response-button').click()
+  await page.getByTestId('chairman-action-select').selectOption('role:Blue')
+  await page.getByTestId('chair-message-input').fill('請針對一週內可完成的最小可行方案補充說明')
+  await page.getByTestId('send-chair-message-button').click()
   await expect(page.getByTestId('role-seat-blue')).toHaveAttribute('data-status', 'thinking')
   await expect(page.getByTestId('operation-status')).toContainText('狀態：已完成')
-  await expect(page.getByTestId('role-output-panel')).toContainText('藍軍回應主席追問')
-  await expect(page.getByTestId('role-output-panel')).toContainText('論點')
-  await expect(page.getByTestId('role-output-panel')).toContainText('Mock argument')
-  await expect(page.getByTestId('rich-verdict-decision')).toHaveCount(0)
-  await closeRoleDrawer(page)
+  await page.getByTestId('role-seat-blue').click()
+  await expect(page.getByTestId('workspace-message-feed')).toContainText('Mock argument')
+  await page.getByTestId('workspace-clear-role-filter').click()
 
   await page.reload()
   await page.getByTestId('past-topics-button').click()
@@ -999,18 +1010,14 @@ test('user can run a mock meeting and add chair feedback', async ({ page }) => {
   await closeAdvancedOptions(page)
   await expect(page.getByTestId('operation-status')).toContainText('狀態：已完成')
 
-  await openRoleDrawer(page, 'judge')
-  await expect(page.getByTestId('role-output-panel')).toContainText('裁判依序回應')
-  await closeRoleDrawer(page)
-
-  await page.getByTestId('start-meeting-button').click()
+  await page.getByTestId('chairman-action-select').selectOption('all')
+  await page.getByTestId('chair-message-input').fill('請根據目前資料開始下一輪審議')
+  await page.getByTestId('send-chair-message-button').click()
   await expect(page.getByTestId('operation-status')).toContainText('狀態：已完成')
-
-  await openRoleDrawer(page, 'blue')
-  await expect(page.getByTestId('role-history-toggle')).toBeVisible()
-  await page.getByTestId('role-history-toggle').click()
-  await expect(page.getByTestId('role-history-list')).toContainText('藍軍修訂')
-  await closeRoleDrawer(page)
+  await page.getByTestId('role-seat-blue').click()
+  await expect(page.getByTestId('workspace-message-feed')).toContainText('藍軍')
+  await expect.poll(() => page.getByTestId('workspace-message-feed').getByTestId('workspace-message').count()).toBeGreaterThan(1)
+  await page.getByTestId('workspace-clear-role-filter').click()
 
   // Full audit trail lives in the records drawer.
   await page.getByTestId('records-button').click()
@@ -1088,7 +1095,7 @@ test('user can run a mock meeting and add chair feedback', async ({ page }) => {
   await page.getByTestId('meetings-close-button').click()
 
   await expect(page.getByTestId('operation-status')).toContainText('狀態：已結案')
-  await expect(page.getByTestId('start-meeting-button')).toBeDisabled()
+  await expect(page.getByTestId('start-meeting-button')).toHaveCount(0)
   await expect(page.getByTestId('chair-message-input')).toBeDisabled()
   await expect(page.getByTestId('send-chair-message-button')).toBeDisabled()
 
@@ -1129,7 +1136,7 @@ test('user can run a mock meeting and add chair feedback', async ({ page }) => {
   await expect(page.getByTestId('meeting-list')).not.toContainText(topic)
   await page.getByTestId('meetings-close-button').click()
 
-  await expect(page.getByTestId('council-stage')).toContainText('尚未選擇會議')
+  await expect(page.getByTestId('workspace-no-meeting')).toContainText('尚未選擇會議')
 })
 
 test('shows a connection error banner when the backend is unreachable on load', async ({ page }) => {
@@ -1138,7 +1145,7 @@ test('shows a connection error banner when the backend is unreachable on load', 
   await page.goto('/')
 
   await expect(page.getByTestId('app-error')).toBeVisible()
-  await expect(page.getByTestId('council-stage')).toBeVisible()
+  await expect(page.getByTestId('workspace-no-meeting')).toBeVisible()
 })
 
 test('role seat shows failed state, halts the rest of the round, and recovers via retry', async ({
@@ -1168,24 +1175,21 @@ test('role seat shows failed state, halts the rest of the round, and recovers vi
   await expect(page.getByTestId('role-seat-red')).not.toContainText('等待發言')
   await expect(page.getByTestId('role-seat-judge')).toHaveAttribute('data-status', 'waiting')
 
-  await openRoleDrawer(page, 'blue')
-  await expect(page.getByTestId('role-output-panel')).toContainText('base_url')
-  const retryButton = page.getByTestId('role-status-retry-button')
+  await page.getByTestId('role-seat-blue').click()
+  await expect(page.getByTestId('workspace-failed-action')).toContainText('藍軍的回應失敗')
+  const retryButton = page.getByTestId('workspace-retry-role-blue')
   await expect(retryButton).toBeVisible()
 
   // Fix the broken assignment before retrying, same as a real operator would.
-  await closeRoleDrawer(page)
   await setModelsInSettings(page, { blue: 'mock-slow', red: 'mock-slow', judge: 'mock-slow' })
   await closeSettings(page)
 
-  await openRoleDrawer(page, 'blue')
-  await page.getByTestId('role-status-retry-button').click()
+  await page.getByTestId('workspace-retry-role-blue').click()
   await expect.poll(() => retryBody).toEqual({})
 
   // retrySelectedStep pushes the whole remaining fixed-round tail (Blue, Red, Blue, Judge
   // for a blue-propose retry), so the seat flips to "thinking" immediately on click.
   await expect(page.getByTestId('role-seat-blue')).toHaveAttribute('data-status', 'thinking')
-  await closeRoleDrawer(page)
 
   await expect(page.getByTestId('operation-status')).toContainText('狀態：已完成')
   await expect(page.getByTestId('role-seat-blue')).toHaveAttribute('data-status', 'completed')
@@ -1298,7 +1302,7 @@ test('records drawer announces clipboard rejection without an unhandled promise'
     .click()
 })
 
-test('a completed fixed round stays on the explicit new-round action after a Human note', async ({
+test('a completed fixed round requires a new chairman instruction before another round', async ({
   page,
 }) => {
   await page.goto('/')
@@ -1312,16 +1316,17 @@ test('a completed fixed round stays on the explicit new-round action after a Hum
   await page.getByTestId('start-meeting-button').click()
   await expect(page.getByTestId('operation-status')).toContainText('狀態：已完成')
 
-  await expect(page.getByTestId('start-meeting-button')).toContainText('開始新回合')
+  await expect(page.getByTestId('start-meeting-button')).toHaveCount(0)
   await page.getByTestId('chair-message-input').fill('主席補充：請議會針對成本做更仔細的討論。')
   const noteSaved = page.waitForResponse((response) => response.request().method() === 'POST' && response.url().endsWith('/messages'))
   await page.getByTestId('send-chair-message-button').click()
   await noteSaved
   await expect(page.getByTestId('operation-status')).toContainText('狀態：等待中')
-  await expect(page.getByTestId('start-meeting-button')).toContainText('開始新回合')
+  await expect(page.getByTestId('start-meeting-button')).toHaveCount(0)
 
-  await page.getByTestId('start-meeting-button').click()
-  await expect(page.getByTestId('role-seat-blue')).toHaveAttribute('data-status', 'thinking')
+  await page.getByTestId('chairman-action-select').selectOption('all')
+  await page.getByTestId('chair-message-input').fill('請以成本風險為新問題開始下一輪審議')
+  await page.getByTestId('send-chair-message-button').click()
   await expect(page.getByTestId('operation-status')).toContainText('狀態：已完成', { timeout: 15000 })
 
   await page.getByTestId('records-button').click()
@@ -1411,7 +1416,7 @@ test('meeting scene selection is isolated when switching meetings', async ({
   await expect(page.getByTestId('council-stage').locator('.stage-scene')).toHaveAttribute('data-scene', 'courtroom')
 })
 
-test('the main "開始新回合" action always starts a fresh fixed round', async ({ page }) => {
+test('a new chairman instruction starts a fresh fixed round without a duplicate main action', async ({ page }) => {
   await page.goto('/')
 
   const topic = `E2E explicit new round ${Date.now()}`
@@ -1422,12 +1427,11 @@ test('the main "開始新回合" action always starts a fresh fixed round', asyn
   await page.getByTestId('start-meeting-button').click()
   await expect(page.getByTestId('operation-status')).toContainText('狀態：已完成')
 
-  await expect(page.getByTestId('start-meeting-button')).toContainText('開始新回合')
-  await page.getByTestId('start-meeting-button').click()
+  await expect(page.getByTestId('start-meeting-button')).toHaveCount(0)
+  await page.getByTestId('chairman-action-select').selectOption('all')
+  await page.getByTestId('chair-message-input').fill('請根據目前結論開始下一輪審議')
+  await page.getByTestId('send-chair-message-button').click()
 
-  // startSelectedMeeting pushes the fixed-round queue synchronously before the network
-  // call, same as the main CTA - Blue flips to "thinking" immediately.
-  await expect(page.getByTestId('role-seat-blue')).toHaveAttribute('data-status', 'thinking')
   await expect(page.getByTestId('operation-status')).toContainText('狀態：已完成', {
     timeout: 15000,
   })
@@ -1484,7 +1488,7 @@ test('reloading mid-round still shows the real final state after reopening the m
   // status purely from the reconnect's snapshot, with nothing left in the pending queue
   // to (correctly or incorrectly) reconcile against.
   await page.reload()
-  await expect(page.getByTestId('council-stage')).toContainText('尚未選擇會議')
+  await expect(page.getByTestId('workspace-no-meeting')).toContainText('尚未選擇會議')
 
   await page.getByTestId('past-topics-button').click()
   await page.getByTestId('meeting-list-item').filter({ hasText: topic }).locator('.meeting-item').click()
@@ -1521,7 +1525,7 @@ test('switching meetings does not leak pendingRoles state, and a revisited meeti
 
   const topicB = `E2E switch meeting B ${Date.now()}`
   await createMeetingViaNewCase(page, topicB)
-  await expect(page.getByTestId('council-stage')).toContainText(topicB)
+  await expect(page.getByTestId('conversation-workspace')).toContainText(topicB)
   await expect(page.getByTestId('role-seat-blue')).toHaveAttribute('data-status', 'waiting')
 
   // Revisit meeting A (already fully completed) and start an explicit new round on it -
@@ -1530,10 +1534,12 @@ test('switching meetings does not leak pendingRoles state, and a revisited meeti
   // round-1 events sitting right there in the very next snapshot.
   await page.getByTestId('past-topics-button').click()
   await page.getByTestId('meeting-list-item').filter({ hasText: topicA }).locator('.meeting-item').click()
-  await expect(page.getByTestId('council-stage')).toContainText(topicA)
+  await expect(page.getByTestId('conversation-workspace')).toContainText(topicA)
 
-  await expect(page.getByTestId('start-meeting-button')).toContainText('開始新回合')
-  await page.getByTestId('start-meeting-button').click()
+  await expect(page.getByTestId('start-meeting-button')).toHaveCount(0)
+  await page.getByTestId('chairman-action-select').selectOption('all')
+  await page.getByTestId('chair-message-input').fill('請根據目前結論開始下一輪審議')
+  await page.getByTestId('send-chair-message-button').click()
 
   await expect(page.getByTestId('operation-status')).toContainText('狀態：已完成', { timeout: 15000 })
 
@@ -1577,7 +1583,7 @@ test('shows a failed-step hint and disables round-level actions until the step i
 
   await expect(page.getByTestId('failed-step-hint')).toBeVisible()
   await expect(page.getByTestId('failed-step-hint')).toContainText(
-    '藍軍的回應失敗了，點擊席位可重試',
+    '藍軍的回應失敗了，請在右側會議脈絡重試',
   )
 
   // Confirmed against the real backend: calling /start (or /sequences) again once a step
@@ -1587,14 +1593,14 @@ test('shows a failed-step hint and disables round-level actions until the step i
   await expect(page.getByTestId('start-meeting-button')).toBeDisabled()
   await expect(page.getByTestId('start-meeting-button')).toHaveAttribute(
     'title',
-    '藍軍的回應失敗了，請點擊席位重試該步驟',
+    '藍軍的回應失敗了，請在右側會議脈絡重試該步驟',
   )
 
   await openAdvancedOptions(page)
   await expect(page.getByTestId('run-sequence-button')).toBeDisabled()
   await expect(page.getByTestId('run-sequence-button')).toHaveAttribute(
     'title',
-    '藍軍的回應失敗了，請點擊席位重試該步驟',
+    '藍軍的回應失敗了，請在右側會議脈絡重試該步驟',
   )
   await closeAdvancedOptions(page)
 
@@ -1602,16 +1608,14 @@ test('shows a failed-step hint and disables round-level actions until the step i
   await setModelsInSettings(page, { blue: 'mock-slow', red: 'mock-slow', judge: 'mock-slow' })
   await closeSettings(page)
 
-  await openRoleDrawer(page, 'blue')
-  await page.getByTestId('role-status-retry-button').click()
+  await page.getByTestId('workspace-retry-role-blue').click()
 
   // The hint clears the instant the failed role re-enters the pending queue, not on a
   // timer - it's derived from the same seat status the seat itself reads.
   await expect(page.getByTestId('failed-step-hint')).not.toBeVisible()
-  await closeRoleDrawer(page)
 
   await expect(page.getByTestId('operation-status')).toContainText('狀態：已完成')
-  await expect(page.getByTestId('start-meeting-button')).toBeEnabled()
+  await expect(page.getByTestId('start-meeting-button')).toHaveCount(0)
   await openAdvancedOptions(page)
   await expect(page.getByTestId('run-sequence-button')).toBeEnabled()
   await closeAdvancedOptions(page)

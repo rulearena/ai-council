@@ -22,7 +22,6 @@ const {
   canRun,
   startButtonLabel,
   selectedSequencePresetId,
-  error,
   operationStatus,
   operationStatusText,
   failedRole,
@@ -122,7 +121,7 @@ const failedRoleName = computed(() =>
   failedRole.value ? roleDisplayName(activeMode.value, participants.value, failedRole.value) : '',
 )
 const failedStepTitle = computed(() =>
-  failedRole.value ? `${failedRoleName.value}的回應失敗了，請點擊席位重試該步驟` : undefined,
+  failedRole.value ? `${failedRoleName.value}的回應失敗了，請在右側會議脈絡重試該步驟` : undefined,
 )
 const lastStepLabel = computed(() => {
   const meeting = selectedMeeting.value
@@ -146,8 +145,6 @@ const showPrimaryCta = computed(() => (
 
 <template>
   <footer class="action-bar" :class="{ 'action-bar-embedded': embedded }" @keydown="onKeydown">
-    <p v-if="error" class="error" data-testid="app-error">{{ error }}</p>
-
     <section
       v-if="selectedMeeting?.requires_goal"
       class="meeting-goal-migration"
@@ -190,7 +187,7 @@ const showPrimaryCta = computed(() => (
         <line x1="12" y1="9" x2="12" y2="13" />
         <line x1="12" y1="17" x2="12.01" y2="17" />
       </svg>
-      {{ failedRoleName }}的回應失敗了，點擊席位可重試
+      {{ failedRoleName }}的回應失敗了，請在右側會議脈絡重試
     </p>
 
     <div class="action-bar-row">

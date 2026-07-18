@@ -56,6 +56,10 @@ function onSeatClick(role: CouncilRole | 'Chairman') {
       @open-mode-help="navigateFromMeetingSettings(() => modeHelpOpen = true)"
     />
 
+    <p v-if="store.error.value" class="error app-global-error" data-testid="app-error">
+      {{ store.error.value }}
+    </p>
+
     <template v-if="store.selectedMeeting.value?.mode_id === 'courtroom'">
       <CourtroomDocketPanel
         :scene="currentScene"

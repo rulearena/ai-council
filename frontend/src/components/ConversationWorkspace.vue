@@ -41,6 +41,8 @@ const {
   selectedModels,
   models,
   chairmanEvents,
+  failedRole,
+  retrySelectedStep,
 } = store
 
 const roleFilter = ref<WorkspaceRoleFilter | null>(null)
@@ -120,6 +122,17 @@ async function selectRole(roleId?: string) {
 
 function messageTime(message: WorkspaceMessage): string {
   return message.createdAt ? formatDateTime(message.createdAt) : ''
+}
+
+function failedEventFor(roleId: string) {
+  return [...(selectedMeeting.value?.events ?? [])]
+    .reverse()
+    .find((event) => event.role === roleId && event.status === 'failed')
+}
+
+async function retryRole(roleId: string) {
+  const event = failedEventFor(roleId)
+  if (event) await retrySelectedStep(event)
 }
 </script>
 
@@ -266,6 +279,17 @@ function messageTime(message: WorkspaceMessage): string {
           <strong>{{ workspace.parallel.completed }}／{{ workspace.parallel.total }} 位完成</strong>
           <small>彙整：{{ workspace.parallel.synthesis === 'completed' ? '已完成' : workspace.parallel.synthesis === 'running' ? '進行中' : workspace.parallel.synthesis === 'blocked' ? '等待失敗成員處理' : workspace.parallel.synthesis === 'failed' ? '失敗' : '等待全員' }}</small>
         </section>
+        <section v-if="failedRole" class="workspace-context-failure" data-testid="workspace-failed-action">
+          <span>回應需要處理</span>
+          <p>{{ workspace.roles.find((role) => role.roleId === failedRole)?.name || failedRole }}的回應失敗；重試後會從失敗步驟繼續。</p>
+          <button
+            type="button"
+            class="btn btn-primary btn-sm"
+            :data-testid="`workspace-retry-role-${failedRole.toLowerCase()}`"
+            :disabled="isMeetingRunning || !failedEventFor(failedRole)"
+            @click="retryRole(failedRole)"
+          >{{ isMeetingRunning ? '重試中…' : '重試失敗步驟' }}</button>
+        </section>
         <details class="workspace-scene-details">
           <summary>角色場景（次要狀態視圖）</summary>
           <CouncilStage
@@ -280,7 +304,7 @@ function messageTime(message: WorkspaceMessage): string {
     </aside>
   </section>
 
-  <section v-else class="workspace-no-meeting">
+  <section v-else class="workspace-no-meeting" data-testid="workspace-no-meeting">
     <h2>尚未選擇會議</h2>
     <p>從右上角「新增會議」建立，或到「歷史會議」選擇會議。</p>
   </section>
