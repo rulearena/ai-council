@@ -164,6 +164,42 @@ test('conversation projection preserves saved arrival order and exposes parallel
   )
 })
 
+test('conversation messages format every structured role-output field without exposing raw JSON', () => {
+  const workspace = projectMeetingWorkspace({
+    meeting: {
+      ...brainstormMeeting,
+      events: [{
+        event_id: 'structured', meeting_id: 'meeting-parallel', step_id: 'fanout-1-member-1',
+        role: 'Member-1', attempt: 1, status: 'completed',
+        parsed_output: {
+          summary: '先做小規模驗證',
+          arguments: [{ title: '成本', detail: '可降低首次投入' }],
+          risks: [{ title: '樣本偏差', detail: '需涵蓋不同使用者' }],
+          recommendation: '兩週後檢視成效',
+        },
+        raw_output: '{"summary":"不應直接顯示的原始 JSON"}',
+      }],
+    },
+    mode: brainstormMode,
+  })
+
+  assert.equal(workspace.family, 'conversation')
+  assert.equal(workspace.messages[0]?.content, [
+    '摘要',
+    '先做小規模驗證',
+    '',
+    '論點',
+    '成本：可降低首次投入',
+    '',
+    '風險',
+    '樣本偏差：需涵蓋不同使用者',
+    '',
+    '建議處置',
+    '兩週後檢視成效',
+  ].join('\n'))
+  assert.equal(workspace.messages[0]?.content.includes('原始 JSON'), false)
+})
+
 test('workspace role filters find the latest saved message and reset on meeting switch', () => {
   const workspace = projectMeetingWorkspace({ meeting: brainstormMeeting, mode: brainstormMode })
   const selected = nextWorkspaceRoleFilter(null, 'meeting-parallel', 'Member-3')

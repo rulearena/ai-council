@@ -16,7 +16,14 @@ import { resolveSceneSeats, type SceneConfig, type SeatRole, type SeatRosterEntr
 import { modelDisplayLabel } from '../providers'
 import { roleDisplayName } from '../presentation'
 
-const props = defineProps<{ scene: SceneConfig }>()
+const props = withDefaults(defineProps<{
+  scene: SceneConfig
+  seatTestIdPrefix?: string
+  modelTestIdPrefix?: string
+}>(), {
+  seatTestIdPrefix: 'role-seat',
+  modelTestIdPrefix: 'seat-model-label',
+})
 defineEmits<{ 'seat-click': [role: CouncilRole | 'Chairman'] }>()
 
 const store = inject(councilKey)!
@@ -132,7 +139,7 @@ const latestChairMessage = computed(() => chairmanEvents.value.at(-1)?.content ?
           { 'seat-anchor-bottom': hasPortrait(role) },
         ]"
         :style="seatStyle(role)"
-        :data-testid="`role-seat-${role.toLowerCase()}`"
+        :data-testid="`${seatTestIdPrefix}-${role.toLowerCase()}`"
         :data-status="seatStatus(role)"
         :disabled="!selectedMeeting"
         @click="$emit('seat-click', role)"
@@ -181,7 +188,7 @@ const latestChairMessage = computed(() => chairmanEvents.value.at(-1)?.content ?
               v-if="role !== 'Chairman'"
               class="seat-model-label"
               :class="{ 'seat-model-label-empty': !selectedModels[role] }"
-              :data-testid="`seat-model-label-${role.toLowerCase()}`"
+              :data-testid="`${modelTestIdPrefix}-${role.toLowerCase()}`"
               :title="modelLabelTitle(role)"
             >{{ modelLabelText(role) }}</span>
           </span>

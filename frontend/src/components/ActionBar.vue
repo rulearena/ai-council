@@ -4,6 +4,9 @@ import { activeMode, councilKey, formatDateTime, sequencePresets } from '../comp
 import { nextMeetingMigrationDraft } from '../meetingMigration'
 import { roleDisplayName, stepDisplayLabel } from '../presentation'
 
+const props = withDefaults(defineProps<{ embedded?: boolean }>(), { embedded: false })
+defineEmits<{ 'open-materials': [] }>()
+
 const store = inject(councilKey)!
 const {
   chairMessage,
@@ -133,10 +136,16 @@ const canSubmitChairman = computed(() => {
   if (chairmanAction.value === 'all') return canRun.value && !primaryAction.value.disabled
   return canRun.value
 })
+const hasAiOutput = computed(() => selectedMeeting.value?.events?.some(
+  (event) => !['Human', 'System'].includes(event.role) && event.status === 'completed',
+) ?? false)
+const showPrimaryCta = computed(() => (
+  selectedMeeting.value?.mode_id !== 'courtroom' && (!props.embedded || !hasAiOutput.value)
+))
 </script>
 
 <template>
-  <footer class="action-bar" @keydown="onKeydown">
+  <footer class="action-bar" :class="{ 'action-bar-embedded': embedded }" @keydown="onKeydown">
     <p v-if="error" class="error" data-testid="app-error">{{ error }}</p>
 
     <section
@@ -185,6 +194,15 @@ const canSubmitChairman = computed(() => {
     </p>
 
     <div class="action-bar-row">
+      <button
+        v-if="embedded"
+        type="button"
+        class="btn btn-secondary workspace-materials-button"
+        data-testid="workspace-open-materials"
+        aria-label="開啟案卷與證據"
+        :disabled="!selectedMeeting"
+        @click="$emit('open-materials')"
+      >＋</button>
       <label class="chairman-action-select">
         主席動作
         <select
@@ -214,7 +232,7 @@ const canSubmitChairman = computed(() => {
         {{ chairmanPresentation.submitLabel }}
       </button>
       <button
-        v-if="selectedMeeting?.mode_id !== 'courtroom'"
+        v-if="showPrimaryCta"
         type="button"
         class="btn btn-primary action-bar-cta"
         data-testid="start-meeting-button"

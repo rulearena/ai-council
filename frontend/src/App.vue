@@ -14,6 +14,7 @@ import ModeHelpDrawer from './components/ModeHelpDrawer.vue'
 import CourtroomDocketPanel from './components/CourtroomDocketPanel.vue'
 import MeetingSettingsDrawer from './components/MeetingSettingsDrawer.vue'
 import CaseMaterialsDrawer from './components/CaseMaterialsDrawer.vue'
+import ConversationWorkspace from './components/ConversationWorkspace.vue'
 import { canLeaveMeetingSettings } from './meetingSettingsNavigation'
 
 const store = useCouncil()
@@ -57,11 +58,17 @@ function onSeatClick(role: CouncilRole | 'Chairman') {
       @open-mode-help="navigateFromMeetingSettings(() => modeHelpOpen = true)"
     />
 
-    <CouncilStage :scene="currentScene" @seat-click="onSeatClick" />
-
-    <CourtroomDocketPanel @open-meeting-settings="meetingSettingsOpen = true" />
-
-    <ActionBar />
+    <template v-if="store.selectedMeeting.value?.mode_id === 'courtroom'">
+      <CouncilStage :scene="currentScene" @seat-click="onSeatClick" />
+      <CourtroomDocketPanel @open-meeting-settings="meetingSettingsOpen = true" />
+      <ActionBar />
+    </template>
+    <ConversationWorkspace
+      v-else
+      :scene="currentScene"
+      @role-click="onSeatClick"
+      @open-materials="materialsOpen = true"
+    />
 
     <SettingsModal :show="openModal === 'settings'" @close="closeModal" />
     <MeetingsModal :show="openModal === 'past-topics'" @close="closeModal" />

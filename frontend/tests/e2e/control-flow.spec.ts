@@ -88,6 +88,76 @@ test('New Case requires separate title and goal fields before creation', async (
   await expect(createButton).toBeEnabled()
 })
 
+test('conversation workspace keeps the role rail, chronological feed, and composer together', async ({
+  page,
+}) => {
+  await page.goto('/')
+  const topic = `E2E conversation workspace ${Date.now()}`
+  await createMeetingViaNewCase(page, topic)
+
+  await expect(page.getByTestId('conversation-workspace')).toBeVisible()
+  await expect(page.getByTestId('workspace-role-rail')).toBeVisible()
+  await expect(page.getByTestId('workspace-message-feed')).toBeVisible()
+  await expect(page.getByTestId('workspace-context-panel')).toBeVisible()
+  await expect(page.getByTestId('chair-message-input')).toBeVisible()
+
+  await page.getByTestId('chair-message-input').fill('先確認本次討論的判斷標準。')
+  await page.getByTestId('send-chair-message-button').click()
+  await expect(page.getByTestId('workspace-message-feed')).toContainText('先確認本次討論的判斷標準。')
+
+  await page.getByTestId('workspace-open-materials').click()
+  await expect(page.getByTestId('case-materials-drawer')).toBeVisible()
+})
+
+test('conversation workspace collapses long messages, filters roles, and stays usable at 375px', async ({
+  page,
+}) => {
+  await page.goto('/')
+  const topic = `E2E conversation reading ${Date.now()}`
+  await createMeetingViaNewCase(page, topic)
+
+  const longNote = Array.from({ length: 16 }, (_, index) => `第 ${index + 1} 項主席說明需要保留在時間序中。`).join('\n')
+  await page.getByTestId('chair-message-input').fill(longNote)
+  await page.getByTestId('send-chair-message-button').click()
+  const humanMessage = page.getByTestId('workspace-message').filter({ hasText: '第 1 項主席說明' }).first()
+  await expect(humanMessage.locator('.workspace-message-content')).toHaveClass(/collapsed/)
+  await humanMessage.getByRole('button', { name: '展開完整發言' }).click()
+  await expect(humanMessage.locator('.workspace-message-content')).not.toHaveClass(/collapsed/)
+
+  await page.getByTestId('start-meeting-button').click()
+  await expect(page.getByTestId('operation-status')).toContainText('狀態：已完成', { timeout: 15000 })
+  await page.getByTestId('role-seat-blue').click()
+  await expect(page.getByTestId('workspace-clear-role-filter')).toBeVisible()
+  const filteredMessages = page.getByTestId('workspace-message')
+  await expect(filteredMessages.first()).toHaveAttribute('data-role', 'Blue')
+  expect(await filteredMessages.count()).toBeGreaterThan(0)
+
+  await page.setViewportSize({ width: 375, height: 760 })
+  await expect(page.getByTestId('workspace-role-rail')).toBeVisible()
+  await expect(page.getByTestId('chair-message-input')).toBeVisible()
+  await page.getByRole('button', { name: '開啟會議脈絡' }).click()
+  await expect(page.getByTestId('workspace-context-panel')).toBeVisible()
+})
+
+test('parallel and relay meetings use the same conversation workspace with parallel progress', async ({
+  page,
+}) => {
+  await page.goto('/')
+  const topic = `E2E parallel conversation workspace ${Date.now()}`
+  await createMeetingViaNewCase(page, topic, { modeId: 'six-hats' })
+
+  await expect(page.getByTestId('conversation-workspace')).toBeVisible()
+  await expect(page.getByTestId('workspace-role-rail')).toBeVisible()
+  await expect(page.getByTestId('workspace-message-feed')).toBeVisible()
+  await expect(page.getByTestId('workspace-parallel-progress')).toContainText('0／5 位完成')
+
+  await page.getByTestId('start-meeting-button').click()
+  await expect(page.getByTestId('operation-status')).toContainText('狀態：已完成', { timeout: 15000 })
+  await expect(page.getByTestId('workspace-parallel-progress')).toContainText('5／5 位完成')
+  await expect(page.getByTestId('workspace-parallel-progress')).toContainText('彙整：已完成')
+  await expect(page.locator('.workspace-message-synthesizer')).toHaveCount(1)
+})
+
 test('legacy meeting requires explicit title and goal migration without rewriting events', async ({
   page,
 }) => {

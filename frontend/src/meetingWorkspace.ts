@@ -103,6 +103,7 @@ type WorkspaceParticipant = {
   role_id: string
   display_name?: string | null
   name?: string | null
+  kind?: string | null
 }
 
 type WorkspaceEvent = {
@@ -121,7 +122,16 @@ type WorkspaceEvent = {
   issue_id?: string
   issue_phase?: 'charge' | 'defense' | 'rebuttal' | 'ruling'
   interaction_type?: string
-  parsed_output?: { summary?: string } | null
+  parsed_output?: {
+    summary?: string
+    decision?: string
+    arguments?: Array<{ title: string; detail: string }>
+    findings?: Array<{ title: string; detail: string; evidence_refs?: string[] }>
+    risks?: Array<{ title: string; detail: string; evidence_refs?: string[] }>
+    recommendation?: string
+    conditions?: string[]
+    unresolved_questions?: string[]
+  } | null
   raw_output?: string
 }
 
@@ -157,7 +167,7 @@ export type WorkspaceProjectionMeeting = {
 export type WorkspaceProjectionMode = {
   id: string
   category: string
-  roles: Array<{ id: string; name: string }>
+  roles: Array<{ id: string; name: string; kind?: string }>
   steps?: Array<{ role: string; label: string; template: string }>
   fanout?: { role: string; label: string }
   synthesis?: { role: string; label: string }
@@ -251,12 +261,47 @@ function messageKind(event: WorkspaceEvent, mode: WorkspaceProjectionMode): Work
   return 'ai'
 }
 
+const DECISION_DISPLAY: Record<string, string> = {
+  approve: '核准',
+  'approve-with-conditions': '有條件核准',
+  reject: '否決',
+  'insufficient-evidence': '證據不足',
+}
+
+function titledItems(
+  items: Array<{ title: string; detail: string; evidence_refs?: string[] }> | undefined,
+): string[] {
+  return (items ?? []).map((item) => {
+    const evidence = item.evidence_refs?.length ? `（${item.evidence_refs.join('、')}）` : ''
+    return `${item.title}：${item.detail}${evidence}`
+  })
+}
+
+function formatStructuredOutput(output: NonNullable<WorkspaceEvent['parsed_output']>): string {
+  const sections: string[] = []
+  const addSection = (label: string, lines: Array<string | undefined>) => {
+    const content = lines.filter((line): line is string => Boolean(line?.trim()))
+    if (content.length) sections.push([label, ...content].join('\n'))
+  }
+  addSection('摘要', [output.summary])
+  addSection('裁決', [output.decision ? DECISION_DISPLAY[output.decision] ?? output.decision : undefined])
+  addSection('判定事項', titledItems(output.findings))
+  addSection('論點', titledItems(output.arguments))
+  addSection('風險', titledItems(output.risks))
+  addSection('建議處置', [output.recommendation])
+  addSection('附帶條件', output.conditions ?? [])
+  addSection('待釐清事項', output.unresolved_questions ?? [])
+  return sections.join('\n\n')
+}
+
 function messageContent(event: WorkspaceEvent): string {
-  return event.content
-    ?? event.parsed_output?.summary
-    ?? event.raw_output
-    ?? event.error
-    ?? ''
+  if (event.content !== undefined) return event.content
+  if (event.status === 'failed') return event.error ?? '本次回應失敗。'
+  if (event.parsed_output) {
+    const formatted = formatStructuredOutput(event.parsed_output)
+    if (formatted) return formatted
+  }
+  return event.raw_output ?? event.error ?? ''
 }
 
 function projectMessages(
@@ -337,8 +382,14 @@ function projectParallel(
   if (mode.category !== 'parallel' || !mode.fanout) return null
   const memberRoleIds = new Set(
     meeting.participants
-      .map((participant) => participant.role_id)
-      .filter((roleId) => roleId === mode.fanout?.role || roleId.startsWith(`${mode.fanout?.role}-`)),
+      .filter((participant) => {
+        const kind = participant.kind ?? mode.roles.find((role) => role.id === participant.role_id)?.kind
+        return kind
+          ? kind === 'member'
+          : participant.role_id === mode.fanout?.role
+            || participant.role_id.startsWith(`${mode.fanout?.role}-`)
+      })
+      .map((participant) => participant.role_id),
   )
   const latestMembers = latestRoundMemberEvents(meeting.events ?? [], memberRoleIds)
   const currentRound = latestMembers.length
