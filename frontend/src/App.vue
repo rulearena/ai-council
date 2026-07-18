@@ -3,8 +3,6 @@ import { provide, ref } from 'vue'
 import { councilKey, useCouncil, type CouncilRole } from './composables/useCouncil'
 import { useScenePreference } from './scenes'
 import TopBar from './components/TopBar.vue'
-import CouncilStage from './components/CouncilStage.vue'
-import ActionBar from './components/ActionBar.vue'
 import SettingsModal from './components/SettingsModal.vue'
 import MeetingsModal from './components/MeetingsModal.vue'
 import NewCaseModal from './components/NewCaseModal.vue'
@@ -59,9 +57,12 @@ function onSeatClick(role: CouncilRole | 'Chairman') {
     />
 
     <template v-if="store.selectedMeeting.value?.mode_id === 'courtroom'">
-      <CouncilStage :scene="currentScene" @seat-click="onSeatClick" />
-      <CourtroomDocketPanel @open-meeting-settings="meetingSettingsOpen = true" />
-      <ActionBar />
+      <CourtroomDocketPanel
+        :scene="currentScene"
+        @open-meeting-settings="meetingSettingsOpen = true"
+        @open-materials="materialsOpen = true"
+        @role-click="onSeatClick"
+      />
     </template>
     <ConversationWorkspace
       v-else

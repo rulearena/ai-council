@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, inject, reactive, ref, watch } from 'vue'
+import { computed, inject, nextTick, reactive, ref, watch } from 'vue'
 import {
   ApiError,
   confirmCourtroomIssues,
@@ -10,7 +10,15 @@ import {
   type CourtroomCivilFinal,
   type CourtroomCriminalFinal,
 } from '../api'
-import { councilKey } from '../composables/useCouncil'
+import {
+  activeMode,
+  councilKey,
+  formatDateTime,
+  roleClass,
+  roleColorVars,
+  roleIcon,
+  type CouncilRole,
+} from '../composables/useCouncil'
 import {
   courtroomFailedPhaseLabel,
   courtroomFinalOutcomeLabel,
@@ -19,8 +27,29 @@ import {
   nextCourtroomDraft,
   type CourtroomDraft,
 } from '../courtroomWorkspace'
+import {
+  latestWorkspaceMessageTarget,
+  messageClampPolicy,
+  nextWorkspaceRoleFilter,
+  projectMeetingWorkspace,
+  type CourtHearingWorkspaceProjection,
+  type CourtHearingIssueGroup,
+  type WorkspaceMessage,
+  type WorkspaceProjectionMeeting,
+  type WorkspaceRoleFilter,
+} from '../meetingWorkspace'
+import { modelDisplayLabel } from '../providers'
+import type { SceneConfig } from '../scenes'
+import ActionBar from './ActionBar.vue'
+import CouncilStage from './CouncilStage.vue'
+import RoleSilhouette from './RoleSilhouette.vue'
 
-const emit = defineEmits<{ 'open-meeting-settings': [] }>()
+defineProps<{ scene: SceneConfig }>()
+const emit = defineEmits<{
+  'open-meeting-settings': []
+  'open-materials': []
+  'role-click': [role: CouncilRole | 'Chairman']
+}>()
 
 const store = inject(councilKey)!
 const {
@@ -33,12 +62,20 @@ const {
   openMeeting,
   refreshMeetingUntilSettled,
   retrySelectedStep,
+  pendingRoles,
+  selectedModels,
+  models,
+  operationStatusText,
+  currentStepProgress,
 } = store
 
 const drafts = reactive<Record<string, CourtroomDraft>>({})
 const busy = ref(false)
 const feedback = ref('')
 const localError = ref('')
+const roleFilter = ref<WorkspaceRoleFilter | null>(null)
+const expandedMessageIds = ref(new Set<string>())
+const contextCollapsed = ref(false)
 
 const courtroom = computed(() => selectedMeeting.value?.courtroom ?? null)
 const meetingId = computed(() => selectedMeeting.value?.meeting_id ?? '')
@@ -84,6 +121,23 @@ const primaryExplanation = computed(() => ({
   'courtroom-ruling': '按下後才會呼叫法官；不會自動判斷。',
   'courtroom-final': '所有爭點均已判斷；按下後才會請法官作成全案最終判決。',
 } as Record<string, string>)[primaryAction.value.kind] ?? '')
+const workspace = computed<CourtHearingWorkspaceProjection | null>(() => {
+  const meeting = selectedMeeting.value
+  if (!meeting || meeting.mode_id !== 'courtroom') return null
+  const projected = projectMeetingWorkspace({
+    meeting: meeting as WorkspaceProjectionMeeting,
+    mode: activeMode.value,
+    thinkingRoleIds: pendingRoles.value,
+  })
+  return projected.family === 'court-hearing' ? projected : null
+})
+const selectedRoleId = computed(() => {
+  const filter = roleFilter.value
+  return filter && filter.meetingId === workspace.value?.meetingId ? filter.roleId : null
+})
+const courtGeneralMessages = computed(() => (workspace.value?.ungroupedMessages ?? []).filter(
+  (message) => !message.event.interaction_type?.startsWith('courtroom-'),
+))
 
 watch(
   () => {
@@ -105,6 +159,74 @@ watch(
   },
   { immediate: true },
 )
+
+watch(() => selectedMeeting.value?.meeting_id, () => {
+  roleFilter.value = null
+  expandedMessageIds.value = new Set()
+})
+
+function roleState(roleId: string) {
+  return workspace.value?.roles.find((role) => role.roleId === roleId)?.state ?? 'waiting'
+}
+
+function roleStateLabel(state: ReturnType<typeof roleState>): string {
+  if (state === 'thinking') return '思考中'
+  if (state === 'completed') return '已完成'
+  if (state === 'failed') return '失敗'
+  return '等待中'
+}
+
+function roleModelLabel(roleId: string): string {
+  const modelId = selectedModels.value[roleId]
+  const model = models.value.find((candidate) => candidate.id === modelId)
+  return model ? modelDisplayLabel(model) : modelId || '未選模型'
+}
+
+function filteredMessages(messages: WorkspaceMessage[]): WorkspaceMessage[] {
+  const seen = new Set<string>()
+  return messages.filter((message) => {
+    if (seen.has(message.id)) return false
+    seen.add(message.id)
+    return !selectedRoleId.value || message.roleId === selectedRoleId.value
+  })
+}
+
+function issueGroup(issueId: string): CourtHearingIssueGroup | undefined {
+  return workspace.value?.issues.find((group) => group.issue.id === issueId)
+}
+
+function toggleMessage(messageId: string) {
+  const next = new Set(expandedMessageIds.value)
+  if (next.has(messageId)) next.delete(messageId)
+  else next.add(messageId)
+  expandedMessageIds.value = next
+}
+
+function isExpanded(message: WorkspaceMessage): boolean {
+  return expandedMessageIds.value.has(message.id)
+}
+
+async function selectRole(roleId?: string) {
+  const currentWorkspace = workspace.value
+  if (!currentWorkspace) return
+  roleFilter.value = nextWorkspaceRoleFilter(roleFilter.value, currentWorkspace.meetingId, roleId)
+  await nextTick()
+  const target = latestWorkspaceMessageTarget(currentWorkspace, roleFilter.value)
+  if (target) document.getElementById(`court-message-${target}`)?.scrollIntoView({ block: 'nearest' })
+}
+
+function phaseLabel(phase: string): string {
+  return ({
+    charge: courtroom.value?.case_type === 'civil' ? '原告代理人主張' : '檢察官主張',
+    defense: courtroom.value?.case_type === 'civil' ? '被告代理人答辯' : '辯護律師答辯',
+    rebuttal: courtroom.value?.case_type === 'civil' ? '原告代理人反駁' : '檢察官反駁',
+    ruling: '法官判斷',
+  } as Record<string, string>)[phase] ?? phase
+}
+
+function messageTime(message: WorkspaceMessage): string {
+  return message.createdAt ? formatDateTime(message.createdAt) : ''
+}
 
 function errorMessage(error: unknown): string {
   if (error instanceof ApiError) {
@@ -206,121 +328,201 @@ function ruling(issue: CourtroomIssueProjection) {
 </script>
 
 <template>
-  <section v-if="isCourtroom && courtroom" class="courtroom-docket" data-testid="courtroom-docket-panel">
-    <header class="courtroom-docket-header">
-      <div>
-        <h2>爭點審理</h2>
-        <p v-if="courtroom.status !== 'confirmed'">先建立並確認爭點；確認前不會開始審理。</p>
-        <p v-else>一次只處理一個爭點；每次攻防與法官判斷後都會停下等待主席。</p>
-      </div>
-      <span class="docket-state" data-testid="courtroom-docket-status">
-        {{ courtroom.status === 'confirmed' ? '已確認' : '草稿，尚未開始審理' }}
-      </span>
-    </header>
-
-    <div v-if="courtroom.requires_case_type" class="courtroom-case-type-gate" data-testid="legacy-courtroom-case-type-gate">
-      <p>這是舊法院會議。請到會議設定選擇案件類型並一次儲存全部設定，AI 才能依正確角色與法律流程繼續。</p>
-      <button type="button" class="btn btn-primary" data-testid="open-meeting-settings-from-courtroom" @click="emit('open-meeting-settings')">前往會議設定</button>
-    </div>
-
-    <template v-else-if="courtroom.status !== 'confirmed'">
-      <div class="courtroom-draft-actions">
-        <button type="button" class="btn btn-secondary" data-testid="generate-courtroom-draft-button" :disabled="busy || isMeetingRunning" @click="generateDraft">
-          <span v-if="busy || isMeetingRunning" class="loading-spinner" aria-hidden="true"></span>
-          {{ busy || isMeetingRunning ? '正在產生爭點草稿…' : '讓 AI 產生爭點草稿' }}
-        </button>
-        <button type="button" class="btn btn-secondary" data-testid="add-courtroom-issue-button" :disabled="!editable" @click="addIssue">手動新增爭點</button>
-      </div>
-      <p v-if="failedDraft" class="error" data-testid="courtroom-draft-error">
-        AI 草稿產生失敗：{{ failedDraft.error || '請重試，或改用手動新增爭點。' }}
-        <button type="button" class="btn btn-secondary btn-sm" data-testid="retry-courtroom-draft-button" :disabled="busy || isMeetingRunning" @click="retryDraft">重試 AI 草稿</button>
-      </p>
-      <ol v-if="draft.issues.length" class="courtroom-issue-editor" data-testid="courtroom-issue-editor">
-        <li v-for="(issue, index) in draft.issues" :key="issue.id ?? `new-${index}`">
-          <span class="issue-number">{{ index + 1 }}</span>
-          <input v-model="issue.title" :data-testid="`courtroom-issue-title-${index}`" :aria-label="`爭點 ${index + 1}`" :disabled="!editable" />
-          <button type="button" class="btn btn-ghost btn-sm" :aria-label="`上移爭點 ${index + 1}`" :disabled="!editable || index === 0" @click="moveIssue(index, -1)">↑</button>
-          <button type="button" class="btn btn-ghost btn-sm" :aria-label="`下移爭點 ${index + 1}`" :disabled="!editable || index === draft.issues.length - 1" @click="moveIssue(index, 1)">↓</button>
-          <button type="button" class="btn btn-ghost btn-sm" :aria-label="`刪除爭點 ${index + 1}`" :disabled="!editable" @click="removeIssue(index)">刪除</button>
-        </li>
-      </ol>
-      <p v-else class="empty-state" data-testid="courtroom-empty-docket">尚無爭點。可請 AI 產生草稿，或由主席手動新增。</p>
-      <div class="courtroom-confirm-actions">
-        <button type="button" class="btn btn-secondary" data-testid="save-courtroom-issues-button" :disabled="busy || !dirty || !draft.issues.length || draft.issues.some(issue => !issue.title.trim())" @click="saveIssues">儲存爭點草稿</button>
-        <button type="button" class="btn btn-primary" data-testid="confirm-courtroom-issues-button" :disabled="busy || dirty || !courtroom.issues.length" @click="confirmIssues">確認爭點並鎖定目標</button>
-      </div>
-    </template>
-
-    <ol v-else class="courtroom-issue-progress" data-testid="courtroom-issue-progress">
-      <li v-for="issue in courtroom.issues" :key="issue.id" :class="{ current: issue.id === courtroom.current_issue_id }" :data-issue-id="issue.id">
-        <header>
-          <strong>{{ issue.position }}. {{ issue.title }}</strong>
-          <span>{{ courtroomIssueStatusLabel(issue.status) }}</span>
-        </header>
-        <p v-if="issue.id === courtroom.current_issue_id" class="current-focus">目前焦點</p>
-        <section v-if="issue.status === 'failed'" class="issue-failure" :data-testid="`courtroom-issue-failure-${issue.id}`">
-          <p><strong>{{ issue.failed_phase_display || courtroomFailedPhaseLabel(issue.failed_phase) }}執行失敗，請重試。</strong></p>
-          <button
-            type="button"
-            class="btn btn-primary btn-sm"
-            :data-testid="`retry-courtroom-issue-${issue.id}`"
-            :disabled="busy || isMeetingRunning || !failedEvent(issue)"
-            @click="retryIssue(issue)"
-          >
-            {{ busy || isMeetingRunning ? '重新執行中…' : `重試${issue.failed_phase_display || courtroomFailedPhaseLabel(issue.failed_phase)}` }}
-          </button>
-          <p v-if="!failedEvent(issue)" class="error">找不到可重試的失敗紀錄，請到「會議紀錄」查看診斷。</p>
-        </section>
-        <p
-          v-if="issue.status === 'awaiting-ruling'"
-          class="awaiting-ruling-explanation"
-          :data-testid="`courtroom-awaiting-ruling-${issue.id}`"
-        >攻防已完成，等待主席送交法官；不會自動判斷。</p>
-        <section v-if="ruling(issue)" class="issue-ruling" :data-testid="`courtroom-ruling-${issue.id}`">
-          <h3>法官對此爭點的判斷：{{ courtroomOutcomeLabel(ruling(issue)!.outcome, courtroom.case_type) }}</h3>
-          <p><strong>理由：</strong>{{ ruling(issue)!.reasoning }}</p>
-          <p><strong>證據：</strong>{{ ruling(issue)!.evidence_refs.length ? ruling(issue)!.evidence_refs.join('、') : '未引用證據' }}</p>
-          <p><strong>未解問題：</strong>{{ ruling(issue)!.unresolved_questions.length ? ruling(issue)!.unresolved_questions.join('；') : '無' }}</p>
-        </section>
-      </li>
-    </ol>
-
-    <div
-      v-if="courtroom.status === 'confirmed' && courtroom.final_status !== 'completed' && !failedIssue"
-      class="courtroom-primary-action"
-      data-testid="courtroom-sticky-primary-action"
-    >
-      <p v-if="currentIssue">目前焦點：{{ currentIssue.title }}</p>
-      <small v-if="primaryExplanation" data-testid="courtroom-primary-action-explanation">{{ primaryExplanation }}</small>
-      <button type="button" class="btn btn-primary" data-testid="courtroom-primary-action" :disabled="busy || isMeetingRunning || primaryAction.disabled" @click="startOrContinueMeeting">
-        {{ isMeetingRunning ? '執行中…' : primaryLabel }}
+  <section v-if="isCourtroom && courtroom && workspace && selectedMeeting" class="conversation-workspace court-hearing-workspace" data-testid="court-hearing-workspace">
+    <nav class="workspace-role-rail" data-testid="workspace-role-rail" aria-label="法庭角色">
+      <button type="button" class="workspace-role-button workspace-role-chairman" data-testid="role-seat-chairman" data-status="chairman" aria-label="主席" @click="emit('role-click', 'Chairman')">
+        <span class="workspace-role-avatar"><RoleSilhouette color="currentColor" :size="26" /></span>
+        <span class="workspace-role-name">主席</span>
       </button>
-    </div>
+      <button
+        v-for="role in workspace.roles"
+        :key="role.roleId"
+        type="button"
+        class="workspace-role-button"
+        :class="[roleClass(role.roleId), { active: selectedRoleId === role.roleId }]"
+        :style="roleColorVars(role.roleId)"
+        :data-testid="`role-seat-${role.roleId.toLowerCase()}`"
+        :data-status="role.state"
+        :aria-label="`${role.name}，${roleStateLabel(role.state)}`"
+        :aria-pressed="selectedRoleId === role.roleId"
+        @click="selectRole(role.roleId)"
+      >
+        <span class="workspace-role-avatar">
+          <img v-if="roleIcon(role.roleId)" :src="roleIcon(role.roleId)" :alt="role.name" />
+          <RoleSilhouette v-else :color="'var(--role-color)'" :size="26" />
+          <i v-if="role.state === 'thinking'" class="workspace-thinking-pulse" aria-hidden="true"></i>
+        </span>
+        <span class="workspace-role-name">{{ role.name }}</span>
+        <span class="workspace-role-state">{{ roleStateLabel(role.state) }}</span>
+        <span class="workspace-role-model" :title="roleModelLabel(role.roleId)" :data-testid="`seat-model-label-${role.roleId.toLowerCase()}`">{{ roleModelLabel(role.roleId) }}</span>
+      </button>
+    </nav>
 
-    <section v-if="finalVerdict" class="courtroom-final-verdict" data-testid="courtroom-final-verdict">
-      <h3>最終判決</h3>
-      <p>{{ finalVerdict.summary }}</p>
-      <template v-if="civilFinal">
-        <article v-for="claim in civilFinal.claims" :key="claim.claim">
-          <h4>{{ claim.claim }}：{{ courtroomFinalOutcomeLabel(claim.outcome, 'civil') }}</h4>
-          <p><strong>理由：</strong>{{ claim.reasoning }}</p>
-          <p><strong>給付／義務：</strong>{{ claim.relief.obligation }}</p>
-          <p v-if="claim.relief.monetary_amount"><strong>金額：</strong>{{ claim.relief.monetary_amount }}</p>
-          <p v-if="claim.relief.calculation_basis"><strong>計算基礎：</strong>{{ claim.relief.calculation_basis }}</p>
-          <p><strong>證據：</strong>{{ claim.evidence_refs.join('、') || '未引用證據' }}</p>
-        </article>
-      </template>
-      <template v-else-if="criminalFinal">
-        <article v-for="charge in criminalFinal.charges" :key="charge.charge">
-          <h4>{{ charge.charge }}：{{ courtroomFinalOutcomeLabel(charge.decision, 'criminal') }}</h4>
-          <p><strong>理由：</strong>{{ charge.reasoning }}</p>
-          <p><strong>證據：</strong>{{ charge.evidence_refs.join('、') || '未引用證據' }}</p>
-        </article>
-        <p><strong>量刑考量：</strong>{{ criminalFinal.sentencing_factors.join('、') || '無' }}</p>
-      </template>
+    <section class="workspace-conversation-column" data-testid="court-hearing-record">
+      <header class="workspace-conversation-header">
+        <div>
+          <span class="workspace-eyebrow">法院庭審</span>
+          <h2>{{ selectedMeeting.title }}</h2>
+        </div>
+        <button v-if="selectedRoleId" type="button" class="btn btn-ghost btn-sm" data-testid="workspace-clear-role-filter" @click="selectRole()">顯示全部庭審紀錄</button>
+      </header>
+
+      <div class="court-hearing-scroll">
+        <section class="courtroom-docket" data-testid="courtroom-docket-panel">
+          <header class="courtroom-docket-header">
+            <div>
+              <h2>爭點審理</h2>
+              <p v-if="courtroom.status !== 'confirmed'">先建立並確認爭點；確認前不會開始審理。</p>
+              <p v-else>一次只處理一個爭點；攻防與法官判斷分階段保存。</p>
+            </div>
+            <span class="docket-state" data-testid="courtroom-docket-status">{{ courtroom.status === 'confirmed' ? '已確認' : '草稿，尚未開始審理' }}</span>
+          </header>
+
+          <section v-if="courtGeneralMessages.length" class="court-hearing-phase court-hearing-supplements" data-testid="court-hearing-general-record">
+            <h3>主席與程序補充</h3>
+            <article
+              v-for="message in filteredMessages(courtGeneralMessages)"
+              :id="`court-message-${message.id}`"
+              :key="message.id"
+              class="court-hearing-message"
+              :data-role="message.roleId"
+            >
+              <header><strong>{{ message.roleName }}</strong><time v-if="message.createdAt" :datetime="message.createdAt">{{ messageTime(message) }}</time></header>
+              <p class="workspace-message-content" :class="{ collapsed: messageClampPolicy(message.content).collapsible && !isExpanded(message) }">{{ message.content || '（沒有文字內容）' }}</p>
+              <button v-if="messageClampPolicy(message.content).collapsible" type="button" class="workspace-message-toggle" :aria-expanded="isExpanded(message)" @click="toggleMessage(message.id)">{{ isExpanded(message) ? '收合長文' : '展開完整發言' }}</button>
+            </article>
+          </section>
+
+          <div v-if="courtroom.requires_case_type" class="courtroom-case-type-gate" data-testid="legacy-courtroom-case-type-gate">
+            <p>這是舊法院會議。請到會議設定選擇案件類型並一次儲存全部設定，AI 才能依正確角色與法律流程繼續。</p>
+            <button type="button" class="btn btn-primary" data-testid="open-meeting-settings-from-courtroom" @click="emit('open-meeting-settings')">前往會議設定</button>
+          </div>
+
+          <template v-else-if="courtroom.status !== 'confirmed'">
+            <div class="courtroom-draft-actions">
+              <button type="button" class="btn btn-secondary" data-testid="generate-courtroom-draft-button" :disabled="busy || isMeetingRunning" @click="generateDraft">
+                <span v-if="busy || isMeetingRunning" class="loading-spinner" aria-hidden="true"></span>
+                {{ busy || isMeetingRunning ? '正在產生爭點草稿…' : '讓 AI 產生爭點草稿' }}
+              </button>
+              <button type="button" class="btn btn-secondary" data-testid="add-courtroom-issue-button" :disabled="!editable" @click="addIssue">手動新增爭點</button>
+            </div>
+            <p v-if="failedDraft" class="error" data-testid="courtroom-draft-error">
+              AI 草稿產生失敗：{{ failedDraft.error || '請重試，或改用手動新增爭點。' }}
+              <button type="button" class="btn btn-secondary btn-sm" data-testid="retry-courtroom-draft-button" :disabled="busy || isMeetingRunning" @click="retryDraft">重試 AI 草稿</button>
+            </p>
+            <ol v-if="draft.issues.length" class="courtroom-issue-editor" data-testid="courtroom-issue-editor">
+              <li v-for="(issue, index) in draft.issues" :key="issue.id ?? `new-${index}`">
+                <span class="issue-number">{{ index + 1 }}</span>
+                <input v-model="issue.title" :data-testid="`courtroom-issue-title-${index}`" :aria-label="`爭點 ${index + 1}`" :disabled="!editable" />
+                <button type="button" class="btn btn-ghost btn-sm" :aria-label="`上移爭點 ${index + 1}`" :disabled="!editable || index === 0" @click="moveIssue(index, -1)">↑</button>
+                <button type="button" class="btn btn-ghost btn-sm" :aria-label="`下移爭點 ${index + 1}`" :disabled="!editable || index === draft.issues.length - 1" @click="moveIssue(index, 1)">↓</button>
+                <button type="button" class="btn btn-ghost btn-sm" :aria-label="`刪除爭點 ${index + 1}`" :disabled="!editable" @click="removeIssue(index)">刪除</button>
+              </li>
+            </ol>
+            <p v-else class="empty-state" data-testid="courtroom-empty-docket">尚無爭點。可請 AI 產生草稿，或由主席手動新增。</p>
+            <div class="courtroom-confirm-actions">
+              <button type="button" class="btn btn-secondary" data-testid="save-courtroom-issues-button" :disabled="busy || !dirty || !draft.issues.length || draft.issues.some(issue => !issue.title.trim())" @click="saveIssues">儲存爭點草稿</button>
+              <button type="button" class="btn btn-primary" data-testid="confirm-courtroom-issues-button" :disabled="busy || dirty || !courtroom.issues.length" @click="confirmIssues">確認爭點並鎖定目標</button>
+            </div>
+          </template>
+
+          <ol v-else class="courtroom-issue-progress" data-testid="courtroom-issue-progress">
+            <li
+              v-for="issue in courtroom.issues"
+              :key="issue.id"
+              :class="{ current: issue.id === courtroom.current_issue_id }"
+              :data-issue-id="issue.id"
+              :data-testid="`court-issue-group-${issue.id}`"
+            >
+              <header><strong>{{ issue.position }}. {{ issue.title }}</strong><span>{{ courtroomIssueStatusLabel(issue.status) }}</span></header>
+              <p v-if="issue.id === courtroom.current_issue_id" class="current-focus">目前焦點</p>
+
+              <section
+                v-for="phase in issueGroup(issue.id)?.phases ?? []"
+                :key="phase.phase"
+                class="court-hearing-phase"
+                :data-testid="`court-phase-${phase.phase}-${issue.id}`"
+              >
+                <h3>{{ phaseLabel(phase.phase) }}</h3>
+                <article
+                  v-for="message in filteredMessages(phase.messages)"
+                  :id="`court-message-${message.id}`"
+                  :key="message.id"
+                  class="court-hearing-message"
+                  :style="roleColorVars(message.roleId)"
+                  :data-role="message.roleId"
+                >
+                  <header><strong>{{ message.roleName }}</strong><time v-if="message.createdAt" :datetime="message.createdAt">{{ messageTime(message) }}</time></header>
+                  <p class="workspace-message-content" :class="{ collapsed: messageClampPolicy(message.content).collapsible && !isExpanded(message) }">{{ message.content || '（沒有文字內容）' }}</p>
+                  <button v-if="messageClampPolicy(message.content).collapsible" type="button" class="workspace-message-toggle" :aria-expanded="isExpanded(message)" @click="toggleMessage(message.id)">{{ isExpanded(message) ? '收合長文' : '展開完整發言' }}</button>
+                </article>
+                <p v-if="selectedRoleId && !filteredMessages(phase.messages).length" class="court-filter-empty">此階段沒有這個角色的發言。</p>
+              </section>
+
+              <section v-if="issueGroup(issue.id)?.otherMessages.length" class="court-hearing-phase court-hearing-supplements">
+                <h3>庭審補充</h3>
+                <article v-for="message in filteredMessages(issueGroup(issue.id)?.otherMessages ?? [])" :id="`court-message-${message.id}`" :key="message.id" class="court-hearing-message" :data-role="message.roleId">
+                  <header><strong>{{ message.roleName }}</strong><time v-if="message.createdAt" :datetime="message.createdAt">{{ messageTime(message) }}</time></header>
+                  <p class="workspace-message-content" :class="{ collapsed: messageClampPolicy(message.content).collapsible && !isExpanded(message) }">{{ message.content || '（沒有文字內容）' }}</p>
+                  <button v-if="messageClampPolicy(message.content).collapsible" type="button" class="workspace-message-toggle" :aria-expanded="isExpanded(message)" @click="toggleMessage(message.id)">{{ isExpanded(message) ? '收合長文' : '展開完整發言' }}</button>
+                </article>
+              </section>
+
+              <section v-if="issue.status === 'failed'" class="issue-failure" :data-testid="`courtroom-issue-failure-${issue.id}`">
+                <p><strong>{{ issue.failed_phase_display || courtroomFailedPhaseLabel(issue.failed_phase) }}執行失敗，請重試。</strong></p>
+                <button type="button" class="btn btn-primary btn-sm" :data-testid="`retry-courtroom-issue-${issue.id}`" :disabled="busy || isMeetingRunning || !failedEvent(issue)" @click="retryIssue(issue)">{{ busy || isMeetingRunning ? '重新執行中…' : `重試${issue.failed_phase_display || courtroomFailedPhaseLabel(issue.failed_phase)}` }}</button>
+                <p v-if="!failedEvent(issue)" class="error">找不到可重試的失敗紀錄，請到「會議紀錄」查看診斷。</p>
+              </section>
+              <p v-if="issue.status === 'awaiting-ruling'" class="awaiting-ruling-explanation" :data-testid="`courtroom-awaiting-ruling-${issue.id}`">攻防已完成，等待主席送交法官；不會自動判斷。</p>
+              <section v-if="ruling(issue)" class="issue-ruling" :data-testid="`courtroom-ruling-${issue.id}`">
+                <h3>法官對此爭點的判斷：{{ courtroomOutcomeLabel(ruling(issue)!.outcome, courtroom.case_type) }}</h3>
+                <p><strong>理由：</strong>{{ ruling(issue)!.reasoning }}</p>
+                <p><strong>證據：</strong>{{ ruling(issue)!.evidence_refs.length ? ruling(issue)!.evidence_refs.join('、') : '未引用證據' }}</p>
+                <p><strong>未解問題：</strong>{{ ruling(issue)!.unresolved_questions.length ? ruling(issue)!.unresolved_questions.join('；') : '無' }}</p>
+              </section>
+            </li>
+          </ol>
+
+          <section v-if="finalVerdict" class="courtroom-final-verdict" data-testid="courtroom-final-verdict">
+            <h3>最終判決</h3><p>{{ finalVerdict.summary }}</p>
+            <template v-if="civilFinal">
+              <article v-for="claim in civilFinal.claims" :key="claim.claim">
+                <h4>{{ claim.claim }}：{{ courtroomFinalOutcomeLabel(claim.outcome, 'civil') }}</h4>
+                <p><strong>理由：</strong>{{ claim.reasoning }}</p><p><strong>給付／義務：</strong>{{ claim.relief.obligation }}</p>
+                <p v-if="claim.relief.monetary_amount"><strong>金額：</strong>{{ claim.relief.monetary_amount }}</p>
+                <p v-if="claim.relief.calculation_basis"><strong>計算基礎：</strong>{{ claim.relief.calculation_basis }}</p>
+                <p><strong>證據：</strong>{{ claim.evidence_refs.join('、') || '未引用證據' }}</p>
+              </article>
+            </template>
+            <template v-else-if="criminalFinal">
+              <article v-for="charge in criminalFinal.charges" :key="charge.charge">
+                <h4>{{ charge.charge }}：{{ courtroomFinalOutcomeLabel(charge.decision, 'criminal') }}</h4><p><strong>理由：</strong>{{ charge.reasoning }}</p><p><strong>證據：</strong>{{ charge.evidence_refs.join('、') || '未引用證據' }}</p>
+              </article>
+              <p><strong>量刑考量：</strong>{{ criminalFinal.sentencing_factors.join('、') || '無' }}</p>
+            </template>
+          </section>
+
+          <p v-if="feedback" class="success" data-testid="courtroom-workspace-feedback">{{ feedback }}</p>
+          <p v-if="localError" class="error" data-testid="courtroom-workspace-error">{{ localError }}</p>
+        </section>
+      </div>
+
+      <ActionBar embedded @open-materials="emit('open-materials')" />
     </section>
 
-    <p v-if="feedback" class="success" data-testid="courtroom-workspace-feedback">{{ feedback }}</p>
-    <p v-if="localError" class="error" data-testid="courtroom-workspace-error">{{ localError }}</p>
+    <aside class="workspace-context-panel court-formal-context" :class="{ collapsed: contextCollapsed }" data-testid="court-formal-context">
+      <header><strong>正式流程</strong><button type="button" class="btn btn-ghost btn-icon" :aria-label="contextCollapsed ? '展開正式流程' : '收合正式流程'" :aria-expanded="!contextCollapsed" @click="contextCollapsed = !contextCollapsed">{{ contextCollapsed ? '‹' : '›' }}</button></header>
+      <div v-if="!contextCollapsed" class="workspace-context-body">
+        <section><span>AI 最終目標</span><p>{{ selectedMeeting.goal }}</p></section>
+        <section class="workspace-context-status"><span>目前狀態</span><strong>{{ operationStatusText }}</strong><small v-if="currentStepProgress">第 {{ currentStepProgress.index }}／{{ currentStepProgress.total }} 步 · {{ currentStepProgress.label }}</small></section>
+        <div v-if="courtroom.status === 'confirmed' && courtroom.final_status !== 'completed' && !failedIssue" class="courtroom-primary-action" data-testid="courtroom-sticky-primary-action">
+          <p v-if="currentIssue">目前焦點：{{ currentIssue.title }}</p>
+          <small v-if="primaryExplanation" data-testid="courtroom-primary-action-explanation">{{ primaryExplanation }}</small>
+          <button type="button" class="btn btn-primary" data-testid="courtroom-primary-action" :disabled="busy || isMeetingRunning || primaryAction.disabled" @click="startOrContinueMeeting">{{ isMeetingRunning ? '執行中…' : primaryLabel }}</button>
+        </div>
+        <section><span>庭審補充</span><p>下方輸入框只會記錄補充，或請後端允許的指定角色回應；不會裁定或推進正式流程。</p></section>
+        <details class="workspace-scene-details"><summary>角色場景（次要狀態視圖）</summary><CouncilStage :scene="scene" seat-test-id-prefix="scene-role-seat" model-test-id-prefix="scene-seat-model-label" @seat-click="emit('role-click', $event)" /></details>
+      </div>
+    </aside>
   </section>
 </template>

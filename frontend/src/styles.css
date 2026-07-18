@@ -1057,6 +1057,60 @@ h2 {
   text-align: center;
 }
 
+/* Court Hearing reuses the A3-1 shell, but its centre is a formal issue record rather
+   than a chat feed. Workflow actions stay in the context column so typing a note can
+   never be mistaken for advancing the court state machine. */
+.court-hearing-scroll {
+  min-height: 0;
+  overflow-y: auto;
+  padding: 18px clamp(10px, 2vw, 28px);
+}
+
+.court-hearing-scroll .courtroom-docket {
+  margin: 0;
+}
+
+.court-hearing-phase {
+  margin-top: 12px;
+  padding: 12px;
+  border-left: 3px solid var(--color-border-strong);
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+  background: rgba(255, 255, 255, 0.025);
+}
+
+.court-hearing-phase > h3 {
+  margin: 0 0 10px;
+  color: var(--color-text-secondary);
+  font-size: 13px;
+}
+
+.court-hearing-message {
+  padding: 10px 12px;
+  border: 1px solid color-mix(in srgb, var(--role-color, var(--color-border)) 45%, var(--color-border));
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--role-color, var(--color-surface)) 5%, var(--color-surface));
+}
+
+.court-hearing-message + .court-hearing-message { margin-top: 8px; }
+.court-hearing-message > header { display: flex; gap: 8px; margin-bottom: 6px; font-size: 12px; }
+.court-hearing-message > header time { margin-left: auto; color: var(--color-text-muted); font-size: 10px; }
+.court-filter-empty { margin: 0; color: var(--color-text-muted); font-size: 12px; }
+
+.court-formal-context .courtroom-primary-action {
+  position: sticky;
+  top: 12px;
+  bottom: auto;
+  z-index: 2;
+  display: grid;
+  align-items: stretch;
+  padding: 12px;
+  border: 1px solid rgba(74, 144, 226, 0.42);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface);
+}
+
+.court-formal-context .courtroom-primary-action .btn { width: 100%; }
+
 @keyframes workspace-pulse {
   0% { transform: scale(0.9); opacity: 0.9; }
   100% { transform: scale(1.25); opacity: 0; }
@@ -2495,6 +2549,26 @@ pre {
   .workspace-context-panel.mobile-open { display: block; }
   .workspace-context-panel.mobile-open.collapsed { width: min(310px, 88vw); }
   .workspace-context-panel.mobile-open > header strong { display: inline; }
+  .court-hearing-workspace .court-formal-context {
+    display: block;
+    position: static;
+    inset: auto;
+    width: auto;
+    grid-row: 2;
+    z-index: auto;
+    border-top: 1px solid var(--color-border);
+    border-left: 0;
+    box-shadow: none;
+  }
+  .court-hearing-workspace { grid-template-rows: auto auto minmax(0, 1fr); }
+  .court-hearing-workspace .workspace-role-rail { grid-row: 1; }
+  .court-hearing-workspace .workspace-conversation-column { grid-row: 3; }
+  .court-hearing-workspace .court-formal-context.collapsed { width: auto; justify-self: stretch; }
+  .court-hearing-workspace .court-formal-context .workspace-context-body { padding: 10px; }
+  .court-hearing-workspace .court-formal-context .workspace-context-body > section,
+  .court-hearing-workspace .court-formal-context .workspace-scene-details { display: none; }
+  .court-hearing-workspace .court-formal-context .courtroom-primary-action { position: static; }
+  .court-hearing-scroll { padding: 10px; }
   .action-bar-embedded { padding: 8px 10px 10px; }
   .action-bar-embedded .action-bar-row { align-items: stretch; }
   .action-bar-embedded .chairman-action-select { flex: 1; min-width: 0; }

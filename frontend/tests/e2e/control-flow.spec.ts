@@ -158,6 +158,66 @@ test('parallel and relay meetings use the same conversation workspace with paral
   await expect(page.locator('.workspace-message-synthesizer')).toHaveCount(1)
 })
 
+test('court hearing workspace groups issue phases and keeps formal actions out of the composer', async ({
+  page,
+}) => {
+  await page.goto('/')
+  const topic = `E2E court hearing workspace ${Date.now()}`
+  await createMeetingViaNewCase(page, topic, {
+    modeId: 'courtroom',
+    goal: '逐一判斷各爭點，最後作成全案判決。',
+  })
+
+  await expect(page.getByTestId('court-hearing-workspace')).toBeVisible()
+  await expect(page.getByTestId('workspace-role-rail')).toBeVisible()
+  await expect(page.getByTestId('court-hearing-record')).toBeVisible()
+  await expect(page.getByTestId('court-formal-context')).toBeVisible()
+  await expect(page.getByTestId('chairman-action-select')).not.toContainText('請全體回應')
+  await expect(page.getByTestId('courtroom-primary-action')).toHaveCount(0)
+  const longNote = Array.from({ length: 12 }, (_, index) => `法院補充紀錄第 ${index + 1} 行。`).join('\n')
+  await page.getByTestId('chair-message-input').fill(longNote)
+  await page.getByTestId('send-chair-message-button').click()
+  const note = page.getByTestId('court-hearing-general-record').locator('.court-hearing-message').filter({ hasText: '法院補充紀錄第 1 行' })
+  await expect(note.locator('.workspace-message-content')).toHaveClass(/collapsed/)
+  await note.getByRole('button', { name: '展開完整發言' }).click()
+  await expect(note.locator('.workspace-message-content')).not.toHaveClass(/collapsed/)
+
+  await page.getByTestId('add-courtroom-issue-button').click()
+  await page.getByTestId('courtroom-issue-title-0').fill('被告是否具有合法占有權源？')
+  await page.getByTestId('save-courtroom-issues-button').click()
+  await page.getByTestId('confirm-courtroom-issues-button').click()
+
+  const formalContext = page.getByTestId('court-formal-context')
+  const primary = formalContext.getByTestId('courtroom-primary-action')
+  await expect(primary).toHaveText('開始爭點攻防')
+  await primary.click()
+  await expect(page.getByTestId('court-issue-group-issue-1')).toContainText('等待主席送交法官', {
+    timeout: 15000,
+  })
+  await expect(page.getByTestId('court-phase-charge-issue-1')).toBeVisible()
+  await expect(page.getByTestId('court-phase-defense-issue-1')).toBeVisible()
+  await expect(page.getByTestId('court-phase-rebuttal-issue-1')).toBeVisible()
+  await expect(primary).toHaveText('送交法官判斷')
+  await page.getByTestId('role-seat-defense').click()
+  await expect(page.getByTestId('workspace-clear-role-filter')).toBeVisible()
+  await expect(page.locator('.court-hearing-message[data-role="Defense"]')).toBeVisible()
+  await expect(page.locator('.court-hearing-message[data-role="Prosecutor"]')).toHaveCount(0)
+  await page.getByTestId('workspace-clear-role-filter').click()
+
+  await page.reload()
+  await page.getByTestId('past-topics-button').click()
+  await page.getByTestId('meeting-list-item').filter({ hasText: topic }).locator('.meeting-item').click()
+  await expect(page.getByTestId('court-phase-charge-issue-1')).toBeVisible()
+  await expect(page.getByTestId('court-phase-defense-issue-1')).toBeVisible()
+  await expect(page.getByTestId('court-phase-rebuttal-issue-1')).toBeVisible()
+
+  await page.setViewportSize({ width: 375, height: 760 })
+  await expect(page.getByTestId('court-hearing-record')).toBeVisible()
+  await expect(page.getByTestId('court-formal-context')).toBeVisible()
+  await expect(page.getByTestId('chair-message-input')).toBeVisible()
+  await expect(primary).toBeVisible()
+})
+
 test('legacy meeting requires explicit title and goal migration without rewriting events', async ({
   page,
 }) => {
@@ -1315,22 +1375,23 @@ test('switching to the courtroom scene renders its own seat positions', async ({
     'data-scene',
     'courtroom',
   )
+  await page.locator('.workspace-scene-details summary').click()
 
   // Seat coordinates come straight from courtroomScene.seats (scenes.ts) - a distinct
   // layout from meeting-room's (Judge near the bench, Chairman at the bar) - confirming
   // CouncilStage actually re-reads the scene prop instead of caching the first one seen.
-  await expect(page.getByTestId('role-seat-judge')).toHaveAttribute('style', /left:\s*50%/)
-  await expect(page.getByTestId('role-seat-judge')).toHaveAttribute('style', /top:\s*44%/)
-  await expect(page.getByTestId('role-seat-blue')).toHaveAttribute('style', /left:\s*21\.6%/)
-  await expect(page.getByTestId('role-seat-red')).toHaveAttribute('style', /left:\s*78\.4%/)
-  await expect(page.getByTestId('role-seat-chairman')).toHaveAttribute('style', /top:\s*80%/)
+  await expect(page.getByTestId('scene-role-seat-judge')).toHaveAttribute('style', /left:\s*50%/)
+  await expect(page.getByTestId('scene-role-seat-judge')).toHaveAttribute('style', /top:\s*44%/)
+  await expect(page.getByTestId('scene-role-seat-blue')).toHaveAttribute('style', /left:\s*21\.6%/)
+  await expect(page.getByTestId('scene-role-seat-red')).toHaveAttribute('style', /left:\s*78\.4%/)
+  await expect(page.getByTestId('scene-role-seat-chairman')).toHaveAttribute('style', /top:\s*80%/)
 
   // All four seats still render and stay visible/clickable - the scene swap doesn't
   // break CouncilStage's core rendering for a non-4:3, non-meeting-room scene.
-  await expect(page.getByTestId('role-seat-chairman')).toBeVisible()
-  await expect(page.getByTestId('role-seat-blue')).toBeVisible()
-  await expect(page.getByTestId('role-seat-red')).toBeVisible()
-  await expect(page.getByTestId('role-seat-judge')).toBeVisible()
+  await expect(page.getByTestId('scene-role-seat-chairman')).toBeVisible()
+  await expect(page.getByTestId('scene-role-seat-blue')).toBeVisible()
+  await expect(page.getByTestId('scene-role-seat-red')).toBeVisible()
+  await expect(page.getByTestId('scene-role-seat-judge')).toBeVisible()
 })
 
 test('meeting scene selection is isolated when switching meetings', async ({
