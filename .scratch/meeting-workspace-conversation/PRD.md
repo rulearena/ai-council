@@ -1,6 +1,6 @@
 # Backlog #90：會議工作區與時間序對話介面重整
 
-Status: implemented / awaiting acceptance
+Status: implemented / acceptance fix in progress
 
 ## 問題
 
@@ -17,6 +17,7 @@ Status: implemented / awaiting acceptance
 - Parallel 成員完成即顯示；全員完成後才彙整，reload 保持同一順序。
 - 法院以爭點與階段分組，正式 CTA 只來自 backend workflow projection。
 - 375px 到桌面寬度皆可操作；原角色形象保留為次要狀態視圖。
+- 法院案件名稱只在全域頂欄顯示；桌面版中央庭審紀錄獨立滾動，左右角色與正式流程不隨長文離開視窗。
 
 ## 固定產品契約
 
