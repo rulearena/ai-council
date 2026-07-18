@@ -1,6 +1,6 @@
 # Backlog #90：會議工作區與時間序對話介面重整
 
-Status: implemented / acceptance fix in progress
+Status: implemented / awaiting acceptance
 
 ## 問題
 

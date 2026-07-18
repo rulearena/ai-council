@@ -1,7 +1,7 @@
 # 06 — 法院中央獨立滾動驗收修補
 
 Type: acceptance fix
-Status: ready
+Status: resolved
 Blocked by: 04
 
 ## 問題
@@ -31,3 +31,11 @@ Playwright 建立法院 meeting 並塞入足以溢出的庭審補充，驗證：
 - Court Hearing targeted Playwright、frontend unit、build、完整 Chromium 與 backend full 全綠。
 - 真瀏覽器在桌面 viewport 驗證長文滾動與固定左右欄。
 - Standards／Spec 兩軸獨立 review 通過。
+
+## Comments
+
+- 2026-07-19 TDD red：既有 Court Hearing Playwright 在中央 record 找到第二份 meeting title，`expected 0, received 1`。
+- Green：移除中央重複標頭，法院專屬 app shell 建立 `100dvh` flex 高度鏈；中央紀錄獨立滾動，左右欄維持各自 overflow。行動版在 640px 以下回到自然頁面流，避免 scroll trap。
+- 驗證：targeted Chromium 1 passed、frontend unit 61 passed、build 通過、backend 605 passed、完整 Chromium 94/94 passed；Standards／Spec review 均 pass。
+- 瀏覽器控制環境沒有可用的 in-app browser，因此未另做人工控制 smoke；新增的 targeted Chromium 已直接驗證 scrollTop、左右 bounding boxes、window.scrollY 與 375px 操作面。
+- 工具沒有 Luna／Terra selector；Executor 與 Reviewers 使用彼此獨立的 assigned runtime。
