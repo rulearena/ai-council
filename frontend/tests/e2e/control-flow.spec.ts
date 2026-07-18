@@ -200,7 +200,10 @@ test('court hearing workspace groups issue phases and keeps formal actions out o
 
   await expect(page.getByTestId('court-hearing-workspace')).toBeVisible()
   await expect(page.getByTestId('workspace-role-rail')).toBeVisible()
-  await expect(page.getByTestId('court-hearing-record')).toBeVisible()
+  const hearingRecord = page.getByTestId('court-hearing-record')
+  await expect(hearingRecord).toBeVisible()
+  await expect(hearingRecord.getByText(topic, { exact: true })).toHaveCount(0)
+  await expect(hearingRecord.getByText('法院庭審', { exact: true })).toHaveCount(0)
   await expect(page.getByTestId('court-formal-context')).toBeVisible()
   await expect(page.getByTestId('chairman-action-select')).not.toContainText('請全體回應')
   await expect(page.getByTestId('courtroom-primary-action')).toHaveCount(0)
@@ -212,12 +215,30 @@ test('court hearing workspace groups issue phases and keeps formal actions out o
   await note.getByRole('button', { name: '展開完整發言' }).click()
   await expect(note.locator('.workspace-message-content')).not.toHaveClass(/collapsed/)
 
+  const hearingScroll = page.getByTestId('court-hearing-scroll')
+  const roleRail = page.getByTestId('workspace-role-rail')
+  const formalContext = page.getByTestId('court-formal-context')
+  const beforeScroll = {
+    rail: await roleRail.boundingBox(),
+    context: await formalContext.boundingBox(),
+    windowY: await page.evaluate(() => window.scrollY),
+  }
+  const scrollMetrics = await hearingScroll.evaluate((element) => ({
+    clientHeight: element.clientHeight,
+    scrollHeight: element.scrollHeight,
+  }))
+  expect(scrollMetrics.scrollHeight).toBeGreaterThan(scrollMetrics.clientHeight)
+  await hearingScroll.evaluate((element) => { element.scrollTop = 120 })
+  await expect.poll(() => hearingScroll.evaluate((element) => element.scrollTop)).toBeGreaterThan(0)
+  expect(await roleRail.boundingBox()).toEqual(beforeScroll.rail)
+  expect(await formalContext.boundingBox()).toEqual(beforeScroll.context)
+  expect(await page.evaluate(() => window.scrollY)).toBe(beforeScroll.windowY)
+
   await page.getByTestId('add-courtroom-issue-button').click()
   await page.getByTestId('courtroom-issue-title-0').fill('被告是否具有合法占有權源？')
   await page.getByTestId('save-courtroom-issues-button').click()
   await page.getByTestId('confirm-courtroom-issues-button').click()
 
-  const formalContext = page.getByTestId('court-formal-context')
   const primary = formalContext.getByTestId('courtroom-primary-action')
   await expect(primary).toHaveText('開始爭點攻防')
   await primary.click()

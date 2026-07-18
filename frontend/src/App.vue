@@ -45,7 +45,7 @@ function onSeatClick(role: CouncilRole | 'Chairman') {
 </script>
 
 <template>
-  <main class="app-shell">
+  <main class="app-shell" :class="{ 'app-shell-court-hearing': store.selectedMeeting.value?.mode_id === 'courtroom' }">
     <TopBar
       @open-settings="navigateFromMeetingSettings(() => openModal = 'settings')"
       @open-meeting-settings="meetingSettingsOpen = true"

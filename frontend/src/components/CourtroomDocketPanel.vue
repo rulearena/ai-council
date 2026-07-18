@@ -359,15 +359,11 @@ function ruling(issue: CourtroomIssueProjection) {
     </nav>
 
     <section class="workspace-conversation-column" data-testid="court-hearing-record">
-      <header class="workspace-conversation-header">
-        <div>
-          <span class="workspace-eyebrow">法院庭審</span>
-          <h2>{{ selectedMeeting.title }}</h2>
-        </div>
+      <div class="court-hearing-toolbar" :class="{ active: selectedRoleId }">
         <button v-if="selectedRoleId" type="button" class="btn btn-ghost btn-sm" data-testid="workspace-clear-role-filter" @click="selectRole()">顯示全部庭審紀錄</button>
-      </header>
+      </div>
 
-      <div class="court-hearing-scroll">
+      <div class="court-hearing-scroll" data-testid="court-hearing-scroll">
         <section class="courtroom-docket" data-testid="courtroom-docket-panel">
           <header class="courtroom-docket-header">
             <div>
