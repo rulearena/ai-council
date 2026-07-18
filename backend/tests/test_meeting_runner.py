@@ -1645,12 +1645,12 @@ def test_parallel_cancel_after_members_complete_does_not_start_synthesis(
 
     events = repository.read_events("meeting-1")
     assert len(adapter.requests) == 3
-    assert [event["step_id"] for event in events] == [
+    assert {event["step_id"] for event in events[:-1]} == {
         "fanout-1-member-1",
         "fanout-1-member-2",
         "fanout-1-member-3",
-        "meeting",
-    ]
+    }
+    assert events[-1]["step_id"] == "meeting"
     assert all(event["step_id"] != "synthesis-1" for event in events)
 
 
@@ -1930,22 +1930,148 @@ def test_parallel_runner_completes_fanout_then_synthesis(tmp_path: Path) -> None
 
     events = runner.repository.read_events("meeting-1")
     completed = [event for event in events if event["status"] == "completed"]
-    assert [event["step_id"] for event in completed] == [
+    assert {event["step_id"] for event in completed[:-1]} == {
         "fanout-1-member-1",
         "fanout-1-member-2",
         "fanout-1-member-3",
-        "synthesis-1",
-    ]
-    assert [event["base_step_id"] for event in completed] == [
+    }
+    assert completed[-1]["step_id"] == "synthesis-1"
+    assert {event["base_step_id"] for event in completed[:-1]} == {
         "member-1",
         "member-2",
         "member-3",
-        "synthesis",
-    ]
+    }
+    assert completed[-1]["base_step_id"] == "synthesis"
     synthesis_prompt = completed[-1]["prompt_messages"][0]["content"]
     assert "Member-1" in synthesis_prompt
     assert "Continue" in synthesis_prompt
     assert {event["output_schema_id"] for event in completed} == {"role-output/v1"}
+
+
+def test_parallel_runner_publishes_members_in_arrival_order_from_one_round_start_context(
+    tmp_path: Path,
+) -> None:
+    class SignallingRepository(MeetingRepository):
+        def __init__(self, root: Path) -> None:
+            super().__init__(root)
+            self.appended = {
+                "fanout-1-member-1": Event(),
+                "fanout-1-member-2": Event(),
+                "fanout-1-member-3": Event(),
+            }
+
+        def append_event(self, meeting_id: str, event: dict[str, object]) -> None:
+            super().append_event(meeting_id, event)
+            signal = self.appended.get(str(event.get("step_id")))
+            if signal is not None:
+                signal.set()
+
+    class ControlledArrivalAdapter:
+        def __init__(self) -> None:
+            self.lock = Lock()
+            self.member_requests: dict[str, ModelRequest] = {}
+            self.member_started = {role: Event() for role in ("Member-1", "Member-2", "Member-3")}
+            self.release = {role: Event() for role in ("Member-1", "Member-2", "Member-3")}
+            self.synthesis_started = Event()
+
+        def complete(self, request: ModelRequest) -> ModelResponse:
+            role = request.model_config.id.removeprefix("mock-").title()
+            if role == "Moderator":
+                self.synthesis_started.set()
+                return ModelResponse(raw_output=VALID_OUTPUT)
+            with self.lock:
+                self.member_requests[role] = request
+            self.member_started[role].set()
+            assert self.release[role].wait(timeout=10)
+            return ModelResponse(
+                raw_output=json.dumps(
+                    {
+                        "summary": f"{role} completed",
+                        "arguments": [],
+                        "risks": [],
+                        "recommendation": "Continue",
+                    }
+                )
+            )
+
+    repository = SignallingRepository(tmp_path / "data")
+    repository.append_event(
+        "meeting-1",
+        {
+            "event_id": "prior-event",
+            "meeting_id": "meeting-1",
+            "step_id": "prior-step",
+            "role": "Human",
+            "attempt": 1,
+            "status": "completed",
+            "raw_output": "ROUND_START_CONTEXT",
+        },
+    )
+    adapter = ControlledArrivalAdapter()
+    runner = build_runner(
+        tmp_path,
+        adapter=adapter,
+        templates=("brainstorm_member", "brainstorm_synthesis"),
+        extra_placeholders=" {{ instance_prompt }} {{ fanout_outputs }}",
+        repository=repository,
+    )
+    thread = Thread(
+        target=lambda: runner.start_parallel(
+            plan=PARALLEL_PLAN,
+            meeting_id="meeting-1",
+            goal="如何改善 onboarding？",
+            model_assignments=parallel_model_assignments(),
+        )
+    )
+    thread.start()
+    for started in adapter.member_started.values():
+        assert started.wait(timeout=3)
+
+    try:
+        adapter.release["Member-3"].set()
+        member_three_visible_while_running = repository.appended[
+            "fanout-1-member-3"
+        ].wait(timeout=1)
+        partial_steps = [
+            event["step_id"]
+            for event in repository.read_events("meeting-1")
+            if str(event["step_id"]).startswith("fanout-")
+        ]
+        synthesis_started_early = adapter.synthesis_started.is_set()
+
+        adapter.release["Member-1"].set()
+        assert repository.appended["fanout-1-member-1"].wait(timeout=3)
+        adapter.release["Member-2"].set()
+    finally:
+        for release in adapter.release.values():
+            release.set()
+        thread.join(timeout=3)
+
+    assert not thread.is_alive()
+    assert member_three_visible_while_running is True
+    assert partial_steps == ["fanout-1-member-3"]
+    assert synthesis_started_early is False
+    events = repository.read_events("meeting-1")
+    assert [
+        event["step_id"]
+        for event in events
+        if str(event["step_id"]).startswith(("fanout-", "synthesis-"))
+    ] == [
+        "fanout-1-member-3",
+        "fanout-1-member-1",
+        "fanout-1-member-2",
+        "synthesis-1",
+    ]
+
+    schema = runner.output_schemas.get("role-output/v1").schema
+    prior_transcripts = {
+        request.prompt.split("如何改善 onboarding？", maxsplit=1)[1]
+        .split(schema, maxsplit=1)[0]
+        .strip()
+        for request in adapter.member_requests.values()
+    }
+    assert len(prior_transcripts) == 1
+    assert "prior-step" in prior_transcripts.pop()
 
 
 def test_parallel_restart_synthesis_uses_only_active_epoch_members(tmp_path: Path) -> None:
@@ -2120,15 +2246,19 @@ def test_parallel_member_parse_failure_is_recorded_then_auto_retried(
     )
 
     events = runner.repository.read_events("meeting-1")
-    assert [
+    assert {
         (event["step_id"], event["attempt"], event["status"])
-        for event in events
-    ] == [
+        for event in events[:-1]
+    } == {
         ("fanout-1-member-1", 1, "failed"),
         ("fanout-1-member-1", 2, "completed"),
         ("fanout-1-member-2", 1, "completed"),
-        ("synthesis-1", 1, "completed"),
-    ]
+    }
+    assert (events[-1]["step_id"], events[-1]["attempt"], events[-1]["status"]) == (
+        "synthesis-1",
+        1,
+        "completed",
+    )
     assert {event["output_schema_id"] for event in events} == {custom_schema_id}
     assert len({event["output_schema_hash"] for event in events}) == 1
 
@@ -2449,11 +2579,11 @@ def test_parallel_runner_records_individual_failures_without_stopping_other_memb
     )
 
     events = runner.repository.read_events("meeting-1")
-    assert [(event["step_id"], event["status"]) for event in events] == [
+    assert {(event["step_id"], event["status"]) for event in events} == {
         ("fanout-1-member-1", "completed"),
         ("fanout-1-member-2", "failed"),
         ("fanout-1-member-3", "completed"),
-    ]
+    }
     assert all(event["step_id"] != "synthesis-1" for event in events)
 
 
@@ -2484,10 +2614,18 @@ def test_parallel_runner_retry_failed_member_runs_only_that_member_then_synthesi
     )
 
     events = runner.repository.read_events("meeting-1")
-    assert [(event["step_id"], event["attempt"], event["status"]) for event in events] == [
+    assert {
+        (event["step_id"], event["attempt"], event["status"])
+        for event in events[:3]
+    } == {
         ("fanout-1-member-1", 1, "completed"),
         ("fanout-1-member-2", 1, "failed"),
         ("fanout-1-member-3", 1, "completed"),
+    }
+    assert [
+        (event["step_id"], event["attempt"], event["status"])
+        for event in events[3:]
+    ] == [
         ("fanout-1-member-2", 2, "completed"),
         ("synthesis-1", 1, "completed"),
     ]
@@ -2520,16 +2658,18 @@ def test_parallel_runner_starts_next_round_after_synthesis_complete(tmp_path: Pa
         for event in runner.repository.read_events("meeting-1")
         if event["status"] == "completed"
     ]
-    assert completed_step_ids == [
+    assert set(completed_step_ids[:3]) == {
         "fanout-1-member-1",
         "fanout-1-member-2",
         "fanout-1-member-3",
-        "synthesis-1",
+    }
+    assert completed_step_ids[3] == "synthesis-1"
+    assert set(completed_step_ids[4:7]) == {
         "fanout-2-member-1",
         "fanout-2-member-2",
         "fanout-2-member-3",
-        "synthesis-2",
-    ]
+    }
+    assert completed_step_ids[7] == "synthesis-2"
 
 
 def parallel_model_assignments() -> dict[str, ModelConfig]:
@@ -2548,6 +2688,7 @@ def build_runner(
     templates: tuple[str, ...] = ("blue_propose", "red_critique", "blue_revise", "judge_decide"),
     extra_placeholders: str = "",
     output_schemas: OutputSchemaRegistry | None = None,
+    repository: MeetingRepository | None = None,
 ) -> MeetingRunner:
     prompt_dir = tmp_path / "prompts"
     prompt_dir.mkdir()
@@ -2565,7 +2706,7 @@ def build_runner(
             encoding="utf-8",
         )
 
-    repository = MeetingRepository(tmp_path / "data")
+    repository = repository or MeetingRepository(tmp_path / "data")
     return MeetingRunner(
         repository=repository,
         prompt_renderer=PromptRenderer(prompt_dir),

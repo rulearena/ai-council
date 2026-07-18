@@ -5238,10 +5238,93 @@ def test_start_brainstorm_meeting_runs_parallel_steps(tmp_path: Path) -> None:
     completed_steps = [
         event["step_id"] for event in meeting["events"] if event["status"] == "completed"
     ]
-    assert completed_steps == [
+    assert set(completed_steps[:-1]) == {
         "fanout-1-member-1",
         "fanout-1-member-2",
-        "synthesis-1",
+    }
+    assert completed_steps[-1] == "synthesis-1"
+
+
+def test_parallel_partial_completion_is_live_over_http_and_websocket(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    member_started = {model_id: threading.Event() for model_id in ("member-1", "member-2")}
+    release_member = {model_id: threading.Event() for model_id in ("member-1", "member-2")}
+    synthesis_started = threading.Event()
+    original_complete = MockModelAdapter.complete
+
+    def complete_in_controlled_order(
+        self: MockModelAdapter,
+        request: ModelRequest,
+    ) -> ModelResponse:
+        model_id = request.model_config.id.removeprefix("mock-")
+        if model_id == "moderator":
+            synthesis_started.set()
+            return original_complete(self, request)
+        member_started[model_id].set()
+        assert release_member[model_id].wait(timeout=10)
+        return original_complete(self, request)
+
+    monkeypatch.setattr(MockModelAdapter, "complete", complete_in_controlled_order)
+    app = create_test_app(
+        tmp_path,
+        models_yaml="""
+models:
+  - id: mock-member-1
+    adapter: mock
+  - id: mock-member-2
+    adapter: mock
+  - id: mock-moderator
+    adapter: mock
+""".strip(),
+    )
+    client = TestClient(app)
+    meeting_id = client.post(
+        "/meetings",
+        json={
+            "title": "平行即時顯示",
+            "goal": "依完成順序顯示",
+            "mode_id": "brainstorm",
+            "participants": [
+                {"role_id": "Member-1", "model_config_id": "mock-member-1"},
+                {"role_id": "Member-2", "model_config_id": "mock-member-2"},
+                {"role_id": "Moderator", "model_config_id": "mock-moderator"},
+            ],
+        },
+    ).json()["meeting_id"]
+
+    try:
+        with client.websocket_connect(f"/meetings/{meeting_id}/events") as websocket:
+            assert websocket.receive_json()["activity_status"] == "idle"
+            assert client.post(f"/meetings/{meeting_id}/start", json={}).status_code == 202
+            for started in member_started.values():
+                assert started.wait(timeout=3)
+
+            running = websocket.receive_json()
+            assert running["activity_status"] == "running"
+            release_member["member-2"].set()
+
+            while True:
+                partial = websocket.receive_json()
+                if partial["events"]:
+                    break
+
+            assert partial["activity_status"] == "running"
+            assert [event["role"] for event in partial["events"]] == ["Member-2"]
+            http_snapshot = client.get(f"/meetings/{meeting_id}").json()
+            assert http_snapshot["activity_status"] == "running"
+            assert [event["role"] for event in http_snapshot["events"]] == ["Member-2"]
+            assert synthesis_started.is_set() is False
+    finally:
+        for release in release_member.values():
+            release.set()
+
+    completed = wait_for_activity(client, meeting_id, "completed")
+    assert [event["role"] for event in completed["events"]] == [
+        "Member-2",
+        "Member-1",
+        "Moderator",
     ]
 
 
@@ -5291,11 +5374,11 @@ models:
 
     client.post(f"/meetings/{meeting_id}/start", json={"models": request_models})
     meeting = wait_for_activity(client, meeting_id, "waiting")
-    assert [event["step_id"] for event in meeting["events"]] == [
+    assert {event["step_id"] for event in meeting["events"]} == {
         "fanout-1-member-1",
         "fanout-1-member-2",
-    ]
-    assert meeting["events"][-1]["status"] == "failed"
+    }
+    assert any(event["status"] == "failed" for event in meeting["events"])
 
     failing_model_ids.clear()
     retry = client.post(
@@ -5304,9 +5387,11 @@ models:
     )
     assert retry.status_code == 202
     meeting = wait_for_activity(client, meeting_id, "completed")
-    assert [event["step_id"] for event in meeting["events"]] == [
+    assert {event["step_id"] for event in meeting["events"][:2]} == {
         "fanout-1-member-1",
         "fanout-1-member-2",
+    }
+    assert [event["step_id"] for event in meeting["events"][2:]] == [
         "fanout-1-member-2",
         "synthesis-1",
     ]

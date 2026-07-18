@@ -4,7 +4,7 @@ import re
 import time
 import uuid
 from copy import deepcopy
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any, Callable, Literal, Protocol, TypedDict
@@ -798,8 +798,21 @@ class MeetingRunner:
     ) -> None:
         if not members:
             return
+        round_start_events = [
+            event
+            for event in self._active_events(meeting_id)
+            if not (
+                str(event.get("step_id", "")).startswith(f"fanout-{round_number}-")
+                or event.get("step_id") == f"synthesis-{round_number}"
+            )
+        ]
+        round_start_transcript = self.transcript_projector.project(
+            round_start_events,
+            title=goal,
+        )
+        discarded_groups: list[tuple[int, list[dict[str, object]]]] = []
         with ThreadPoolExecutor(max_workers=len(members)) as executor:
-            futures = [
+            futures = {
                 executor.submit(
                     self._build_parallel_member_events,
                     meeting_id=meeting_id,
@@ -809,11 +822,19 @@ class MeetingRunner:
                     inputs=inputs,
                     round_number=round_number,
                     attempt=attempt,
-                )
+                    prior_transcript=round_start_transcript,
+                ): member
                 for member in members
-            ]
-            event_groups = [future.result() for future in futures]
-        for events in event_groups:
+            }
+            for future in as_completed(futures):
+                member = futures[future]
+                events = future.result()
+                if any(event.get("result_discarded") is True for event in events):
+                    discarded_groups.append((member.index, events))
+                    continue
+                for event in events:
+                    self.repository.append_event(meeting_id, event)
+        for _, events in sorted(discarded_groups):
             for event in events:
                 self.repository.append_event(meeting_id, event)
 
@@ -827,6 +848,7 @@ class MeetingRunner:
         inputs: dict[str, Any] | None,
         round_number: int,
         attempt: int,
+        prior_transcript: str,
     ) -> list[dict[str, object]]:
         config = model_assignments[member.role]
         event_step_id = f"fanout-{round_number}-member-{member.index}"
@@ -836,10 +858,7 @@ class MeetingRunner:
             template_name=member.template_name,
             role=member.role,
             goal=goal,
-            prior_transcript=self.transcript_projector.project(
-                self._active_events(meeting_id),
-                title=goal,
-            ),
+            prior_transcript=prior_transcript,
             required_json_schema=output_schema.schema,
             inputs=self._prompt_inputs_for_role(
                 inputs,

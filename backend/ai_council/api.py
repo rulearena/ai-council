@@ -3652,6 +3652,24 @@ def project_activity_status_for_mode(
     }:
         return projected
     if mode.category == "parallel":
+        current_round = max(
+            (
+                int(event.get("round", 0))
+                for event in events
+                if str(event.get("base_step_id", "")).startswith("member-")
+            ),
+            default=0,
+        )
+        latest_members: dict[str, dict[str, Any]] = {}
+        for event in events:
+            base_step_id = str(event.get("base_step_id", ""))
+            if (
+                int(event.get("round", 0)) == current_round
+                and base_step_id.startswith("member-")
+            ):
+                latest_members[base_step_id] = event
+        if any(event.get("status") == "failed" for event in latest_members.values()):
+            return "waiting"
         base_step_id = str(latest_event.get("base_step_id", latest_event.get("step_id", "")))
         return "completed" if base_step_id == "synthesis" else "running"
     if not mode.steps:
