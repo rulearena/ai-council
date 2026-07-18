@@ -774,16 +774,16 @@ class MeetingRunner:
         }
         if response.token_usage is not None:
             completed_event["token_usage"] = response.token_usage
-        if self._is_terminal(meeting_id):
-            self.repository.append_event(
-                meeting_id, self._discarded_terminal_attempt(completed_event)
-            )
-            return False
-        self.repository.append_event(
+        if self.repository.append_event_if(
             meeting_id,
             completed_event,
+            lambda events: not self._events_are_terminal(events),
+        ):
+            return True
+        self.repository.append_event(
+            meeting_id, self._discarded_terminal_attempt(completed_event)
         )
-        return True
+        return False
 
     def _run_parallel_members(
         self,
@@ -829,37 +829,37 @@ class MeetingRunner:
             for future in as_completed(futures):
                 member = futures[future]
                 events = future.result()
-                terminal_at_publish = self._is_terminal(meeting_id)
-                if terminal_at_publish:
-                    # Completed output is not transcript-visible until publish, so it
-                    # cannot cross a terminal marker. Finished failure diagnostics keep
-                    # their original classification and are still ordered below.
-                    events = [
-                        event
-                        if event.get("result_discarded") is True
-                        or event.get("status") != "completed"
-                        else self._discarded_terminal_attempt(event)
-                        for event in events
-                    ]
-                if terminal_at_publish or any(
+                if any(
                     event.get("result_discarded") is True for event in events
                 ):
                     discarded_groups.append((member.index, events))
                     continue
                 for position, event in enumerate(events):
-                    if self._is_terminal(meeting_id):
-                        discarded_groups.append((
-                            member.index,
-                            [
-                                remaining
-                                if remaining.get("result_discarded") is True
-                                or remaining.get("status") != "completed"
-                                else self._discarded_terminal_attempt(remaining)
-                                for remaining in events[position:]
-                            ],
-                        ))
+                    published = event.get("status") != "completed" or (
+                        self.repository.append_event_if(
+                            meeting_id,
+                            event,
+                            lambda snapshot: not self._events_are_terminal(snapshot),
+                        )
+                    )
+                    if not published:
+                        discarded_groups.append(
+                            (
+                                member.index,
+                                [
+                                    remaining
+                                    if remaining.get("result_discarded") is True
+                                    or remaining.get("status") != "completed"
+                                    else self._discarded_terminal_attempt(remaining)
+                                    for remaining in events[position:]
+                                ],
+                            )
+                        )
                         break
-                    self.repository.append_event(meeting_id, event)
+                    if event.get("status") != "completed":
+                        # Parse, adapter, configuration, and timeout diagnostics retain
+                        # their original classification even after cancellation.
+                        self.repository.append_event(meeting_id, event)
         for _, events in sorted(discarded_groups):
             for event in events:
                 self.repository.append_event(meeting_id, event)
@@ -1225,8 +1225,12 @@ class MeetingRunner:
         ).event_id(legacy_event_id)
 
     def _is_terminal(self, meeting_id: str) -> bool:
+        return self._events_are_terminal(self.repository.read_events(meeting_id))
+
+    @staticmethod
+    def _events_are_terminal(events: list[dict[str, Any]]) -> bool:
         latest_lifecycle_status = None
-        for event in self.repository.read_events(meeting_id):
+        for event in events:
             status = event.get("status")
             if status in LIFECYCLE_STATUSES:
                 latest_lifecycle_status = status

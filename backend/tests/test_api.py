@@ -4699,7 +4699,7 @@ def test_courtroom_get_does_not_report_settled_from_an_incomplete_event_snapshot
     release_remaining_phases = threading.Event()
     job_released = threading.Event()
     original_complete = MockModelAdapter.complete
-    original_append = MeetingRepository.append_event
+    original_append = MeetingRepository._append_event_unlocked
     original_read = MeetingRepository.read_events
     original_finish = MeetingJobManager._finish
     model_call_count = 0
@@ -4743,7 +4743,7 @@ def test_courtroom_get_does_not_report_settled_from_an_incomplete_event_snapshot
         job_released.set()
 
     monkeypatch.setattr(MockModelAdapter, "complete", controlled_complete)
-    monkeypatch.setattr(MeetingRepository, "append_event", tracked_append)
+    monkeypatch.setattr(MeetingRepository, "_append_event_unlocked", tracked_append)
     monkeypatch.setattr(MeetingRepository, "read_events", release_after_snapshot)
     monkeypatch.setattr(MeetingJobManager, "_finish", track_job_release)
 
@@ -4789,7 +4789,7 @@ def test_courtroom_websocket_does_not_publish_completed_with_partial_arguments(
     release_remaining_phases = threading.Event()
     job_released = threading.Event()
     original_complete = MockModelAdapter.complete
-    original_append = MeetingRepository.append_event
+    original_append = MeetingRepository._append_event_unlocked
     original_read = MeetingRepository.read_events
     original_finish = MeetingJobManager._finish
     model_call_count = 0
@@ -4833,7 +4833,7 @@ def test_courtroom_websocket_does_not_publish_completed_with_partial_arguments(
         job_released.set()
 
     monkeypatch.setattr(MockModelAdapter, "complete", controlled_complete)
-    monkeypatch.setattr(MeetingRepository, "append_event", tracked_append)
+    monkeypatch.setattr(MeetingRepository, "_append_event_unlocked", tracked_append)
     monkeypatch.setattr(MeetingRepository, "read_events", release_after_websocket_snapshot)
     monkeypatch.setattr(MeetingJobManager, "_finish", track_job_release)
 

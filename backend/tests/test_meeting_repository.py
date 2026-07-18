@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from threading import Event, Thread
 
 import pytest
 
@@ -47,6 +48,105 @@ def test_appended_events_round_trip_in_order(repository: MeetingRepository) -> N
     stored_events = repository.read_events("meeting-1")
     assert [event["event_id"] for event in stored_events] == ["evt-1", "evt-2", "evt-3"]
     assert all(event["created_at"] for event in stored_events)
+
+
+def test_conditional_append_linearizes_completed_publish_before_competing_cancel(
+    repository: MeetingRepository,
+) -> None:
+    predicate_entered = Event()
+    release_predicate = Event()
+    publisher_result: list[bool] = []
+
+    def terminal_free(events: list[dict[str, object]]) -> bool:
+        predicate_entered.set()
+        assert release_predicate.wait(timeout=5)
+        return not any(event.get("status") == "cancelled" for event in events)
+
+    publisher = Thread(
+        target=lambda: publisher_result.append(
+            repository.append_event_if(
+                "meeting-1",
+                {"event_id": "completed", "status": "completed"},
+                terminal_free,
+            )
+        )
+    )
+    publisher.start()
+    assert predicate_entered.wait(timeout=5)
+
+    canceller = Thread(
+        target=lambda: repository.append_event(
+            "meeting-1", {"event_id": "cancelled", "status": "cancelled"}
+        )
+    )
+    canceller.start()
+    release_predicate.set()
+    publisher.join(timeout=5)
+    canceller.join(timeout=5)
+
+    assert not publisher.is_alive()
+    assert not canceller.is_alive()
+    assert publisher_result == [True]
+    assert [event["event_id"] for event in repository.read_events("meeting-1")] == [
+        "completed",
+        "cancelled",
+    ]
+    assert repository.event_lock_registry_size == 0
+
+
+def test_conditional_append_rejects_after_cancel_wins_publish_race(
+    tmp_path: Path,
+) -> None:
+    cancel_entered = Event()
+    release_cancel = Event()
+
+    class BlockingCancelRepository(MeetingRepository):
+        def _append_event_unlocked(
+            self, meeting_id: str, event: dict[str, object]
+        ) -> None:
+            if event.get("status") == "cancelled":
+                cancel_entered.set()
+                assert release_cancel.wait(timeout=5)
+            super()._append_event_unlocked(meeting_id, event)
+
+    repository = BlockingCancelRepository(tmp_path)
+    publisher_result: list[bool] = []
+    canceller = Thread(
+        target=lambda: repository.append_event(
+            "meeting-1", {"event_id": "cancelled", "status": "cancelled"}
+        )
+    )
+    canceller.start()
+    assert cancel_entered.wait(timeout=5)
+
+    def publish_or_discard() -> None:
+        published = repository.append_event_if(
+            "meeting-1",
+            {"event_id": "completed", "status": "completed"},
+            lambda events: not any(
+                event.get("status") == "cancelled" for event in events
+            ),
+        )
+        publisher_result.append(published)
+        if not published:
+            repository.append_event(
+                "meeting-1", {"event_id": "interrupted", "status": "failed"}
+            )
+
+    publisher = Thread(target=publish_or_discard)
+    publisher.start()
+    release_cancel.set()
+    canceller.join(timeout=5)
+    publisher.join(timeout=5)
+
+    assert not publisher.is_alive()
+    assert not canceller.is_alive()
+    assert publisher_result == [False]
+    assert [event["event_id"] for event in repository.read_events("meeting-1")] == [
+        "cancelled",
+        "interrupted",
+    ]
+    assert repository.event_lock_registry_size == 0
 
 
 def test_repository_data_dir_can_be_injected(tmp_path: Path) -> None:

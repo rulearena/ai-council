@@ -1600,8 +1600,10 @@ def test_parallel_cancel_after_members_complete_does_not_start_synthesis(
     class CancellingAfterFanoutRepository(MeetingRepository):
         completed_members = 0
 
-        def append_event(self, meeting_id: str, event: dict[str, object]) -> None:
-            super().append_event(meeting_id, event)
+        def _append_event_unlocked(
+            self, meeting_id: str, event: dict[str, object]
+        ) -> None:
+            super()._append_event_unlocked(meeting_id, event)
             if event.get("status") != "completed" or not str(event.get("step_id", "")).startswith(
                 "fanout-"
             ):
@@ -2038,8 +2040,10 @@ def test_parallel_runner_publishes_members_in_arrival_order_from_one_round_start
                 "fanout-1-member-3": Event(),
             }
 
-        def append_event(self, meeting_id: str, event: dict[str, object]) -> None:
-            super().append_event(meeting_id, event)
+        def _append_event_unlocked(
+            self, meeting_id: str, event: dict[str, object]
+        ) -> None:
+            super()._append_event_unlocked(meeting_id, event)
             signal = self.appended.get(str(event.get("step_id")))
             if signal is not None:
                 signal.set()
