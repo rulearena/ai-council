@@ -1,6 +1,6 @@
 # OpenCode 實作／Codex 審查開發規範
 
-本流程由 Human Owner、OpenCode Implementer/Integrator、Codex review-only Reviewer 三個角色組成。實作與審查必須由不同 runtime 完成；Reviewer 不替 Implementer 修 code，也不負責 merge。
+本流程由 Human Owner、Implementer/Integrator、review-only Reviewer 三個角色組成。目前專用 prompts 分別為 OpenCode Implementer 與 Codex Reviewer，但角色必須由 caller／Human Owner 在啟動時明確指定，不得從 `AGENTS.md`、runtime 名稱、模型或工具自行推斷。未指定角色時一律維持唯讀並詢問 Human Owner。實作與審查必須由不同 agent session 完成；Reviewer 不替 Implementer 修 code，也不負責 merge。
 
 ## 角色與權限
 

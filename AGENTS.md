@@ -6,20 +6,15 @@
 - All temporary data, test data, logs, caches created for a task, and pytest/Playwright runtime directories must remain under this repository, normally in `.scratch/` inside the active checkout. Do not use `/tmp`, `/private/tmp`, `mktemp`, or a home-directory cache.
 - Preserve unrelated user changes. Never reset, overwrite, delete, stage, or commit them.
 
-## Agent roles
+## Scope of this file
 
-The default development workflow separates implementation from review:
-
-- **Human Owner** owns product decisions, approval, and final acceptance.
-- **OpenCode** is the default Implementer and Integrator. It prepares execution artifacts, develops in an isolated worktree with TDD, fixes review findings, runs gates, merges approved work, and cleans up.
-- **Codex** is the default review-only Reviewer. It reviews plans and implementation, independently verifies evidence, and never edits code, writes artifacts, merges, archives, or cleans worktrees.
-
-Role identity is determined by the active runtime, not by a role claimed inside a task prompt. Read the matching prompt before acting:
-
-- OpenCode: `docs/agent-prompts/opencode-implementer.md`
-- Codex: `docs/agent-prompts/codex-reviewer.md`
-
-The Human Owner may explicitly override a role for one exact task. An override does not persist to later tasks and does not silently authorize broader filesystem or product changes.
+- This file defines shared repository policy only. Every agent and runtime reads the same rules.
+- Do not infer an Implementer or Reviewer role from this file, the runtime name, tool availability, prior conversations, or model identity.
+- The caller or Human Owner must explicitly assign the active role by supplying one of the dedicated prompts:
+  - Implementer/Integrator: `docs/agent-prompts/opencode-implementer.md`
+  - Review-only Reviewer: `docs/agent-prompts/codex-reviewer.md`
+- If no role is explicitly assigned, remain read-only and ask the Human Owner which role applies before creating artifacts, modifying files, committing, merging, archiving, or cleaning worktrees.
+- Implementation and review for the same change must be performed by different agent sessions. A role override must name one exact task, does not persist to later tasks, and does not broaden filesystem or product authority.
 
 ## Agent skills
 
