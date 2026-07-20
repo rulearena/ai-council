@@ -39,3 +39,4 @@ Playwright 建立法院 meeting 並塞入足以溢出的庭審補充，驗證：
 - 驗證：targeted Chromium 1 passed、frontend unit 61 passed、build 通過、backend 605 passed、完整 Chromium 94/94 passed；Standards／Spec review 均 pass。
 - 瀏覽器控制環境沒有可用的 in-app browser，因此未另做人工控制 smoke；新增的 targeted Chromium 已直接驗證 scrollTop、左右 bounding boxes、window.scrollY 與 375px 操作面。
 - 工具沒有 Luna／Terra selector；Executor 與 Reviewers 使用彼此獨立的 assigned runtime。
+- 2026-07-20 Human Owner 驗收通過：案件名稱只在頂部顯示一次、中央庭審紀錄可獨立滾動、滾動時左右欄保持可見、法院中央不再重複顯示「法院庭審／案件名稱」。
