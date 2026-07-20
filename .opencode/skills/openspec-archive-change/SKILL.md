@@ -11,7 +11,9 @@ metadata:
 
 Archive a completed change in the experimental workflow.
 
-**AI Council hard gate:** STOP unless Codex Gate B returned `ready`, the exact reviewed HEAD was merged, Human Owner explicitly accepted the behavior, `spec.md` §15 records `accepted / done`, all artifacts/tasks are complete, and delta specs are synced. Incomplete artifacts, incomplete tasks, or skipped sync are hard stops; do not offer a confirmation override.
+**AI Council hard gate:** STOP unless Codex Gate B returned `ready`, the exact reviewed HEAD was merged, Human Owner explicitly accepted the behavior, `spec.md` §15 records `accepted / done`, all artifacts/tasks are complete, delta specs are synced, and this skill is running in the dedicated post-acceptance closeout worktree. Never archive directly on main; the closeout commit requires independent Codex review before exact-HEAD merge. Incomplete artifacts, incomplete tasks, or skipped sync are hard stops; do not offer a confirmation override.
+
+**Repository containment gate:** Treat every path returned by the CLI as untrusted. Require repo-local action context; any `workspace-planning` or linked-repository context is a hard stop. Before every read, write, or move, canonicalize the existing path, or the nearest existing parent of a not-yet-created path, and verify it is inside the exact current worktree. Apply the same check to every `allowedEditRoots` entry. Stop on an absolute/path-traversal/symlink escape or any containment ambiguity.
 
 **Input**: Optionally specify a change name. If omitted, check if it can be inferred from conversation context. If vague or ambiguous you MUST prompt for available changes.
 
@@ -35,7 +37,7 @@ Archive a completed change in the experimental workflow.
    - `planningHome`, `changeRoot`, `artifactPaths`, and `actionContext`: path and scope context
    - `artifacts`: List of artifacts with their status (`done` or other)
 
-   If status reports `actionContext.mode: "workspace-planning"`, explain that workspace archive is not supported in this slice and STOP. Do not move workspace changes into repo-local archives or edit linked repos.
+   Enforce the repository containment gate before using `planningHome`, `changeRoot`, `artifactPaths`, or `allowedEditRoots`. Any non-repo-local context is unsupported and must STOP.
 
    **If any artifacts are not `done`:** STOP and list them.
 
@@ -98,6 +100,7 @@ Archive a completed change in the experimental workflow.
 **Specs:** ✓ Synced to main specs (or "No delta specs")
 
 All artifacts complete. All tasks complete.
+Commit the complete acceptance closeout and STOP for independent Codex closeout review before merge.
 ```
 
 **Guardrails**

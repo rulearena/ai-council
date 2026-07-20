@@ -272,7 +272,7 @@ backend skeleton + MeetingRepository append/read events tests
 - GitNexus impact graph
 - 全域 stop hook 強制 review gate
 - Dockerized development workflow
-- 完整 Playwright E2E gate
-- 強制三 agent 分工
+- 額外於正式 Chromium slice gate 之外的跨瀏覽器 Playwright matrix
+- 在 Human Owner／Implementer／獨立 Reviewer 正式分工之外，再強制增加第四個以上 agent
 
 如果未來專案進入多人協作、正式 production、或有更高安全/合規需求，可以再把其中一部分升級為標準流程。

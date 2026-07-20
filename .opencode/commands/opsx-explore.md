@@ -4,7 +4,9 @@ description: Enter explore mode - think through ideas, investigate problems, cla
 
 Enter explore mode. Think deeply. Visualize freely. Follow the conversation wherever it goes.
 
-**IMPORTANT: Explore mode is for thinking, not implementing.** You may read files, search code, and investigate the codebase, but you must NEVER write code or implement features. If the user asks you to implement something, remind them to exit explore mode first and create a change proposal. You MAY create OpenSpec artifacts (proposals, designs, specs) if the user asks—that's capturing thinking, not implementing.
+**IMPORTANT: AI Council explore mode is strictly read-only.** You may read repository-local files, search code, and investigate the codebase, but you must NEVER write code, create or edit OpenSpec artifacts, or implement features. Capture proposed decisions only in the conversation. Creating a change requires an explicitly assigned Implementer, Human Owner-approved scope already recorded in `spec.md` §15, and `/opsx-propose`. Editing an existing artifact invalidates Gate A and must be performed by the Implementer in a separate artifacts commit followed by a fresh Gate A.
+
+**Repository containment gate:** Treat every path returned by the CLI as untrusted. Require repo-local action context; any `workspace-planning` or linked-repository context is a hard stop. Canonicalize every path before reading it and verify it is inside the exact current worktree. Stop on an absolute/path-traversal/symlink escape or any containment ambiguity.
 
 **This is a stance, not a workflow.** There are no fixed steps, no required sequence, no mandatory outputs. You're a thinking partner helping the user explore.
 
@@ -97,7 +99,7 @@ If the user mentioned a specific change name, read its artifacts for context.
 
 Think freely. When insights crystallize, you might offer:
 
-- "This feels solid enough to start a change. Want me to create a proposal?"
+- "This feels solid enough to start a change. An assigned Implementer can verify §15 approval and run `/opsx-propose`."
 - Or keep exploring - no pressure to formalize
 
 ### When a change exists
@@ -106,14 +108,14 @@ If the user mentions a change or you detect one is relevant:
 
 1. **Resolve and read existing artifacts for context**
    - Run `scripts/openspec-local status --change "<name>" --json`.
-   - Use `changeRoot`, `artifactPaths`, and `actionContext` from the status JSON.
+   - Enforce the repository containment gate before using `changeRoot`, `artifactPaths`, `actionContext`, or `allowedEditRoots`; STOP for any non-repo-local context.
    - Read existing files from `artifactPaths.<artifact>.existingOutputPaths`.
 
 2. **Reference them naturally in conversation**
    - "Your design mentions using Redis, but we just realized SQLite fits better..."
    - "The proposal scopes this to premium users, but we're now thinking everyone..."
 
-3. **Offer to capture when decisions are made**
+3. **Identify where an assigned Implementer could later capture decisions**
 
     | Insight Type               | Where to Capture               |
     |----------------------------|--------------------------------|
@@ -124,12 +126,12 @@ If the user mentions a change or you detect one is relevant:
     | New work identified        | `tasks.md`                   |
     | Assumption invalidated     | Relevant artifact              |
 
-   Example offers:
-   - "That's a design decision. Capture it in design.md?"
-   - "This is a new requirement. Add it to specs?"
-   - "This changes scope. Update the proposal?"
+   Example notes:
+   - "That's a proposed design decision for the Implementer to capture."
+   - "This is a proposed requirement for the Implementer to add to specs."
+   - "This changes scope; the Human Owner must approve it before the Implementer updates the proposal."
 
-4. **The user decides** - Offer and move on. Don't pressure. Don't auto-capture.
+4. **Remain read-only** - Summarize proposed artifact changes in chat. Do not make them. If artifacts later change, apply cannot resume until the new artifact commit passes Gate A.
 
 ---
 
@@ -148,8 +150,8 @@ If the user mentions a change or you detect one is relevant:
 
 There's no required ending. Discovery might:
 
-- **Flow into a proposal**: "Ready to start? I can create a change proposal."
-- **Result in artifact updates**: "Updated design.md with these decisions"
+- **Hand off toward a proposal**: "An assigned Implementer can verify §15 approval and create the proposal."
+- **Identify artifact updates**: "These decisions should be captured by the Implementer, then reviewed at a fresh Gate A."
 - **Just provide clarity**: User has what they need, moves on
 - **Continue later**: "We can pick this up anytime"
 
@@ -159,11 +161,11 @@ When things crystallize, you might offer a summary - but it's optional. Sometime
 
 ## Guardrails
 
-- **Don't implement** - Never write code or implement features. Creating OpenSpec artifacts is fine, writing application code is not.
+- **Don't write** - Never write code or create/edit OpenSpec artifacts in explore mode.
 - **Don't fake understanding** - If something is unclear, dig deeper
 - **Don't rush** - Discovery is thinking time, not task time
 - **Don't force structure** - Let patterns emerge naturally
-- **Don't auto-capture** - Offer to save insights, don't just do it
+- **Don't capture** - Summarize proposed changes in chat and hand them to an explicitly assigned Implementer
 - **Do visualize** - A good diagram is worth many paragraphs
 - **Do explore the codebase** - Ground discussions in reality
 - **Do question assumptions** - Including the user's and your own

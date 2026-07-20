@@ -11,7 +11,9 @@ metadata:
 
 Sync delta specs from a change to main specs.
 
-**AI Council hard gate:** STOP unless the merged change passed Codex Gate B, Human Owner explicitly accepted it, and `spec.md` §15 records `accepted / done`. Sync is acceptance closeout, not implementation readiness.
+**AI Council hard gate:** STOP unless the merged change passed Codex Gate B, Human Owner explicitly accepted it, `spec.md` §15 records `accepted / done`, and this skill is running in the dedicated post-acceptance closeout worktree. Sync is acceptance closeout, not implementation readiness. Never write directly on main; the closeout commit requires independent Codex review before exact-HEAD merge.
+
+**Repository containment gate:** Treat every path returned by the CLI as untrusted. Require repo-local action context; any `workspace-planning` or linked-repository context is a hard stop. Before every read or write, canonicalize the existing path, or the nearest existing parent of a not-yet-created path, and verify it is inside the exact current worktree. Apply the same check to every `allowedEditRoots` entry. Stop on an absolute/path-traversal/symlink escape or any containment ambiguity.
 
 This is an **agent-driven** operation - you will read delta specs and directly edit main specs to apply the changes. This allows intelligent merging (e.g., adding a scenario without copying the entire requirement).
 
@@ -34,7 +36,7 @@ This is an **agent-driven** operation - you will read delta specs and directly e
    scripts/openspec-local status --change "<name>" --json
    ```
 
-   If status reports `actionContext.mode: "workspace-planning"`, explain that workspace spec sync is not supported in this slice and STOP. Do not fall back to repo-local paths or edit linked repos.
+   Enforce the repository containment gate before using `planningHome`, `changeRoot`, `artifactPaths`, or `allowedEditRoots`. Any non-repo-local context is unsupported and must STOP.
 
 3. **Find delta specs**
 
@@ -138,7 +140,7 @@ Updated main specs:
 - Created new spec file
 - Added requirement: "Another Feature"
 
-Main specs are now updated. The change remains active - archive when implementation is complete.
+Main specs are now updated. Archive in the same post-acceptance closeout worktree, then commit and stop for independent closeout review.
 ```
 
 **Guardrails**

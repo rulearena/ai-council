@@ -17,13 +17,14 @@
 4. Gate A `ready` 後，Implementer 才可在隔離 worktree執行 `/opsx-apply`。
 5. Implementation、tests、docs、tasks 與完整 gates 完成後，Codex Reviewer 執行 Gate B。
 6. Gate B `ready` 後由 Implementer merge exact reviewed HEAD。
-7. Human Owner 驗收通過並在 `spec.md` §15 標記 `accepted / done` 後，才可 sync main specs 並 archive change。
+7. Human Owner 驗收通過後，Implementer 從最新 main 建立獨立 `.worktrees/<change>-acceptance-closeout`，在同一 closeout chain 中把 `spec.md` §15 標記 `accepted / done`、sync main specs、archive change 並提交。
+8. 不同 Codex session 以 closeout base 與 HEAD 執行固定 diff review；`ready` 後由 Implementer fast-forward merge exact reviewed HEAD，只做 read-only post-merge checks，然後清理 closeout worktree／branch。任何 closeout 修改都不得直接寫 main，Review 後變更亦須重審。
 
 OpenSpec 的「apply-ready」只表示 schema artifacts 齊全，不代表本專案 Gate A 已通過。OpenSpec 的「tasks complete」也不代表可 merge 或 archive。
 
 ## OpenSpec 執行規則
 
-- 一律透過 `scripts/openspec-local` 呼叫 CLI；wrapper 會停用 telemetry，並把 HOME、XDG config 與 TMPDIR 固定在目前 checkout 的 `.scratch/openspec-runtime/`。
+- 一律透過 `scripts/openspec-local` 呼叫 CLI；wrapper 會停用 telemetry，把 HOME、全部 XDG runtime directories 與 TMPDIR 固定在目前 checkout 的 `.scratch/openspec-runtime/`，anchor 至 wrapper 所在 checkout，並拒絕 `--force`。
 - 禁止直接呼叫裸 `openspec`，禁止 `--force`，禁止使用 workspace 外 config/cache。
 - `openspec update` 可能覆寫生成的 agent commands/skills；執行前必須獲得 Human Owner 明確授權，執行後整個治理 diff 必須重新 review。
 - `openspec/changes/archive/` 只保存 Human Owner 已驗收的 change。

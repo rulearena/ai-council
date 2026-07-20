@@ -61,4 +61,5 @@ Codex 回覆 `not ready` 時，修正 findings、補測試並重新送審。不�
 - merge main 後清理自己建立的 worktree、branch、runtime 與 logs。
 - 向 Human Owner 列出可直接操作的驗收功能，不只回報技術檔案。
 - Human Owner 驗收失敗時回到同一 change 修正；需求改變才重新建立 artifacts gate。
-- `/opsx-sync` 與 `/opsx-archive` 只能在 Human Owner 明確驗收通過、`spec.md` §15 已為 `accepted / done` 後執行；任何 incomplete artifact/task 或 skipped sync 都是 hard stop，不得用 OpenSpec 的 warning confirmation 繞過。
+- Human Owner 明確驗收通過後，從最新 main 建立獨立 acceptance-closeout worktree；在同一 closeout chain 更新 `spec.md` §15 為 `accepted / done`、執行 `/opsx-sync` 與 `/opsx-archive` 並 commit。任何 incomplete artifact/task 或 skipped sync 都是 hard stop，不得用 OpenSpec 的 warning confirmation 繞過。
+- Closeout commit 必須由不同 Codex session 以固定 base...HEAD 審查；只有 `ready` 才可 fast-forward merge exact reviewed HEAD，再執行 read-only post-merge checks 並清理。不得直接修改 main，review 後改動必須重審。

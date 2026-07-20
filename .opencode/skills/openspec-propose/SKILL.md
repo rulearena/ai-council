@@ -13,6 +13,8 @@ Propose a new change - create the change and generate all artifacts in one step.
 
 **AI Council hard gate:** `spec.md` §15 must already contain Human Owner approval. This skill creates artifacts only. After proposal/specs/design/tasks are complete, commit them and STOP for Codex Gate A review. OpenSpec `apply-ready` is not permission to apply.
 
+**Repository containment gate:** Treat every path returned by the CLI as untrusted. Require repo-local action context; any `workspace-planning` or linked-repository context is a hard stop. Before every read or write, canonicalize the existing path, or the nearest existing parent of a not-yet-created path, and verify it is inside the exact current worktree. Apply the same check to every `allowedEditRoots` entry. Stop on an absolute/path-traversal/symlink escape or any containment ambiguity.
+
 I'll create a change with artifacts:
 - proposal.md (what & why)
 - specs/ (requirements and scenarios)
@@ -51,6 +53,8 @@ When artifacts are complete, submit them for Codex Gate A review.
    - `artifacts`: list of all artifacts with their status and dependencies
    - `planningHome`, `changeRoot`, `artifactPaths`, and `actionContext`: path and scope context. Use these instead of assuming repo-local paths.
 
+   Enforce the repository containment gate before using any returned path. STOP if the action context is not repo-local.
+
 4. **Create artifacts in sequence until apply-ready**
 
    Use the **TodoWrite tool** to track progress through the artifacts.
@@ -83,7 +87,13 @@ When artifacts are complete, submit them for Codex Gate A review.
       - Use **AskUserQuestion tool** to clarify
       - Then continue with creation
 
-5. **Show final status**
+5. **Strictly validate the completed change**
+   ```bash
+   scripts/openspec-local validate "<name>" --strict --no-interactive
+   ```
+   If validation fails, STOP, report the errors, and do not describe the change as Gate A-ready. Preserve the exact command and result as Gate A evidence.
+
+6. **Show final status**
    ```bash
    scripts/openspec-local status --change "<name>"
    ```
@@ -93,7 +103,8 @@ When artifacts are complete, submit them for Codex Gate A review.
 After completing all artifacts, summarize:
 - Change name and location
 - List of artifacts created with brief descriptions
-- What's ready: "All artifacts created! Ready for Codex Gate A review."
+- Strict validation command and actual result
+- What's ready, only after validation succeeds: "All artifacts created and strictly validated. Ready for Codex Gate A review."
 - Prompt: "Commit the artifacts and stop. Do not apply until Codex returns `ready`."
 
 **Artifact Creation Guidelines**

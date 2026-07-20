@@ -11,7 +11,9 @@ metadata:
 
 Implement tasks from an OpenSpec change.
 
-**AI Council hard gate:** STOP unless the caller identifies the exact change and provides a Codex Gate A `ready` conclusion for the current artifacts commit. Implementation must occur in the approved isolated worktree. OpenSpec artifact completeness alone never authorizes apply.
+**AI Council hard gate:** STOP unless the caller identifies the exact change, every artifact named by `applyRequires` is complete, and the exact current artifacts commit has a Codex Gate A `ready` conclusion. Implementation must occur in the approved isolated worktree. OpenSpec artifact completeness alone never authorizes apply.
+
+**Repository containment gate:** Treat every path returned by the CLI as untrusted. Require repo-local action context; any `workspace-planning` or linked-repository context is a hard stop. Before every read or write, canonicalize the existing path, or the nearest existing parent of a not-yet-created path, and verify it is inside the exact current worktree. Apply the same check to every `allowedEditRoots` entry. Stop on an absolute/path-traversal/symlink escape or any containment ambiguity.
 
 **Input**: Optionally specify a change name. If omitted, check if it can be inferred from conversation context. If vague or ambiguous you MUST prompt for available changes.
 
@@ -48,11 +50,11 @@ Implement tasks from an OpenSpec change.
    - Dynamic instruction based on current state
 
    **Handle states:**
-   - If `state: "blocked"` (missing artifacts): show message, suggest using openspec-continue-change
-   - If `state: "all_done"`: congratulate, suggest archive
+   - If `state: "blocked"` or any `applyRequires` artifact is not complete: show the missing artifacts and STOP; do not implement
+   - If `state: "all_done"`: report completion and STOP for Gate B; do not suggest archive
    - Otherwise: proceed to implementation
 
-   **Workspace guard:** If status JSON reports `actionContext.mode: "workspace-planning"` and `allowedEditRoots` is empty, explain that full workspace apply is not supported in this slice. Treat linked repos and folders as read-only context, ask the user to select an affected area through an explicit implementation workflow, and STOP before editing files.
+   **Workspace guard:** Enforce the repository containment gate above before using `planningHome`, `changeRoot`, `artifactPaths`, `contextFiles`, or `allowedEditRoots`. Any non-repo-local context is unsupported and must STOP before reading or editing files.
 
 4. **Read context files**
 
@@ -78,9 +80,12 @@ Implement tasks from an OpenSpec change.
    - Mark task complete in the tasks file: `- [ ]` → `- [x]`
    - Continue to next task
 
+   **Stop and invalidate Gate A if:**
+   - Implementation reveals that proposal, delta specs, design, or task semantics must change. Do not edit application code further. An explicitly assigned Implementer may update the artifacts in a separate commit, then must obtain a fresh Gate A for that exact artifact commit before apply resumes.
+
    **Pause if:**
    - Task is unclear → ask for clarification
-   - Implementation reveals a design issue → suggest updating artifacts
+   - Implementation reveals a design issue → follow the Gate A invalidation rule above
    - Error or blocker encountered → report and wait for guidance
    - User interrupts
 
@@ -89,7 +94,7 @@ Implement tasks from an OpenSpec change.
    Display:
    - Tasks completed this session
    - Overall progress: "N/M tasks complete"
-   - If all done: suggest archive
+   - If all done: stop for full gates and Gate B. After exact reviewed-HEAD merge, Human Owner acceptance, accepted/done closeout review, and main-spec sync, archive may run.
    - If paused: explain why and wait for guidance
 
 **Output During Implementation**
@@ -147,15 +152,10 @@ What would you like to do?
 - Keep going through tasks until done or blocked
 - Always read context files before starting (from the apply instructions output)
 - If task is ambiguous, pause and ask before implementing
-- If implementation reveals issues, pause and suggest artifact updates
+- Any semantic artifact update immediately invalidates Gate A: stop implementation, commit the artifact change, and obtain a fresh Gate A before resuming
 - Keep code changes minimal and scoped to each task
 - Update task checkbox immediately after completing each task
 - Pause on errors, blockers, or unclear requirements - don't guess
 - Use contextFiles from CLI output, don't assume specific file names
 
-**Fluid Workflow Integration**
-
-This skill supports the "actions on a change" model:
-
-- **Can be invoked anytime**: Before all artifacts are done (if tasks exist), after partial implementation, interleaved with other actions
-- **Allows artifact updates**: If implementation reveals design issues, suggest updating artifacts - not phase-locked, work fluidly
+**Phase boundary:** This skill may run only after all required artifacts and the exact artifact commit pass Gate A. Artifact authoring and implementation must never be interleaved under one Gate A approval.

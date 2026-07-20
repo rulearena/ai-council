@@ -105,6 +105,6 @@ ready | not ready | ready with noted limitations
 - Review 後若 HEAD 改變，OpenCode 必須提供新 diff；行為性修改需重新 review。
 - OpenCode 只可 merge Codex 已審查的 commit chain；`implemented / awaiting acceptance` 狀態更新必須已包含在送審 chain。Merge 後執行不改檔的必要 post-merge checks，再清理 worktree/branch。
 - Codex 可做 post-merge read-only audit；發現 merge 漂移時回報 `not ready`，不得自行修復。
-- Human Owner 驗收通過後才標記 `accepted / done`，之後才可 sync `openspec/specs/` 並 archive change。OpenSpec 預設允許帶 warning archive 的行為在本專案一律禁止。
+- Human Owner 驗收通過後，由 Implementer 從最新 main 建立獨立 acceptance-closeout worktree，在同一 commit chain 標記 `accepted / done`、sync `openspec/specs/` 並 archive change。不同 Codex session 必須對 closeout base...HEAD 作獨立固定 diff review；`ready` 後 Implementer 只能 fast-forward merge exact reviewed HEAD，再做 read-only checks 與清理。Closeout 不得直接寫 main，Review 後任何變更均須重審。OpenSpec 預設允許帶 warning archive 的行為在本專案一律禁止。
 
 除非出現需 Human Owner 裁定的條件，OpenCode 自開始 implementation 後應持續工作至 review、修正、merge、gates、清理與交付驗收完成。
