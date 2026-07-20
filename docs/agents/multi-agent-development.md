@@ -1,104 +1,109 @@
-# 多代理自主開發規範
+# OpenCode 實作／Codex 審查開發規範
 
-本流程由 Human Owner、Orchestrator、Executor、Reviewer 四個角色組成。需求達成共同理解後，代理團隊應持續自主開發至完成，不要求 Human Owner 逐步確認。
+本流程由 Human Owner、OpenCode Implementer/Integrator、Codex review-only Reviewer 三個角色組成。實作與審查必須由不同 runtime 完成；Reviewer 不替 Implementer 修 code，也不負責 merge。
 
-預設模型：
+## 角色與權限
 
-- Orchestrator：Codex `gpt-5.6-sol`，reasoning effort `high`
-- Executor：Codex `gpt-5.6-luna`
-- Reviewer：Codex `gpt-5.6-terra`
+### Human Owner — 產品決策與驗收
 
-模型不可用時可使用能力相近的替代模型，但 Executor 與 Reviewer 必須保持獨立，並在完成報告揭露替代情況。
+- 提出需求、目標、優先順序、限制與期待成果。
+- `spec.md` §15 是唯一產品 backlog Source of Record；只有 Human Owner 能核准新產品行為或範圍擴張。
+- 一次核准整批工作後，OpenCode 可依已核准 artifacts 持續實作，不需逐項重新請示。
+- 需求矛盾、重大產品決策、範圍擴張、外部權限、破壞性操作或無法自行排除的阻塞，必須停下來交由 Human Owner 裁定。
+- 完成並 merge 後由 Human Owner 做最終功能驗收；驗收失敗自動回到原 change 的修正循環，只有需求改變才需重新核准。
 
-## Human Owner — 需求與驗收
+### OpenCode — Implementer 與 Integrator
 
-- 提出產品需求、目標、優先順序、限制條件與期待成果。
-- 新功能、跨模組變更、資料格式或使用者流程改動，可要求 Orchestrator 使用 `$grill-me` 釐清方向。
-- Grilling 一次處理一項決策；可從程式碼查證的事實由 Orchestrator 自行調查。
-- Orchestrator 必須為每個問題提出建議答案、理由與主要取捨，最終產品決策由 Human Owner 做出。
-- 確認雙方達成共同理解後，授權代理團隊開始自主開發。
-- 一次核准整批 backlog 後，代理團隊可依順序連續完成，不需逐項重新取得授權。
-- 完成後由 Human Owner 進行最終功能驗收。
-- 驗收失敗視為原需求尚未完成，自動進入修正循環；只有需求本身改變時才重新 grilling。
+- 開始前完整閱讀 `AGENTS.md`、`docs/HANDOFF.md`、本文件、相關 spec、架構文件、程式碼與測試。
+- 對新能力、跨模組變更、資料格式或使用者流程改動，先建立或更新 `.scratch/<feature>/PRD.md`、tickets 與必要實作計畫；不得在 artifacts review 通過前修改 implementation code。
+- 每張 ticket 必須包含目標、行為契約、相關檔案、相依關係、禁止事項、TDD seams、驗收條件與基線。
+- 收到 Codex 的 artifacts `ready` 後，才建立 `.worktrees/<slice>` 隔離 worktree 並開始實作。
+- 嚴格 TDD：先執行能抓到使用者症狀的紅燈，再做最小綠燈；保留紅／綠命令與實際結果。
+- 建立單一目的的小步 commit；不得順手修工單外問題，不得回退或提交使用者既有變更。
+- implementation review 為 `not ready` 時，由 OpenCode 修正並重新提交同一固定 review chain。
+- 送交 implementation review 前，OpenCode 必須完成相關 code、tests、`spec.md`／HANDOFF／tickets 與完整 slice gates，讓 Reviewer 審到預計 merge 的完整 commit chain。
+- Codex 給出 implementation `ready` 後，OpenCode 只能 merge 已審查的 exact HEAD；若任何檔案再改動，必須重新送審。Merge 後執行不改檔的 post-merge checks、清理 worktree/branch，並提供 Human Owner 明確驗收項目。
+- 所有測試資料與暫存均留在 repository 內 `.scratch/`；不得使用 `/tmp`、`/private/tmp`、`mktemp` 或 home cache。
 
-## Orchestrator — 設計與整合
+### Codex — Review-only Reviewer
 
-- 閱讀 AGENTS、handoff、spec、架構文件、程式碼及現有測試。
-- 負責架構決策、相容性規則、模組責任、命名慣例、資料模型及 migration 策略。
-- 將 slice 拆成可獨立測試、commit 與 review 的 bite-sized tasks。
-- 每張工單提供目標、行為契約、相關檔案、相依關係、禁止事項、TDD 案例與驗收條件。
-- 只有接口或架構必須固定時才提供程式碼骨架。
-- 記錄 main 測試基線、必要 regression tests、瀏覽器情境及不可破壞的相容性規則。
-- 仲裁 review findings，將 Blocking/Major 路由回 Executor，決定 Minor 立即修正或列入 backlog。
-- 負責整合、merge conflict、完整驗收、merge main、文件更新與 worktree 清理。
-- 原則上不實作功能；可處理整合問題、測試基礎設施、純文件及明確低風險修正。
-- 開發期間提供不需 Human Owner 回覆的簡短里程碑更新，流程不得因此停下。
+- 預設只讀：不得修改 tracked/product files、補 patch、建立 artifacts、stage、commit、merge、archive、刪 branch 或清 Implementer worktree。獨立驗證可在 repository 內建立專屬 ephemeral `.scratch/review-runtime-*`，完成後只能清理自己建立的 runtime。
+- 不採信 OpenCode 自述；必須讀固定範圍 diff、相關資料流、spec、tests 與文件，並獨立執行與風險相稱的驗證。
+- Reviewer 有兩個獨立 gate：
+  1. **Artifacts review**：確認需求、介面、相容性、TDD seams、風險與驗收線足以開始實作。
+  2. **Implementation review**：同時檢查 Spec 合規與 Standards／correctness，不得用先前 artifacts approval 取代。
+- Review 必須固定 base commit 與 HEAD，使用 `git diff <approved-base>...<head>`；base 不明、diff 為空或工作樹範圍混雜時不得給 `ready`。
+- 重點檢查 bug、falsy trap、edge case、state leak、schema/contract mismatch、wrong default、缺失或無效測試、安全與秘密、路徑越界、歷史資料改寫、backlog/documentation 漂移。
+- Codex 可指出 required fix，但不可直接代做。只有 Human Owner 在當次對話明確指定 exact task 時，才可暫時解除 review-only；例外不延續到下一項工作。
 
-## Executor — TDD 實作
+## 兩階段交付流程
 
-- 每個 task 原則上使用一個新的 Executor agent。
-- 嚴格依工單實作，不擅自擴大公開行為、資料格式或架構範圍。
-- 採 TDD：先建立原因明確的 failing test，再完成最小實作，最後重構。
-- 執行 targeted tests，並依範圍執行 lint、type check、build、局部 e2e 或真瀏覽器驗證。
-- 建立單一目的的小步 commit，回報 commit SHA、變更摘要、測試指令及實際結果。
-- 工單外問題應回報並記入 backlog，不順手修改無關程式碼。
-- 只有疑問會改變公開行為、資料格式、相容性、架構或工單範圍時才回報 Orchestrator。
-- Review 退件由原 Executor 優先續修；無法恢復原 agent 時，以工單、commit 與 findings 重建上下文。
+### Gate A：Artifacts readiness
 
-## Reviewer — 獨立審查
+OpenCode 提交 review packet：
 
-Reviewer 不採信 Executor 自述，必須逐行閱讀 diff、檢查相關資料流並獨立執行驗證。
+- canonical backlog 條目與 Human Owner 核准依據
+- `.scratch/` PRD/tickets／必要 plan
+- 相關介面、資料相容性、migration/fallback 決策
+- pre-agreed TDD seams、紅燈預期與完整 gates
+- 明確的 scope exclusions
 
-審查分成兩道關卡：
+Codex 只回 findings、independent verification 與：
 
-1. Spec 合規：確認完整符合工單，沒有缺漏、偏離或未授權擴張。
-2. 程式品質：檢查正確性、邊界條件、相容性、效能、安全性、測試有效性與註解品質。
+- `ready`
+- `not ready`
+- `ready with noted limitations`
 
-固定輸出格式：
+只有 `ready` 或 Human Owner 明確接受 limitations 後才能開始 implementation。
+
+### Gate B：Implementation readiness
+
+OpenCode 提交 review packet：
+
+- approved base commit、HEAD、branch、worktree
+- commit list 與完整 diff command
+- 紅燈命令、失敗原因、綠燈命令與結果
+- targeted/full gates 實際數字
+- 未驗證範圍與 runtime/tooling 偏差
+
+Codex findings-first review 必須包含：
 
 ```text
-Verdict: pass | needs-fixes
-
-Spec findings:
-- Blocking / Major / Minor
-
-Quality findings:
-- Blocking / Major / Minor / Nit
+Findings:
+- severity: critical | high | medium | low
+- location: file:line 或 section
+- contract: 對應 spec／ticket／repo rule
+- description: 問題
+- why_it_matters: 風險
+- required_fix: 必須達成的結果（不提供 patch）
 
 Independent verification:
-- 執行指令
-- 實際結果
-- 未驗證範圍
+- commands
+- actual results
+- unverified scope
+
+Conclusion:
+ready | not ready | ready with noted limitations
 ```
 
-Blocking/Major 必須修復；Minor 由 Orchestrator 決定立即處理或加入 backlog；Nit 不阻擋 merge。
+沒有 finding 時明確寫 `No new findings.`。`critical`／`high`／`medium` 預設阻擋；`low` 必須說明是否阻擋。不得使用「大致沒問題」等模糊結論。
 
-## 退件與升級
+## Worktree、範圍與測試
 
-- 前兩次退件交回原 Executor 修復，再由 Reviewer 獨立複驗。
-- 同一問題退件兩次後，由 Orchestrator 判斷是規格、架構或實作品質問題。
-- Orchestrator 可指定 Reviewer 模型擔任 escalation fixer，但不得讓它審查自己的修正。
-- Escalation fixer 的變更由 Orchestrator 或另一個獨立 Reviewer 複驗。
-- 審查意見有爭議時，由 Orchestrator 依 spec、測試證據、既有慣例與相容性要求裁決。
+- 一個 feature 一個 `.worktrees/<slice>`；tasks 原則上串行。
+- 平行工作必須互不相依且檔案責任清楚分離。
+- `spec.md` §15 是 backlog SoR；`.scratch/` 只保存已核准工作的執行 artifacts；HANDOFF 只同步狀態、基線與工作政策。
+- 歷史 events、meeting metadata、既有資料與使用者設定不得回填、重寫或 migration，除非 canonical contract 明確核准。
+- Task gate：targeted tests、相關 lint/type check/build/局部 e2e。
+- Slice gate：完整 backend tests、frontend unit/build、完整 Chromium e2e 及必要真瀏覽器 smoke；依 HANDOFF 的當前基線不得新增失敗。
+- 若環境／flake 阻擋，必須在相同環境證明 main 也可重現，並揭露未驗證範圍；無法證明與 change 無關時不得 merge。
 
-## Worktree 與範圍
+## Merge、驗收與完成
 
-- 所有功能在 repository 內指定的 `.worktrees/<slice>` 開發。
-- 預設一個 slice 一個 worktree，tasks 串行執行。
-- 平行 tasks 必須互不相依、檔案範圍清楚分離，並各自使用獨立 worktree 與 branch。
-- 不得覆寫、清除或回退來源不明的既有變更。
-- 相鄰問題原則上加入 backlog；只有不修就無法完成需求、會造成安全問題或破壞相容性時才能納入目前 slice。
+- Codex `ready` 只是 merge gate，不是 Human acceptance，也不授權未審查的新 commit。
+- Review 後若 HEAD 改變，OpenCode 必須提供新 diff；行為性修改需重新 review。
+- OpenCode 只可 merge Codex 已審查的 commit chain；`implemented / awaiting acceptance` 狀態更新必須已包含在送審 chain。Merge 後執行不改檔的必要 post-merge checks，再清理 worktree/branch。
+- Codex 可做 post-merge read-only audit；發現 merge 漂移時回報 `not ready`，不得自行修復。
+- Human Owner 驗收通過後才標記 `accepted / done`。
 
-## 驗收與完成
-
-- Task 關卡：targeted tests 與相關 build、lint、局部 e2e 通過，commit 完整。
-- Slice 關卡：完整 backend tests、frontend build、完整 e2e 及必要瀏覽器 smoke test 通過。
-- 驗收數字以開始開發時的 main 為基線，不得新增失敗，新增測試必須全部通過。
-- 若既有 flake 或環境問題阻擋驗收，只有在相同環境的 main 可重現、targeted tests 通過且沒有新增失敗時才可 merge，並須揭露證據與未驗證範圍。
-- 無法證明失敗與本次變更無關時不得 merge，應回報 Human Owner。
-- 自動驗收與 merge 完成後標記 `implemented / awaiting acceptance`。
-- Human Owner 驗收通過後標記 `accepted / done`；驗收失敗則重新開啟。
-- 最終更新 spec、backlog、handoff，merge 回 main、清理 branch/worktree，並提交成果、驗證證據、已知限制與驗收方式。
-- 純文件、拼字及明確低風險修正可由 Orchestrator 直接完成；涉及執行行為、設定語意、API、測試邏輯或使用者流程時，必須走完整代理流程。
-
-除非出現需求矛盾、重大產品決策、範圍擴張、外部權限、破壞性操作或無法自行排除的阻塞，代理團隊從開發開始後應持續工作，直到整批核准項目完成並交付 Human Owner 驗收。
+除非出現需 Human Owner 裁定的條件，OpenCode 自開始 implementation 後應持續工作至 review、修正、merge、gates、清理與交付驗收完成。
