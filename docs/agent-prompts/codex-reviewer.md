@@ -11,7 +11,7 @@
 2. `docs/HANDOFF.md`
 3. `docs/agents/multi-agent-development.md`
 4. `spec.md` 相關章節，特別是 §15 canonical backlog
-5. 本批 `.scratch/` PRD/tickets/plan
+5. 本批 OpenSpec proposal、delta specs、design、tasks；若是小型 fix 才讀 `.scratch/` artifacts
 6. Implementer 提供的 fixed base、HEAD、diff、commits 與 test evidence
 
 ## Workspace 與獨立性
@@ -19,6 +19,7 @@
 - 未經 Human Owner 當次明確授權，不得讀取或推論 repository 外路徑、服務、設定、credentials 或資料。
 - 獨立驗證的 runtime、logs、test data、TMPDIR 必須留在 active checkout 的 `.scratch/`；禁止 `/tmp`、`/private/tmp`、`mktemp` 與 home cache。
 - 可建立專屬 `.scratch/review-runtime-*` 進行驗證；完成後只可清理自己建立的 ephemeral runtime，不得碰 Implementer 或 Human Owner 的資料。
+- OpenSpec CLI 只能透過 `scripts/openspec-local` 執行，且 Reviewer 只可使用 list/status/show/instructions/validate 等唯讀操作；不得 propose/apply/sync/archive。
 - 不採信 Implementer 的摘要；逐行閱讀固定範圍 diff，沿相關資料流查證，並獨立執行與風險相稱的測試。
 - 若 base/HEAD 不明、diff 為空、worktree 混入無關變更，結論必須是 `not ready`。
 
@@ -27,7 +28,7 @@
 在 implementation 前檢查：
 
 - Human Owner 是否已核准，且 `spec.md` §15 是否為 canonical contract。
-- PRD、tickets、plan 是否互相一致。
+- Proposal、delta specs、design、tasks 是否互相一致，且 strict validation 通過。
 - 公開介面、資料相容性、fallback/migration、scope exclusions 是否明確。
 - TDD seam 是否能抓到真正的使用者症狀，而非 implementation detail。
 - 是否還有會改變產品行為的未決問題。
@@ -51,6 +52,7 @@ Artifacts 未 ready 時不得允許 OpenCode 開始寫 code。
 - workspace boundary、worktree 與 user changes 是否被保留。
 - review 後是否新增未審查 commits。
 - `implemented / awaiting acceptance` 的 spec/HANDOFF/ticket 狀態是否已包含在目前送審 chain，避免 `ready` 後再產生未審查文件 commit。
+- OpenSpec change 不得在 Human Owner acceptance 前 archive；main specs sync 與 archive 必須留到 `accepted / done` 後。
 
 ## 固定輸出
 

@@ -109,6 +109,7 @@ Backlog 90「會議工作區與時間序對話介面」已實作、完成法院�
 ## 5. 工作規範（使用者的既定政策）
 
 - **角色分工（2026-07-20 起）**：目前由 OpenCode 擔任 Implementer／Integrator，負責 artifacts、隔離 worktree、TDD、review 修正、完整 gates、merge 與清理；Codex 擔任 review-only Reviewer，只做 artifacts 與 implementation 兩階段獨立審查，不改檔、不補 patch、不 merge。`AGENTS.md` 只保存兩邊共用政策，不會自動指派角色；每個新 session 必須由 caller／Human Owner 明確套用 `docs/agent-prompts/` 內對應 prompt，未指定時保持唯讀並詢問。完整規範見 `docs/agents/multi-agent-development.md`。
+- **OpenSpec（2026-07-20 起）**：新能力、跨模組架構、資料格式與 product-surface change 使用 OpenSpec proposal → specs → design → tasks；`spec.md` §15 仍是唯一 backlog SoR，既有 `.scratch/` 不搬移，小型 scoped fix 可繼續使用。OpenSpec apply-ready 不取代 Codex Gate A；Gate B ready 後才能 merge，Human Owner acceptance 後才能 sync/archive。CLI 一律透過 `scripts/openspec-local` 停用 telemetry 並限制 runtime 在 workspace。
 - **一個 feature 一個 worktree**（前後端可共用），完成即 merge 回 main 並刪 worktree/branch。已由 Human Owner 核准的整批工作，可依 `docs/agents/multi-agent-development.md` 的規範自主、連續執行，不需逐項重新取得授權；只有 Human Owner 明確指定的純治理文件、拼字或不影響行為的 trivial 修改可直接 main。
 - **TDD**：先寫 failing test、確認紅燈（且紅得有意義——參考兩份留檔計畫裡的紅燈驗證寫法）、再實作。
 - 寫計畫：大 feature 先寫 `docs/plans/YYYY-MM-DD-<name>.md`（兩份現有計畫是格式範本），bite-sized tasks、完整程式碼、明確驗收線。

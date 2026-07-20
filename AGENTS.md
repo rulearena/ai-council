@@ -20,7 +20,7 @@
 
 ### Issue tracker
 
-Issues and PRDs are tracked as local markdown files under `.scratch/`; external PRs are not a triage surface. See `docs/agents/issue-tracker.md`.
+`spec.md` §15 remains the product backlog Source of Record. New approved capabilities and product-surface changes use OpenSpec change artifacts; existing `.scratch/` records remain historical and small scoped fixes may continue there. External PRs are not a triage surface. See `docs/agents/issue-tracker.md`.
 
 ### Triage labels
 

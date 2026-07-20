@@ -9,6 +9,7 @@ backend/.venv/
 .scratch/*.png
 .scratch/local-executor-canary/sandboxes/
 .scratch/pytest-runtime/
+.scratch/openspec-runtime/
 
 frontend/.cache/
 frontend/dist/

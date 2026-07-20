@@ -1,32 +1,43 @@
-# Issue tracker: Local Markdown
+# Issue tracker 與 OpenSpec
 
-`spec.md` §15 是唯一的 canonical product backlog Source of Record（SoR）。`.scratch/` 是已核准工作的 PRD/ticket 執行區，不是另一份產品 backlog；`docs/HANDOFF.md` 只記錄當前狀態、驗收基線與目前已核准批次。
+`spec.md` §15 是唯一 canonical product backlog Source of Record（SoR）。OpenSpec 與 `.scratch/` 都是執行 artifacts，不得自行新增或擴張產品 backlog；`docs/HANDOFF.md` 只記錄當前狀態、驗收基線與已核准批次。
 
-任何 deferred product work 若仍可能實作，必須先同步記錄到 `spec.md` §15，再建立或更新 `.scratch/` 下對應的 PRD/ticket。執行完成後，狀態可在 ticket 留下完成紀錄，產品 backlog 的完成標記仍回寫 `spec.md` §15。
+## 新工作使用哪一種 artifacts
 
-## Conventions
+- 新能力、跨模組架構、資料格式或 product-surface change：使用 `openspec/changes/<change-name>/`。
+- 小型 bugfix、acceptance fix、純文件或不需要完整 proposal/design/spec/tasks 的 scoped change：可使用 `.scratch/<feature>/`。
+- 既有 `.scratch/` 是歷史執行紀錄，不搬移、不回填、不批次轉換成 OpenSpec。
+- Deferred product work 必須先記錄在 `spec.md` §15；Human Owner 核准後才能建立 OpenSpec change 或 `.scratch` artifacts。
 
-- One feature per directory: `.scratch/<feature-slug>/`
-- The PRD is `.scratch/<feature-slug>/PRD.md`
-- Implementation issues are `.scratch/<feature-slug>/issues/<NN>-<slug>.md`, numbered from `01`
-- Triage state is recorded as a `Status:` line near the top of each issue file (see `triage-labels.md` for the role strings)
-- Comments and conversation history append to the bottom of the file under a `## Comments` heading
+## OpenSpec change lifecycle
 
-## When a skill says "publish to the issue tracker"
+1. Human Owner 核准 `spec.md` §15 的範圍。
+2. Implementer 使用 `scripts/openspec-local new change <name>` 或 `/opsx-propose` 建立 proposal、delta specs、design、tasks。
+3. 提交 artifacts commit，停止；Codex Reviewer 執行 Gate A。
+4. Gate A `ready` 後，Implementer 才可在隔離 worktree執行 `/opsx-apply`。
+5. Implementation、tests、docs、tasks 與完整 gates 完成後，Codex Reviewer 執行 Gate B。
+6. Gate B `ready` 後由 Implementer merge exact reviewed HEAD。
+7. Human Owner 驗收通過並在 `spec.md` §15 標記 `accepted / done` 後，才可 sync main specs 並 archive change。
 
-確認工作已在 `spec.md` §15 被選定或核准後，建立新檔於 `.scratch/<feature-slug>/`（必要時建立目錄）。不要把 `.scratch/` 檔案當成產品 backlog 的新增來源。
+OpenSpec 的「apply-ready」只表示 schema artifacts 齊全，不代表本專案 Gate A 已通過。OpenSpec 的「tasks complete」也不代表可 merge 或 archive。
 
-## When a skill says "fetch the relevant ticket"
+## OpenSpec 執行規則
 
-Read the file at the referenced path. The user will normally pass the path or the issue number directly.
+- 一律透過 `scripts/openspec-local` 呼叫 CLI；wrapper 會停用 telemetry，並把 HOME、XDG config 與 TMPDIR 固定在目前 checkout 的 `.scratch/openspec-runtime/`。
+- 禁止直接呼叫裸 `openspec`，禁止 `--force`，禁止使用 workspace 外 config/cache。
+- `openspec update` 可能覆寫生成的 agent commands/skills；執行前必須獲得 Human Owner 明確授權，執行後整個治理 diff 必須重新 review。
+- `openspec/changes/archive/` 只保存 Human Owner 已驗收的 change。
+- `openspec/specs/` 是已驗收 capability contracts 的投影，不取代 `spec.md` §15 backlog。
+
+## Existing `.scratch/` conventions
+
+- One scoped fix per directory: `.scratch/<feature-slug>/`
+- PRD: `.scratch/<feature-slug>/PRD.md`
+- Issues: `.scratch/<feature-slug>/issues/<NN>-<slug>.md`
+- Comments append under `## Comments`; status remains local execution state。
+
+Skills 若要求「publish to issue tracker」，先確認工作是否為 OpenSpec-sized change。大型 change 寫入 `openspec/changes/`；小型 scoped fix 才使用 `.scratch/`。兩者都不得繞過 `spec.md` §15 與 Human Owner approval。
 
 ## Wayfinding operations
 
-Used by `/wayfinder`. The **map** is a file with one **child** file per ticket.
-
-- **Map**: `.scratch/<effort>/map.md` - the Notes / Decisions-so-far / Fog body.
-- **Child ticket**: `.scratch/<effort>/issues/NN-<slug>.md`, numbered from `01`, with the question in the body. A `Type:` line records the ticket type (`research`/`prototype`/`grilling`/`task`); a `Status:` line records `claimed`/`resolved`.
-- **Blocking**: a `Blocked by: NN, NN` line near the top. A ticket is unblocked when every file it lists is `resolved`.
-- **Frontier**: scan `.scratch/<effort>/issues/` for files that are open, unblocked, and unclaimed; first by number wins.
-- **Claim**: set `Status: claimed` and save before any work.
-- **Resolve**: append the answer under an `## Answer` heading, set `Status: resolved`, then append a context pointer (gist + link) to the map's Decisions-so-far in `map.md`.
+`/wayfinder` 仍使用 `.scratch/<effort>/map.md` 與 `.scratch/<effort>/issues/` 作為調查 map。Wayfinding 結論若形成可實作產品工作，仍須先進 `spec.md` §15，再依規模建立 OpenSpec change 或 scoped fix artifacts。

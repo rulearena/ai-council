@@ -11,33 +11,36 @@
 2. `docs/HANDOFF.md`
 3. `docs/agents/multi-agent-development.md`
 4. `spec.md` 相關章節，特別是 §15 canonical backlog
-5. 本批 `.scratch/<feature>/PRD.md`、tickets 與 plan
+5. 本批 `openspec/changes/<change>/` proposal、delta specs、design、tasks；小型 fix 才讀 `.scratch/` artifacts
 
 ## 權限與邊界
 
 - 只在本 repository 工作；未經 Human Owner 當次明確授權，不得讀取或推論 workspace 外路徑、服務、設定、credentials 或資料。
 - 所有 runtime、logs、test data、TMPDIR 留在 active checkout 的 `.scratch/`；禁止 `/tmp`、`/private/tmp`、`mktemp` 與 home cache。
 - 保留所有無關 user changes；不得 reset、覆寫、刪除、stage 或 commit。
-- `spec.md` §15 是唯一產品 backlog SoR；`.scratch/` 不是新增需求來源。
+- `spec.md` §15 是唯一產品 backlog SoR；OpenSpec 與 `.scratch/` 都不是新增需求來源。
+- 所有 OpenSpec CLI 必須透過 `scripts/openspec-local`；不得直接呼叫裸 `openspec`、不得使用 `--force`。
 
 ## Artifacts gate
 
-新能力、架構、資料格式或 product-surface change 必須先完成 PRD/tickets/plan，交給 Codex review-only Reviewer。
+新能力、架構、資料格式或 product-surface change 必須先用 `/opsx-propose` 完成 proposal、delta specs、design、tasks，提交 artifacts commit 後停止，交給 Codex review-only Reviewer。
 
 Reviewer 尚未回覆 `ready` 前：
 
 - 不得修改 implementation code 或 tests。
 - 不得先做「順手的小修」。
 - artifacts 有 finding 時先修 artifacts，再重新送審。
+- OpenSpec 顯示 `apply-ready` 不等於 Codex Gate A `ready`，不得直接執行 `/opsx-apply`。
 
 ## Implementation
 
 - 收到 artifacts `ready` 後建立 `.worktrees/<slice>` 與 feature branch。
+- 只有 Human Owner／caller 明確指定已通過 Gate A 的 change 時才能執行 `/opsx-apply`。
 - 嚴格 TDD：先寫 public seam regression，執行並確認原因正確的 red，再做最小 green。
 - 不擴張 API、schema、歷史資料、fallback 或 UX 行為；相鄰需求記回 `spec.md` §15 候選並等待 Human Owner 核准。
 - 小步 commit，每個 commit 單一目的。
 - 定期執行 targeted tests、type check/build；完成後依 HANDOFF 執行完整 gates。
-- 送審前完成 implementation、tests、文件與 `implemented / awaiting acceptance` 狀態更新；Reviewer 必須看到預計 merge 的完整 commit chain。
+- 送審前完成 implementation、tests、OpenSpec tasks、文件與 `implemented / awaiting acceptance` 狀態更新；Reviewer 必須看到預計 merge 的完整 commit chain。
 
 ## 送交 implementation review
 
@@ -58,3 +61,4 @@ Codex 回覆 `not ready` 時，修正 findings、補測試並重新送審。不�
 - merge main 後清理自己建立的 worktree、branch、runtime 與 logs。
 - 向 Human Owner 列出可直接操作的驗收功能，不只回報技術檔案。
 - Human Owner 驗收失敗時回到同一 change 修正；需求改變才重新建立 artifacts gate。
+- `/opsx-sync` 與 `/opsx-archive` 只能在 Human Owner 明確驗收通過、`spec.md` §15 已為 `accepted / done` 後執行；任何 incomplete artifact/task 或 skipped sync 都是 hard stop，不得用 OpenSpec 的 warning confirmation 繞過。

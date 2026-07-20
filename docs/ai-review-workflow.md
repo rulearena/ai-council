@@ -262,11 +262,13 @@ backend skeleton + MeetingRepository append/read events tests
 
 ## 13. 現階段不作為預設的流程
 
+自 2026-07-20 起，新能力、跨模組架構、資料格式與 product-surface change 已採 OpenSpec 作為執行 artifacts；`spec.md` §15 仍是唯一產品 backlog SoR。OpenSpec 的 apply/archive 必須再受 `docs/agents/multi-agent-development.md` 的 Codex review 與 Human acceptance gates 約束。
+
 以下流程不作為本專案目前預設，不代表永久不用：
 
 - 每個變更都開 PR
 - branch protection / CI required checks
-- OpenSpec proposal/apply/archive
+- 未經 Codex Gate A／Gate B 與 Human acceptance 的 OpenSpec apply/archive
 - GitNexus impact graph
 - 全域 stop hook 強制 review gate
 - Dockerized development workflow

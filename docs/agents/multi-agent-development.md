@@ -15,13 +15,13 @@
 ### OpenCode — Implementer 與 Integrator
 
 - 開始前完整閱讀 `AGENTS.md`、`docs/HANDOFF.md`、本文件、相關 spec、架構文件、程式碼與測試。
-- 對新能力、跨模組變更、資料格式或使用者流程改動，先建立或更新 `.scratch/<feature>/PRD.md`、tickets 與必要實作計畫；不得在 artifacts review 通過前修改 implementation code。
-- 每張 ticket 必須包含目標、行為契約、相關檔案、相依關係、禁止事項、TDD seams、驗收條件與基線。
+- 對新能力、跨模組變更、資料格式或使用者流程改動，先建立 `openspec/changes/<change>/` 的 proposal、delta specs、design、tasks；小型 scoped fix 才使用 `.scratch/`。不得在 artifacts review 通過前修改 implementation code。
+- Tasks 必須包含目標、行為契約、相依關係、禁止事項、TDD seams、驗收條件與基線；proposal/design/specs/tasks 必須雙向一致。
 - 收到 Codex 的 artifacts `ready` 後，才建立 `.worktrees/<slice>` 隔離 worktree 並開始實作。
 - 嚴格 TDD：先執行能抓到使用者症狀的紅燈，再做最小綠燈；保留紅／綠命令與實際結果。
 - 建立單一目的的小步 commit；不得順手修工單外問題，不得回退或提交使用者既有變更。
 - implementation review 為 `not ready` 時，由 OpenCode 修正並重新提交同一固定 review chain。
-- 送交 implementation review 前，OpenCode 必須完成相關 code、tests、`spec.md`／HANDOFF／tickets 與完整 slice gates，讓 Reviewer 審到預計 merge 的完整 commit chain。
+- 送交 implementation review 前，OpenCode 必須完成相關 code、tests、OpenSpec tasks、`spec.md`／HANDOFF 與完整 slice gates，讓 Reviewer 審到預計 merge 的完整 commit chain。
 - Codex 給出 implementation `ready` 後，OpenCode 只能 merge 已審查的 exact HEAD；若任何檔案再改動，必須重新送審。Merge 後執行不改檔的 post-merge checks、清理 worktree/branch，並提供 Human Owner 明確驗收項目。
 - 所有測試資料與暫存均留在 repository 內 `.scratch/`；不得使用 `/tmp`、`/private/tmp`、`mktemp` 或 home cache。
 
@@ -43,7 +43,8 @@
 OpenCode 提交 review packet：
 
 - canonical backlog 條目與 Human Owner 核准依據
-- `.scratch/` PRD/tickets／必要 plan
+- OpenSpec proposal、delta specs、design、tasks（或小型 fix 的 `.scratch/` artifacts）
+- `scripts/openspec-local validate <change> --strict --no-interactive` 結果
 - 相關介面、資料相容性、migration/fallback 決策
 - pre-agreed TDD seams、紅燈預期與完整 gates
 - 明確的 scope exclusions
@@ -92,7 +93,7 @@ ready | not ready | ready with noted limitations
 
 - 一個 feature 一個 `.worktrees/<slice>`；tasks 原則上串行。
 - 平行工作必須互不相依且檔案責任清楚分離。
-- `spec.md` §15 是 backlog SoR；`.scratch/` 只保存已核准工作的執行 artifacts；HANDOFF 只同步狀態、基線與工作政策。
+- `spec.md` §15 是 backlog SoR；OpenSpec 是新大型 change 的執行 artifacts，`.scratch/` 保留歷史與小型 scoped fixes；HANDOFF 只同步狀態、基線與工作政策。
 - 歷史 events、meeting metadata、既有資料與使用者設定不得回填、重寫或 migration，除非 canonical contract 明確核准。
 - Task gate：targeted tests、相關 lint/type check/build/局部 e2e。
 - Slice gate：完整 backend tests、frontend unit/build、完整 Chromium e2e 及必要真瀏覽器 smoke；依 HANDOFF 的當前基線不得新增失敗。
@@ -104,6 +105,6 @@ ready | not ready | ready with noted limitations
 - Review 後若 HEAD 改變，OpenCode 必須提供新 diff；行為性修改需重新 review。
 - OpenCode 只可 merge Codex 已審查的 commit chain；`implemented / awaiting acceptance` 狀態更新必須已包含在送審 chain。Merge 後執行不改檔的必要 post-merge checks，再清理 worktree/branch。
 - Codex 可做 post-merge read-only audit；發現 merge 漂移時回報 `not ready`，不得自行修復。
-- Human Owner 驗收通過後才標記 `accepted / done`。
+- Human Owner 驗收通過後才標記 `accepted / done`，之後才可 sync `openspec/specs/` 並 archive change。OpenSpec 預設允許帶 warning archive 的行為在本專案一律禁止。
 
 除非出現需 Human Owner 裁定的條件，OpenCode 自開始 implementation 後應持續工作至 review、修正、merge、gates、清理與交付驗收完成。
