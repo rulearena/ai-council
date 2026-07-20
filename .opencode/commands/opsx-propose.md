@@ -31,13 +31,19 @@ When artifacts are complete, submit them for Codex Gate A review.
 
    **IMPORTANT**: Do NOT proceed without understanding what the user wants to build.
 
-2. **Create the change directory**
+2. **Run the read-only repo-local preflight**
+   ```bash
+   scripts/openspec-local preflight repo-local "<name>"
+   ```
+   Require the returned `mode` to be `repo-local` and both `root` and `changesDir` to be canonically contained in the exact current worktree. If preflight fails or containment is ambiguous, STOP before creating anything.
+
+3. **Create the change directory**
    ```bash
    scripts/openspec-local new change "<name>"
    ```
    This creates a scaffolded change in the planning home resolved by the CLI with `.openspec.yaml`.
 
-3. **Get the artifact build order**
+4. **Get the artifact build order**
    ```bash
    scripts/openspec-local status --change "<name>" --json
    ```
@@ -48,7 +54,7 @@ When artifacts are complete, submit them for Codex Gate A review.
 
    Enforce the repository containment gate before using any returned path. STOP if the action context is not repo-local.
 
-4. **Create artifacts in sequence until apply-ready**
+5. **Create artifacts in sequence until apply-ready**
 
    Use the **TodoWrite tool** to track progress through the artifacts.
 
@@ -80,13 +86,13 @@ When artifacts are complete, submit them for Codex Gate A review.
       - Use **AskUserQuestion tool** to clarify
       - Then continue with creation
 
-5. **Strictly validate the completed change**
+6. **Strictly validate the completed change**
    ```bash
    scripts/openspec-local validate "<name>" --strict --no-interactive
    ```
    If validation fails, STOP, report the errors, and do not describe the change as Gate A-ready. Preserve the exact command and result as Gate A evidence.
 
-6. **Show final status**
+7. **Show final status**
    ```bash
    scripts/openspec-local status --change "<name>"
    ```

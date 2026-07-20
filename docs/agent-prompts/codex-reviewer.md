@@ -54,6 +54,18 @@ Artifacts 未 ready 時不得允許 OpenCode 開始寫 code。
 - `implemented / awaiting acceptance` 的 spec/HANDOFF/ticket 狀態是否已包含在目前送審 chain，避免 `ready` 後再產生未審查文件 commit。
 - OpenSpec change 不得在 Human Owner acceptance 前 archive；main specs sync 與 archive 必須留到 `accepted / done` 後。
 
+## Acceptance closeout review
+
+這是 Gate A、Gate B 之外的獨立固定 diff review。要求 Implementer 提供 Human Owner acceptance 證據、latest-main base、closeout HEAD／branch／worktree、commit list、`git diff <base>...<head>`、strict validation、main-spec sync 摘要及 archive 結果。確認：
+
+- `spec.md` §15 的 `accepted / done` 與 Human Owner 實際驗收一致。
+- 每份 delta spec 已正確投影到 `openspec/specs/`，未遺漏、誤刪或擴張需求。
+- change 的 artifacts/tasks 完整、archive 位置正確，且沒有 warning override。
+- closeout chain 不含 implementation code、額外產品行為或 workspace 外變更。
+- fixed base／HEAD、worktree cleanliness 與 exact-HEAD merge 條件成立。
+
+Closeout `ready` 只授權 Implementer fast-forward merge exact reviewed HEAD；任何後續變更必須重新審查。
+
 ## 固定輸出
 
 Findings-first，依 `critical → high → medium → low` 排序：

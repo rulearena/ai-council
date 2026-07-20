@@ -6,6 +6,34 @@ script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd -P)
 repo_root=$(CDPATH= cd -- "$script_dir/.." && pwd -P)
 runtime_root="$repo_root/.scratch/openspec-runtime"
 
+reject_symlink() {
+    if [ -L "$1" ]; then
+        echo "openspec-local: symlinked runtime path is prohibited: $1" >&2
+        exit 2
+    fi
+}
+
+repo_local_preflight() {
+    change_name=${1-}
+    reject_symlink "$repo_root/openspec"
+    reject_symlink "$repo_root/openspec/README.md"
+    reject_symlink "$repo_root/openspec/specs"
+    reject_symlink "$repo_root/openspec/changes"
+    if [ ! -d "$repo_root/openspec" ] || [ ! -f "$repo_root/openspec/README.md" ]; then
+        echo "openspec-local: checked-in repo-local openspec/ marker is required" >&2
+        exit 2
+    fi
+    if [ -n "$change_name" ]; then
+        case "$change_name" in
+            *[!a-z0-9-]*|-*|*-)
+                echo "openspec-local: unsafe change name: $change_name" >&2
+                exit 2
+                ;;
+        esac
+        reject_symlink "$repo_root/openspec/changes/$change_name"
+    fi
+}
+
 for arg in "$@"; do
     case "$arg" in
         --force|--force=*)
@@ -15,21 +43,68 @@ for arg in "$@"; do
     esac
 done
 
+reject_symlink "$repo_root/.scratch"
+reject_symlink "$runtime_root"
+reject_symlink "$runtime_root/home"
+reject_symlink "$runtime_root/xdg"
+reject_symlink "$runtime_root/xdg/config"
+reject_symlink "$runtime_root/xdg/cache"
+reject_symlink "$runtime_root/xdg/data"
+reject_symlink "$runtime_root/xdg/state"
+reject_symlink "$runtime_root/xdg/runtime"
+reject_symlink "$runtime_root/tmp"
+
 mkdir -p \
     "$runtime_root/home" \
     "$runtime_root/xdg/config" \
     "$runtime_root/xdg/cache" \
     "$runtime_root/xdg/data" \
     "$runtime_root/xdg/state" \
+    "$runtime_root/xdg/runtime" \
     "$runtime_root/tmp"
 
+runtime_physical=$(CDPATH= cd -- "$runtime_root" && pwd -P)
+case "$runtime_physical/" in
+    "$repo_root/"*) ;;
+    *)
+        echo "openspec-local: runtime path escapes the repository: $runtime_physical" >&2
+        exit 2
+        ;;
+esac
+
+chmod 700 "$runtime_root" "$runtime_root/xdg/runtime"
+
 cd "$repo_root"
+
+if [ "${1-}" = "preflight" ] && [ "${2-}" = "repo-local" ] && { [ "$#" -eq 2 ] || [ "$#" -eq 3 ]; }; then
+    if [ "$#" -eq 3 ] && [ -z "$3" ]; then
+        echo "openspec-local: change name must not be empty" >&2
+        exit 2
+    fi
+    repo_local_preflight "${3-}"
+    printf '{"mode":"repo-local","root":"%s","changesDir":"%s"}\n' \
+        "$repo_root" "$repo_root/openspec/changes"
+    exit 0
+fi
+
+if [ "${1-}" = "new" ] && [ "${2-}" = "change" ]; then
+    if [ "$#" -ne 3 ]; then
+        echo "openspec-local: guarded new change requires exactly one kebab-case name" >&2
+        exit 2
+    fi
+    if [ -z "$3" ]; then
+        echo "openspec-local: change name must not be empty" >&2
+        exit 2
+    fi
+    repo_local_preflight "$3"
+fi
 
 HOME="$runtime_root/home" \
 XDG_CONFIG_HOME="$runtime_root/xdg/config" \
 XDG_CACHE_HOME="$runtime_root/xdg/cache" \
 XDG_DATA_HOME="$runtime_root/xdg/data" \
 XDG_STATE_HOME="$runtime_root/xdg/state" \
+XDG_RUNTIME_DIR="$runtime_root/xdg/runtime" \
 TMPDIR="$runtime_root/tmp" \
 OPENSPEC_TELEMETRY=0 \
 exec openspec "$@"

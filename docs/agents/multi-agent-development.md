@@ -29,14 +29,15 @@
 
 - 預設只讀：不得修改 tracked/product files、補 patch、建立 artifacts、stage、commit、merge、archive、刪 branch 或清 Implementer worktree。獨立驗證可在 repository 內建立專屬 ephemeral `.scratch/review-runtime-*`，完成後只能清理自己建立的 runtime。
 - 不採信 OpenCode 自述；必須讀固定範圍 diff、相關資料流、spec、tests 與文件，並獨立執行與風險相稱的驗證。
-- Reviewer 有兩個獨立 gate：
+- Reviewer 有三個獨立 checkpoint：
   1. **Artifacts review**：確認需求、介面、相容性、TDD seams、風險與驗收線足以開始實作。
   2. **Implementation review**：同時檢查 Spec 合規與 Standards／correctness，不得用先前 artifacts approval 取代。
+  3. **Acceptance closeout review**：在 Human Owner 驗收後，檢查獨立 closeout chain 的 acceptance 證據、`accepted / done` 狀態、delta-to-main-spec sync、archive 完整性與固定 base／HEAD；不得用 Gate B 取代。
 - Review 必須固定 base commit 與 HEAD，使用 `git diff <approved-base>...<head>`；base 不明、diff 為空或工作樹範圍混雜時不得給 `ready`。
 - 重點檢查 bug、falsy trap、edge case、state leak、schema/contract mismatch、wrong default、缺失或無效測試、安全與秘密、路徑越界、歷史資料改寫、backlog/documentation 漂移。
 - Codex 可指出 required fix，但不可直接代做。只有 Human Owner 在當次對話明確指定 exact task 時，才可暫時解除 review-only；例外不延續到下一項工作。
 
-## 兩階段交付流程
+## 三階段審查流程
 
 ### Gate A：Artifacts readiness
 
@@ -88,6 +89,10 @@ ready | not ready | ready with noted limitations
 ```
 
 沒有 finding 時明確寫 `No new findings.`。`critical`／`high`／`medium` 預設阻擋；`low` 必須說明是否阻擋。不得使用「大致沒問題」等模糊結論。
+
+### Closeout review：Acceptance record readiness
+
+Implementer 提交 Human Owner acceptance 證據、latest-main base、closeout HEAD／branch／worktree、commit list、固定 diff、`accepted / done` 更新、strict validation、main-spec sync 摘要與 archive 結果。不同 Codex session 確認所有內容屬於同一 closeout chain、delta 已正確投影至 main specs、archive 完整且沒有 implementation code 或未授權行為變更。只有 `ready` 才可 merge exact reviewed HEAD。
 
 ## Worktree、範圍與測試
 

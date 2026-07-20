@@ -87,7 +87,7 @@ Implement tasks from an OpenSpec change.
    Display:
    - Tasks completed this session
    - Overall progress: "N/M tasks complete"
-   - If all done: stop for full gates and Gate B. After exact reviewed-HEAD merge, Human Owner acceptance, accepted/done closeout review, and main-spec sync, archive may run.
+   - If all done: stop for full gates and Gate B. The later order is exact reviewed-HEAD merge → Human Owner acceptance → dedicated closeout worktree → accepted/done + main-spec sync + archive → closeout commit → independent closeout review → exact closeout merge.
    - If paused: explain why and wait for guidance
 
 **Output During Implementation**

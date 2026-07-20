@@ -16,6 +16,7 @@ Lifecycle:
 4. OpenCode implements in an isolated worktree with TDD.
 5. Codex Gate B must return `ready` before merge.
 6. Human Owner accepts the merged behavior.
-7. Only then may OpenCode sync main specs and archive the change.
+7. OpenCode creates a dedicated latest-main acceptance-closeout worktree and commits accepted/done, main-spec sync, and archive together.
+8. A different Codex session reviews the fixed closeout diff; only `ready` permits an exact-HEAD fast-forward merge and cleanup.
 
 Existing `.scratch/` artifacts remain historical and are not migrated.
