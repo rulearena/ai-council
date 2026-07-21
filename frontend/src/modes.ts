@@ -22,7 +22,7 @@ import {
   type BackendModeSynthesis,
 } from './api'
 
-export type ModeCategory = 'relay' | 'parallel'
+export type ModeCategory = 'relay' | 'parallel' | 'chatroom'
 
 // Mirrors spec.md 16.2's `kind` enum. `member` is a participant whose output feeds the
 // next step (relay) or the synthesis step (parallel); `adjudicator` is the relay's final

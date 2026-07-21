@@ -14,6 +14,7 @@ import {
   messageClampPolicy,
   nextWorkspaceRoleFilter,
   projectMeetingWorkspace,
+  shouldShowChatroomComposer,
   type ConversationWorkspaceProjection,
   type WorkspaceMessage,
   type WorkspaceProjectionMeeting,
@@ -22,6 +23,7 @@ import {
 import type { SceneConfig } from '../scenes'
 import { modelDisplayLabel } from '../providers'
 import ActionBar from './ActionBar.vue'
+import ChatroomComposer from './ChatroomComposer.vue'
 import CouncilStage from './CouncilStage.vue'
 import RoleSilhouette from './RoleSilhouette.vue'
 
@@ -49,6 +51,8 @@ const roleFilter = ref<WorkspaceRoleFilter | null>(null)
 const expandedMessageIds = ref(new Set<string>())
 const contextCollapsed = ref(false)
 const mobileContextOpen = ref(false)
+const quotedMessage = ref<{ eventId: string; preview: string } | null>(null)
+const isChatroom = computed(() => shouldShowChatroomComposer(activeMode.value.category))
 const latestChairMessage = computed(() => chairmanEvents.value.at(-1)?.content ?? '')
 
 const workspace = computed<ConversationWorkspaceProjection | null>(() => {
@@ -182,7 +186,7 @@ async function retryRole(roleId: string) {
     <section class="workspace-conversation-column">
       <header class="workspace-conversation-header">
         <div>
-          <span class="workspace-eyebrow">{{ activeMode.category === 'parallel' ? '平行討論' : '依序討論' }}</span>
+          <span class="workspace-eyebrow">{{ activeMode.category === 'chatroom' ? '聊天室' : activeMode.category === 'parallel' ? '平行討論' : '依序討論' }}</span>
           <h2>{{ selectedMeeting.title }}</h2>
         </div>
         <button
@@ -232,6 +236,13 @@ async function retryRole(roleId: string) {
             :data-testid="`workspace-message-toggle-${message.id}`"
             @click="toggleMessage(message.id)"
           >{{ isExpanded(message) ? '收合長文' : '展開完整發言' }}</button>
+          <button
+            v-if="isChatroom && message.kind !== 'human' && message.kind !== 'system'"
+            type="button"
+            class="btn btn-ghost btn-sm workspace-quote-button"
+            data-testid="quote-message-button"
+            @click="quotedMessage = { eventId: message.id, preview: message.content.slice(0, 60) }"
+          >引用</button>
         </article>
         <article
           v-for="role in workspace.roles.filter((candidate) => candidate.state === 'thinking')"
@@ -245,7 +256,15 @@ async function retryRole(roleId: string) {
         </article>
       </div>
 
-      <ActionBar embedded @open-materials="emit('open-materials')" />
+      <ChatroomComposer
+        v-if="isChatroom"
+        :meeting-id="selectedMeeting.meeting_id"
+        :participants="selectedMeeting.participants"
+        v-model:quoted-message="quotedMessage"
+        @open-materials="emit('open-materials')"
+        @message-sent="quotedMessage = null"
+      />
+      <ActionBar v-else embedded @open-materials="emit('open-materials')" />
     </section>
 
     <aside
@@ -265,7 +284,10 @@ async function retryRole(roleId: string) {
         >{{ contextCollapsed ? '‹' : '›' }}</button>
       </header>
       <div v-if="!contextCollapsed" class="workspace-context-body">
-        <section>
+        <section v-if="isChatroom" class="workspace-mode-badge" data-testid="workspace-mode-badge">
+          <span class="badge badge-chatroom">聊天室</span>
+        </section>
+        <section v-if="selectedMeeting.goal">
           <span>AI 最終目標</span>
           <p>{{ selectedMeeting.goal }}</p>
         </section>

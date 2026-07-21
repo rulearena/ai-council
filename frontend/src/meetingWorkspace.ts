@@ -580,6 +580,10 @@ export type MessageClampPolicy = {
   lineClamp: 3
 }
 
+export function shouldShowChatroomComposer(modeCategory: string): boolean {
+  return modeCategory === 'chatroom'
+}
+
 export function messageClampPolicy(content: string): MessageClampPolicy {
   const collapsible = content.length > 240 || content.split(/\r?\n/).length > 3
   return {
