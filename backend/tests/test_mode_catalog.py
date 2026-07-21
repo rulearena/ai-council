@@ -71,6 +71,23 @@ modes:
       anonymize_inputs: true
 """
 
+CHATROOM_MODE_YAML = """
+modes:
+  - id: chatroom
+    name: 自由聊天室
+    category: chatroom
+    tagline: 隨性交流、即問即答。
+    when_to_use: 開放式自由對話。
+    sop:
+      - 選擇委員並挑選模型
+      - 用 @ 點名想發言的委員
+    default_scene: meeting-room
+    inputs: []
+    roles:
+      - { id: Advisor, name: 顧問, color: "#4d8dff", kind: member }
+      - { id: Critic, name: 評論者, color: "#ff6b5e", kind: member }
+"""
+
 
 def test_catalog_parses_relay_mode(tmp_path: Path) -> None:
     config_path = _write_yaml(tmp_path, RELAY_MODE_YAML)
@@ -486,13 +503,48 @@ modes:
         ModeCatalogRepository(config_path).list_modes()
 
 
+def test_chatroom_mode_loads(tmp_path: Path) -> None:
+    config_path = _write_yaml(tmp_path, CHATROOM_MODE_YAML)
+
+    modes = ModeCatalogRepository(config_path).list_modes()
+
+    assert len(modes) == 1
+    mode = modes[0]
+    assert mode.id == "chatroom"
+    assert mode.category == "chatroom"
+    assert mode.default_scene == "meeting-room"
+    assert mode.role_ids() == ["Advisor", "Critic"]
+    assert all(role.kind == "member" for role in mode.roles)
+    assert mode.steps == []
+    assert mode.fanout is None
+    assert mode.synthesis is None
+
+
+def test_chatroom_relay_plan_rejected(tmp_path: Path) -> None:
+    config_path = _write_yaml(tmp_path, CHATROOM_MODE_YAML)
+    mode = ModeCatalogRepository(config_path).get_mode("chatroom")
+    assert mode is not None
+
+    with pytest.raises(ModeConfigError):
+        relay_plan(mode)
+
+
+def test_chatroom_parallel_plan_rejected(tmp_path: Path) -> None:
+    config_path = _write_yaml(tmp_path, CHATROOM_MODE_YAML)
+    mode = ModeCatalogRepository(config_path).get_mode("chatroom")
+    assert mode is not None
+
+    with pytest.raises(ModeConfigError):
+        parallel_plan(mode, [])
+
+
 def test_repo_modes_yaml_is_loadable() -> None:
     config_path = Path(__file__).resolve().parents[2] / "config" / "modes.yaml"
     prompts_dir = Path(__file__).resolve().parents[2] / "prompts"
 
     modes = ModeCatalogRepository(config_path).list_modes()
 
-    assert len(modes) == 6
+    assert len(modes) == 7
 
     red_blue = next(mode for mode in modes if mode.id == "red-blue")
     plan = relay_plan(red_blue)
@@ -527,6 +579,11 @@ def test_repo_modes_yaml_is_loadable() -> None:
     }
 
     for mode in modes:
+        if mode.category == "chatroom":
+            assert mode.steps == [], f"chatroom mode must not have steps: {mode.id}"
+            assert mode.fanout is None, f"chatroom mode must not have fanout: {mode.id}"
+            assert mode.synthesis is None, f"chatroom mode must not have synthesis: {mode.id}"
+            continue
         if mode.category == "relay":
             templates = [step.template for step in mode.steps]
         else:

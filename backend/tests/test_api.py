@@ -3609,6 +3609,7 @@ def test_modes_endpoint_returns_catalog(tmp_path: Path) -> None:
         "brainstorm",
         "six-hats",
         "persona-testing",
+        "chatroom",
     ]
     red_blue = next(mode for mode in modes if mode["id"] == "red-blue")
     assert red_blue["available"] is True
@@ -6041,7 +6042,13 @@ def test_every_non_courtroom_mode_can_restart_without_changing_case_files(
     tmp_path: Path,
 ) -> None:
     client = TestClient(create_test_app(tmp_path))
-    modes = [mode for mode in client.get("/modes").json() if mode["id"] != "courtroom"]
+    # chatroom has no deliberation lifecycle yet (no runner/restart wiring), so it is
+    # excluded from restart coverage alongside courtroom's issue-based flow.
+    modes = [
+        mode
+        for mode in client.get("/modes").json()
+        if mode["id"] not in {"courtroom", "chatroom"}
+    ]
     assert {mode["category"] for mode in modes} == {"relay", "parallel"}
 
     for mode in modes:

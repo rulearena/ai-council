@@ -13,7 +13,7 @@ from ai_council.prompting.schemas import (
     OutputSchemaRegistry,
 )
 
-VALID_CATEGORIES = {"relay", "parallel"}
+VALID_CATEGORIES = {"relay", "parallel", "chatroom"}
 VALID_ROLE_KINDS = {"member", "adjudicator", "synthesizer"}
 VALID_INPUT_KINDS = {"text", "persona-list"}
 DEFAULT_MODE_ID = "red-blue"
