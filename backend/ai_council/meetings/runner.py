@@ -476,6 +476,8 @@ class MeetingRunner:
         instruction = instruction.strip()
         if not instruction:
             raise ValueError("Fanout instruction cannot be blank")
+        if not model_assignments:
+            return
         prior_transcript = self.transcript_projector.project(
             self._active_events(meeting_id), title=goal
         )
@@ -527,9 +529,9 @@ class MeetingRunner:
                         meeting_id=meeting_id,
                     )
                 )
-                output_schema.parse(response.raw_output)
+                parsed_output = output_schema.parse(response.raw_output)
             except (OutputParseError, AdapterError) as error:
-                return {
+                failed_event = {
                     "event_id": self._event_id(
                         meeting_id, f"{meeting_id}:{event_step_id}:attempt-1:failed"
                     ),
@@ -549,7 +551,10 @@ class MeetingRunner:
                     "interaction_type": "chatroom-fanout-response",
                     "in_response_to_event_id": human_event_id,
                 }
-            return {
+                if response is not None and response.token_usage is not None:
+                    failed_event["token_usage"] = response.token_usage
+                return failed_event
+            completed_event = {
                 "event_id": self._event_id(
                     meeting_id,
                     f"{meeting_id}:{event_step_id}:attempt-1:completed",
@@ -561,13 +566,17 @@ class MeetingRunner:
                 "model_config_id": config.id,
                 "adapter": config.adapter,
                 "prompt_messages": [{"role": "user", "content": prompt}],
-                "raw_output": response.raw_output if response else "",
+                "raw_output": response.raw_output,
+                "parsed_output": parsed_output,
                 "status": "completed",
                 **self._timing_fields(started_at, started_clock),
                 **prompt_metadata,
                 "interaction_type": "chatroom-fanout-response",
                 "in_response_to_event_id": human_event_id,
             }
+            if response.token_usage is not None:
+                completed_event["token_usage"] = response.token_usage
+            return completed_event
 
         with ThreadPoolExecutor(max_workers=len(model_assignments)) as executor:
             futures = {

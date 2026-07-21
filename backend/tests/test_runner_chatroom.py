@@ -13,7 +13,7 @@ from ai_council.meetings.runner import (
     MeetingRunner,
     RunnerAdapters,
 )
-from ai_council.models.adapters import AdapterError, ModelRequest, ModelResponse
+from ai_council.models.adapters import AdapterError, ModelRequest, ModelResponse, TokenUsage
 from ai_council.models.config import ModelConfig
 from ai_council.prompting.renderer import PromptRenderer
 
@@ -188,6 +188,120 @@ def test_chat_fanout_all_roles_invoked(tmp_path: Path) -> None:
     assert roles_responded == {"Blue", "Red", "Green"}
     for event in response_events:
         assert event["status"] == "completed"
+        parsed = event.get("parsed_output")
+        assert parsed is not None, "completed fanout event must include parsed_output"
+        assert parsed["summary"] == "OK"
+
+
+def test_chat_fanout_empty_model_assignments_no_crash(tmp_path: Path) -> None:
+    adapter = FakeAdapter([])
+    runner = build_chatroom_runner(tmp_path, adapter)
+    runner.fanout_chatroom_all(
+        meeting_id="meeting-1",
+        goal="團隊策略討論",
+        instruction="@all 大家覺得怎麼樣？",
+        role_display_names={},
+        model_assignments={},
+    )
+    events = runner.repository.read_events("meeting-1")
+    response_events = [
+        e for e in events if e.get("interaction_type") == "chatroom-fanout-response"
+    ]
+    assert len(response_events) == 0
+    assert adapter.requests == []
+
+
+def test_chat_fanout_completed_events_include_token_usage(tmp_path: Path) -> None:
+    class TokenAdapter:
+        def __init__(self) -> None:
+            self.requests: list[ModelRequest] = []
+
+        def complete(self, request: ModelRequest) -> ModelResponse:
+            self.requests.append(request)
+            return ModelResponse(
+                raw_output=VALID_OUTPUT,
+                token_usage=TokenUsage(
+                    prompt_tokens=10,
+                    completion_tokens=20,
+                    total_tokens=30,
+                ),
+            )
+
+    adapter = TokenAdapter()
+    runner = build_chatroom_runner(tmp_path, adapter)
+    model_assignments = {
+        "Blue": ModelConfig(id="mock-blue", adapter="mock"),
+        "Red": ModelConfig(id="mock-red", adapter="mock"),
+    }
+    runner.fanout_chatroom_all(
+        meeting_id="meeting-1",
+        goal="團隊策略討論",
+        instruction="@all 大家覺得怎麼樣？",
+        role_display_names={"Blue": "藍軍", "Red": "紅軍"},
+        model_assignments=model_assignments,
+    )
+
+    events = runner.repository.read_events("meeting-1")
+    response_events = [
+        e for e in events if e.get("interaction_type") == "chatroom-fanout-response"
+    ]
+    assert len(response_events) == 2
+    for event in response_events:
+        assert event["status"] == "completed"
+        assert "token_usage" in event, "completed fanout event must include token_usage"
+        assert event["token_usage"]["total_tokens"] == 30
+
+
+def test_chat_fanout_failed_events_include_token_usage(tmp_path: Path) -> None:
+    class FailParseAdapter:
+        def __init__(self) -> None:
+            self.call_count = 0
+
+        def complete(self, request: ModelRequest) -> ModelResponse:
+            self.call_count += 1
+            if "green" in request.model_config.id.lower():
+                return ModelResponse(
+                    raw_output="not valid json",
+                    token_usage=TokenUsage(
+                        prompt_tokens=5,
+                        completion_tokens=10,
+                        total_tokens=15,
+                    ),
+                )
+            return ModelResponse(
+                raw_output=VALID_OUTPUT,
+                token_usage=TokenUsage(
+                    prompt_tokens=10,
+                    completion_tokens=20,
+                    total_tokens=30,
+                ),
+            )
+
+    adapter = FailParseAdapter()
+    runner = build_chatroom_runner(tmp_path, adapter)
+    model_assignments = {
+        "Blue": ModelConfig(id="mock-blue", adapter="mock"),
+        "Green": ModelConfig(id="mock-green", adapter="mock"),
+    }
+    runner.fanout_chatroom_all(
+        meeting_id="meeting-1",
+        goal="團隊策略討論",
+        instruction="@all 大家覺得怎麼樣？",
+        role_display_names={"Blue": "藍軍", "Green": "綠軍"},
+        model_assignments=model_assignments,
+    )
+
+    events = runner.repository.read_events("meeting-1")
+    response_events = [
+        e for e in events if e.get("interaction_type") == "chatroom-fanout-response"
+    ]
+    assert len(response_events) == 2
+    completed = [e for e in response_events if e["status"] == "completed"]
+    failed = [e for e in response_events if e["status"] == "failed"]
+    assert len(completed) == 1
+    assert len(failed) == 1
+    assert "token_usage" in completed[0]
+    assert "token_usage" in failed[0]
 
 
 def test_chat_fanout_frozen_context(tmp_path: Path) -> None:
