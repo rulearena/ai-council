@@ -403,7 +403,7 @@ function buildParticipants() {
       </label>
 
       <label class="topic-input-row">
-        目標
+        目標{{ selectedMode.category === 'chatroom' ? '（選填）' : '' }}
         <textarea v-model="goal" aria-label="目標" />
       </label>
 
@@ -649,7 +649,7 @@ function buildParticipants() {
         class="btn btn-primary create-meeting-cta"
         data-testid="create-meeting-button"
         @click="submit"
-        :disabled="loading || caseFileLimitsLoading || !caseFileLimits || !title.trim() || !goal.trim() || (selectedMode.id === 'courtroom' && !caseType) || hasEmptyRequiredInput || hasIncompleteModelAssignment || hasIncompleteCaseFile || hasOversizedCaseFile || hasOversizedCaseFileTotal"
+        :disabled="loading || caseFileLimitsLoading || !caseFileLimits || !title.trim() || (selectedMode.category !== 'chatroom' && !goal.trim()) || (selectedMode.id === 'courtroom' && !caseType) || hasEmptyRequiredInput || hasIncompleteModelAssignment || hasIncompleteCaseFile || hasOversizedCaseFile || hasOversizedCaseFileTotal"
       >
         建立
       </button>

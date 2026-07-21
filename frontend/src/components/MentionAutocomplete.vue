@@ -32,6 +32,22 @@ const menuItems = computed(() => {
 
 const showMenu = computed(() => isOpen.value && menuItems.value.length > 0)
 
+watch(() => props.modelValue, (text) => {
+  if (!shouldShowMentionAutocomplete(props.modeCategory)) {
+    isOpen.value = false
+    return
+  }
+
+  const trigger = detectMentionTrigger(text)
+  if (trigger.triggered) {
+    isOpen.value = true
+    filterText.value = trigger.filterText
+    activeIndex.value = 0
+  } else {
+    isOpen.value = false
+  }
+})
+
 function onInput(event: Event) {
   const target = event.target as HTMLTextAreaElement
   const text = target.value
@@ -130,3 +146,47 @@ function optionLabel(item: { role_id: string; display_name?: string | null; name
     </ul>
   </div>
 </template>
+
+<style scoped>
+.mention-autocomplete {
+  position: absolute;
+  bottom: 100%;
+  left: 0;
+  z-index: 100;
+  width: 220px;
+}
+
+.mention-menu {
+  list-style: none;
+  margin: 0;
+  padding: 4px 0;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface);
+  box-shadow: var(--shadow-md);
+  max-height: 200px;
+  overflow-y: auto;
+}
+
+.mention-option {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 10px;
+  cursor: pointer;
+  font-size: 13px;
+  color: var(--color-text);
+}
+
+.mention-option-active,
+.mention-option:hover {
+  background: var(--color-surface-muted);
+}
+
+.mention-role-id {
+  margin-left: 8px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--color-text-muted);
+}
+</style>
