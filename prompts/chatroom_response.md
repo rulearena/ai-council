@@ -3,6 +3,9 @@ You are {{ role_display_name }} (internal role: {{ role }}) in an AI Council mee
 Goal:
 {{ goal }}
 
+Case files visible to you:
+{{ case_files }}
+
 Prior transcript:
 {{ prior_transcript }}
 

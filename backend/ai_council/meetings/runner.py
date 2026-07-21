@@ -384,6 +384,83 @@ class MeetingRunner:
             },
         )
 
+    def chat_respond_as_role(
+        self,
+        *,
+        meeting_id: str,
+        goal: str,
+        role: str,
+        role_display_name: str,
+        instruction: str,
+        model_assignments: dict[str, ModelConfig],
+        inputs: dict[str, Any] | None = None,
+    ) -> None:
+        if self._is_terminal(meeting_id):
+            return
+        instruction = instruction.strip()
+        if not instruction:
+            raise ValueError("Directed role instruction cannot be blank")
+        if role not in model_assignments:
+            self.repository.append_event(
+                meeting_id,
+                {
+                    "event_id": self._event_id(
+                        meeting_id, f"{meeting_id}:human-message:{uuid.uuid4().hex}"
+                    ),
+                    "meeting_id": meeting_id,
+                    "step_id": "human-message",
+                    "role": "Human",
+                    "attempt": 1,
+                    "status": "completed",
+                    "content": instruction,
+                },
+            )
+            return
+        directed_sequence = self._next_chat_directed_sequence_number(meeting_id)
+        instruction_event_id = f"{meeting_id}:human-directed-message:{uuid.uuid4().hex}"
+        self.repository.append_event(
+            meeting_id,
+            {
+                "event_id": instruction_event_id,
+                "meeting_id": meeting_id,
+                "step_id": "human-directed-message",
+                "role": "Human",
+                "attempt": 1,
+                "status": "completed",
+                "interaction_type": "directed-role-instruction",
+                "target_role_id": role,
+                "content": instruction,
+                **self._audit_event_fields(inputs),
+            },
+        )
+        step = StepDefinition(
+            step_id=f"chat-directed-{directed_sequence}-{role.lower()}-response",
+            role=role,
+            template_name="chatroom_response",
+            output_schema_id=DEFAULT_OUTPUT_SCHEMA_ID,
+        )
+        event_step_id = f"chat-directed-{directed_sequence}-{role.lower()}-response"
+        self._run_step(
+            meeting_id=meeting_id,
+            goal=goal,
+            model_assignments=model_assignments,
+            inputs=inputs,
+            step=step,
+            attempt=1,
+            round_number=1,
+            event_step_id=event_step_id,
+            extra_event_fields={
+                "interaction_type": "directed-role-response",
+                "directed_sequence": directed_sequence,
+                "in_response_to_event_id": instruction_event_id,
+            },
+            prior_transcript_override=None,
+            prompt_input_overrides={
+                "instruction": instruction,
+                "role_display_name": role_display_name,
+            },
+        )
+
     def respond_as_sequence(
         self,
         *,
@@ -1404,6 +1481,20 @@ class MeetingRunner:
         existing_sequences = {
             int(event["directed_sequence"])
             for event in directed_events
+            if "directed_sequence" in event
+        }
+        return (max(existing_sequences) if existing_sequences else 0) + 1
+
+    def _next_chat_directed_sequence_number(self, meeting_id: str) -> int:
+        chat_directed_events = [
+            event
+            for event in self._active_events(meeting_id)
+            if event.get("interaction_type") == "directed-role-response"
+            and str(event.get("step_id", "")).startswith("chat-directed-")
+        ]
+        existing_sequences = {
+            int(event["directed_sequence"])
+            for event in chat_directed_events
             if "directed_sequence" in event
         }
         return (max(existing_sequences) if existing_sequences else 0) + 1

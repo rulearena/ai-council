@@ -540,6 +540,7 @@ def test_chatroom_response_template_renders() -> None:
         inputs={
             "role_display_name": "資深顧問",
             "instruction": "請分享你的看法",
+            "case_files": "[證物一] 團隊調查報告",
         },
     )
 
@@ -549,3 +550,4 @@ def test_chatroom_response_template_renders() -> None:
     assert "請分享你的看法" in rendered
     assert "Blue 建議使用 Slack" in rendered
     assert ROLE_OUTPUT_V1_LITERAL in rendered
+    assert "[證物一] 團隊調查報告" in rendered
