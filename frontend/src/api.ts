@@ -627,6 +627,34 @@ export async function addMeetingMessage(
   return postJson(`/meetings/${meetingId}/messages`, { content })
 }
 
+export type ChatMention =
+  | { type: 'role'; role_id: string }
+  | { type: 'all' }
+
+export async function sendChatMessage(
+  meetingId: string,
+  content: string,
+  quotedEventId?: string,
+): Promise<MeetingEvent> {
+  return postJson(`/meetings/${meetingId}/messages`, {
+    content,
+    ...(quotedEventId ? { quoted_event_id: quotedEventId } : {}),
+  })
+}
+
+export async function sendChatMention(
+  meetingId: string,
+  content: string,
+  mentions: ChatMention[],
+  quotedEventId?: string,
+): Promise<MeetingEvent> {
+  return postJson(`/meetings/${meetingId}/chat/mention`, {
+    content,
+    mentions,
+    ...(quotedEventId ? { quoted_event_id: quotedEventId } : {}),
+  })
+}
+
 export async function correctMeetingMessage(
   meetingId: string,
   eventId: string,
