@@ -41,7 +41,7 @@ const previewRingSeats = computed(() => ringSeatLayout(previewMemberCount.value)
     <header class="mode-card-header">
       <h3>{{ mode.name }}</h3>
       <span class="mode-category-badge" :data-category="mode.category">
-        {{ mode.category === 'relay' ? '回合制' : '平行' }}
+        {{ mode.category === 'relay' ? '回合制' : mode.category === 'chatroom' ? '聊天室' : '平行' }}
       </span>
     </header>
     <p class="mode-tagline">{{ mode.tagline }}</p>
