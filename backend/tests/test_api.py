@@ -6914,6 +6914,68 @@ def test_chat_mention_all_deduplicates(tmp_path: Path) -> None:
     assert fanout_roles == {"Advisor", "Critic", "Strategist", "Analyst"}
 
 
+def test_chat_mention_empty_response_event_id_matches_persisted_event(
+    tmp_path: Path,
+) -> None:
+    app = create_test_app(tmp_path)
+    client = TestClient(app)
+    meeting_id = client.post(
+        "/meetings",
+        json={"title": "自由聊天", "mode_id": "chatroom"},
+    ).json()["meeting_id"]
+    quote_target = client.post(
+        f"/meetings/{meeting_id}/messages",
+        json={"content": "之前的訊息"},
+    ).json()
+
+    response = client.post(
+        f"/meetings/{meeting_id}/chat/mention",
+        json={
+            "content": "引用這則",
+            "mentions": [],
+            "quoted_event_id": quote_target["event_id"],
+        },
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    repository = MeetingRepository(tmp_path / "data")
+    persisted = repository.read_events(meeting_id)
+    persisted_ids = {e.get("event_id") for e in persisted}
+    assert body["event_id"] in persisted_ids, (
+        f"Response event_id {body['event_id']!r} not found in persisted events"
+    )
+    assert body["quoted_event_id"] == quote_target["event_id"]
+    persisted_event = next(e for e in persisted if e.get("event_id") == body["event_id"])
+    assert persisted_event.get("quoted_event_id") == quote_target["event_id"]
+
+
+def test_chat_mention_non_participant_role_returns_400(
+    tmp_path: Path,
+) -> None:
+    app = create_test_app(tmp_path)
+    client = TestClient(app)
+    meeting_id = client.post(
+        "/meetings",
+        json={
+            "title": "子集聊天",
+            "mode_id": "chatroom",
+            "participants": [
+                {"role_id": "Advisor", "model_config_id": "mock-fast"},
+                {"role_id": "Critic", "model_config_id": "mock-fast"},
+            ],
+        },
+    ).json()["meeting_id"]
+
+    response = client.post(
+        f"/meetings/{meeting_id}/chat/mention",
+        json={"content": "Strategist 說說看", "mentions": ["Strategist"]},
+    )
+
+    assert response.status_code == 400
+    assert "Strategist" in response.json()["detail"]
+
+
 def wait_for_model_status(
     client: TestClient,
     model_id: str,

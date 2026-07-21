@@ -1863,6 +1863,17 @@ def create_app(
         repository.delete(meeting_id)
         return Response(status_code=204)
 
+    def _resolve_quoted_event_id(
+        meeting_id: str, quoted_event_id: str | None
+    ) -> str | None:
+        if not quoted_event_id:
+            return None
+        exists = any(
+            e.get("event_id") == quoted_event_id
+            for e in repository.read_events(meeting_id)
+        )
+        return quoted_event_id if exists else None
+
     @app.post("/meetings/{meeting_id}/messages")
     @meeting_transitions.synchronized
     def add_meeting_message(
@@ -1872,6 +1883,7 @@ def create_app(
         reject_running_meeting(jobs, meeting_id)
         metadata_store.get(meeting_id)
         reject_terminal_meeting(repository, meeting_id)
+        resolved_quote = _resolve_quoted_event_id(meeting_id, request.quoted_event_id)
         event = {
             "event_id": f"{meeting_id}:human-message:{uuid.uuid4().hex}",
             "meeting_id": meeting_id,
@@ -1881,13 +1893,8 @@ def create_app(
             "status": "completed",
             "content": request.content,
         }
-        if request.quoted_event_id:
-            exists = any(
-                e.get("event_id") == request.quoted_event_id
-                for e in repository.read_events(meeting_id)
-            )
-            if exists:
-                event["quoted_event_id"] = request.quoted_event_id
+        if resolved_quote:
+            event["quoted_event_id"] = resolved_quote
         repository.append_event(meeting_id, event)
         return event
 
@@ -2136,12 +2143,14 @@ def create_app(
             metadata, mode, model_assignments, inputs, participants = (
                 chatroom_mention_context(meeting_id)
             )
-            role_ids = set(mode.role_ids())
+            stored_participant_role_ids = {
+                str(p["role_id"])
+                for p in (metadata.get("participants") or [])
+                if isinstance(p, dict)
+            } | {"all"}
             mention_set: set[str] = set()
             for m in request.mentions:
-                if m == "all":
-                    mention_set.add("all")
-                elif m in role_ids:
+                if m in stored_participant_role_ids:
                     mention_set.add(m)
                 else:
                     raise HTTPException(
@@ -2153,6 +2162,9 @@ def create_app(
 
             def run_mention() -> None:
                 if not request.mentions:
+                    resolved_quote = _resolve_quoted_event_id(
+                        meeting_id, request.quoted_event_id
+                    )
                     event = {
                         "event_id": f"{meeting_id}:human-message:{uuid.uuid4().hex}",
                         "meeting_id": meeting_id,
@@ -2162,13 +2174,8 @@ def create_app(
                         "status": "completed",
                         "content": request.content,
                     }
-                    if request.quoted_event_id:
-                        exists = any(
-                            e.get("event_id") == request.quoted_event_id
-                            for e in repository.read_events(meeting_id)
-                        )
-                        if exists:
-                            event["quoted_event_id"] = request.quoted_event_id
+                    if resolved_quote:
+                        event["quoted_event_id"] = resolved_quote
                     repository.append_event(meeting_id, event)
                     return
                 if has_all:
@@ -2223,8 +2230,10 @@ def create_app(
                     )
 
             if not request.mentions:
-                run_mention()
-                return JSONResponse(status_code=200, content={
+                resolved_quote = _resolve_quoted_event_id(
+                    meeting_id, request.quoted_event_id
+                )
+                event = {
                     "event_id": f"{meeting_id}:human-message:{uuid.uuid4().hex}",
                     "meeting_id": meeting_id,
                     "step_id": "human-message",
@@ -2232,7 +2241,11 @@ def create_app(
                     "attempt": 1,
                     "status": "completed",
                     "content": request.content,
-                })
+                }
+                if resolved_quote:
+                    event["quoted_event_id"] = resolved_quote
+                repository.append_event(meeting_id, event)
+                return JSONResponse(status_code=200, content=event)
 
             if not jobs.start(meeting_id, run_mention):
                 raise HTTPException(status_code=409, detail="Meeting is already running")
