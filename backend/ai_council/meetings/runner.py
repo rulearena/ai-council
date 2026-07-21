@@ -461,6 +461,123 @@ class MeetingRunner:
             },
         )
 
+    def fanout_chatroom_all(
+        self,
+        *,
+        meeting_id: str,
+        goal: str,
+        instruction: str,
+        role_display_names: dict[str, str],
+        model_assignments: dict[str, ModelConfig],
+        inputs: dict[str, Any] | None = None,
+    ) -> None:
+        if self._is_terminal(meeting_id):
+            return
+        instruction = instruction.strip()
+        if not instruction:
+            raise ValueError("Fanout instruction cannot be blank")
+        prior_transcript = self.transcript_projector.project(
+            self._active_events(meeting_id), title=goal
+        )
+        human_event_id = self._event_id(
+            meeting_id, f"{meeting_id}:human-message:{uuid.uuid4().hex}"
+        )
+        self.repository.append_event(
+            meeting_id,
+            {
+                "event_id": human_event_id,
+                "meeting_id": meeting_id,
+                "step_id": "human-message",
+                "role": "Human",
+                "attempt": 1,
+                "status": "completed",
+                "content": instruction,
+                **self._audit_event_fields(inputs),
+            },
+        )
+        timestamp_ms = int(time.time() * 1000)
+        output_schema = self.output_schemas.get(DEFAULT_OUTPUT_SCHEMA_ID)
+
+        def _invoke_role(role: str) -> dict[str, object]:
+            config = model_assignments[role]
+            event_step_id = f"chat-fanout-{timestamp_ms}-{role}"
+            prompt_metadata = self._prompt_metadata("chatroom_response", output_schema)
+            prompt = self.prompt_renderer.render(
+                template_name="chatroom_response",
+                role=role,
+                goal=goal,
+                prior_transcript=prior_transcript,
+                required_json_schema=output_schema.schema,
+                inputs=self._prompt_inputs_for_role(
+                    inputs, role, extra={
+                        "instruction": instruction,
+                        "role_display_name": role_display_names.get(role, role),
+                    },
+                ),
+            )
+            started_at = datetime.now(UTC).isoformat()
+            started_clock = time.monotonic()
+            response: ModelResponse | None = None
+            try:
+                response = self.adapters.by_name[config.adapter].complete(
+                    ModelRequest(
+                        prompt=prompt,
+                        model_config=config,
+                        output_schema_id=output_schema.id,
+                        meeting_id=meeting_id,
+                    )
+                )
+                output_schema.parse(response.raw_output)
+            except (OutputParseError, AdapterError) as error:
+                return {
+                    "event_id": self._event_id(
+                        meeting_id, f"{meeting_id}:{event_step_id}:attempt-1:failed"
+                    ),
+                    "meeting_id": meeting_id,
+                    "step_id": event_step_id,
+                    "role": role,
+                    "attempt": 1,
+                    "model_config_id": config.id,
+                    "adapter": config.adapter,
+                    "prompt_messages": [{"role": "user", "content": prompt}],
+                    "status": "failed",
+                    "failure_kind": self._failure_kind(error),
+                    "error": str(error),
+                    "retry_scheduled": False,
+                    **self._timing_fields(started_at, started_clock),
+                    **prompt_metadata,
+                    "interaction_type": "chatroom-fanout-response",
+                    "in_response_to_event_id": human_event_id,
+                }
+            return {
+                "event_id": self._event_id(
+                    meeting_id,
+                    f"{meeting_id}:{event_step_id}:attempt-1:completed",
+                ),
+                "meeting_id": meeting_id,
+                "step_id": event_step_id,
+                "role": role,
+                "attempt": 1,
+                "model_config_id": config.id,
+                "adapter": config.adapter,
+                "prompt_messages": [{"role": "user", "content": prompt}],
+                "raw_output": response.raw_output if response else "",
+                "status": "completed",
+                **self._timing_fields(started_at, started_clock),
+                **prompt_metadata,
+                "interaction_type": "chatroom-fanout-response",
+                "in_response_to_event_id": human_event_id,
+            }
+
+        with ThreadPoolExecutor(max_workers=len(model_assignments)) as executor:
+            futures = {
+                executor.submit(_invoke_role, role): role
+                for role in model_assignments
+            }
+            for future in as_completed(futures):
+                event = future.result()
+                self.repository.append_event(meeting_id, event)
+
     def respond_as_sequence(
         self,
         *,

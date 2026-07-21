@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import json
+import re
+import time
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 
@@ -10,7 +13,7 @@ from ai_council.meetings.runner import (
     MeetingRunner,
     RunnerAdapters,
 )
-from ai_council.models.adapters import ModelRequest, ModelResponse
+from ai_council.models.adapters import AdapterError, ModelRequest, ModelResponse
 from ai_council.models.config import ModelConfig
 from ai_council.prompting.renderer import PromptRenderer
 
@@ -151,3 +154,203 @@ def test_chat_directed_unknown_role_saves_human_only(tmp_path: Path) -> None:
     assert human_event["content"] == "@Unknown 你好"
 
     assert adapter.requests == []
+
+
+# --- Task group 5: @all fanout tests ---
+
+
+def test_chat_fanout_all_roles_invoked(tmp_path: Path) -> None:
+    adapter = FakeAdapter([VALID_OUTPUT, VALID_OUTPUT, VALID_OUTPUT])
+    runner = build_chatroom_runner(tmp_path, adapter)
+    model_assignments = {
+        "Blue": ModelConfig(id="mock-blue", adapter="mock"),
+        "Red": ModelConfig(id="mock-red", adapter="mock"),
+        "Green": ModelConfig(id="mock-green", adapter="mock"),
+    }
+
+    runner.fanout_chatroom_all(
+        meeting_id="meeting-1",
+        goal="團隊策略討論",
+        instruction="@all 大家覺得怎麼樣？",
+        role_display_names={"Blue": "藍軍", "Red": "紅軍", "Green": "綠軍"},
+        model_assignments=model_assignments,
+    )
+
+    events = runner.repository.read_events("meeting-1")
+    human_events = [e for e in events if e.get("role") == "Human"]
+    response_events = [
+        e for e in events if e.get("interaction_type") == "chatroom-fanout-response"
+    ]
+    assert len(human_events) == 1
+    assert human_events[0]["step_id"] == "human-message"
+    assert len(response_events) == 3
+    roles_responded = {e["role"] for e in response_events}
+    assert roles_responded == {"Blue", "Red", "Green"}
+    for event in response_events:
+        assert event["status"] == "completed"
+
+
+def test_chat_fanout_frozen_context(tmp_path: Path) -> None:
+    captured_requests: list[ModelRequest] = []
+
+    class CaptureAdapter:
+        def __init__(self, outputs: list[str]) -> None:
+            self.outputs = outputs
+
+        def complete(self, request: ModelRequest) -> ModelResponse:
+            captured_requests.append(request)
+            return ModelResponse(raw_output=self.outputs.pop(0))
+
+    adapter = CaptureAdapter([VALID_OUTPUT, VALID_OUTPUT, VALID_OUTPUT])
+    runner = build_chatroom_runner(tmp_path, adapter)
+    model_assignments = {
+        "Blue": ModelConfig(id="mock-blue", adapter="mock"),
+        "Red": ModelConfig(id="mock-red", adapter="mock"),
+        "Green": ModelConfig(id="mock-green", adapter="mock"),
+    }
+
+    runner.fanout_chatroom_all(
+        meeting_id="meeting-1",
+        goal="團隊策略討論",
+        instruction="@all 大家覺得怎麼樣？",
+        role_display_names={"Blue": "藍軍", "Red": "紅軍", "Green": "綠軍"},
+        model_assignments=model_assignments,
+    )
+
+    assert len(captured_requests) == 3
+    prompts = [req.prompt for req in captured_requests]
+    instruction_suffix = "@all 大家覺得怎麼樣？"
+    for prompt in prompts:
+        assert prompt.endswith(instruction_suffix)
+    suffixes = [p.rsplit(instruction_suffix, 1)[1] for p in prompts]
+    prefixes = [p.split("@all 大家覺得怎麼樣？", 1)[0] for p in prompts]
+    role_names = {"Blue", "Red", "Green"}
+    display_names = {"藍軍", "紅軍", "綠軍"}
+    stripped_prefixes = set()
+    for prefix in prefixes:
+        stripped = prefix
+        for name in role_names | display_names:
+            stripped = stripped.replace(name, "X")
+        stripped_prefixes.add(stripped)
+    assert len(stripped_prefixes) == 1, "prompts differ outside of role names"
+
+
+def test_chat_fanout_arrival_order_persistence(tmp_path: Path) -> None:
+    class SlowAdapter:
+        def __init__(self, delays: dict[str, float], output: str) -> None:
+            self.delays = delays
+            self.output = output
+
+        def complete(self, request: ModelRequest) -> ModelResponse:
+            role_hint = "unknown"
+            for key in ("Blue", "Red", "Green"):
+                if key.lower() in request.prompt.lower() or key.lower() in str(
+                    request.model_config.id
+                ).lower():
+                    role_hint = key
+                    break
+            for delay_role, delay in self.delays.items():
+                if delay_role.lower() in request.model_config.id.lower():
+                    time.sleep(delay)
+                    break
+            return ModelResponse(raw_output=self.output)
+
+    adapter = SlowAdapter(
+        delays={"blue": 0.1, "red": 0.01, "green": 0.05}, output=VALID_OUTPUT
+    )
+    runner = build_chatroom_runner(tmp_path, adapter)
+    model_assignments = {
+        "Blue": ModelConfig(id="mock-blue", adapter="mock"),
+        "Red": ModelConfig(id="mock-red", adapter="mock"),
+        "Green": ModelConfig(id="mock-green", adapter="mock"),
+    }
+
+    runner.fanout_chatroom_all(
+        meeting_id="meeting-1",
+        goal="團隊策略討論",
+        instruction="@all 大家覺得怎麼樣？",
+        role_display_names={"Blue": "藍軍", "Red": "紅軍", "Green": "綠軍"},
+        model_assignments=model_assignments,
+    )
+
+    events = runner.repository.read_events("meeting-1")
+    response_events = [
+        e for e in events if e.get("interaction_type") == "chatroom-fanout-response"
+    ]
+    assert len(response_events) == 3
+    assert response_events[0]["role"] == "Red"
+    assert response_events[1]["role"] == "Green"
+    assert response_events[2]["role"] == "Blue"
+
+
+def test_chat_fanout_partial_success(tmp_path: Path) -> None:
+    call_count = 0
+
+    class PartialFailAdapter:
+        def __init__(self, fail_role: str) -> None:
+            self.fail_role = fail_role
+
+        def complete(self, request: ModelRequest) -> ModelResponse:
+            nonlocal call_count
+            call_count += 1
+            if self.fail_role in request.model_config.id:
+                raise AdapterError("simulated adapter failure")
+            return ModelResponse(raw_output=VALID_OUTPUT)
+
+    adapter = PartialFailAdapter(fail_role="green")
+    runner = build_chatroom_runner(tmp_path, adapter)
+    model_assignments = {
+        "Blue": ModelConfig(id="mock-blue", adapter="mock"),
+        "Red": ModelConfig(id="mock-red", adapter="mock"),
+        "Green": ModelConfig(id="mock-green", adapter="mock"),
+    }
+
+    runner.fanout_chatroom_all(
+        meeting_id="meeting-1",
+        goal="團隊策略討論",
+        instruction="@all 大家覺得怎麼樣？",
+        role_display_names={"Blue": "藍軍", "Red": "紅軍", "Green": "綠軍"},
+        model_assignments=model_assignments,
+    )
+
+    events = runner.repository.read_events("meeting-1")
+    response_events = [
+        e for e in events if e.get("interaction_type") == "chatroom-fanout-response"
+    ]
+    assert len(response_events) == 3
+    completed = [e for e in response_events if e["status"] == "completed"]
+    failed = [e for e in response_events if e["status"] == "failed"]
+    assert len(completed) == 2
+    assert len(failed) == 1
+    assert failed[0]["role"] == "Green"
+    assert failed[0]["failure_kind"] == "adapter_error"
+
+
+def test_chat_fanout_step_id_format(tmp_path: Path) -> None:
+    adapter = FakeAdapter([VALID_OUTPUT, VALID_OUTPUT, VALID_OUTPUT])
+    runner = build_chatroom_runner(tmp_path, adapter)
+    model_assignments = {
+        "Blue": ModelConfig(id="mock-blue", adapter="mock"),
+        "Red": ModelConfig(id="mock-red", adapter="mock"),
+        "Green": ModelConfig(id="mock-green", adapter="mock"),
+    }
+
+    with patch("ai_council.meetings.runner.time") as mock_time:
+        mock_time.time.return_value = 1700000000.123
+        mock_time.monotonic.return_value = 0.0
+        runner.fanout_chatroom_all(
+            meeting_id="meeting-1",
+            goal="團隊策略討論",
+            instruction="@all 大家覺得怎麼樣？",
+            role_display_names={"Blue": "藍軍", "Red": "紅軍", "Green": "綠軍"},
+            model_assignments=model_assignments,
+        )
+
+    events = runner.repository.read_events("meeting-1")
+    response_events = [
+        e for e in events if e.get("interaction_type") == "chatroom-fanout-response"
+    ]
+    pattern = re.compile(r"^chat-fanout-\d{13}-.+$")
+    for event in response_events:
+        assert pattern.match(event["step_id"]), f"bad step_id: {event['step_id']}"
+        assert "Blue" in event["step_id"] or "Red" in event["step_id"] or "Green" in event["step_id"]
