@@ -526,3 +526,26 @@ def test_role_output_parser_raises_structured_error_for_invalid_output(
         RoleOutputParser().parse(raw_output)
 
     assert error.value.raw_output == raw_output
+
+
+def test_chatroom_response_template_renders() -> None:
+    prompt_dir = Path(__file__).parents[2] / "prompts"
+
+    rendered = PromptRenderer(prompt_dir).render(
+        template_name="chatroom_response",
+        role="Advisor",
+        goal="如何改善團隊溝通？",
+        prior_transcript="Blue 建議使用 Slack，Red 認為 Email 較好。",
+        required_json_schema=ROLE_OUTPUT_V1_LITERAL,
+        inputs={
+            "role_display_name": "資深顧問",
+            "instruction": "請分享你的看法",
+        },
+    )
+
+    assert "資深顧問" in rendered
+    assert "conversational" in rendered.lower() or "natural sentences" in rendered.lower()
+    assert "如何改善團隊溝通？" in rendered
+    assert "請分享你的看法" in rendered
+    assert "Blue 建議使用 Slack" in rendered
+    assert ROLE_OUTPUT_V1_LITERAL in rendered
