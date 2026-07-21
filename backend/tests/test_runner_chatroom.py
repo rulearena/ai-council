@@ -468,3 +468,40 @@ def test_chat_fanout_step_id_format(tmp_path: Path) -> None:
     for event in response_events:
         assert pattern.match(event["step_id"]), f"bad step_id: {event['step_id']}"
         assert "Blue" in event["step_id"] or "Red" in event["step_id"] or "Green" in event["step_id"]
+
+
+# --- Task group 7: quoted_event_id wiring test ---
+
+
+def test_chat_directed_with_quoted_event_in_context(tmp_path: Path) -> None:
+    adapter = FakeAdapter([VALID_OUTPUT])
+    runner = build_chatroom_runner(tmp_path, adapter)
+    model_assignments = {"Blue": ModelConfig(id="mock-blue", adapter="mock")}
+
+    # Append a target event first so the builder can find it
+    runner.repository.append_event(
+        "meeting-1",
+        {
+            "event_id": "meeting-1:quote-target",
+            "meeting_id": "meeting-1",
+            "step_id": "human-message",
+            "role": "Human",
+            "attempt": 1,
+            "status": "completed",
+            "content": "This is the quoted message about architecture",
+        },
+    )
+
+    runner.chat_respond_as_role(
+        meeting_id="meeting-1",
+        goal="How to improve?",
+        role="Blue",
+        role_display_name="Blue Advisor",
+        instruction="@Blue what do you think?",
+        model_assignments=model_assignments,
+        quoted_event_id="meeting-1:quote-target",
+    )
+
+    assert len(adapter.requests) == 1
+    prompt = adapter.requests[0].prompt
+    assert "This is the quoted message about architecture" in prompt

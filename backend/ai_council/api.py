@@ -2187,6 +2187,7 @@ def create_app(
                         role_display_names=role_display_names,
                         model_assignments=model_assignments,
                         inputs=inputs,
+                        quoted_event_id=request.quoted_event_id,
                     )
                 elif len(mention_set) == 1:
                     single_role = next(iter(mention_set))
@@ -2210,6 +2211,7 @@ def create_app(
                         instruction=request.content,
                         model_assignments=model_assignments,
                         inputs=inputs,
+                        quoted_event_id=request.quoted_event_id,
                     )
                 else:
                     filtered_assignments = {
@@ -2227,6 +2229,7 @@ def create_app(
                         role_display_names=filtered_display_names,
                         model_assignments=filtered_assignments,
                         inputs=inputs,
+                        quoted_event_id=request.quoted_event_id,
                     )
 
             if not request.mentions:

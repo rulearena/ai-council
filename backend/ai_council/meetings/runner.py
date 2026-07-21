@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any, Callable, Literal, Protocol, TypedDict
 
+from ai_council.meetings.chatroom_context import ChatroomContextBuilder
 from ai_council.meetings.execution_state import ActiveExecutionState, MeetingExecutionStateStore
 from ai_council.meetings.deliberation import DeliberationEpochs
 from ai_council.meetings.input_envelope import CASE_EVIDENCE_BY_ROLE_INPUT
@@ -136,6 +137,9 @@ class MeetingRunner:
         self.execution_state_store = execution_state_store
         self.output_schemas = output_schemas or DEFAULT_OUTPUT_SCHEMA_REGISTRY
         self.transcript_projector = TranscriptProjector()
+        self.chatroom_context_builder = ChatroomContextBuilder(
+            transcript_projector=self.transcript_projector,
+        )
 
     def run_workflow_step(
         self,
@@ -394,6 +398,7 @@ class MeetingRunner:
         instruction: str,
         model_assignments: dict[str, ModelConfig],
         inputs: dict[str, Any] | None = None,
+        quoted_event_id: str | None = None,
     ) -> None:
         if self._is_terminal(meeting_id):
             return
@@ -440,6 +445,11 @@ class MeetingRunner:
             output_schema_id=DEFAULT_OUTPUT_SCHEMA_ID,
         )
         event_step_id = f"chat-directed-{directed_sequence}-{role.lower()}-response"
+        prior_transcript = self.chatroom_context_builder.build(
+            self._active_events(meeting_id),
+            goal=goal,
+            quoted_event_id=quoted_event_id,
+        )
         self._run_step(
             meeting_id=meeting_id,
             goal=goal,
@@ -454,7 +464,7 @@ class MeetingRunner:
                 "directed_sequence": directed_sequence,
                 "in_response_to_event_id": instruction_event_id,
             },
-            prior_transcript_override=None,
+            prior_transcript_override=prior_transcript,
             prompt_input_overrides={
                 "instruction": instruction,
                 "role_display_name": role_display_name,
@@ -470,6 +480,7 @@ class MeetingRunner:
         role_display_names: dict[str, str],
         model_assignments: dict[str, ModelConfig],
         inputs: dict[str, Any] | None = None,
+        quoted_event_id: str | None = None,
     ) -> None:
         if self._is_terminal(meeting_id):
             return
@@ -478,8 +489,10 @@ class MeetingRunner:
             raise ValueError("Fanout instruction cannot be blank")
         if not model_assignments:
             return
-        prior_transcript = self.transcript_projector.project(
-            self._active_events(meeting_id), title=goal
+        prior_transcript = self.chatroom_context_builder.build(
+            self._active_events(meeting_id),
+            goal=goal,
+            quoted_event_id=quoted_event_id,
         )
         human_event_id = self._event_id(
             meeting_id, f"{meeting_id}:human-message:{uuid.uuid4().hex}"

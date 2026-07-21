@@ -6976,6 +6976,39 @@ def test_chat_mention_non_participant_role_returns_400(
     assert "Strategist" in response.json()["detail"]
 
 
+def test_chat_mention_with_quoted_event_passes_content_to_runner(
+    tmp_path: Path,
+) -> None:
+    app = create_test_app(tmp_path)
+    client = TestClient(app)
+    meeting_id = client.post(
+        "/meetings",
+        json={"title": "自由聊天", "mode_id": "chatroom"},
+    ).json()["meeting_id"]
+    quote_target = client.post(
+        f"/meetings/{meeting_id}/messages",
+        json={"content": "這是一則關於架構的重要訊息"},
+    ).json()
+
+    response = client.post(
+        f"/meetings/{meeting_id}/chat/mention",
+        json={
+            "content": "Advisor 你怎麼看？",
+            "mentions": ["Advisor"],
+            "quoted_event_id": quote_target["event_id"],
+        },
+    )
+
+    assert response.status_code == 202
+    events = wait_for_event_count(client, meeting_id, 3)
+    response_event = events[-1]
+    assert response_event["status"] == "completed"
+    prompt_messages = response_event.get("prompt_messages", [])
+    assert len(prompt_messages) >= 1
+    prompt_content = prompt_messages[0]["content"]
+    assert "這是一則關於架構的重要訊息" in prompt_content
+
+
 def wait_for_model_status(
     client: TestClient,
     model_id: str,
