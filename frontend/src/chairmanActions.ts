@@ -68,6 +68,10 @@ export function projectFixedRoundFailedRole(
   return projectFixedRoundFailure(steps, events)?.role ?? null
 }
 
+export function chatroomStartGuard(modeCategory: string): boolean {
+  return modeCategory === 'chatroom'
+}
+
 export type PrimaryAction = {
   kind: 'start-round' | 'courtroom-arguments' | 'courtroom-ruling' | 'courtroom-final' | 'courtroom-retry' | 'unavailable'
   issueId?: string

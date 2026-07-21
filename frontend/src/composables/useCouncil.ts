@@ -9,6 +9,7 @@ import { canLeaveMeetingSettings } from '../meetingSettingsNavigation'
 import { projectOperationStatusText } from '../operationStatus'
 import { waitForSettledProjection } from '../meetingSettlement'
 import {
+  chatroomStartGuard,
   chairmanActionBlockReason,
   chairmanActionOptions,
   chairmanActionPresentation,
@@ -707,6 +708,7 @@ export function useCouncil() {
 
   async function startSelectedMeeting(): Promise<boolean> {
     if (!selectedMeeting.value || !canRun.value) return false
+    if (chatroomStartGuard(activeModeSource.value.category)) return false
     clearContinueHint()
     const meetingId = selectedMeeting.value.meeting_id
     // The active mode's full step roster, in order (was a literal ['Blue','Red','Blue',
