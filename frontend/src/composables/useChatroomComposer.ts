@@ -11,10 +11,10 @@ const MENTION_RE = /(?:^|\s)@(all|\w+)/g
 export function extractMentions(
   content: string,
   participants: ChairmanParticipant[],
-): ChatMention[] {
+): string[] {
   const validRoleIds = new Set(participants.map((p) => p.role_id))
   const seen = new Set<string>()
-  const mentions: ChatMention[] = []
+  const mentions: string[] = []
   let match: RegExpExecArray | null
 
   while ((match = MENTION_RE.exec(content)) !== null) {
@@ -23,9 +23,9 @@ export function extractMentions(
     seen.add(token)
 
     if (token === 'all') {
-      mentions.push({ type: 'all' })
+      mentions.push('all')
     } else if (validRoleIds.has(token)) {
-      mentions.push({ type: 'role', role_id: token })
+      mentions.push(token)
     }
   }
 

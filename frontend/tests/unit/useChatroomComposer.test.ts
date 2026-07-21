@@ -70,7 +70,7 @@ test('test_send_with_mention dispatches /chat/mention API call with mentions arr
   assert.equal(calls[0].fn, 'sendChatMention')
   assert.equal(calls[0].args[0], 'meeting-1')
   assert.equal(calls[0].args[1], '@Prosecutor what do you think?')
-  assert.deepEqual(calls[0].args[2], [{ type: 'role', role_id: 'Prosecutor' }])
+  assert.deepEqual(calls[0].args[2], ['Prosecutor'])
   assert.equal(calls[0].args[3], undefined)
   assert.equal(result.ok, true)
 })
@@ -92,7 +92,7 @@ test('test_send_with_mention parses @all token', async () => {
 
   assert.equal(calls.length, 1)
   assert.equal(calls[0].fn, 'sendChatMention')
-  assert.deepEqual(calls[0].args[2], [{ type: 'all' }])
+  assert.deepEqual(calls[0].args[2], ['all'])
 })
 
 test('test_send_with_mention deduplicates repeated mentions', async () => {
@@ -112,7 +112,7 @@ test('test_send_with_mention deduplicates repeated mentions', async () => {
 
   assert.equal(calls.length, 1)
   assert.equal(calls[0].fn, 'sendChatMention')
-  assert.deepEqual(calls[0].args[2], [{ type: 'role', role_id: 'Prosecutor' }])
+  assert.deepEqual(calls[0].args[2], ['Prosecutor'])
 })
 
 test('test_send_with_mention ignores unknown role_id tokens', async () => {
@@ -153,8 +153,8 @@ test('test_send_with_mention parses multiple different mentions', async () => {
   assert.equal(calls.length, 1)
   assert.equal(calls[0].fn, 'sendChatMention')
   assert.deepEqual(calls[0].args[2], [
-    { type: 'role', role_id: 'Prosecutor' },
-    { type: 'role', role_id: 'Defense' },
+    'Prosecutor',
+    'Defense',
   ])
 })
 
@@ -254,4 +254,31 @@ test('mention is case-sensitive for role_id matching', async () => {
   assert.equal(calls.length, 1)
   assert.equal(calls[0].fn, 'sendChatMessage')
   assert.deepEqual(calls[0].args[2], undefined)
+})
+
+test('@all plus role mention produces array with @all first', async () => {
+  const calls: Array<{ fn: string; args: unknown[] }> = []
+  const boundary = {
+    sendChatMessage: async (...args: unknown[]) => { calls.push({ fn: 'sendChatMessage', args }); return { event_id: 'evt-1' } },
+    sendChatMention: async (...args: unknown[]) => { calls.push({ fn: 'sendChatMention', args }); return { event_id: 'evt-2' } },
+  }
+  const participantsWithBlue = [
+    ...participants,
+    { role_id: 'Blue', display_name: '藍方' },
+  ]
+
+  await parseAndSendChatMessage({
+    content: '@all @Blue please respond',
+    meetingId: 'meeting-1',
+    participants: participantsWithBlue,
+    quotedEventId: null,
+    boundary,
+  })
+
+  assert.equal(calls.length, 1)
+  assert.equal(calls[0].fn, 'sendChatMention')
+  const mentions = calls[0].args[2] as string[]
+  assert.ok(mentions.includes('all'), 'should include "all"')
+  assert.ok(mentions.includes('Blue'), 'should include "Blue"')
+  assert.equal(mentions[0], 'all', '@all should appear first')
 })

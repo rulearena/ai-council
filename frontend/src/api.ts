@@ -627,9 +627,7 @@ export async function addMeetingMessage(
   return postJson(`/meetings/${meetingId}/messages`, { content })
 }
 
-export type ChatMention =
-  | { type: 'role'; role_id: string }
-  | { type: 'all' }
+export type ChatMention = string
 
 export async function sendChatMessage(
   meetingId: string,

@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
 import type { ChairmanParticipant } from '../chairmanActions'
-import { sendChatMessage, sendChatMention, type ChatMention } from '../api'
+import { sendChatMessage, sendChatMention } from '../api'
 import { parseAndSendChatMessage } from '../composables/useChatroomComposer'
 import MentionAutocomplete from './MentionAutocomplete.vue'
 
