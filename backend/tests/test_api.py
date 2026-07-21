@@ -6621,6 +6621,7 @@ RELAY_PROMPT_TEMPLATES = [
     "persona_member",
     "persona_synthesis",
     "directed_role_response",
+    "chatroom_response",
 ]
 
 DEBATE_PROMPT_TEMPLATES = {
@@ -6660,6 +6661,8 @@ models:
         if template in {"brainstorm_synthesis", "hat_blue_synthesis", "persona_synthesis"}:
             content += " {{ fanout_outputs }}"
         if template == "directed_role_response":
+            content += " {{ role_display_name }} {{ instruction }}"
+        if template == "chatroom_response":
             content += " {{ role_display_name }} {{ instruction }}"
         if template.startswith("courtroom_issue_") or (
             template.startswith(("courtroom_civil_", "courtroom_criminal_"))
@@ -6756,6 +6759,159 @@ def run_single_courtroom_issue(
             return
         time.sleep(0.01)
     raise AssertionError("Courtroom issue ruling did not complete")
+
+
+# ── Chatroom mention tests (task group 6) ──────────────────────────────
+
+
+def test_chat_mention_single_role(tmp_path: Path) -> None:
+    app = create_test_app(tmp_path)
+    client = TestClient(app)
+    meeting_id = client.post(
+        "/meetings",
+        json={"title": "自由聊天", "mode_id": "chatroom"},
+    ).json()["meeting_id"]
+
+    response = client.post(
+        f"/meetings/{meeting_id}/chat/mention",
+        json={"content": "Advisor 你怎麼看？", "mentions": ["Advisor"]},
+    )
+
+    assert response.status_code == 202
+    events = wait_for_event_count(client, meeting_id, 2)
+    assert events[-2]["step_id"] == "human-directed-message"
+    assert events[-2]["interaction_type"] == "directed-role-instruction"
+    assert events[-2]["target_role_id"] == "Advisor"
+    assert events[-2]["content"] == "Advisor 你怎麼看？"
+    assert events[-1]["step_id"] == "chat-directed-1-advisor-response"
+    assert events[-1]["role"] == "Advisor"
+    assert events[-1]["interaction_type"] == "directed-role-response"
+    assert events[-1]["in_response_to_event_id"] == events[-2]["event_id"]
+
+
+def test_chat_mention_all(tmp_path: Path) -> None:
+    app = create_test_app(tmp_path)
+    client = TestClient(app)
+    meeting_id = client.post(
+        "/meetings",
+        json={"title": "自由聊天", "mode_id": "chatroom"},
+    ).json()["meeting_id"]
+
+    response = client.post(
+        f"/meetings/{meeting_id}/chat/mention",
+        json={"content": "大家怎麼看？", "mentions": ["all"]},
+    )
+
+    assert response.status_code == 202
+    events = wait_for_event_count(client, meeting_id, 5)
+    # human-message + one fanout response per role (Advisor, Critic, Strategist, Analyst)
+    assert events[-5]["step_id"] == "human-message"
+    assert events[-5]["content"] == "大家怎麼看？"
+    fanout_roles = {e["role"] for e in events[-4:]}
+    assert fanout_roles == {"Advisor", "Critic", "Strategist", "Analyst"}
+    for event in events[-4:]:
+        assert event["interaction_type"] == "chatroom-fanout-response"
+
+
+def test_chat_mention_empty_saves_human(tmp_path: Path) -> None:
+    app = create_test_app(tmp_path)
+    client = TestClient(app)
+    meeting_id = client.post(
+        "/meetings",
+        json={"title": "自由聊天", "mode_id": "chatroom"},
+    ).json()["meeting_id"]
+
+    response = client.post(
+        f"/meetings/{meeting_id}/chat/mention",
+        json={"content": "只是一則訊息", "mentions": []},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["step_id"] == "human-message"
+    assert response.json()["content"] == "只是一則訊息"
+    events = client.get(f"/meetings/{meeting_id}").json()["events"]
+    assert len(events) == 1
+    assert events[-1]["step_id"] == "human-message"
+    assert events[-1]["content"] == "只是一則訊息"
+
+
+def test_chat_mention_invalid_role_400(tmp_path: Path) -> None:
+    app = create_test_app(tmp_path)
+    client = TestClient(app)
+    meeting_id = client.post(
+        "/meetings",
+        json={"title": "自由聊天", "mode_id": "chatroom"},
+    ).json()["meeting_id"]
+
+    response = client.post(
+        f"/meetings/{meeting_id}/chat/mention",
+        json={"content": "你好嗎", "mentions": ["Unknown"]},
+    )
+
+    assert response.status_code == 400
+    assert "Unknown" in response.json()["detail"]
+
+
+def test_chat_mention_rejects_non_chatroom(tmp_path: Path) -> None:
+    app = create_test_app(tmp_path)
+    client = TestClient(app)
+    meeting_id = client.post(
+        "/meetings",
+        json={"title": "一般會議", "goal": "一般會議"},
+    ).json()["meeting_id"]
+
+    response = client.post(
+        f"/meetings/{meeting_id}/chat/mention",
+        json={"content": "test", "mentions": ["Blue"]},
+    )
+
+    assert response.status_code == 409
+
+
+def test_chat_mention_multiple_roles(tmp_path: Path) -> None:
+    app = create_test_app(tmp_path)
+    client = TestClient(app)
+    meeting_id = client.post(
+        "/meetings",
+        json={"title": "自由聊天", "mode_id": "chatroom"},
+    ).json()["meeting_id"]
+
+    response = client.post(
+        f"/meetings/{meeting_id}/chat/mention",
+        json={"content": "你們兩個怎麼想？", "mentions": ["Advisor", "Critic"]},
+    )
+
+    assert response.status_code == 202
+    events = wait_for_event_count(client, meeting_id, 3)
+    # human-message + Advisor fanout + Critic fanout
+    assert events[-3]["step_id"] == "human-message"
+    assert events[-3]["content"] == "你們兩個怎麼想？"
+    fanout_roles = {e["role"] for e in events[-2:]}
+    assert fanout_roles == {"Advisor", "Critic"}
+    for event in events[-2:]:
+        assert event["interaction_type"] == "chatroom-fanout-response"
+
+
+def test_chat_mention_all_deduplicates(tmp_path: Path) -> None:
+    app = create_test_app(tmp_path)
+    client = TestClient(app)
+    meeting_id = client.post(
+        "/meetings",
+        json={"title": "自由聊天", "mode_id": "chatroom"},
+    ).json()["meeting_id"]
+
+    response = client.post(
+        f"/meetings/{meeting_id}/chat/mention",
+        json={"content": "大家怎麼看？", "mentions": ["all", "Advisor"]},
+    )
+
+    assert response.status_code == 202
+    events = wait_for_event_count(client, meeting_id, 5)
+    # human-message + one fanout per role (Advisor, Critic, Strategist, Analyst)
+    # Advisor should NOT be double-invoked when 'all' is also present
+    assert events[-5]["step_id"] == "human-message"
+    fanout_roles = {e["role"] for e in events[-4:]}
+    assert fanout_roles == {"Advisor", "Critic", "Strategist", "Analyst"}
 
 
 def wait_for_model_status(

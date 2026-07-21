@@ -295,6 +295,21 @@ class UpdateMeetingPinnedRequest(BaseModel):
 
 class AddMeetingMessageRequest(BaseModel):
     content: str
+    quoted_event_id: str | None = None
+
+
+class AddChatMentionRequest(BaseModel):
+    content: str
+    mentions: list[str]
+    quoted_event_id: str | None = None
+
+    @field_validator("content")
+    @classmethod
+    def require_non_blank_content(cls, value: str) -> str:
+        stripped = value.strip()
+        if not stripped:
+            raise ValueError("must not be blank")
+        return stripped
 
 
 class UpsertModelConfigRequest(BaseModel):
@@ -1866,6 +1881,13 @@ def create_app(
             "status": "completed",
             "content": request.content,
         }
+        if request.quoted_event_id:
+            exists = any(
+                e.get("event_id") == request.quoted_event_id
+                for e in repository.read_events(meeting_id)
+            )
+            if exists:
+                event["quoted_event_id"] = request.quoted_event_id
         repository.append_event(meeting_id, event)
         return event
 
@@ -2083,6 +2105,152 @@ def create_app(
     ) -> Any:
         with meeting_transitions.guard(meeting_id):
             return perform_role_response(meeting_id, role, request)
+
+    def chatroom_mention_context(
+        meeting_id: str,
+    ) -> tuple[
+        dict[str, Any],
+        ModeDefinition,
+        dict[str, ModelConfig],
+        dict[str, Any],
+        list[dict[str, Any]],
+    ]:
+        metadata = metadata_store.get(meeting_id)
+        reject_terminal_meeting(repository, meeting_id)
+        material_view = require_case_materials_ready(repository, case_materials, meeting_id)
+        mode = meeting_mode(mode_catalog, metadata)
+        if mode.category != "chatroom":
+            raise HTTPException(status_code=409, detail="Mode does not support chat mentions")
+        participants = project_participants(mode, metadata)
+        model_assignments = resolved_meeting_models(meeting_assignments, metadata, mode)
+        inputs = material_inputs_for_runner(metadata, material_view)
+        return metadata, mode, model_assignments, inputs, participants
+
+    @app.post("/meetings/{meeting_id}/chat/mention")
+    def chat_mention(
+        meeting_id: str,
+        request: AddChatMentionRequest,
+    ) -> Any:
+        with meeting_transitions.guard(meeting_id):
+            reject_running_meeting(jobs, meeting_id)
+            metadata, mode, model_assignments, inputs, participants = (
+                chatroom_mention_context(meeting_id)
+            )
+            role_ids = set(mode.role_ids())
+            mention_set: set[str] = set()
+            for m in request.mentions:
+                if m == "all":
+                    mention_set.add("all")
+                elif m in role_ids:
+                    mention_set.add(m)
+                else:
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"Unknown role for chat mention: {m}",
+                    )
+            has_all = "all" in mention_set
+            mention_set.discard("all")
+
+            def run_mention() -> None:
+                if not request.mentions:
+                    event = {
+                        "event_id": f"{meeting_id}:human-message:{uuid.uuid4().hex}",
+                        "meeting_id": meeting_id,
+                        "step_id": "human-message",
+                        "role": "Human",
+                        "attempt": 1,
+                        "status": "completed",
+                        "content": request.content,
+                    }
+                    if request.quoted_event_id:
+                        exists = any(
+                            e.get("event_id") == request.quoted_event_id
+                            for e in repository.read_events(meeting_id)
+                        )
+                        if exists:
+                            event["quoted_event_id"] = request.quoted_event_id
+                    repository.append_event(meeting_id, event)
+                    return
+                if has_all:
+                    role_display_names = _build_role_display_names(mode, participants)
+                    runner.fanout_chatroom_all(
+                        meeting_id=meeting_id,
+                        goal=metadata.get("goal", ""),
+                        instruction=request.content,
+                        role_display_names=role_display_names,
+                        model_assignments=model_assignments,
+                        inputs=inputs,
+                    )
+                elif len(mention_set) == 1:
+                    single_role = next(iter(mention_set))
+                    participant = next(
+                        (p for p in participants if p["role_id"] == single_role),
+                        None,
+                    )
+                    role_definition = next(
+                        (r for r in mode.roles if r.id == single_role), None
+                    )
+                    role_display_name = str(
+                        participant.get("display_name")
+                        or participant.get("name")
+                        or (role_definition.name if role_definition is not None else single_role)
+                    )
+                    runner.chat_respond_as_role(
+                        meeting_id=meeting_id,
+                        goal=metadata.get("goal", ""),
+                        role=single_role,
+                        role_display_name=role_display_name,
+                        instruction=request.content,
+                        model_assignments=model_assignments,
+                        inputs=inputs,
+                    )
+                else:
+                    filtered_assignments = {
+                        r: model_assignments[r] for r in mention_set if r in model_assignments
+                    }
+                    role_display_names = _build_role_display_names(mode, participants)
+                    filtered_display_names = {
+                        r: role_display_names[r]
+                        for r in filtered_assignments
+                    }
+                    runner.fanout_chatroom_all(
+                        meeting_id=meeting_id,
+                        goal=metadata.get("goal", ""),
+                        instruction=request.content,
+                        role_display_names=filtered_display_names,
+                        model_assignments=filtered_assignments,
+                        inputs=inputs,
+                    )
+
+            if not request.mentions:
+                run_mention()
+                return JSONResponse(status_code=200, content={
+                    "event_id": f"{meeting_id}:human-message:{uuid.uuid4().hex}",
+                    "meeting_id": meeting_id,
+                    "step_id": "human-message",
+                    "role": "Human",
+                    "attempt": 1,
+                    "status": "completed",
+                    "content": request.content,
+                })
+
+            if not jobs.start(meeting_id, run_mention):
+                raise HTTPException(status_code=409, detail="Meeting is already running")
+            return JSONResponse(status_code=202, content={"status": "running"})
+
+    def _build_role_display_names(
+        mode: ModeDefinition,
+        participants: list[dict[str, Any]],
+    ) -> dict[str, str]:
+        names: dict[str, str] = {}
+        for p in participants:
+            rid = p["role_id"]
+            rd = next((r for r in mode.roles if r.id == rid), None)
+            names[rid] = str(
+                p.get("display_name") or p.get("name")
+                or (rd.name if rd is not None else rid)
+            )
+        return names
 
     @app.post("/meetings/{meeting_id}/sequences", status_code=202)
     @meeting_transitions.synchronized
