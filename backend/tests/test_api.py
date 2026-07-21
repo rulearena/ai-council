@@ -7009,6 +7009,56 @@ def test_chat_mention_with_quoted_event_passes_content_to_runner(
     assert "這是一則關於架構的重要訊息" in prompt_content
 
 
+def test_chatroom_human_message_no_ai(tmp_path: Path) -> None:
+    app = create_test_app(tmp_path)
+    client = TestClient(app)
+    meeting_id = client.post(
+        "/meetings",
+        json={"title": "自由聊天", "mode_id": "chatroom"},
+    ).json()["meeting_id"]
+
+    response = client.post(
+        f"/meetings/{meeting_id}/messages",
+        json={"content": "大家早安"},
+    )
+
+    assert response.status_code == 200
+    event = response.json()
+    assert event["step_id"] == "human-message"
+    assert event["role"] == "Human"
+    assert event["content"] == "大家早安"
+    events = client.get(f"/meetings/{meeting_id}").json()["events"]
+    assert len(events) == 1
+    assert all(e["role"] in ("Human", "System") for e in events)
+
+
+def test_chatroom_human_message_no_ai(tmp_path: Path) -> None:
+    app = create_test_app(tmp_path)
+    client = TestClient(app)
+    meeting_id = client.post(
+        "/meetings",
+        json={"title": "自由聊天", "mode_id": "chatroom"},
+    ).json()["meeting_id"]
+
+    response = client.post(
+        f"/meetings/{meeting_id}/messages",
+        json={"content": "純粹聊天"},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["step_id"] == "human-message"
+    assert body["role"] == "Human"
+    assert body["content"] == "純粹聊天"
+
+    events = client.get(f"/meetings/{meeting_id}").json()["events"]
+    assert len(events) == 1
+    assert events[0]["step_id"] == "human-message"
+    assert events[0]["role"] == "Human"
+    non_human_roles = {e["role"] for e in events if e["role"] not in ("Human", "System")}
+    assert non_human_roles == set()
+
+
 def wait_for_model_status(
     client: TestClient,
     model_id: str,
