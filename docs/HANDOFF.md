@@ -25,8 +25,9 @@
 | Deliberation Lifecycle & Courtroom Workspace | `3551665` | append-only 審議輪次與三種法院重開、版本化證據／案件備註、民刑事 case profile 與安全 final schema、原子 meeting settings、歷史案卷與 responsive workspace（實作計畫：`docs/plans/2026-07-15-deliberation-lifecycle-ux.md`） |
 | Courtroom Async Settlement | `eaa059f`–`b6b2432` | GET／WebSocket 一致 live snapshot、per-meeting lifecycle revision、frontend settlement generation guard 與 deterministic ordering tests（實作計畫：`docs/plans/2026-07-17-courtroom-async-settlement.md`） |
 | Meeting Workspace Conversation | `018df1f`–`ef3c430` | A3-1 時間序工作區、relay／parallel 共用 Conversation、Court Hearing 爭點視圖、parallel arrival-order 即時保存與 terminal 原子 publish（實作計畫：`docs/plans/2026-07-18-meeting-workspace-conversation.md`） |
+| Backlog 91 Chatroom Mode | `0c59c1e`–* | 無流程限制的 AI 聊天室模式：@角色／@all mention fanout、context token budget、聊天室 composer 與 mention autocomplete、Conversation workspace chatroom adaptation（實作計畫：`openspec/changes/ai-chat-room/`） |
 
-**目前驗收基線（任何改動後不得低於此）**：後端 `pytest` **605 passed**；frontend unit **61 passed**；前端 `npm run build` 綠；Chromium e2e **94/94 passed**。Backlog #90 已通過 Standards／Spec 雙軸獨立 review，並以 direct Chromium 實際完成建立會議 → 主席補充 → AI 回合 → 角色篩選 → 長文展開 → 案卷 drawer。
+**目前驗收基線（任何改動後不得低於此）**：後端 `pytest` **650 passed**；frontend unit **99 passed**；前端 `npm run build` 綠；Chromium e2e **105/105 passed**。Backlog #90 已通過 Standards／Spec 雙軸獨立 review，並以 direct Chromium 實際完成建立會議 → 主席補充 → AI 回合 → 角色篩選 → 長文展開 → 案卷 drawer。Backlog #91（chatroom mode）已實作並包含在此基線中。
 
 ## 2. Agent 開發佇列與目前核准批次
 
@@ -130,5 +131,5 @@ Backlog 90「會議工作區與時間序對話介面」已實作、完成法院�
 - Backlog 88 acceptance 修補已實作並再次通過雙軸 review；Human Owner 於 2026-07-17 驗收通過，狀態為 `accepted / done`。
 - Backlog 89 已實作、雙軸 review、597 backend／50 unit／build／90 Chromium、direct browser smoke 與 Human Owner 驗收通過，狀態為 `accepted / done`。
 - Backlog 90 已實作、雙軸 review、605 backend／61 unit／build／94 Chromium 與 direct Chromium smoke 通過，Human Owner 於 2026-07-20 驗收通過，狀態為 `accepted / done`。
-- Backlog 91 自由聊天室模式已記錄但尚未核准實作。
+- Backlog 91 自由聊天室模式已實作、通過 650 backend／99 frontend unit／105 e2e 與 direct Chromium smoke，狀態為 `implemented / awaiting acceptance`。
 - 使用者已裁定：個人版不做多人/帳號（backlog 有註記）；案卷 Phase 2/RAG 仍延後到 backlog 79。

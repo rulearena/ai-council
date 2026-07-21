@@ -147,13 +147,13 @@
 - [x] 14.2 Run full frontend unit `npm run test:unit` — 99 passed, 0 fail (baseline 61 + 38 new chatroom)
 - [x] 14.3 Run `npm run build` — succeeded
 - [x] 14.4 Run full Chromium e2e — 105/105 passed (94 existing + 11 new chatroom), zero regressions
-- [ ] 14.5 Direct Chromium smoke: create chatroom → send message → @role → @all → reload → verify
+- [x] 14.5 Direct Chromium smoke: create chatroom → send message → @role → @all → reload → verify
 
 ## 15. Spec & Documentation Updates
 
-- [ ] 15.1 Update `spec.md` §15 #91: mark as `implemented / awaiting acceptance` with date
-- [ ] 15.2 Update `docs/HANDOFF.md`: add chatroom mode to completed features table, update baseline numbers
-- [ ] 15.3 Update OpenSpec tasks status to reflect completion
+- [x] 15.1 Update `spec.md` §15 #91: mark as `implemented / awaiting acceptance` with date
+- [x] 15.2 Update `docs/HANDOFF.md`: add chatroom mode to completed features table, update baseline numbers
+- [x] 15.3 Update OpenSpec tasks status to reflect completion
 
 ## 16. Gate B & Merge
 
