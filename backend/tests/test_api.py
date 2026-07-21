@@ -7019,29 +7019,6 @@ def test_chatroom_human_message_no_ai(tmp_path: Path) -> None:
 
     response = client.post(
         f"/meetings/{meeting_id}/messages",
-        json={"content": "大家早安"},
-    )
-
-    assert response.status_code == 200
-    event = response.json()
-    assert event["step_id"] == "human-message"
-    assert event["role"] == "Human"
-    assert event["content"] == "大家早安"
-    events = client.get(f"/meetings/{meeting_id}").json()["events"]
-    assert len(events) == 1
-    assert all(e["role"] in ("Human", "System") for e in events)
-
-
-def test_chatroom_human_message_no_ai(tmp_path: Path) -> None:
-    app = create_test_app(tmp_path)
-    client = TestClient(app)
-    meeting_id = client.post(
-        "/meetings",
-        json={"title": "自由聊天", "mode_id": "chatroom"},
-    ).json()["meeting_id"]
-
-    response = client.post(
-        f"/meetings/{meeting_id}/messages",
         json={"content": "純粹聊天"},
     )
 
