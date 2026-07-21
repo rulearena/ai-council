@@ -1,6 +1,7 @@
 data/
 logs/
 .worktrees/
+config/models.yaml
 
 .pytest_cache/
 **/__pycache__/
