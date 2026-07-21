@@ -143,10 +143,10 @@
 
 ## 14. Full Gates
 
-- [ ] 14.1 Run full backend `pytest` — all existing 605+ tests pass, new chatroom tests pass
-- [ ] 14.2 Run full frontend unit `npm run test:unit` — all existing 61+ tests pass, new chatroom tests pass
-- [ ] 14.3 Run `npm run build` — frontend build succeeds
-- [ ] 14.4 Run full Chromium e2e — all existing 94+ tests pass, new chatroom e2e tests pass
+- [x] 14.1 Run full backend `pytest` — 650 passed (baseline 605 + 45 new chatroom)
+- [x] 14.2 Run full frontend unit `npm run test:unit` — 99 passed, 0 fail (baseline 61 + 38 new chatroom)
+- [x] 14.3 Run `npm run build` — succeeded
+- [x] 14.4 Run full Chromium e2e — 105/105 passed (94 existing + 11 new chatroom), zero regressions
 - [ ] 14.5 Direct Chromium smoke: create chatroom → send message → @role → @all → reload → verify
 
 ## 15. Spec & Documentation Updates
