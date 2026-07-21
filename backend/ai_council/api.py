@@ -18,7 +18,7 @@ from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconn
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, PlainTextResponse, Response
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from ai_council.meetings.execution_state import (
     ActiveExecutionState,
@@ -153,20 +153,28 @@ class CaseFileRequest(BaseModel):
 
 class CreateMeetingRequest(BaseModel):
     title: str
-    goal: str
+    goal: str = ""
     mode_id: str = DEFAULT_MODE_ID
     participants: list[MeetingParticipantRequest] = Field(default_factory=list)
     inputs: dict[str, str] = Field(default_factory=dict)
     case_files: list[CaseFileRequest] = Field(default_factory=list)
     case_type: Literal["civil", "criminal"] | None = None
 
-    @field_validator("title", "goal")
+    @field_validator("title")
     @classmethod
-    def require_non_blank(cls, value: str) -> str:
+    def require_non_blank_title(cls, value: str) -> str:
         stripped = value.strip()
         if not stripped:
             raise ValueError("must not be blank")
         return stripped
+
+    @model_validator(mode="after")
+    def normalize_goal(self) -> "CreateMeetingRequest":
+        stripped = self.goal.strip()
+        if self.mode_id != "chatroom" and not stripped:
+            raise ValueError("goal must not be blank")
+        self.goal = stripped
+        return self
 
 
 class UpdateMeetingDetailsRequest(BaseModel):
@@ -2624,6 +2632,21 @@ def normalize_participants(
                 status_code=400,
                 detail=f"Missing participant roles: {', '.join(missing_roles)}",
             )
+        return participants
+
+    if mode.category == "chatroom":
+        participants = [participant.model_dump() for participant in requested]
+        if not participants:
+            participants = [
+                {"role_id": role_id, "model_config_id": default_model_id}
+                for role_id in mode.role_ids()
+            ]
+        validate_participant_ids(
+            mode=mode,
+            participants=participants,
+            allowed_role_ids=set(mode.role_ids()),
+            model_repository=model_repository,
+        )
         return participants
 
     if mode.fanout is None or mode.synthesis is None:

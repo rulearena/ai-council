@@ -3665,6 +3665,68 @@ def test_create_meeting_defaults_to_red_blue(tmp_path: Path) -> None:
     ]
 
 
+def test_create_chatroom_meeting_without_goal(tmp_path: Path) -> None:
+    client = TestClient(create_test_app(tmp_path))
+
+    response = client.post(
+        "/meetings",
+        json={"title": "自由聊天", "mode_id": "chatroom"},
+    )
+
+    assert response.status_code == 200
+    created = response.json()
+    assert created["mode_id"] == "chatroom"
+    assert created["goal"] is None
+    metadata = json.loads(
+        (
+            tmp_path / "data" / "meetings" / created["meeting_id"] / "metadata.json"
+        ).read_text(encoding="utf-8")
+    )
+    assert metadata["goal"] == ""
+
+
+def test_create_chatroom_meeting_with_goal(tmp_path: Path) -> None:
+    client = TestClient(create_test_app(tmp_path))
+
+    response = client.post(
+        "/meetings",
+        json={"title": "自由聊天", "goal": "討論產品方向", "mode_id": "chatroom"},
+    )
+
+    assert response.status_code == 200
+    created = response.json()
+    assert created["mode_id"] == "chatroom"
+    assert created["goal"] == "討論產品方向"
+    metadata = json.loads(
+        (
+            tmp_path / "data" / "meetings" / created["meeting_id"] / "metadata.json"
+        ).read_text(encoding="utf-8")
+    )
+    assert metadata["goal"] == "討論產品方向"
+
+
+def test_create_chatroom_empty_title_rejected(tmp_path: Path) -> None:
+    client = TestClient(create_test_app(tmp_path))
+
+    response = client.post(
+        "/meetings",
+        json={"title": "   ", "mode_id": "chatroom"},
+    )
+
+    assert response.status_code == 422
+
+
+def test_create_relay_meeting_without_goal_still_422(tmp_path: Path) -> None:
+    client = TestClient(create_test_app(tmp_path))
+
+    response = client.post(
+        "/meetings",
+        json={"title": "土地糾紛案", "mode_id": "red-blue"},
+    )
+
+    assert response.status_code == 422
+
+
 def test_create_parallel_without_participants_materializes_default_model_roster(
     tmp_path: Path,
 ) -> None:
