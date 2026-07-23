@@ -1,4 +1,21 @@
 modes:
+  - id: chatroom
+    name: 自由聊天室
+    category: chatroom
+    tagline: 多位委員齊聚一室，你用 @ 點名對話，隨性交流、即問即答。
+    when_to_use: 適合沒有固定流程、想自由發問並與多位角色來回討論的開放式對話。
+    sop:
+      - 選擇要加入聊天室的委員並各自挑選模型
+      - 用 @ 點名想發言的委員，或讓其自由回應
+      - 隨時追問、切換話題，沒有固定回合或結案步驟
+    default_scene: meeting-room
+    inputs: []
+    roles:
+      - { id: Advisor, name: 顧問, color: "#4d8dff", kind: member }
+      - { id: Critic, name: 評論者, color: "#ff6b5e", kind: member }
+      - { id: Strategist, name: 策略師, color: "#8b6dd9", kind: member }
+      - { id: Analyst, name: 分析師, color: "#3dd68c", kind: member }
+
   - id: red-blue
     name: 紅藍對抗
     category: relay
@@ -148,20 +165,3 @@ modes:
       max_instances: 6
       instance_prompt: true
     synthesis: { role: ProductAdvisor, template: persona_synthesis, label: 產品顧問彙整, anonymize_inputs: true }
-
-  - id: chatroom
-    name: 自由聊天室
-    category: chatroom
-    tagline: 多位委員齊聚一室，你用 @ 點名對話，隨性交流、即問即答。
-    when_to_use: 適合沒有固定流程、想自由發問並與多位角色來回討論的開放式對話。
-    sop:
-      - 選擇要加入聊天室的委員並各自挑選模型
-      - 用 @ 點名想發言的委員，或讓其自由回應
-      - 隨時追問、切換話題，沒有固定回合或結案步驟
-    default_scene: meeting-room
-    inputs: []
-    roles:
-      - { id: Advisor, name: 顧問, color: "#4d8dff", kind: member }
-      - { id: Critic, name: 評論者, color: "#ff6b5e", kind: member }
-      - { id: Strategist, name: 策略師, color: "#8b6dd9", kind: member }
-      - { id: Analyst, name: 分析師, color: "#3dd68c", kind: member }

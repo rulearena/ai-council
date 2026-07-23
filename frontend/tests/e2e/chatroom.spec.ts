@@ -386,3 +386,15 @@ test('13.12 message cards display role avatars', async ({ page }) => {
   const advisorMessage = page.getByTestId('workspace-message').filter({ hasText: '顧問' }).first()
   await expect(advisorMessage.getByTestId('workspace-message-avatar')).toBeVisible()
 })
+
+// ── 13.13 ────────────────────────────────────────────────────────────────────
+
+test('13.13 chatroom is the first mode in the mode picker', async ({ page }) => {
+  await page.goto('/')
+  await page.getByTestId('new-case-button').click()
+  await expect(page.getByTestId('new-case-modal')).toBeVisible()
+
+  // The first mode card should be chatroom
+  const firstCard = page.getByTestId('new-case-modal').locator('.mode-select-card').first()
+  await expect(firstCard).toContainText('聊天室')
+})
