@@ -370,3 +370,19 @@ test('13.11 seat click filters feed — identical for Chairman and role seats', 
   // Feed should still show all messages (no filter applied)
   await expect(page.getByTestId('workspace-clear-role-filter')).not.toBeVisible()
 })
+
+// ── 13.12 ────────────────────────────────────────────────────────────────────
+
+test('13.12 message cards display role avatars', async ({ page }) => {
+  await page.goto('/')
+  const title = `E2E chatroom avatars ${Date.now()}`
+  await createChatroomMeeting(page, title, { modelAssignments: defaultModels })
+
+  // Send an Advisor message via @mention
+  await sendChatMessage(page, '@Advisor 請回覆')
+  await waitForRoleMessage(page, '顧問')
+
+  // The message card should contain an avatar element
+  const advisorMessage = page.getByTestId('workspace-message').filter({ hasText: '顧問' }).first()
+  await expect(advisorMessage.getByTestId('workspace-message-avatar')).toBeVisible()
+})

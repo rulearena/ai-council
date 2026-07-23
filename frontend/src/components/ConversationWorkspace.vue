@@ -247,6 +247,10 @@ async function retryRole(roleId: string) {
           :data-role="message.roleId"
         >
           <header>
+            <span class="workspace-message-avatar" data-testid="workspace-message-avatar">
+              <img v-if="roleIcon(message.roleId)" :src="roleIcon(message.roleId)" :alt="message.roleName" />
+              <RoleSilhouette v-else :color="message.kind === 'ai' || message.kind === 'synthesizer' ? 'var(--role-color)' : 'currentColor'" :size="20" />
+            </span>
             <strong>{{ message.roleName }}</strong>
             <span v-if="message.kind === 'synthesizer'" class="workspace-message-badge">彙整</span>
             <time v-if="message.createdAt" :datetime="message.createdAt">{{ messageTime(message) }}</time>
