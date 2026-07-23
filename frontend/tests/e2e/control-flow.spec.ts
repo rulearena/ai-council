@@ -856,7 +856,7 @@ async function closeSettings(page: Page) {
 }
 
 async function openRoleDrawer(page: Page, role: 'blue' | 'red' | 'judge' | 'chairman') {
-  await page.getByTestId(`role-seat-${role}`).click()
+  await page.getByTestId(`role-seat-${role}-info`).click()
   await expect(page.getByTestId('role-drawer')).toBeVisible()
 }
 
