@@ -7,7 +7,6 @@ import SettingsModal from './components/SettingsModal.vue'
 import MeetingsModal from './components/MeetingsModal.vue'
 import NewCaseModal from './components/NewCaseModal.vue'
 import RoleDrawer from './components/RoleDrawer.vue'
-import RecordsDrawer from './components/RecordsDrawer.vue'
 import ModeHelpDrawer from './components/ModeHelpDrawer.vue'
 import CourtroomDocketPanel from './components/CourtroomDocketPanel.vue'
 import MeetingSettingsDrawer from './components/MeetingSettingsDrawer.vue'
@@ -23,7 +22,6 @@ const { currentScene } = useScenePreference()
 type ModalName = 'settings' | 'past-topics' | 'new-case'
 const openModal = ref<ModalName | null>(null)
 const openRole = ref<CouncilRole | 'Chairman' | null>(null)
-const recordsOpen = ref(false)
 const modeHelpOpen = ref(false)
 const meetingSettingsOpen = ref(false)
 const materialsOpen = ref(false)
@@ -78,7 +76,6 @@ function onSeatClick(role: CouncilRole | 'Chairman') {
     <MeetingsModal :show="openModal === 'past-topics'" @close="closeModal" />
     <NewCaseModal :show="openModal === 'new-case'" @close="closeModal" />
     <RoleDrawer :role="openRole" @close="openRole = null" />
-    <RecordsDrawer :show="recordsOpen" @close="recordsOpen = false" />
     <MeetingSettingsDrawer :show="meetingSettingsOpen" @close="meetingSettingsOpen = false" />
     <CaseMaterialsDrawer :show="materialsOpen" @close="materialsOpen = false" />
     <ModeHelpDrawer :show="modeHelpOpen" @close="modeHelpOpen = false" />

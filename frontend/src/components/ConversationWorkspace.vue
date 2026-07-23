@@ -64,26 +64,6 @@ type ContextTab = 'context' | 'records'
 const activeContextTab = ref<ContextTab>('context')
 const feedRef = ref<HTMLDivElement | null>(null)
 
-function isNearBottom(el: HTMLDivElement, threshold = 80): boolean {
-  return el.scrollHeight - el.scrollTop - el.clientHeight < threshold
-}
-
-function scrollToBottom() {
-  const el = feedRef.value
-  if (el) el.scrollTop = el.scrollHeight
-}
-
-watch(
-  () => allMessages.value.length,
-  (newLen, oldLen) => {
-    if (newLen > oldLen) {
-      nextTick(() => {
-        if (feedRef.value && isNearBottom(feedRef.value)) scrollToBottom()
-      })
-    }
-  },
-)
-
 const workspace = computed<ConversationWorkspaceProjection | null>(() => {
   const meeting = selectedMeeting.value
   if (!meeting || meeting.mode_id === 'courtroom') return null
@@ -124,6 +104,26 @@ const allMessages = computed(() => {
     return true
   })
 })
+
+function isNearBottom(el: HTMLDivElement, threshold = 80): boolean {
+  return el.scrollHeight - el.scrollTop - el.clientHeight < threshold
+}
+
+function scrollToBottom() {
+  const el = feedRef.value
+  if (el) el.scrollTop = el.scrollHeight
+}
+
+watch(
+  () => allMessages.value.length,
+  (newLen, oldLen) => {
+    if (newLen > oldLen) {
+      nextTick(() => {
+        if (feedRef.value && isNearBottom(feedRef.value)) scrollToBottom()
+      })
+    }
+  },
+)
 
 function roleState(roleId: string) {
   return workspace.value?.roles.find((role) => role.roleId === roleId)?.state ?? 'waiting'
@@ -202,15 +202,19 @@ async function retryRole(roleId: string) {
 <template>
   <section v-if="workspace && selectedMeeting" class="conversation-workspace" data-testid="conversation-workspace">
     <nav class="workspace-role-rail" data-testid="workspace-role-rail" aria-label="與會角色">
-      <button
+      <div
         type="button"
         class="workspace-role-button workspace-role-chairman"
         :class="{ active: selectedRoleId === 'Chairman' }"
         data-testid="role-seat-chairman"
         data-status="chairman"
+        role="button"
+        tabindex="0"
         aria-label="主席"
         :aria-pressed="selectedRoleId === 'Chairman'"
         @click="selectRole('Chairman')"
+        @keydown.enter="selectRole('Chairman')"
+        @keydown.space.prevent="selectRole('Chairman')"
       >
         <span class="workspace-role-avatar"><RoleSilhouette color="currentColor" :size="26" /></span>
         <span class="workspace-role-name">主席</span>
@@ -222,19 +226,22 @@ async function retryRole(roleId: string) {
           @click.stop="$emit('role-click', 'Chairman')"
         >ℹ</button>
         <span v-if="latestChairMessage" class="visually-hidden">{{ latestChairMessage }}</span>
-      </button>
-      <button
+      </div>
+      <div
         v-for="role in workspace.roles"
         :key="role.roleId"
-        type="button"
         class="workspace-role-button"
         :class="[roleClass(role.roleId), { active: selectedRoleId === role.roleId }]"
         :style="roleColorVars(role.roleId)"
         :data-testid="`role-seat-${role.roleId.toLowerCase()}`"
         :data-status="role.state"
+        role="button"
+        tabindex="0"
         :aria-label="`${role.name}，${roleStateLabel(role.state)}`"
         :aria-pressed="selectedRoleId === role.roleId"
         @click="selectRole(role.roleId)"
+        @keydown.enter="selectRole(role.roleId)"
+        @keydown.space.prevent="selectRole(role.roleId)"
       >
         <span class="workspace-role-avatar">
           <img v-if="roleIcon(role.roleId)" :src="roleIcon(role.roleId)" :alt="role.name" />
@@ -263,7 +270,7 @@ async function retryRole(roleId: string) {
           :aria-label="`${role.name}詳情`"
           @click.stop="$emit('role-click', role.roleId)"
         >ℹ</button>
-      </button>
+      </div>
     </nav>
 
     <section class="workspace-conversation-column">

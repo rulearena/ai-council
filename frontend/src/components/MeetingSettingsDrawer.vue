@@ -117,21 +117,6 @@ async function save() {
         <h3>場景</h3>
         <label>會議場景<select v-model="draft.scene" data-testid="scene-select" :disabled="loading || isMeetingRunning"><option v-for="scene in scenes" :key="scene.id" :value="scene.id">{{ scene.label }}</option></select></label>
       </section>
-      <section>
-        <h3>角色模型</h3>
-        <div v-if="assignmentWarnings.length" class="materials-impact-warning" data-testid="assignment-fallback-warning">
-          <strong>部分原指派模型已無法使用，系統目前使用替代模型</strong>
-          <p v-for="warning in assignmentWarnings" :key="warning">{{ warning }}</p>
-        </div>
-        <label v-for="participant in selectedMeeting.participants" :key="participant.role_id">
-          {{ displayRole(participant.role_id) }}
-          <select v-model="draft.participantModels[participant.role_id]" :data-testid="`${participant.role_id.toLowerCase()}-model-select`" :disabled="loading || isMeetingRunning">
-            <option value="" disabled>請選擇模型</option>
-            <option v-for="model in models" :key="model.id" :value="model.id">{{ modelDisplayLabel(model) }}</option>
-          </select>
-        </label>
-        <small v-if="errors.participantModels" class="field-error">{{ errors.participantModels }}</small>
-      </section>
       <p v-if="saveError" class="error" role="alert">{{ saveError }}</p>
       <footer class="drawer-sticky-actions">
         <button type="submit" class="btn btn-primary" data-testid="save-meeting-settings-button" :disabled="loading || isMeetingRunning || invalid || !dirty">{{ saving ? '儲存中…' : '一次儲存全部設定' }}</button>

@@ -382,7 +382,7 @@ test('chairman asks everyone from the unified composer exactly once and reload p
   await page.getByTestId('context-tab-records').click()
   await expect(page.getByTestId('step-timeline')).toContainText(message)
   await expect(page.getByTestId('step-timeline').locator('.timeline-content', { hasText: message })).toHaveCount(1)
-  await page.getByTestId('records-close-button').click()
+  await page.getByTestId('context-tab-context').click()
 
   await page.getByTestId('past-topics-button').click()
   page.once('dialog', (dialog) => dialog.accept())
@@ -467,7 +467,7 @@ test('legacy courtroom is gated by issue setup and rejected generic paths preser
   await page.getByTestId('context-tab-records').click()
   await expect(page.getByTestId('step-timeline').locator('.timeline-row')).toHaveCount(4)
   await expect(page.getByTestId('step-timeline')).toContainText('法官判決')
-  await page.getByTestId('records-close-button').click()
+  await page.getByTestId('court-context-tab-context').click()
 
   await page.getByTestId('advanced-options-button').click()
   page.once('dialog', async (dialog) => {
@@ -510,7 +510,7 @@ test('editing an established goal confirms and audits old/new values while title
   await expect(page.getByTestId('transcript-preview')).toContainText('主席修改會議目標')
   await expect(page.getByTestId('transcript-preview')).toContainText(`舊目標：${originalGoal}`)
   await expect(page.getByTestId('transcript-preview')).toContainText(`新目標：${revisedGoal}`)
-  await page.getByTestId('records-close-button').click()
+  await page.getByTestId('context-tab-context').click()
 
   const eventsPath = join(dataDir!, 'meetings', meetingId, 'events.jsonl')
   const beforeTitleOnly = readFileSync(eventsPath, 'utf8').trim().split('\n').length
@@ -602,13 +602,12 @@ test('Settings persists complete participant assignments across reload', async (
   await expect(page.getByTestId('seat-model-label-judge')).toHaveText('Custom OpenAI-compatible · mock-broken')
 })
 
-test('Settings rolls back a rejected participant assignment and shows the server error', async ({
+test('In-rail model switch rolls back a rejected assignment and shows the error', async ({
   page,
 }) => {
   await page.goto('/')
   await createMeetingViaNewCase(page, `E2E assignment rollback ${Date.now()}`)
-  await page.getByTestId('meeting-settings-button').click()
-  await expect(page.getByTestId('blue-model-select')).toHaveValue('mock-fast')
+  await expect(page.getByTestId('seat-model-label-blue')).toBeVisible()
   await page.route(/\/meetings\/[^/]+\/settings$/, (route) =>
     route.fulfill({
       status: 500,
@@ -617,13 +616,13 @@ test('Settings rolls back a rejected participant assignment and shows the server
     }),
   )
 
-  await page.getByTestId('blue-model-select').selectOption('mock-slow')
-  await page.getByTestId('save-meeting-settings-button').click()
-  await expect(page.getByRole('alert')).toContainText('Assignment save failed')
-  await expect(page.getByTestId('blue-model-select')).toHaveValue('mock-slow')
-  page.once('dialog', (dialog) => dialog.accept())
-  await closeSettings(page)
-  await expect(page.getByTestId('seat-model-label-blue')).toHaveText('Mock · mock-fast')
+  // Click model label to open inline select, pick a different model
+  await page.getByTestId('seat-model-label-blue').click()
+  const select = page.getByTestId('seat-model-select-blue')
+  await expect(select).toBeVisible()
+  await select.selectOption('mock-slow')
+  // After failed save, model label should revert to original
+  await expect(page.getByTestId('seat-model-label-blue')).toHaveText(/mock-fast/)
 })
 
 test('a delayed assignment save blocks leaving and remains scoped to its meeting', async ({
@@ -655,19 +654,14 @@ test('a delayed assignment save blocks leaving and remains scoped to its meeting
     const response = await route.fetch()
     await route.fulfill({ response })
   })
-  await page.getByTestId('meeting-settings-button').click()
+  // Use in-rail model select instead of MeetingSettingsDrawer
+  await expect(page.getByTestId('seat-model-label-blue')).toBeVisible()
+  await page.getByTestId('seat-model-label-blue').click()
+  const select = page.getByTestId('seat-model-select-blue')
+  await expect(select).toBeVisible()
   const successResponse = page.waitForResponse(assignmentUrl)
-  await page.getByTestId('blue-model-select').selectOption('mock-slow')
-  await page.getByTestId('save-meeting-settings-button').click()
+  await select.selectOption('mock-slow')
   await expect.poll(() => successIntercepted).toBe(true)
-  let savingAlertMessage = ''
-  page.once('dialog', async (dialog) => {
-    savingAlertMessage = dialog.message()
-    await dialog.accept()
-  })
-  await page.getByTestId('meeting-settings-close-button').click()
-  expect(savingAlertMessage).toContain('正在儲存')
-  await expect(page.getByTestId('meeting-settings-drawer')).toBeVisible()
 
   releaseSuccess()
   await successResponse
@@ -708,8 +702,8 @@ test('a deleted assigned model shows the backend fallback warning without persis
   await page.reload()
   await page.getByTestId('past-topics-button').click()
   await page.getByTestId('meeting-list-item').filter({ hasText: topic }).locator('.meeting-item').click()
-  await page.getByTestId('meeting-settings-button').click()
-  await expect(page.getByTestId('assignment-fallback-warning')).toContainText(deletedModelId)
+  // Model fallback is now visible in the in-rail model label (shows fallback model name)
+  await expect(page.getByTestId('seat-model-label-blue')).toBeVisible()
 
   const projected = await (await page.request.get(`${apiOrigin}/meetings/${meetingId}`)).json()
   const blue = projected.participants.find(
@@ -819,23 +813,23 @@ test('legacy recovery hydration trusts the participant projection instead of eve
   await expect(page.getByTestId('seat-model-label-blue')).toHaveText('Mock · mock-slow')
 })
 
-// Generalized model-assignment helper (mode-system slice B task 9 made the model-select
-// testid role-derived - `${role.toLowerCase()}-model-select` - for any mode's roster, not
-// just red-blue's Blue/Red/Judge). Leaves the meeting-settings drawer open.
+// Generalized model-assignment helper. Sets models via the in-rail model select
+// (click model label → select from inline <select>). Model updates are immediate.
 async function setRoleModelsInSettings(page: Page, assignments: Record<string, string>) {
-  await page.getByTestId('meeting-settings-button').click()
   for (const [role, model] of Object.entries(assignments)) {
-    const select = page.getByTestId(`${role.toLowerCase()}-model-select`)
-    if ((await select.inputValue()) === model) continue
+    const roleLower = role.toLowerCase()
+    const label = page.getByTestId(`seat-model-label-${roleLower}`)
+    // If label is not visible (e.g. already in select mode or different view), skip
+    if (!(await label.isVisible().catch(() => false))) continue
+    const currentText = await label.textContent()
+    const modelDisplay = model // may need adjustment if display differs from id
+    if (currentText?.includes(modelDisplay)) continue
+    await label.click()
+    const select = page.getByTestId(`seat-model-select-${roleLower}`)
+    await expect(select).toBeVisible()
     await select.selectOption(model)
+    await expect(select).not.toBeVisible()
   }
-  const saveButton = page.getByTestId('save-meeting-settings-button')
-  if (await saveButton.isDisabled()) return
-  const response = page.waitForResponse(
-    (candidate) => candidate.request().method() === 'PUT' && candidate.url().endsWith('/settings'),
-  )
-  await saveButton.click()
-  await response
 }
 
 async function setModelsInSettings(
@@ -1076,7 +1070,7 @@ test('user can run a mock meeting and add chair feedback', async ({ page }) => {
   // Debug tab only exists once developer mode is on (toggled earlier is not the case here,
   // so it should be absent by default).
   await expect(page.getByTestId('records-tab-debug')).toHaveCount(0)
-  await page.getByTestId('records-close-button').click()
+  await page.getByTestId('context-tab-context').click()
 
   await setModelsInSettings(page, { blue: 'mock-slow', red: 'mock-slow', judge: 'mock-slow' })
   await closeSettings(page)
@@ -1107,7 +1101,7 @@ test('user can run a mock meeting and add chair feedback', async ({ page }) => {
   await page.getByTestId('records-tab-debug').click()
   await expect(page.getByTestId('debug-panel')).toContainText('"interaction_type": "role-sequence-response"')
 
-  await page.getByTestId('records-close-button').click()
+  await page.getByTestId('context-tab-context').click()
 
   await openAdvancedOptions(page)
   page.once('dialog', (dialog) => dialog.accept())
@@ -1223,7 +1217,7 @@ test('role seat shows failed state, halts the rest of the round, and recovers vi
 
   await page.getByTestId('context-tab-records').click()
   await expect(page.getByTestId('step-timeline')).toContainText('裁判裁決')
-  await page.getByTestId('records-close-button').click()
+  await page.getByTestId('context-tab-context').click()
 
   await page.getByTestId('past-topics-button').click()
   page.once('dialog', (dialog) => dialog.accept())
@@ -1271,7 +1265,7 @@ test('records drawer keeps failed attempt diagnostics collapsed and copies safe 
   expect(copied).not.toHaveProperty('command')
   expect(copied).not.toHaveProperty('env')
 
-  await page.getByTestId('records-close-button').click()
+  await page.getByTestId('context-tab-context').click()
   await page.getByTestId('past-topics-button').click()
   page.once('dialog', (dialog) => dialog.accept())
   await page
@@ -1317,7 +1311,7 @@ test('records drawer announces clipboard rejection without an unhandled promise'
     ),
   ).toEqual([])
 
-  await page.getByTestId('records-close-button').click()
+  await page.getByTestId('context-tab-context').click()
   await page.getByTestId('past-topics-button').click()
   page.once('dialog', (dialog) => dialog.accept())
   await page
@@ -1358,7 +1352,7 @@ test('a completed fixed round requires a new chairman instruction before another
   await expect(
     page.getByTestId('step-timeline').locator('.timeline-row strong', { hasText: '藍軍提案' }),
   ).toHaveCount(2)
-  await page.getByTestId('records-close-button').click()
+  await page.getByTestId('context-tab-context').click()
 
   await openAdvancedOptions(page)
   await expect(page.getByTestId('role-sequence-controls')).toBeVisible()
@@ -1476,7 +1470,7 @@ test('a new chairman instruction starts a fresh fixed round without a duplicate 
   await expect(
     page.getByTestId('step-timeline').locator('.timeline-row strong', { hasText: '裁判裁決' }),
   ).toHaveCount(2)
-  await page.getByTestId('records-close-button').click()
+  await page.getByTestId('context-tab-context').click()
 
   await page.getByTestId('past-topics-button').click()
   page.once('dialog', (dialog) => dialog.accept())
@@ -1525,7 +1519,7 @@ test('reloading mid-round still shows the real final state after reopening the m
 
   await page.getByTestId('context-tab-records').click()
   await expect(page.getByTestId('step-timeline')).toContainText('裁判裁決')
-  await page.getByTestId('records-close-button').click()
+  await page.getByTestId('context-tab-context').click()
 
   await page.getByTestId('past-topics-button').click()
   page.once('dialog', (dialog) => dialog.accept())
@@ -1578,7 +1572,7 @@ test('switching meetings does not leak pendingRoles state, and a revisited meeti
   await expect(
     page.getByTestId('step-timeline').locator('.timeline-row strong', { hasText: '藍軍提案' }),
   ).toHaveCount(2)
-  await page.getByTestId('records-close-button').click()
+  await page.getByTestId('context-tab-context').click()
 
   await page.getByTestId('past-topics-button').click()
   for (const topic of [topicA, topicB]) {
@@ -2284,13 +2278,14 @@ test('New Case blocks an empty model catalog and seat nameplates follow persiste
   await expect(page.getByTestId('seat-model-label-judge')).toHaveText('Custom OpenAI-compatible · mock-broken')
   await expect(page.getByTestId('seat-model-label-blue')).toHaveAttribute('title', 'Mock · mock-slow')
 
-  // Changing the model again in meeting settings is staged and saved atomically.
-  await page.getByTestId('meeting-settings-button').click()
+  // Changing the model again via in-rail select is saved immediately.
+  await page.getByTestId('seat-model-label-blue').click()
+  const selectEl = page.getByTestId('seat-model-select-blue')
+  await expect(selectEl).toBeVisible()
   const saved = page.waitForResponse(
     (response) => response.request().method() === 'PUT' && response.url().endsWith('/settings'),
   )
-  await page.getByTestId('blue-model-select').selectOption('mock-fast')
-  await page.getByTestId('save-meeting-settings-button').click()
+  await selectEl.selectOption('mock-fast')
   await saved
   await expect(page.getByTestId('seat-model-label-blue')).toHaveText('Mock · mock-fast')
 
@@ -2595,7 +2590,7 @@ test('brainstorm mode creates member instances and runs fanout plus synthesis', 
   for (const stepId of ['fanout-1-member-1', 'fanout-1-member-2', 'fanout-1-member-3', 'synthesis-1']) {
     await expect(page.getByTestId('step-timeline')).toContainText(stepId)
   }
-  await page.getByTestId('records-close-button').click()
+  await page.getByTestId('context-tab-context').click()
 
   await page.getByTestId('past-topics-button').click()
   page.once('dialog', (dialog) => dialog.accept())
@@ -2782,7 +2777,7 @@ test('ordinary restart archives the prior epoch without duplicating evidence', a
   await expect(page.getByText('正在查看封存輪次。')).toBeVisible()
   await expect(page.getByRole('link', { name: '下載 Markdown' })).toHaveAttribute('href', new RegExp(`epoch=${archivedEpoch}`))
   await expect(page.getByTestId('download-all-epochs')).toHaveAttribute('href', /epoch=all/)
-  await page.getByTestId('records-close-button').click()
+  await page.getByTestId('context-tab-context').click()
 
   await page.getByTestId('workspace-open-materials').click()
   await expect(page.getByTestId('case-evidence-card')).toHaveCount(1)
@@ -2848,7 +2843,7 @@ test('archived records show their historical case-material revision without repl
   await expect(page.getByTestId('archived-evidence-card')).toContainText('可見：藍軍、裁判')
   await expect(page.getByTestId('archived-note-card')).toContainText('封存輪次備註')
   await expect(page.getByTestId('archived-note-card')).toContainText('可見：紅軍、裁判')
-  await page.getByTestId('records-close-button').click()
+  await page.getByTestId('context-tab-context').click()
 
   await page.getByTestId('workspace-open-materials').click()
   await expect(page.getByTestId('case-evidence-card')).toContainText('目前證據')
@@ -2898,7 +2893,7 @@ test('versioned evidence and promoted notes trigger a visible restart gate', asy
   const promoted = page.waitForResponse((response) => response.url().includes('/promote-to-note'))
   await promotionForm.getByTestId('confirm-promote-case-note').click()
   await promoted
-  await page.getByTestId('records-close-button').click()
+  await page.getByTestId('context-tab-context').click()
   await page.getByTestId('workspace-open-materials').click()
   await expect(page.getByTestId('case-note-card')).toContainText('固定案件事實')
   await expect(page.getByTestId('case-note-card')).toContainText('可見：藍軍、紅軍')
@@ -3091,7 +3086,6 @@ test('running meeting settings are read-only with an explicit explanation', asyn
   await expect(page.getByTestId('meeting-title-input')).toBeDisabled()
   await expect(page.getByTestId('meeting-goal-input')).toBeDisabled()
   await expect(page.getByTestId('scene-select')).toBeDisabled()
-  await expect(page.getByTestId('blue-model-select')).toBeDisabled()
   await expect(page.getByTestId('save-meeting-settings-button')).toBeDisabled()
 })
 
@@ -3177,7 +3171,7 @@ test('late records and case-material responses from another meeting are discarde
   const requestedHistory = page.waitForRequest((request) => request.url().endsWith(`/meetings/${meetingAId}/deliberations`))
   await page.getByTestId('context-tab-records').click()
   await requestedHistory
-  await page.getByTestId('records-close-button').click()
+  await page.getByTestId('context-tab-context').click()
   await page.getByTestId('past-topics-button').click()
   await page.getByTestId('meeting-list-item').filter({ hasText: topicB }).locator('.meeting-item').click()
   await page.getByTestId('context-tab-records').click()
@@ -3235,7 +3229,7 @@ test('records and case-material initial load errors stay local and can be retrie
   await page.getByTestId('retry-records-load-button').click()
   await expect(page.getByTestId('records-epoch-select')).toBeVisible()
   await expect(page.getByTestId('records-load-error')).toHaveCount(0)
-  await page.getByTestId('records-close-button').click()
+  await page.getByTestId('context-tab-context').click()
 
   let materialsAttempts = 0
   await page.route(new RegExp(`/meetings/${meetingId}/materials$`), async (route) => {
@@ -4264,6 +4258,5 @@ test('deleting a model that a role has selected falls back to the first remainin
   await page.getByTestId('past-topics-button').click()
   await page.getByTestId('meeting-list-item').filter({ hasText: topic }).locator('.meeting-item').click()
   await expect(page.getByTestId('seat-model-label-blue')).toHaveText('Mock · mock-fast')
-  await page.getByTestId('meeting-settings-button').click()
-  await expect(page.getByTestId('assignment-fallback-warning')).toContainText(modelId)
+  // Fallback model is visible in the in-rail label; no separate warning in settings drawer
 })

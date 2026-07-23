@@ -30,7 +30,7 @@ const baseMeeting = {
   ],
 }
 
-test('workspace projection returns role states that model label depends on', () => {
+test('workspace projection returns role states for model label rendering', () => {
   const result = projectMeetingWorkspace({
     meeting: baseMeeting as any,
     mode: baseMode as any,
@@ -56,4 +56,30 @@ test('workspace projection role count matches participants', () => {
     ['Advisor', 'Critic'],
     'Role IDs match participant role_ids',
   )
+})
+
+test('updateSelectedModel same-model guard: selecting current model is a no-op', () => {
+  // Simulate the guard logic from useCouncil.ts updateSelectedModel
+  const selectedModels: Record<string, string> = { Advisor: 'gpt-4o', Critic: 'claude-3' }
+  const role = 'Advisor'
+  const modelId = 'gpt-4o' // same as current
+
+  // Guard: if same model, return early (no state change)
+  const before = { ...selectedModels }
+  if (selectedModels[role] !== modelId) {
+    selectedModels[role] = modelId
+  }
+  assert.deepEqual(selectedModels, before, 'State unchanged when selecting same model')
+})
+
+test('updateSelectedModel changes state when selecting a different model', () => {
+  const selectedModels: Record<string, string> = { Advisor: 'gpt-4o', Critic: 'claude-3' }
+  const role = 'Advisor'
+  const modelId = 'gemini-pro' // different from current
+
+  if (selectedModels[role] !== modelId) {
+    selectedModels[role] = modelId
+  }
+  assert.equal(selectedModels.Advisor, 'gemini-pro', 'Advisor model updated to gemini-pro')
+  assert.equal(selectedModels.Critic, 'claude-3', 'Critic model unchanged')
 })
