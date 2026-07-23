@@ -3603,13 +3603,13 @@ def test_modes_endpoint_returns_catalog(tmp_path: Path) -> None:
     assert response.status_code == 200
     modes = response.json()
     assert [mode["id"] for mode in modes] == [
+        "chatroom",
         "red-blue",
         "courtroom",
         "debate",
         "brainstorm",
         "six-hats",
         "persona-testing",
-        "chatroom",
     ]
     red_blue = next(mode for mode in modes if mode["id"] == "red-blue")
     assert red_blue["available"] is True
