@@ -381,6 +381,10 @@ function lastMessageForRole(
   return undefined
 }
 
+export function seatIdToEventRoleId(seatId: string): string {
+  return seatId === 'Chairman' ? 'Human' : seatId
+}
+
 function parallelMemberRoleIds(
   meeting: WorkspaceProjectionMeeting,
   mode: WorkspaceProjectionMode,
@@ -571,7 +575,7 @@ export function latestWorkspaceMessageTarget(
   filter: WorkspaceRoleFilter | null,
 ): string | null {
   if (!filter || filter.meetingId !== workspace.meetingId) return null
-  return lastMessageForRole(allWorkspaceMessages(workspace), filter.roleId)?.id ?? null
+  return lastMessageForRole(allWorkspaceMessages(workspace), seatIdToEventRoleId(filter.roleId))?.id ?? null
 }
 
 export type MessageClampPolicy = {

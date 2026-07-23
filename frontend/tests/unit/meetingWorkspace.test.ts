@@ -324,6 +324,14 @@ test('workspace role filters find the latest saved message and reset on meeting 
   }), null)
 })
 
+test('workspace role filter accepts Chairman as a filterable seat id and toggles off on re-click', () => {
+  const filter = nextWorkspaceRoleFilter(null, 'meeting-a', 'Chairman')
+  assert.deepEqual(filter, { meetingId: 'meeting-a', roleId: 'Chairman' })
+  // Re-clicking the same seat clears the filter (toggle)
+  const cleared = nextWorkspaceRoleFilter(filter, 'meeting-a', 'Chairman')
+  assert.equal(cleared, null)
+})
+
 test('long message clamp policy is deterministic and keeps short messages open', () => {
   assert.deepEqual(messageClampPolicy('短回應'), {
     collapsible: false,

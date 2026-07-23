@@ -326,3 +326,47 @@ test('13.10 mention autocomplete — @ shows participant list', async ({ page })
   // Menu should close after selection
   await expect(page.getByTestId('mention-menu')).not.toBeVisible()
 })
+
+// ── 13.11 ────────────────────────────────────────────────────────────────────
+
+test('13.11 seat click filters feed — identical for Chairman and role seats', async ({ page }) => {
+  await page.goto('/')
+  const title = `E2E chatroom seat filter ${Date.now()}`
+  await createChatroomMeeting(page, title, { modelAssignments: defaultModels })
+
+  // Send a chairman message
+  await sendChatMessage(page, '主席測試訊息')
+  await waitForMessage(page, '主席測試訊息')
+
+  // Send an Advisor message via @mention
+  await sendChatMessage(page, '@Advisor 請回覆')
+  await waitForRoleMessage(page, '顧問')
+
+  // Click Chairman seat → feed filters to Chairman messages only
+  await page.getByTestId('role-seat-chairman').click()
+  await expect(page.getByTestId('workspace-clear-role-filter')).toBeVisible()
+  const chairmanMessages = page.getByTestId('workspace-message')
+  await expect(chairmanMessages.first()).toHaveAttribute('data-role', 'Human')
+
+  // Click Chairman seat again → filter clears
+  await page.getByTestId('role-seat-chairman').click()
+  await expect(page.getByTestId('workspace-clear-role-filter')).not.toBeVisible()
+
+  // Click Advisor seat → feed filters to Advisor messages only
+  await page.getByTestId('role-seat-advisor').click()
+  await expect(page.getByTestId('workspace-clear-role-filter')).toBeVisible()
+  const advisorMessages = page.getByTestId('workspace-message')
+  await expect(advisorMessages.first()).toHaveAttribute('data-role', 'Advisor')
+
+  // Click Advisor seat again → filter clears
+  await page.getByTestId('role-seat-advisor').click()
+  await expect(page.getByTestId('workspace-clear-role-filter')).not.toBeVisible()
+
+  // Secondary detail control (ℹ) opens the RoleDrawer without filtering
+  await page.getByTestId('role-seat-chairman-info').click()
+  await expect(page.getByTestId('role-drawer')).toBeVisible()
+  await page.getByTestId('role-drawer-close-button').click()
+  await expect(page.getByTestId('role-drawer')).not.toBeVisible()
+  // Feed should still show all messages (no filter applied)
+  await expect(page.getByTestId('workspace-clear-role-filter')).not.toBeVisible()
+})

@@ -14,6 +14,7 @@ import {
   messageClampPolicy,
   nextWorkspaceRoleFilter,
   projectMeetingWorkspace,
+  seatIdToEventRoleId,
   shouldShowChatroomComposer,
   type ConversationWorkspaceProjection,
   type WorkspaceMessage,
@@ -84,7 +85,16 @@ const messages = computed(() => {
     return true
   })
   if (!selectedRoleId.value) return chronological
-  return chronological.filter((message) => message.roleId === selectedRoleId.value)
+  return chronological.filter((message) => message.roleId === seatIdToEventRoleId(selectedRoleId.value!))
+})
+const allMessages = computed(() => {
+  if (!workspace.value) return []
+  const seen = new Set<string>()
+  return workspace.value.messages.filter((message) => {
+    if (seen.has(message.id)) return false
+    seen.add(message.id)
+    return true
+  })
 })
 
 function roleState(roleId: string) {
@@ -120,7 +130,9 @@ async function selectRole(roleId?: string) {
   if (!currentWorkspace) return
   roleFilter.value = nextWorkspaceRoleFilter(roleFilter.value, currentWorkspace.meetingId, roleId)
   await nextTick()
-  const target = latestWorkspaceMessageTarget(currentWorkspace, roleFilter.value)
+  const target = roleFilter.value
+    ? latestWorkspaceMessageTarget(currentWorkspace, roleFilter.value)
+    : allMessages.value.at(-1)?.id ?? null
   if (target) document.getElementById(`workspace-message-${target}`)?.scrollIntoView({ block: 'nearest' })
 }
 
@@ -146,13 +158,22 @@ async function retryRole(roleId: string) {
       <button
         type="button"
         class="workspace-role-button workspace-role-chairman"
+        :class="{ active: selectedRoleId === 'Chairman' }"
         data-testid="role-seat-chairman"
         data-status="chairman"
         aria-label="主席"
-        @click="$emit('role-click', 'Chairman')"
+        :aria-pressed="selectedRoleId === 'Chairman'"
+        @click="selectRole('Chairman')"
       >
         <span class="workspace-role-avatar"><RoleSilhouette color="currentColor" :size="26" /></span>
         <span class="workspace-role-name">主席</span>
+        <button
+          type="button"
+          class="workspace-role-info-btn"
+          data-testid="role-seat-chairman-info"
+          aria-label="主席詳情"
+          @click.stop="$emit('role-click', 'Chairman')"
+        >ℹ</button>
         <span v-if="latestChairMessage" class="visually-hidden">{{ latestChairMessage }}</span>
       </button>
       <button
@@ -180,6 +201,13 @@ async function retryRole(roleId: string) {
           :title="roleModelLabel(role.roleId)"
           :data-testid="`seat-model-label-${role.roleId.toLowerCase()}`"
         >{{ roleModelLabel(role.roleId) }}</span>
+        <button
+          type="button"
+          class="workspace-role-info-btn"
+          :data-testid="`role-seat-${role.roleId.toLowerCase()}-info`"
+          :aria-label="`${role.name}詳情`"
+          @click.stop="$emit('role-click', role.roleId)"
+        >ℹ</button>
       </button>
     </nav>
 
