@@ -52,7 +52,6 @@ function onSeatClick(role: CouncilRole | 'Chairman') {
       @open-materials="navigateFromMeetingSettings(() => materialsOpen = true)"
       @open-past-topics="navigateFromMeetingSettings(() => openModal = 'past-topics')"
       @open-new-case="navigateFromMeetingSettings(() => openModal = 'new-case')"
-      @open-records="navigateFromMeetingSettings(() => recordsOpen = true)"
       @open-mode-help="navigateFromMeetingSettings(() => modeHelpOpen = true)"
     />
 

@@ -498,3 +498,18 @@ test('13.17 records accessible from courtroom context panel without modal', asyn
   const recordsSection = page.getByTestId('court-context-records-section')
   await expect(recordsSection).toBeVisible()
 })
+
+// ── 13.18 ────────────────────────────────────────────────────────────────────
+
+test('13.18 no meeting-subnav row renders when a meeting is open', async ({ page }) => {
+  await page.goto('/')
+  await page.getByTestId('new-case-button').click()
+  await expect(page.getByTestId('new-case-modal')).toBeVisible()
+  await page.getByTestId('mode-select-chatroom').click()
+  await page.getByTestId('confirm-start-meeting').click()
+  await expect(page.getByTestId('workspace')).toBeVisible()
+  await expect(page.getByTestId('workspace-message-feed')).toBeVisible()
+
+  // The old meeting-subnav row should NOT exist
+  await expect(page.getByRole('navigation', { name: '會議工作區' })).not.toBeVisible()
+})

@@ -379,7 +379,7 @@ test('chairman asks everyone from the unified composer exactly once and reload p
   await page.reload()
   await page.getByTestId('past-topics-button').click()
   await page.getByTestId('meeting-list-item').filter({ hasText: title }).locator('.meeting-item').click()
-  await page.getByTestId('records-button').click()
+  await page.getByTestId('context-tab-records').click()
   await expect(page.getByTestId('step-timeline')).toContainText(message)
   await expect(page.getByTestId('step-timeline').locator('.timeline-content', { hasText: message })).toHaveCount(1)
   await page.getByTestId('records-close-button').click()
@@ -464,7 +464,7 @@ test('legacy courtroom is gated by issue setup and rejected generic paths preser
   expect((await page.request.post(`${apiOrigin}/meetings/${meetingId}/sequences`, { data: { roles: ['Prosecutor', 'Defense', 'Judge'] } })).status()).toBe(409)
   expect(readFileSync(eventsPath, 'utf8')).toBe(originalEvents)
   await page.getByTestId('advanced-options-button').click()
-  await page.getByTestId('records-button').click()
+  await page.getByTestId('context-tab-records').click()
   await expect(page.getByTestId('step-timeline').locator('.timeline-row')).toHaveCount(4)
   await expect(page.getByTestId('step-timeline')).toContainText('法官判決')
   await page.getByTestId('records-close-button').click()
@@ -502,7 +502,7 @@ test('editing an established goal confirms and audits old/new values while title
   })
   await page.getByTestId('save-meeting-settings-button').click()
   await expect(page.getByTestId('meeting-settings-drawer')).not.toBeVisible()
-  await page.getByTestId('records-button').click()
+  await page.getByTestId('context-tab-records').click()
   await expect(page.getByTestId('step-timeline')).toContainText('主席修改會議目標')
   await expect(page.getByTestId('step-timeline')).toContainText(`舊目標：${originalGoal}`)
   await expect(page.getByTestId('step-timeline')).toContainText(`新目標：${revisedGoal}`)
@@ -1045,7 +1045,7 @@ test('user can run a mock meeting and add chair feedback', async ({ page }) => {
   await page.getByTestId('workspace-clear-role-filter').click()
 
   // Full audit trail lives in the records drawer.
-  await page.getByTestId('records-button').click()
+  await page.getByTestId('context-tab-records').click()
   await expect(page.getByTestId('step-timeline')).toContainText('藍軍提案')
   await expect(page.getByTestId('step-timeline')).toContainText('紅軍質詢')
   await expect(page.getByTestId('step-timeline')).toContainText('裁判裁決')
@@ -1085,7 +1085,7 @@ test('user can run a mock meeting and add chair feedback', async ({ page }) => {
   await page.getByTestId('dev-mode-toggle').check()
   await closeSettings(page)
 
-  await page.getByTestId('records-button').click()
+  await page.getByTestId('context-tab-records').click()
 
   // Selecting a timeline row feeds its raw event into the Debug tab - use that to verify
   // directed vs. sequence responses are actually typed differently, not just visually similar.
@@ -1221,7 +1221,7 @@ test('role seat shows failed state, halts the rest of the round, and recovers vi
   await expect(page.getByTestId('role-seat-red')).toHaveAttribute('data-status', 'completed')
   await expect(page.getByTestId('role-seat-judge')).toHaveAttribute('data-status', 'completed')
 
-  await page.getByTestId('records-button').click()
+  await page.getByTestId('context-tab-records').click()
   await expect(page.getByTestId('step-timeline')).toContainText('裁判裁決')
   await page.getByTestId('records-close-button').click()
 
@@ -1248,7 +1248,7 @@ test('records drawer keeps failed attempt diagnostics collapsed and copies safe 
   await page.getByTestId('start-meeting-button').click()
   await expect(page.getByTestId('role-seat-blue')).toHaveAttribute('data-status', 'failed')
 
-  await page.getByTestId('records-button').click()
+  await page.getByTestId('context-tab-records').click()
   const diagnostics = page.getByTestId('meeting-attempt-diagnostics')
   await expect(diagnostics).toHaveCount(1)
   await expect(diagnostics).not.toHaveAttribute('open', '')
@@ -1301,7 +1301,7 @@ test('records drawer announces clipboard rejection without an unhandled promise'
   await closeSettings(page)
   await page.getByTestId('start-meeting-button').click()
   await expect(page.getByTestId('role-seat-blue')).toHaveAttribute('data-status', 'failed')
-  await page.getByTestId('records-button').click()
+  await page.getByTestId('context-tab-records').click()
   const diagnostics = page.getByTestId('meeting-attempt-diagnostics')
   await diagnostics.locator('summary').click()
 
@@ -1354,7 +1354,7 @@ test('a completed fixed round requires a new chairman instruction before another
   await page.getByTestId('send-chair-message-button').click()
   await expect(page.getByTestId('operation-status')).toContainText('狀態：已完成', { timeout: 15000 })
 
-  await page.getByTestId('records-button').click()
+  await page.getByTestId('context-tab-records').click()
   await expect(
     page.getByTestId('step-timeline').locator('.timeline-row strong', { hasText: '藍軍提案' }),
   ).toHaveCount(2)
@@ -1469,7 +1469,7 @@ test('a new chairman instruction starts a fresh fixed round without a duplicate 
   await expect(page.getByTestId('role-seat-red')).toHaveAttribute('data-status', 'completed')
   await expect(page.getByTestId('role-seat-judge')).toHaveAttribute('data-status', 'completed')
 
-  await page.getByTestId('records-button').click()
+  await page.getByTestId('context-tab-records').click()
   await expect(
     page.getByTestId('step-timeline').locator('.timeline-row strong', { hasText: '藍軍提案' }),
   ).toHaveCount(2)
@@ -1523,7 +1523,7 @@ test('reloading mid-round still shows the real final state after reopening the m
   await expect(page.getByTestId('role-seat-red')).toHaveAttribute('data-status', 'completed')
   await expect(page.getByTestId('role-seat-judge')).toHaveAttribute('data-status', 'completed')
 
-  await page.getByTestId('records-button').click()
+  await page.getByTestId('context-tab-records').click()
   await expect(page.getByTestId('step-timeline')).toContainText('裁判裁決')
   await page.getByTestId('records-close-button').click()
 
@@ -1574,7 +1574,7 @@ test('switching meetings does not leak pendingRoles state, and a revisited meeti
   await expect(page.getByTestId('role-seat-red')).toHaveAttribute('data-status', 'completed')
   await expect(page.getByTestId('role-seat-judge')).toHaveAttribute('data-status', 'completed')
 
-  await page.getByTestId('records-button').click()
+  await page.getByTestId('context-tab-records').click()
   await expect(
     page.getByTestId('step-timeline').locator('.timeline-row strong', { hasText: '藍軍提案' }),
   ).toHaveCount(2)
@@ -2591,7 +2591,7 @@ test('brainstorm mode creates member instances and runs fanout plus synthesis', 
   await expect(page.getByTestId('role-seat-member-3')).toHaveAttribute('data-status', 'completed')
   await expect(page.getByTestId('role-seat-moderator')).toHaveAttribute('data-status', 'completed')
 
-  await page.getByTestId('records-button').click()
+  await page.getByTestId('context-tab-records').click()
   for (const stepId of ['fanout-1-member-1', 'fanout-1-member-2', 'fanout-1-member-3', 'synthesis-1']) {
     await expect(page.getByTestId('step-timeline')).toContainText(stepId)
   }
@@ -2768,9 +2768,9 @@ test('ordinary restart archives the prior epoch without duplicating evidence', a
   await page.getByTestId('restart-reason-input').fill('改用新的評估方向')
   await page.getByTestId('restart-deliberation-button').click()
   await expect(page.getByTestId('operation-status')).toContainText('狀態：尚未開始')
-  await expect(page.getByTestId('case-materials-button')).toContainText('（1）')
+  await expect(page.getByTestId('workspace-open-materials')).toContainText('（1）')
 
-  await page.getByTestId('records-button').click()
+  await page.getByTestId('context-tab-records').click()
   const epochSelect = page.getByTestId('records-epoch-select')
   await expect(epochSelect.locator('option')).toHaveCount(2)
   await expect(epochSelect.locator('option').last()).toContainText('第 2 輪（目前）')
@@ -2784,7 +2784,7 @@ test('ordinary restart archives the prior epoch without duplicating evidence', a
   await expect(page.getByTestId('download-all-epochs')).toHaveAttribute('href', /epoch=all/)
   await page.getByTestId('records-close-button').click()
 
-  await page.getByTestId('case-materials-button').click()
+  await page.getByTestId('workspace-open-materials').click()
   await expect(page.getByTestId('case-evidence-card')).toHaveCount(1)
   await expect(page.getByTestId('case-evidence-card')).toContainText('[證物一]')
   await expect(page.getByTestId('case-evidence-card')).toContainText('v1')
@@ -2834,7 +2834,7 @@ test('archived records show their historical case-material revision without repl
     }
     await route.continue()
   })
-  await page.getByTestId('records-button').click()
+  await page.getByTestId('context-tab-records').click()
   const epochSelect = page.getByTestId('records-epoch-select')
   const archivedEpoch = await epochSelect.locator('option').first().getAttribute('value')
   await epochSelect.selectOption(archivedEpoch!)
@@ -2850,7 +2850,7 @@ test('archived records show their historical case-material revision without repl
   await expect(page.getByTestId('archived-note-card')).toContainText('可見：紅軍、裁判')
   await page.getByTestId('records-close-button').click()
 
-  await page.getByTestId('case-materials-button').click()
+  await page.getByTestId('workspace-open-materials').click()
   await expect(page.getByTestId('case-evidence-card')).toContainText('目前證據')
   await expect(page.getByTestId('case-evidence-card')).toContainText('v2')
   await expect(page.getByTestId('case-evidence-card')).toContainText('第二版目前內容')
@@ -2874,7 +2874,7 @@ test('archived records explain when a legacy epoch has no recoverable material r
     delete body.epochs[0].materials_revision
     await route.fulfill({ response, json: body })
   })
-  await page.getByTestId('records-button').click()
+  await page.getByTestId('context-tab-records').click()
   const epochSelect = page.getByTestId('records-epoch-select')
   const archivedEpoch = await epochSelect.locator('option').first().getAttribute('value')
   await epochSelect.selectOption(archivedEpoch!)
@@ -2890,7 +2890,7 @@ test('versioned evidence and promoted notes trigger a visible restart gate', asy
   })
   await page.getByTestId('chair-message-input').fill('跨輪都應知道的重要事實')
   await page.getByTestId('send-chair-message-button').click()
-  await page.getByTestId('records-button').click()
+  await page.getByTestId('context-tab-records').click()
   await page.getByTestId('promote-case-note-button').last().click()
   const promotionForm = page.getByTestId('promote-case-note-form')
   await promotionForm.getByTestId('promote-case-note-title').fill('固定案件事實')
@@ -2899,7 +2899,7 @@ test('versioned evidence and promoted notes trigger a visible restart gate', asy
   await promotionForm.getByTestId('confirm-promote-case-note').click()
   await promoted
   await page.getByTestId('records-close-button').click()
-  await page.getByTestId('case-materials-button').click()
+  await page.getByTestId('workspace-open-materials').click()
   await expect(page.getByTestId('case-note-card')).toContainText('固定案件事實')
   await expect(page.getByTestId('case-note-card')).toContainText('可見：藍軍、紅軍')
   await page.getByTestId('deactivate-note-button').click()
@@ -2910,7 +2910,7 @@ test('versioned evidence and promoted notes trigger a visible restart gate', asy
 
   await page.getByTestId('start-meeting-button').click()
   await expect(page.getByTestId('operation-status')).toContainText('狀態：已完成', { timeout: 15000 })
-  await page.getByTestId('case-materials-button').click()
+  await page.getByTestId('workspace-open-materials').click()
   await page.getByTestId('case-evidence-card').getByRole('button', { name: '建立新版本' }).click()
   const form = page.getByTestId('case-material-form')
   await form.getByLabel('內容').fill('補充後的第二版內容')
@@ -2930,7 +2930,7 @@ test('versioned evidence and promoted notes trigger a visible restart gate', asy
   await page.getByTestId('restart-deliberation-button').click()
   await restarted
   await expect(page.getByTestId('advanced-options-panel')).toHaveCount(0)
-  await page.getByTestId('case-materials-button').click()
+  await page.getByTestId('workspace-open-materials').click()
   await expect(page.getByTestId('materials-impact-warning')).toHaveCount(0)
   await expect(page.getByTestId('case-evidence-card')).toContainText('[證物一]')
   await expect(page.getByTestId('case-evidence-card')).toContainText('v2')
@@ -3060,7 +3060,7 @@ test('meeting drawers remain usable at 375px and dirty close requires confirmati
   await expect(drawer).not.toBeVisible()
   await expect(page.getByTestId('meeting-title-display')).toHaveText(topic)
 
-  await page.getByTestId('case-materials-button').click()
+  await page.getByTestId('workspace-open-materials').click()
   await expect.poll(async () => {
     const box = await page.getByTestId('case-materials-drawer').boundingBox()
     return box ? box.x + box.width : Number.POSITIVE_INFINITY
@@ -3145,12 +3145,12 @@ test('late records and case-material responses from another meeting are discarde
     await route.fulfill({ response })
   })
   const requestedMaterials = page.waitForRequest((request) => request.url().endsWith(`/meetings/${meetingAId}/materials`))
-  await page.getByTestId('case-materials-button').click()
+  await page.getByTestId('workspace-open-materials').click()
   await requestedMaterials
   await page.getByTestId('case-materials-close-button').click()
   await page.getByTestId('past-topics-button').click()
   await page.getByTestId('meeting-list-item').filter({ hasText: topicB }).locator('.meeting-item').click()
-  await page.getByTestId('case-materials-button').click()
+  await page.getByTestId('workspace-open-materials').click()
   releaseMaterials()
   await expect(page.getByTestId('case-evidence-card')).toHaveCount(0)
   await page.getByTestId('case-materials-close-button').click()
@@ -3175,12 +3175,12 @@ test('late records and case-material responses from another meeting are discarde
     })
   })
   const requestedHistory = page.waitForRequest((request) => request.url().endsWith(`/meetings/${meetingAId}/deliberations`))
-  await page.getByTestId('records-button').click()
+  await page.getByTestId('context-tab-records').click()
   await requestedHistory
   await page.getByTestId('records-close-button').click()
   await page.getByTestId('past-topics-button').click()
   await page.getByTestId('meeting-list-item').filter({ hasText: topicB }).locator('.meeting-item').click()
-  await page.getByTestId('records-button').click()
+  await page.getByTestId('context-tab-records').click()
   await expect(page.getByTestId('records-epoch-select').locator('option')).toHaveCount(1)
   releaseHistory()
   await expect(page.getByTestId('records-epoch-select').locator('option')).toHaveCount(1)
@@ -3212,7 +3212,7 @@ test('late transcript refresh from a previous meeting cannot overwrite the activ
   releaseTranscript()
   await lateTranscriptResponse
 
-  await page.getByTestId('records-button').click()
+  await page.getByTestId('context-tab-records').click()
   await page.getByTestId('records-tab-transcript').click()
   await expect(page.getByTestId('transcript-preview')).not.toContainText('LATE A TRANSCRIPT MUST NOT LEAK')
   await expect(page.getByTestId('step-timeline')).toHaveCount(0)
@@ -3230,7 +3230,7 @@ test('records and case-material initial load errors stay local and can be retrie
     }
     await route.continue()
   })
-  await page.getByTestId('records-button').click()
+  await page.getByTestId('context-tab-records').click()
   await expect(page.getByTestId('records-load-error')).toContainText('紀錄暫時無法載入')
   await page.getByTestId('retry-records-load-button').click()
   await expect(page.getByTestId('records-epoch-select')).toBeVisible()
@@ -3246,7 +3246,7 @@ test('records and case-material initial load errors stay local and can be retrie
     }
     await route.continue()
   })
-  await page.getByTestId('case-materials-button').click()
+  await page.getByTestId('workspace-open-materials').click()
   await expect(page.getByTestId('materials-load-error')).toContainText('案卷暫時無法載入')
   await page.getByTestId('retry-materials-load-button').click()
   await expect(page.getByTestId('case-material-form')).toBeVisible()
