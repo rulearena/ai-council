@@ -1,64 +1,71 @@
 models:
-  - id: mock-fast
-    adapter: mock
-
-  - id: mock-slow
-    adapter: mock
-    extra_body:
-      mock_delay_ms: 300
-
-  # Fails immediately (missing base_url/model) — used by the frontend e2e suite to
-  # exercise the failed / retry role-status-card states without any network call.
-  - id: mock-broken
-    adapter: openai-compatible-http
-
-  - id: claude-subscription
-    adapter: subscription-cli
-    command: [claude, -p, "{prompt}"]
-    timeout_seconds: 300
-
-  - id: codex-subscription
-    adapter: subscription-cli
-    command: [codex, exec, "{prompt}"]
-    timeout_seconds: 300
-    extra_body:
-      cli_provider: codex
-
-  - id: agy-subscription
-    adapter: subscription-cli
-    command: [agy, -p, "{prompt}"]
-    timeout_seconds: 300
-
-  - id: qwen27
-    adapter: openai-compatible-http
-    base_url: http://192.168.50.80:8487/v1
-    model: bartowski/Qwen_Qwen3.6-27B-GGUF
-    api_key_env: null
-    supports_json_mode: true
-    extra_body:
-      chat_template_kwargs:
-        enable_thinking: false
-
-  - id: ornith
-    adapter: openai-compatible-http
-    base_url: http://192.168.50.81:8488/v1
-    model: deepreinforce-ai/Ornith-1.0-35B-GGUF
-    api_key_env: null
-    supports_json_mode: true
-    extra_body:
-      chat_template_kwargs:
-        enable_thinking: false
-
-  - id: claude-api
-    adapter: anthropic-http
-    base_url: https://api.anthropic.com/v1
-    model: claude-sonnet-4-5
-    api_key_env: ANTHROPIC_API_KEY
-    extra_body:
-      max_tokens: 4096
-
-  - id: gemini-api
-    adapter: gemini-http
-    base_url: https://generativelanguage.googleapis.com/v1beta
-    model: gemini-2.5-pro
-    api_key_env: GEMINI_API_KEY
+- id: mock-fast
+  adapter: mock
+- id: mock-slow
+  adapter: mock
+  extra_body:
+    mock_delay_ms: 300
+- id: mock-broken
+  adapter: openai-compatible-http
+- id: claude-subscription
+  adapter: subscription-cli
+  command:
+  - claude
+  - -p
+  - '{prompt}'
+  timeout_seconds: 900.0
+- id: codex-subscription
+  adapter: subscription-cli
+  extra_body:
+    cli_provider: codex
+  command:
+  - codex
+  - exec
+  - '{prompt}'
+  timeout_seconds: 300.0
+- id: agy-subscription
+  adapter: subscription-cli
+  command:
+  - agy
+  - -p
+  - '{prompt}'
+  timeout_seconds: 300.0
+- id: qwen27
+  adapter: openai-compatible-http
+  base_url: http://192.0.2.10:8487/v1
+  model: bartowski/Qwen_Qwen3.6-27B-GGUF
+  supports_json_mode: true
+  extra_body:
+    chat_template_kwargs:
+      enable_thinking: false
+- id: ornith
+  adapter: openai-compatible-http
+  base_url: http://192.0.2.11:8488/v1
+  model: deepreinforce-ai/Ornith-1.0-35B-GGUF
+  supports_json_mode: true
+  extra_body:
+    chat_template_kwargs:
+      enable_thinking: false
+- id: claude-api
+  adapter: anthropic-http
+  base_url: https://api.anthropic.com/v1
+  model: claude-sonnet-4-5
+  api_key_env: ANTHROPIC_API_KEY
+  extra_body:
+    max_tokens: 4096
+- id: gemini-api
+  adapter: gemini-http
+  base_url: https://generativelanguage.googleapis.com/v1beta
+  model: gemini-2.5-pro
+  api_key_env: GEMINI_API_KEY
+- id: agy-subscription_Sonnet4-6
+  adapter: subscription-cli
+  extra_body:
+    cli_provider: agy
+  command:
+  - agy
+  - --model
+  - Claude Sonnet 4.6 (Thinking)
+  - -p
+  - '{prompt}'
+  timeout_seconds: 600.0
