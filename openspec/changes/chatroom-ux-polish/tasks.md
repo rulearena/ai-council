@@ -49,23 +49,25 @@
 - [ ] 6.2 Port `RecordsDrawer.vue`'s content/data source into a records-tab section rendered within the context panel
 - [ ] 6.3 Retire `RecordsDrawer.vue` as a standalone top-level modal: remove its separate trigger from `TopBar.vue` and `App.vue`; refactor it into a records sub-component rendered inside the context panel's records tab (keep the component file as the tab's internal view rather than inlining its complex timeline/transcript/epoch logic)
 - [ ] 6.4 Add test: selecting the records tab in the context panel displays the meeting's records
+- [ ] 6.5 In `CourtroomDocketPanel.vue`, add an equivalent records tab/section to the `court-formal-context` panel (header + tab toggle or dedicated section), reusing the same records sub-component from 6.2; this preserves records/attempt-diagnostics access (backlog #82) in courtroom mode after the TopBar records-button is removed in task 7
+- [ ] 6.6 Add test: records are accessible from the courtroom context panel without opening a separate modal
 
-**Red light:** 6.4 fails before the change (records are only reachable via the separate `RecordsDrawer` modal).
+**Red light:** 6.4 fails before the change (records are only reachable via the separate `RecordsDrawer` modal); 6.6 fails before the change (courtroom mode has no in-panel records access).
 
 ## 7. TopBar subnav consolidation
 
 - [ ] 7.1 Remove `case-materials-button` and `records-button` from `TopBar.vue`'s `meeting-subnav`
 - [ ] 7.2 Add a pencil icon button beside `meeting-title-pill` in `top-bar-left`, wired to the existing `open-meeting-settings` emit; remove `meeting-settings-button` from `meeting-subnav`
 - [ ] 7.3 Remove the now-empty `meeting-subnav` row and its styles once no buttons remain in it
-- [ ] 7.4 Update e2e tests referencing the old subnav testids (`meeting-settings-button`, `case-materials-button`, `records-button`) to target their new locations
+- [ ] 7.4 Update e2e tests referencing the old subnav testids (`meeting-settings-button`, `case-materials-button`, `records-button`) to target their new locations; specifically update the 21 `records-button` references in `control-flow.spec.ts` to use the new in-panel records entry point (context panel tab in ConversationWorkspace, court-formal-context records section in CourtroomDocketPanel)
 - [ ] 7.5 Add test asserting no `meeting-subnav` row renders when a meeting is open
 
 **Red light:** 7.5 fails before the change (the subnav row currently always renders for an open meeting).
 
 ## 8. Message feed scroll fix
 
-- [ ] 8.1 Reproduce the reported wheel-scroll failure live in-browser across relay/parallel/chatroom meetings; note the exact trigger condition (idle feed vs. actively streaming, specific viewport, input device)
-- [ ] 8.2 Identify root cause (e.g. pointer-events overlap from an adjacent element, a missing height constraint somewhere in the ancestor chain despite the `min-height: 0` chain looking correct in `styles.css`, or a `scroll-behavior: smooth` interaction with rapid re-renders during streaming)
+- [ ] 8.1 Reproduce the reported wheel-scroll failure live in-browser across relay/parallel/chatroom meetings; note the exact trigger condition (idle feed vs. actively streaming, specific viewport, input device). Investigate two independent hypotheses: **(a)** wheel/trackpad events are physically blocked by an overlapping element or missing height constraint, and **(b)** new messages arriving during streaming do not trigger auto-scroll to the bottom (the component has no `watch(messages)` or equivalent auto-scroll — `selectRole` scrolls to a target, but new incoming messages have no scroll-follow behavior). These are distinct symptoms that may have distinct root causes.
+- [ ] 8.2 Based on 8.1 findings, determine which hypothesis (or both) applies and identify the root cause for each applicable symptom (e.g. pointer-events overlap for hypothesis (a), missing `watch` + `nextTick` scroll-to-bottom for hypothesis (b))
 - [ ] 8.3 Implement the fix in `ConversationWorkspace.vue` / `styles.css` based on the 8.2 findings
 - [ ] 8.4 Add a regression e2e test verifying the message feed scrolls via wheel/trackpad input, including while a response is actively streaming
 

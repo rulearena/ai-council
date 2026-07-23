@@ -46,7 +46,7 @@ Backlog #91 (`ai-chat-room`) shipped the chatroom mode and is merged to main but
 **TopBar subnav removal.**
 - 案卷與證據: removed from `TopBar`. Chatroom already has the composer "+" entry point (existing `ai-chat-room` requirement); relay/parallel modes already have it via `ActionBar embedded @open-materials`. The TopBar button was a redundant third entry point.
 - 會議設定: removed from `TopBar` subnav; a pencil icon button is added beside `meeting-title-pill` in `top-bar-left`, wired to the same `open-meeting-settings` emit.
-- 議事紀錄: removed from `TopBar` subnav; `RecordsDrawer`'s content is folded into `workspace-context-panel` as a second tab (脈絡／紀錄) alongside the existing context body, toggled by a small tab control in the panel header. `RecordsDrawer.vue` as a standalone modal is retired once its content is reachable from the panel.
+- 議事紀錄: removed from `TopBar` subnav; `RecordsDrawer`'s content is folded into `workspace-context-panel` as a second tab (脈絡／紀錄) alongside the existing context body, toggled by a small tab control in the panel header. **Courtroom mode** uses `CourtroomDocketPanel.vue`'s separate `court-formal-context` panel (not `ConversationWorkspace.vue`'s context panel); this panel also gains an equivalent records tab/section so courtroom mode retains records/attempt-diagnostics access (backlog #82) after the TopBar button is removed. `RecordsDrawer.vue` as a standalone modal is retired once its content is reachable from both panels.
 
 **Scroll investigation.** Root cause not yet known — will be diagnosed live in-browser (mouse wheel / trackpad event path, possible pointer-events overlap, possible `scroll-behavior: smooth` + rapid re-render interaction from streaming AI messages) before writing the fix task in detail. Task list keeps this as a spike-then-fix pair rather than a pre-committed patch.
 
@@ -60,6 +60,8 @@ Backlog #91 (`ai-chat-room`) shipped the chatroom mode and is merged to main but
 ## Migration Plan
 
 Frontend + config only; no data migration. Roll out as a normal merge to main once Gate B (manual smoke test) passes again, same process used for `ai-chat-room`. Rollback is a normal git revert (no persisted-state impact).
+
+**Closeout ordering.** Backlog #91 (`ai-chat-room`) will not be independently synced or archived — it was rejected at acceptance due to the UX issues addressed by this change, and should not close out before #92. The #91 and #92 delta specs will be synced into `openspec/specs/` and archived together in a single closeout after Human Owner acceptance of this change (Orchestrator decision, recorded).
 
 ## Open Questions
 
