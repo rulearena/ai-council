@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, inject, nextTick, ref, watch } from 'vue'
+import { computed, inject, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import {
   activeMode,
   councilKey,
@@ -47,6 +47,7 @@ const {
   chairmanEvents,
   failedRole,
   retrySelectedStep,
+  updateSelectedModel,
 } = store
 
 const roleFilter = ref<WorkspaceRoleFilter | null>(null)
@@ -57,6 +58,7 @@ const quotedMessage = ref<{ eventId: string; preview: string } | null>(null)
 const isChatroom = computed(() => shouldShowChatroomComposer(activeMode.value.category))
 const latestChairMessage = computed(() => chairmanEvents.value.at(-1)?.content ?? '')
 const sceneLightboxOpen = ref(false)
+const openModelSeatId = ref<string | null>(null)
 
 const workspace = computed<ConversationWorkspaceProjection | null>(() => {
   const meeting = selectedMeeting.value
@@ -138,6 +140,25 @@ async function selectRole(roleId?: string) {
   if (target) document.getElementById(`workspace-message-${target}`)?.scrollIntoView({ block: 'nearest' })
 }
 
+function toggleModelSelect(roleId: string) {
+  openModelSeatId.value = openModelSeatId.value === roleId ? null : roleId
+}
+
+async function switchSeatModel(roleId: CouncilRole, modelId: string) {
+  await updateSelectedModel(roleId, modelId)
+  openModelSeatId.value = null
+}
+
+function onDocumentClick(e: MouseEvent) {
+  const target = e.target as HTMLElement
+  if (!target.closest('.workspace-role-model-select') && !target.closest('.workspace-role-model')) {
+    openModelSeatId.value = null
+  }
+}
+
+onMounted(() => document.addEventListener('click', onDocumentClick))
+onUnmounted(() => document.removeEventListener('click', onDocumentClick))
+
 function messageTime(message: WorkspaceMessage): string {
   return message.createdAt ? formatDateTime(message.createdAt) : ''
 }
@@ -198,11 +219,19 @@ async function retryRole(roleId: string) {
         </span>
         <span class="workspace-role-name">{{ role.name }}</span>
         <span class="workspace-role-state">{{ roleStateLabel(role.state) }}</span>
-        <span
-          class="workspace-role-model"
+        <span v-if="openModelSeatId !== role.roleId" class="workspace-role-model"
           :title="roleModelLabel(role.roleId)"
           :data-testid="`seat-model-label-${role.roleId.toLowerCase()}`"
+          @click.stop="toggleModelSelect(role.roleId)"
         >{{ roleModelLabel(role.roleId) }}</span>
+        <select v-else class="workspace-role-model-select"
+          :data-testid="`seat-model-select-${role.roleId.toLowerCase()}`"
+          :value="selectedModels[role.roleId]"
+          @change="switchSeatModel(role.roleId, ($event.target as HTMLSelectElement).value)"
+          @click.stop
+        >
+          <option v-for="model in models" :key="model.id" :value="model.id">{{ modelDisplayLabel(model) }}</option>
+        </select>
         <button
           type="button"
           class="workspace-role-info-btn"

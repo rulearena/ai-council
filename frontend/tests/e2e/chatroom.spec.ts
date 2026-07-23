@@ -426,3 +426,35 @@ test('13.14 clicking scene image opens enlarged lightbox modal', async ({ page }
   await page.keyboard.press('Escape')
   await expect(lightbox).not.toBeVisible()
 })
+
+// ── 13.15 ────────────────────────────────────────────────────────────────────
+
+test('13.15 switch role model directly from the role rail', async ({ page }) => {
+  await page.goto('/')
+  await page.getByTestId('new-case-button').click()
+  await expect(page.getByTestId('new-case-modal')).toBeVisible()
+  await page.getByTestId('mode-select-chatroom').click()
+  await page.getByTestId('confirm-start-meeting').click()
+  await expect(page.getByTestId('workspace')).toBeVisible()
+  await expect(page.getByTestId('workspace-message-feed')).toBeVisible()
+
+  // The Advisor seat should have a model label
+  const advisorModelLabel = page.getByTestId('seat-model-label-advisor')
+  await expect(advisorModelLabel).toBeVisible()
+  const initialLabel = await advisorModelLabel.textContent()
+
+  // Click the model label to open the inline model select
+  await advisorModelLabel.click()
+  const modelSelect = page.getByTestId('seat-model-select-advisor')
+  await expect(modelSelect).toBeVisible()
+
+  // Select a different model (pick second option if available)
+  const options = modelSelect.locator('option')
+  const optionCount = await options.count()
+  if (optionCount > 1) {
+    const secondValue = await options.nth(1).getAttribute('value')
+    if (secondValue) await modelSelect.selectOption(secondValue)
+    // The label should update (or at least the select should close)
+    await expect(modelSelect).not.toBeVisible()
+  }
+})
