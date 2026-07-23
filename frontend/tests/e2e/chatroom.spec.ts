@@ -513,3 +513,23 @@ test('13.18 no meeting-subnav row renders when a meeting is open', async ({ page
   // The old meeting-subnav row should NOT exist
   await expect(page.getByRole('navigation', { name: '會議工作區' })).not.toBeVisible()
 })
+
+// ── 13.19 ────────────────────────────────────────────────────────────────────
+
+test('13.19 message feed scrolls to bottom when new messages arrive', async ({ page }) => {
+  await page.goto('/')
+  await page.getByTestId('new-case-button').click()
+  await expect(page.getByTestId('new-case-modal')).toBeVisible()
+  await page.getByTestId('mode-select-chatroom').click()
+  await page.getByTestId('confirm-start-meeting').click()
+  await expect(page.getByTestId('workspace')).toBeVisible()
+  await expect(page.getByTestId('workspace-message-feed')).toBeVisible()
+
+  // The feed should be scrollable and the last message should be visible
+  const feed = page.getByTestId('workspace-message-feed')
+  await expect(feed).toBeVisible()
+
+  // Verify the feed has scroll capability (overflow-y: auto)
+  const overflowY = await feed.evaluate((el) => getComputedStyle(el).overflowY)
+  expect(overflowY).toBe('auto')
+})

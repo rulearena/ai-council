@@ -62,6 +62,27 @@ const sceneLightboxOpen = ref(false)
 const openModelSeatId = ref<string | null>(null)
 type ContextTab = 'context' | 'records'
 const activeContextTab = ref<ContextTab>('context')
+const feedRef = ref<HTMLDivElement | null>(null)
+
+function isNearBottom(el: HTMLDivElement, threshold = 80): boolean {
+  return el.scrollHeight - el.scrollTop - el.clientHeight < threshold
+}
+
+function scrollToBottom() {
+  const el = feedRef.value
+  if (el) el.scrollTop = el.scrollHeight
+}
+
+watch(
+  () => allMessages.value.length,
+  (newLen, oldLen) => {
+    if (newLen > oldLen) {
+      nextTick(() => {
+        if (feedRef.value && isNearBottom(feedRef.value)) scrollToBottom()
+      })
+    }
+  },
+)
 
 const workspace = computed<ConversationWorkspaceProjection | null>(() => {
   const meeting = selectedMeeting.value
@@ -266,7 +287,7 @@ async function retryRole(roleId: string) {
         >會議脈絡</button>
       </header>
 
-      <div class="workspace-message-feed" data-testid="workspace-message-feed" aria-live="polite">
+      <div ref="feedRef" class="workspace-message-feed" data-testid="workspace-message-feed" aria-live="polite">
         <p v-if="!messages.length" class="workspace-empty-feed">
           {{ selectedRoleId ? '這個角色還沒有發言。' : '尚未有會議發言；可先記錄主席補充，或啟動第一次審議。' }}
         </p>
