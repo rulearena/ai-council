@@ -157,12 +157,12 @@
 
 ## 16. Gate B & Merge
 
-- [ ] 16.1 Prepare Gate B review packet: base, HEAD, branch, worktree, commit list, diff, red/green evidence, gate results
-- [ ] 16.2 Submit for Codex Gate B review
-- [ ] 16.3 After Gate B `ready`: merge exact reviewed HEAD to main
-- [ ] 16.4 Post-merge: run read-only checks (pytest, unit, build, e2e) to confirm no merge drift
-- [ ] 16.5 Clean up worktree and branch
-- [ ] 16.6 Present Human Owner acceptance checklist with verifiable features
+- [x] 16.1 Prepare Gate B review packet: base, HEAD, branch, worktree, commit list, diff, red/green evidence, gate results
+- [x] 16.2 Submit for Gate B review (Reviewer role explicitly assigned to Claude for this session; Codex was out of quota — see project memory)
+- [x] 16.3 After Gate B `ready`: merge exact reviewed HEAD to main (fast-forward, `16ae378..8f8b10c`)
+- [x] 16.4 Post-merge: run read-only checks (pytest, unit, build, e2e) to confirm no merge drift
+- [x] 16.5 Clean up worktree and branch
+- [x] 16.6 Present Human Owner acceptance checklist with verifiable features
 
 ## 17. Acceptance Closeout (after Human Owner acceptance)
 
