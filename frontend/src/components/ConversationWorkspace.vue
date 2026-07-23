@@ -27,6 +27,7 @@ import ActionBar from './ActionBar.vue'
 import ChatroomComposer from './ChatroomComposer.vue'
 import CouncilStage from './CouncilStage.vue'
 import Modal from './Modal.vue'
+import RecordsDrawer from './RecordsDrawer.vue'
 import RoleSilhouette from './RoleSilhouette.vue'
 
 const props = defineProps<{ scene: SceneConfig }>()
@@ -59,6 +60,8 @@ const isChatroom = computed(() => shouldShowChatroomComposer(activeMode.value.ca
 const latestChairMessage = computed(() => chairmanEvents.value.at(-1)?.content ?? '')
 const sceneLightboxOpen = ref(false)
 const openModelSeatId = ref<string | null>(null)
+type ContextTab = 'context' | 'records'
+const activeContextTab = ref<ContextTab>('context')
 
 const workspace = computed<ConversationWorkspaceProjection | null>(() => {
   const meeting = selectedMeeting.value
@@ -336,7 +339,10 @@ async function retryRole(roleId: string) {
       data-testid="workspace-context-panel"
     >
       <header>
-        <strong>會議脈絡</strong>
+        <div class="workspace-context-tabs">
+          <button type="button" class="workspace-context-tab" :class="{ active: activeContextTab === 'context' }" data-testid="context-tab-context" @click="activeContextTab = 'context'">脈絡</button>
+          <button type="button" class="workspace-context-tab" :class="{ active: activeContextTab === 'records' }" data-testid="context-tab-records" @click="activeContextTab = 'records'">紀錄</button>
+        </div>
         <button
           type="button"
           class="btn btn-ghost btn-icon"
@@ -347,6 +353,7 @@ async function retryRole(roleId: string) {
         >{{ contextCollapsed ? '‹' : '›' }}</button>
       </header>
       <div v-if="!contextCollapsed" class="workspace-context-body">
+        <template v-if="activeContextTab === 'context'">
         <section v-if="isChatroom" class="workspace-mode-badge" data-testid="workspace-mode-badge">
           <span class="badge badge-chatroom">聊天室</span>
         </section>
@@ -386,6 +393,10 @@ async function retryRole(roleId: string) {
           />
         </details>
         <p v-if="isMeetingRunning" class="workspace-live-note">完成的回應會立即出現在時間序中，不必等待整輪結束。</p>
+        </template>
+        <div v-else data-testid="context-records-section">
+          <RecordsDrawer :show="true" inline />
+        </div>
       </div>
     </aside>
   </section>

@@ -8,7 +8,7 @@ import type { CaseMaterials, Deliberations, MeetingEvent, VersionedCaseMaterial 
 import { nextHistorySelection } from '../meetingWorkspace'
 import { eventRoleDisplayName, roleDisplayName, statusDisplayLabel, stepDisplayLabel } from '../presentation'
 
-const props = defineProps<{ show: boolean }>()
+const props = defineProps<{ show: boolean; inline?: boolean }>()
 defineEmits<{ close: [] }>()
 
 const store = inject(councilKey)!
@@ -243,7 +243,7 @@ async function promoteToCaseNote() {
 </script>
 
 <template>
-  <Drawer :show="show" title="議事紀錄" test-id="records-drawer" close-test-id="records-close-button" @close="$emit('close')">
+  <component :is="props.inline ? 'div' : Drawer" v-bind="props.inline ? {} : { show: props.show, title: '議事紀錄', 'test-id': 'records-drawer', 'close-test-id': 'records-close-button' }" v-on="props.inline ? {} : { close: () => $emit('close') }" :class="props.inline ? 'records-inline' : ''">
     <div v-if="recordsLoadError" class="error" data-testid="records-load-error">
       <p>{{ recordsLoadError }}</p>
       <button type="button" class="btn btn-secondary btn-sm" data-testid="retry-records-load-button" :disabled="recordsLoading" @click="retryRecordsLoad">重新載入</button>
@@ -454,5 +454,5 @@ async function promoteToCaseNote() {
       <h2>開發診斷</h2>
       <pre>{{ selectedEvent ? JSON.stringify(selectedEvent, null, 2) : '尚未選擇事件' }}</pre>
     </section>
-  </Drawer>
+  </component>
 </template>

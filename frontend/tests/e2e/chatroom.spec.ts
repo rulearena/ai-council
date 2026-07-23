@@ -458,3 +458,43 @@ test('13.15 switch role model directly from the role rail', async ({ page }) => 
     await expect(modelSelect).not.toBeVisible()
   }
 })
+
+// ── 13.16 ────────────────────────────────────────────────────────────────────
+
+test('13.16 records tab in context panel shows meeting records', async ({ page }) => {
+  await page.goto('/')
+  await page.getByTestId('new-case-button').click()
+  await expect(page.getByTestId('new-case-modal')).toBeVisible()
+  await page.getByTestId('mode-select-chatroom').click()
+  await page.getByTestId('confirm-start-meeting').click()
+  await expect(page.getByTestId('workspace')).toBeVisible()
+  await expect(page.getByTestId('workspace-message-feed')).toBeVisible()
+
+  // Context panel should have a records tab toggle
+  const recordsTab = page.getByTestId('context-tab-records')
+  await expect(recordsTab).toBeVisible()
+  await recordsTab.click()
+
+  // Records content should be visible in the context panel
+  const recordsSection = page.getByTestId('context-records-section')
+  await expect(recordsSection).toBeVisible()
+})
+
+// ── 13.17 ────────────────────────────────────────────────────────────────────
+
+test('13.17 records accessible from courtroom context panel without modal', async ({ page }) => {
+  await page.goto('/')
+  await page.getByTestId('new-case-button').click()
+  await expect(page.getByTestId('new-case-modal')).toBeVisible()
+  await page.getByTestId('mode-select-courtroom').click()
+  await page.getByTestId('confirm-start-meeting').click()
+  await expect(page.getByTestId('workspace')).toBeVisible()
+
+  // Courtroom context panel should have a records section
+  const recordsTab = page.getByTestId('court-context-tab-records')
+  await expect(recordsTab).toBeVisible()
+  await recordsTab.click()
+
+  const recordsSection = page.getByTestId('court-context-records-section')
+  await expect(recordsSection).toBeVisible()
+})

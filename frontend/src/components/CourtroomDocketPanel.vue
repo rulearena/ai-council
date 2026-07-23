@@ -42,6 +42,7 @@ import { modelDisplayLabel } from '../providers'
 import type { SceneConfig } from '../scenes'
 import ActionBar from './ActionBar.vue'
 import CouncilStage from './CouncilStage.vue'
+import RecordsDrawer from './RecordsDrawer.vue'
 import RoleSilhouette from './RoleSilhouette.vue'
 
 defineProps<{ scene: SceneConfig }>()
@@ -76,6 +77,8 @@ const localError = ref('')
 const roleFilter = ref<WorkspaceRoleFilter | null>(null)
 const expandedMessageIds = ref(new Set<string>())
 const contextCollapsed = ref(false)
+type CourtContextTab = 'context' | 'records'
+const activeCourtContextTab = ref<CourtContextTab>('context')
 
 const courtroom = computed(() => selectedMeeting.value?.courtroom ?? null)
 const meetingId = computed(() => selectedMeeting.value?.meeting_id ?? '')
@@ -507,8 +510,15 @@ function ruling(issue: CourtroomIssueProjection) {
     </section>
 
     <aside class="workspace-context-panel court-formal-context" :class="{ collapsed: contextCollapsed }" data-testid="court-formal-context">
-      <header><strong>正式流程</strong><button type="button" class="btn btn-ghost btn-icon" :aria-label="contextCollapsed ? '展開正式流程' : '收合正式流程'" :aria-expanded="!contextCollapsed" @click="contextCollapsed = !contextCollapsed">{{ contextCollapsed ? '‹' : '›' }}</button></header>
+      <header>
+        <div class="workspace-context-tabs">
+          <button type="button" class="workspace-context-tab" :class="{ active: activeCourtContextTab === 'context' }" data-testid="court-context-tab-context" @click="activeCourtContextTab = 'context'">正式流程</button>
+          <button type="button" class="workspace-context-tab" :class="{ active: activeCourtContextTab === 'records' }" data-testid="court-context-tab-records" @click="activeCourtContextTab = 'records'">紀錄</button>
+        </div>
+        <button type="button" class="btn btn-ghost btn-icon" :aria-label="contextCollapsed ? '展開正式流程' : '收合正式流程'" :aria-expanded="!contextCollapsed" @click="contextCollapsed = !contextCollapsed">{{ contextCollapsed ? '‹' : '›' }}</button>
+      </header>
       <div v-if="!contextCollapsed" class="workspace-context-body">
+        <template v-if="activeCourtContextTab === 'context'">
         <section><span>AI 最終目標</span><p>{{ selectedMeeting.goal }}</p></section>
         <section class="workspace-context-status"><span>目前狀態</span><strong>{{ operationStatusText }}</strong><small v-if="currentStepProgress">第 {{ currentStepProgress.index }}／{{ currentStepProgress.total }} 步 · {{ currentStepProgress.label }}</small></section>
         <div v-if="courtroom.status === 'confirmed' && courtroom.final_status !== 'completed' && !failedIssue" class="courtroom-primary-action" data-testid="courtroom-sticky-primary-action">
@@ -518,6 +528,10 @@ function ruling(issue: CourtroomIssueProjection) {
         </div>
         <section><span>庭審補充</span><p>下方輸入框只會記錄補充，或請後端允許的指定角色回應；不會裁定或推進正式流程。</p></section>
         <details class="workspace-scene-details"><summary>角色場景（次要狀態視圖）</summary><CouncilStage :scene="scene" seat-test-id-prefix="scene-role-seat" model-test-id-prefix="scene-seat-model-label" @seat-click="emit('role-click', $event)" /></details>
+        </template>
+        <div v-else data-testid="court-context-records-section">
+          <RecordsDrawer :show="true" inline />
+        </div>
       </div>
     </aside>
   </section>
