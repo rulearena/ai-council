@@ -398,3 +398,31 @@ test('13.13 chatroom is the first mode in the mode picker', async ({ page }) => 
   const firstCard = page.getByTestId('new-case-modal').locator('.mode-select-card').first()
   await expect(firstCard).toContainText('聊天室')
 })
+
+// ── 13.14 ────────────────────────────────────────────────────────────────────
+
+test('13.14 clicking scene image opens enlarged lightbox modal', async ({ page }) => {
+  await page.goto('/')
+  await page.getByTestId('new-case-button').click()
+  await expect(page.getByTestId('new-case-modal')).toBeVisible()
+  await page.getByTestId('mode-select-chatroom').click()
+  await page.getByTestId('confirm-start-meeting').click()
+  await expect(page.getByTestId('workspace')).toBeVisible()
+  await expect(page.getByTestId('workspace-message-feed')).toBeVisible()
+
+  // Expand scene details and click the scene image
+  const sceneDetails = page.getByTestId('workspace-scene-details')
+  await sceneDetails.locator('summary').click()
+  const sceneImage = sceneDetails.getByTestId('scene-enlarge-trigger')
+  await expect(sceneImage).toBeVisible()
+  await sceneImage.click()
+
+  // Lightbox modal should appear with enlarged scene
+  const lightbox = page.getByTestId('scene-lightbox-modal')
+  await expect(lightbox).toBeVisible()
+  await expect(lightbox.locator('.stage-scene')).toBeVisible()
+
+  // Close via Escape
+  await page.keyboard.press('Escape')
+  await expect(lightbox).not.toBeVisible()
+})

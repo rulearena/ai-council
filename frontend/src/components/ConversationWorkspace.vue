@@ -26,6 +26,7 @@ import { modelDisplayLabel } from '../providers'
 import ActionBar from './ActionBar.vue'
 import ChatroomComposer from './ChatroomComposer.vue'
 import CouncilStage from './CouncilStage.vue'
+import Modal from './Modal.vue'
 import RoleSilhouette from './RoleSilhouette.vue'
 
 const props = defineProps<{ scene: SceneConfig }>()
@@ -55,6 +56,7 @@ const mobileContextOpen = ref(false)
 const quotedMessage = ref<{ eventId: string; preview: string } | null>(null)
 const isChatroom = computed(() => shouldShowChatroomComposer(activeMode.value.category))
 const latestChairMessage = computed(() => chairmanEvents.value.at(-1)?.content ?? '')
+const sceneLightboxOpen = ref(false)
 
 const workspace = computed<ConversationWorkspaceProjection | null>(() => {
   const meeting = selectedMeeting.value
@@ -344,13 +346,14 @@ async function retryRole(roleId: string) {
             @click="retryRole(failedRole)"
           >{{ isMeetingRunning ? '重試中…' : '重試失敗步驟' }}</button>
         </section>
-        <details class="workspace-scene-details">
+        <details class="workspace-scene-details" data-testid="workspace-scene-details">
           <summary>角色場景（次要狀態視圖）</summary>
           <CouncilStage
             :scene="props.scene"
             seat-test-id-prefix="scene-role-seat"
             model-test-id-prefix="scene-seat-model-label"
             @seat-click="$emit('role-click', $event)"
+            @scene-click="sceneLightboxOpen = true"
           />
         </details>
         <p v-if="isMeetingRunning" class="workspace-live-note">完成的回應會立即出現在時間序中，不必等待整輪結束。</p>
@@ -362,4 +365,14 @@ async function retryRole(roleId: string) {
     <h2>尚未選擇會議</h2>
     <p>從右上角「新增會議」建立，或到「歷史會議」選擇會議。</p>
   </section>
+
+  <Modal :show="sceneLightboxOpen" title="場景全覽" test-id="scene-lightbox-modal" @close="sceneLightboxOpen = false">
+    <div class="scene-lightbox">
+      <CouncilStage
+        :scene="props.scene"
+        seat-test-id-prefix="lb-role-seat"
+        model-test-id-prefix="lb-seat-model-label"
+      />
+    </div>
+  </Modal>
 </template>

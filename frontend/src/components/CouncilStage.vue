@@ -24,7 +24,7 @@ const props = withDefaults(defineProps<{
   seatTestIdPrefix: 'role-seat',
   modelTestIdPrefix: 'seat-model-label',
 })
-defineEmits<{ 'seat-click': [role: CouncilRole | 'Chairman'] }>()
+defineEmits<{ 'seat-click': [role: CouncilRole | 'Chairman']; 'scene-click': [] }>()
 
 const store = inject(councilKey)!
 const { selectedMeeting, pendingRoles, roleSeatStatus, chairmanSpeaking, chairmanEvents, selectedModels, models } = store
@@ -122,6 +122,8 @@ const latestChairMessage = computed(() => chairmanEvents.value.at(-1)?.content ?
       :class="{ 'stage-scene-placeholder': !scene.background }"
       :style="sceneStyle"
       :data-scene="scene.id"
+      data-testid="scene-enlarge-trigger"
+      @click="$emit('scene-click')"
     >
       <div class="stage-table" :style="topicStyle">
         <span class="stage-table-topic">{{ selectedMeeting?.title ?? '尚未選擇會議' }}</span>
