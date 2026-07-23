@@ -1,7 +1,7 @@
 ## MODIFIED Requirements
 
 ### Requirement: Role filtering in chatroom
-Clicking a seat (Chairman or any role) in the left rail SHALL toggle a message-feed filter to that seat's messages: a single click on an unfiltered or differently-filtered seat filters the feed to that seat; a single click on the currently active (filtered) seat clears the filter. The currently filtered seat SHALL display a visible filtering indicator. A "顯示全部發言" button SHALL remain available in the conversation header as a secondary way to clear the filter.
+Clicking a seat (Chairman or any role) in the left rail SHALL toggle a message-feed filter to that seat's messages: a single click on an unfiltered or differently-filtered seat filters the feed to that seat; a single click on the currently active (filtered) seat clears the filter and scrolls to the latest message. The currently filtered seat SHALL display a visible filtering indicator. A "顯示全部發言" button SHALL remain available in the conversation header as a secondary way to clear the filter and scroll to the latest message.
 
 #### Scenario: Filter by role in chatroom
 - **WHEN** the user clicks "Blue" in the role rail
@@ -10,12 +10,12 @@ Clicking a seat (Chairman or any role) in the left rail SHALL toggle a message-f
 
 #### Scenario: Clicking the active seat clears the filter
 - **WHEN** the Blue seat is currently filtering the feed and the user clicks the Blue seat again
-- **THEN** the filter is cleared and all messages are visible
+- **THEN** the filter is cleared, all messages are visible, and the feed scrolls to the latest message
 - **AND** the Blue seat no longer shows a filtering indicator
 
 #### Scenario: Header button still clears the filter
 - **WHEN** a seat filter is active
-- **THEN** clicking "顯示全部發言" in the conversation header clears the filter
+- **THEN** clicking "顯示全部發言" in the conversation header clears the filter and scrolls to the latest message
 
 ## ADDED Requirements
 
