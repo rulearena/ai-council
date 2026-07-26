@@ -10,6 +10,7 @@ const props = defineProps<{
   participants: ChairmanParticipant[]
   quotedMessage: { eventId: string; preview: string } | null
   disabled?: boolean
+  materialCount?: number
 }>()
 
 const emit = defineEmits<{
@@ -72,7 +73,7 @@ async function handleSend() {
         aria-label="開啟案卷與證據"
         :disabled="disabled"
         @click="emit('open-materials')"
-      >＋</button>
+      >＋{{ props.materialCount ? `（${props.materialCount}）` : '' }}</button>
       <div class="chatroom-composer-input-wrap">
         <MentionAutocomplete
           v-model="messageText"

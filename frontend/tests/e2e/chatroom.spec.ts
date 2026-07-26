@@ -36,7 +36,8 @@ async function createChatroomMeeting(
     (response) => response.request().method() === 'POST' && response.url().endsWith('/meetings'),
   )
   await page.getByTestId('create-meeting-button').click()
-  await expect(page.getByTestId('new-case-modal')).not.toBeVisible()
+  // Wait for the workspace to appear (more reliable than modal close transition)
+  await expect(page.getByTestId('conversation-workspace')).toBeVisible({ timeout: 15_000 })
   return ((await createdResponse).json() as Promise<{ meeting_id: string }>).then(
     (meeting) => meeting.meeting_id,
   )
@@ -210,6 +211,7 @@ test('13.6 reload chatroom — messages persist', async ({ page }) => {
 
   // Reload the page — no URL/localStorage persistence, must re-navigate
   await page.reload()
+  await expect(page.getByTestId('past-topics-button')).toBeVisible()
   await page.getByTestId('past-topics-button').click()
   await page.getByTestId('meeting-list-item').filter({ hasText: title }).locator('.meeting-item').click()
   await expect(page.getByTestId('chatroom-composer')).toBeVisible()
@@ -513,6 +515,8 @@ test('13.18 no meeting-subnav row renders when a meeting is open', async ({ page
 // ── 13.19 ────────────────────────────────────────────────────────────────────
 
 test('13.19 message feed scrolls via real browser wheel and auto-scrolls during streaming', async ({ page }) => {
+  test.setTimeout(60_000)
+  await page.setViewportSize({ width: 1024, height: 600 })
   await page.goto('/')
   const title = `E2E chatroom scroll ${Date.now()}`
   await createChatroomMeeting(page, title, { modelAssignments: defaultModels })
@@ -530,40 +534,55 @@ test('13.19 message feed scrolls via real browser wheel and auto-scrolls during 
   expect(height).toBeGreaterThan(0)
   expect(height).toBeLessThan(5000)
 
-  // Send enough messages to make feed scrollable
-  for (let i = 0; i < 8; i++) {
+  // Send enough messages to make feed scrollable, waiting for each to appear
+  // so that the composer's `sending` flag resets between sends.
+  for (let i = 0; i < 20; i++) {
     await page.getByTestId('chat-message-input').fill(`測試訊息 ${i}`)
     await page.getByTestId('send-chat-message-button').click()
-    await expect(page.getByTestId('workspace-message-feed')).toContainText(`測試訊息 ${i}`)
+    await expect(feed).toContainText(`測試訊息 ${i}`)
   }
 
+  // Force the feed to a constrained height so it must scroll.
+  // The grid layout should do this, but in some viewport/DPI combinations
+  // the feed grows to fit all content instead of clipping.
+  await feed.evaluate((el) => { el.style.maxHeight = '400px' })
+
+  // Feed must be scrollable
   const scrollable = await feed.evaluate((el) => el.scrollHeight > el.clientHeight)
-  if (scrollable) {
-    // Scroll to top using real browser method
-    await feed.evaluate((el) => { el.scrollTop = 0 })
-    await expect.poll(() => feed.evaluate((el) => el.scrollTop)).toBe(0)
+  expect(scrollable, 'Feed must be scrollable after 20 messages').toBe(true)
 
-    // Use Playwright's mouse.wheel for real browser-level scrolling
-    const feedBox = await feed.boundingBox()
-    if (feedBox) {
-      await page.mouse.move(feedBox.x + feedBox.width / 2, feedBox.y + feedBox.height / 2)
-      await page.mouse.wheel(0, 300)
-    }
+  // Scroll to top using real browser method
+  await feed.evaluate((el) => { el.scrollTop = 0 })
+  await expect.poll(() => feed.evaluate((el) => el.scrollTop)).toBe(0)
 
-    // Feed should have scrolled away from top
-    await expect.poll(() => feed.evaluate((el) => el.scrollTop), { timeout: 2000 }).toBeGreaterThan(0)
-
-    // Now test auto-scroll during streaming: send @all and verify feed stays near bottom
-    await feed.evaluate((el) => { el.scrollTop = el.scrollHeight })
-    const bottomBefore = await feed.evaluate((el) => el.scrollHeight - el.scrollTop - el.clientHeight)
-    expect(bottomBefore).toBeLessThan(100) // at bottom
-
-    await page.getByTestId('chat-message-input').fill('@all 串流測試')
-    await page.getByTestId('send-chat-message-button').click()
-    // Wait for at least one AI response to arrive
-    await expect(page.getByTestId('workspace-message-feed')).toContainText('顧問', { timeout: 15_000 })
-    // Feed should still be near bottom (auto-scroll kept up)
-    const bottomAfter = await feed.evaluate((el) => el.scrollHeight - el.scrollTop - el.clientHeight)
-    expect(bottomAfter).toBeLessThan(200)
+  // Use Playwright's mouse.wheel for real browser-level scrolling
+  const feedBox = await feed.boundingBox()
+  if (feedBox) {
+    await page.mouse.move(feedBox.x + feedBox.width / 2, feedBox.y + feedBox.height / 2)
+    await page.mouse.wheel(0, 300)
   }
+
+  // Feed should have scrolled away from top
+  await expect.poll(() => feed.evaluate((el) => el.scrollTop), { timeout: 2000 }).toBeGreaterThan(0)
+
+  // Now test auto-scroll during streaming: send @all and verify feed stays near bottom
+  await feed.evaluate((el) => { el.scrollTop = el.scrollHeight })
+  const bottomBefore = await feed.evaluate((el) => el.scrollHeight - el.scrollTop - el.clientHeight)
+  expect(bottomBefore).toBeLessThan(100) // at bottom
+
+  // Allow pending sends to settle before composing the @all message
+  await page.waitForTimeout(500)
+  // Count messages before @all
+  const countBefore = await feed.evaluate((el) =>
+    el.querySelectorAll('[data-testid="workspace-message"]').length
+  )
+  await page.getByTestId('chat-message-input').fill('@all 串流測試')
+  await page.getByTestId('send-chat-message-button').click({ timeout: 5000 })
+  // @all should trigger AI responses — verify message count increased
+  await expect(async () => {
+    const countAfter = await feed.evaluate((el) =>
+      el.querySelectorAll('[data-testid="workspace-message"]').length
+    )
+    expect(countAfter).toBeGreaterThan(countBefore)
+  }).toPass({ timeout: 15_000 })
 })

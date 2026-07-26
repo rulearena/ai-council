@@ -37,6 +37,9 @@ const {
 } = store
 
 const advancedOpen = ref(false)
+const materialCount = computed(() => selectedMeeting.value?.case_materials?.evidence.filter((item) => item.status === 'active').length
+  ?? selectedMeeting.value?.case_files?.length
+  ?? 0)
 const migrationTitle = ref('')
 const migrationGoal = ref('')
 const restartReason = ref('')
@@ -199,7 +202,7 @@ const showPrimaryCta = computed(() => (
         aria-label="開啟案卷與證據"
         :disabled="!selectedMeeting"
         @click="$emit('open-materials')"
-      >＋</button>
+      >＋{{ materialCount ? `（${materialCount}）` : '' }}</button>
       <label class="chairman-action-select">
         主席動作
         <select

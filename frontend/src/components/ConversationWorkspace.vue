@@ -57,6 +57,9 @@ const contextCollapsed = ref(false)
 const mobileContextOpen = ref(false)
 const quotedMessage = ref<{ eventId: string; preview: string } | null>(null)
 const isChatroom = computed(() => shouldShowChatroomComposer(activeMode.value.category))
+const materialCount = computed(() => selectedMeeting.value?.case_materials?.evidence.filter((item) => item.status === 'active').length
+  ?? selectedMeeting.value?.case_files?.length
+  ?? 0)
 const latestChairMessage = computed(() => chairmanEvents.value.at(-1)?.content ?? '')
 const sceneLightboxOpen = ref(false)
 const openModelSeatId = ref<string | null>(null)
@@ -354,6 +357,7 @@ async function retryRole(roleId: string) {
         v-if="isChatroom"
         :meeting-id="selectedMeeting.meeting_id"
         :participants="selectedMeeting.participants"
+        :material-count="materialCount"
         v-model:quoted-message="quotedMessage"
         @open-materials="emit('open-materials')"
         @message-sent="quotedMessage = null"
