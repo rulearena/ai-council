@@ -7,6 +7,11 @@ import { applyModeScene } from '../scenes'
 import { roleDisplayName } from '../presentation'
 import { canLeaveMeetingSettings } from '../meetingSettingsNavigation'
 import { projectOperationStatusText } from '../operationStatus'
+import {
+  isSameModelAssignment,
+  applyOptimisticModelUpdate,
+  mergeServerParticipantModels,
+} from '../meetingWorkspace'
 import { waitForSettledProjection } from '../meetingSettlement'
 import {
   chatroomStartGuard,
@@ -955,15 +960,15 @@ export function useCouncil() {
   }
 
   async function updateSelectedModel(role: CouncilRole, modelId: string) {
-    if (selectedModels.value[role] === modelId) return
+    if (isSameModelAssignment(selectedModels.value, role, modelId)) return
     if (!selectedMeeting.value) {
-      selectedModels.value = { ...selectedModels.value, [role]: modelId }
+      selectedModels.value = applyOptimisticModelUpdate(selectedModels.value, role, modelId)
       return
     }
     const meetingId = selectedMeeting.value.meeting_id
     const requestGeneration = ++assignmentSaveGeneration
     const previous = { ...selectedModels.value }
-    const next = { ...previous, [role]: modelId }
+    const next = applyOptimisticModelUpdate(selectedModels.value, role, modelId)
     selectedModels.value = next
     assignmentUpdateError.value = ''
     loading.value = true
@@ -990,11 +995,9 @@ export function useCouncil() {
         events: selectedMeeting.value.events,
         case_files: selectedMeeting.value.case_files,
       }
-      selectedModels.value = Object.fromEntries(
-        meeting.participants.map((participant) => [
-          participant.role_id,
-          participant.model_config_id ?? '',
-        ]),
+      selectedModels.value = mergeServerParticipantModels(
+        selectedModels.value,
+        meeting.participants,
       )
     } catch (caught) {
       if (

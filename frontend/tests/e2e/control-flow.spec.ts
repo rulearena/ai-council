@@ -464,7 +464,7 @@ test('legacy courtroom is gated by issue setup and rejected generic paths preser
   expect((await page.request.post(`${apiOrigin}/meetings/${meetingId}/sequences`, { data: { roles: ['Prosecutor', 'Defense', 'Judge'] } })).status()).toBe(409)
   expect(readFileSync(eventsPath, 'utf8')).toBe(originalEvents)
   await page.getByTestId('advanced-options-button').click()
-  await page.getByTestId('context-tab-records').click()
+  await page.getByTestId('court-context-tab-records').click()
   await expect(page.getByTestId('step-timeline').locator('.timeline-row')).toHaveCount(4)
   await expect(page.getByTestId('step-timeline')).toContainText('法官判決')
   await page.getByTestId('court-context-tab-context').click()
@@ -574,8 +574,8 @@ test('New Case persists the complete relay model roster and reload hydrates that
 
 test('Settings persists complete participant assignments across reload', async ({ page }) => {
   const replacementPayloads: Array<Record<string, string>> = []
-  await page.route('**/meetings/*/settings', async (route) => {
-    replacementPayloads.push((route.request().postDataJSON() as { participant_models: Record<string, string> }).participant_models)
+  await page.route('**/meetings/*/participant-models', async (route) => {
+    replacementPayloads.push((route.request().postDataJSON() as { models: Record<string, string> }).models)
     await route.continue()
   })
   await page.goto('/')
@@ -608,7 +608,7 @@ test('In-rail model switch rolls back a rejected assignment and shows the error'
   await page.goto('/')
   await createMeetingViaNewCase(page, `E2E assignment rollback ${Date.now()}`)
   await expect(page.getByTestId('seat-model-label-blue')).toBeVisible()
-  await page.route(/\/meetings\/[^/]+\/settings$/, (route) =>
+  await page.route(/\/meetings\/[^/]+\/participant-models$/, (route) =>
     route.fulfill({
       status: 500,
       contentType: 'application/json',
@@ -640,7 +640,7 @@ test('a delayed assignment save blocks leaving and remains scoped to its meeting
     await page.getByTestId('past-topics-button').click()
     await page.getByTestId('meeting-list-item').filter({ hasText: topic }).locator('.meeting-item').click()
   }
-  const assignmentUrl = new RegExp(`/meetings/${meetingAId}/settings$`)
+  const assignmentUrl = new RegExp(`/meetings/${meetingAId}/participant-models$`)
 
   await openTopic(topicA)
   let releaseSuccess!: () => void
@@ -843,7 +843,7 @@ async function closeSettings(page: Page) {
   if (await page.getByTestId('meeting-settings-drawer').isVisible().catch(() => false)) {
     await page.getByTestId('meeting-settings-close-button').click()
     await expect(page.getByTestId('meeting-settings-drawer')).not.toBeVisible()
-  } else {
+  } else if (await page.getByTestId('settings-modal').isVisible().catch(() => false)) {
     await page.getByTestId('settings-close-button').click()
     await expect(page.getByTestId('settings-modal')).not.toBeVisible()
   }
@@ -2283,7 +2283,7 @@ test('New Case blocks an empty model catalog and seat nameplates follow persiste
   const selectEl = page.getByTestId('seat-model-select-blue')
   await expect(selectEl).toBeVisible()
   const saved = page.waitForResponse(
-    (response) => response.request().method() === 'PUT' && response.url().endsWith('/settings'),
+    (response) => response.request().method() === 'PUT' && response.url().endsWith('/participant-models'),
   )
   await selectEl.selectOption('mock-fast')
   await saved

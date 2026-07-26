@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, inject, nextTick, reactive, ref, watch } from 'vue'
+import { computed, inject, nextTick, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
 import {
   ApiError,
   confirmCourtroomIssues,
@@ -66,6 +66,7 @@ const {
   pendingRoles,
   selectedModels,
   models,
+  updateSelectedModel,
   operationStatusText,
   currentStepProgress,
 } = store
@@ -184,6 +185,27 @@ function roleModelLabel(roleId: string): string {
   const model = models.value.find((candidate) => candidate.id === modelId)
   return model ? modelDisplayLabel(model) : modelId || '未選模型'
 }
+
+const openModelSeatId = ref<string | null>(null)
+
+function toggleModelSelect(roleId: string) {
+  openModelSeatId.value = openModelSeatId.value === roleId ? null : roleId
+}
+
+async function switchSeatModel(roleId: CouncilRole, modelId: string) {
+  await updateSelectedModel(roleId, modelId)
+  openModelSeatId.value = null
+}
+
+function onDocumentClick(e: MouseEvent) {
+  const target = e.target as HTMLElement
+  if (!target.closest('.workspace-role-model-select') && !target.closest('.workspace-role-model')) {
+    openModelSeatId.value = null
+  }
+}
+
+onMounted(() => document.addEventListener('click', onDocumentClick))
+onUnmounted(() => document.removeEventListener('click', onDocumentClick))
 
 function filteredMessages(messages: WorkspaceMessage[]): WorkspaceMessage[] {
   const seen = new Set<string>()
@@ -357,7 +379,19 @@ function ruling(issue: CourtroomIssueProjection) {
         </span>
         <span class="workspace-role-name">{{ role.name }}</span>
         <span class="workspace-role-state">{{ roleStateLabel(role.state) }}</span>
-        <span class="workspace-role-model" :title="roleModelLabel(role.roleId)" :data-testid="`seat-model-label-${role.roleId.toLowerCase()}`">{{ roleModelLabel(role.roleId) }}</span>
+        <span v-if="openModelSeatId !== role.roleId" class="workspace-role-model"
+          :title="roleModelLabel(role.roleId)"
+          :data-testid="`seat-model-label-${role.roleId.toLowerCase()}`"
+          @click.stop="toggleModelSelect(role.roleId)"
+        >{{ roleModelLabel(role.roleId) }}</span>
+        <select v-else class="workspace-role-model-select"
+          :data-testid="`seat-model-select-${role.roleId.toLowerCase()}`"
+          :value="selectedModels[role.roleId]"
+          @change="switchSeatModel(role.roleId, ($event.target as HTMLSelectElement).value)"
+          @click.stop
+        >
+          <option v-for="model in models" :key="model.id" :value="model.id">{{ modelDisplayLabel(model) }}</option>
+        </select>
       </button>
     </nav>
 

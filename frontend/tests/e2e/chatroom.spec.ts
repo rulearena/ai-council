@@ -395,7 +395,7 @@ test('13.13 chatroom is the first mode in the mode picker', async ({ page }) => 
   await expect(page.getByTestId('new-case-modal')).toBeVisible()
 
   // The first mode card should be chatroom
-  const firstCard = page.getByTestId('new-case-modal').locator('.mode-select-card').first()
+  const firstCard = page.getByTestId('new-case-modal').locator('.mode-card').first()
   await expect(firstCard).toContainText('聊天室')
 })
 
@@ -403,11 +403,9 @@ test('13.13 chatroom is the first mode in the mode picker', async ({ page }) => 
 
 test('13.14 clicking scene image opens enlarged lightbox modal', async ({ page }) => {
   await page.goto('/')
-  await page.getByTestId('new-case-button').click()
-  await expect(page.getByTestId('new-case-modal')).toBeVisible()
-  await page.getByTestId('mode-select-chatroom').click()
-  await page.getByTestId('confirm-start-meeting').click()
-  await expect(page.getByTestId('workspace')).toBeVisible()
+  const title = `E2E chatroom lightbox ${Date.now()}`
+  await createChatroomMeeting(page, title, { modelAssignments: defaultModels })
+  await expect(page.getByTestId('conversation-workspace')).toBeVisible()
   await expect(page.getByTestId('workspace-message-feed')).toBeVisible()
 
   // Expand scene details and click the scene image
@@ -431,11 +429,9 @@ test('13.14 clicking scene image opens enlarged lightbox modal', async ({ page }
 
 test('13.15 switch role model directly from the role rail', async ({ page }) => {
   await page.goto('/')
-  await page.getByTestId('new-case-button').click()
-  await expect(page.getByTestId('new-case-modal')).toBeVisible()
-  await page.getByTestId('mode-select-chatroom').click()
-  await page.getByTestId('confirm-start-meeting').click()
-  await expect(page.getByTestId('workspace')).toBeVisible()
+  const title = `E2E chatroom model switch ${Date.now()}`
+  await createChatroomMeeting(page, title, { modelAssignments: defaultModels })
+  await expect(page.getByTestId('conversation-workspace')).toBeVisible()
   await expect(page.getByTestId('workspace-message-feed')).toBeVisible()
 
   // The Advisor seat should have a model label
@@ -463,11 +459,9 @@ test('13.15 switch role model directly from the role rail', async ({ page }) => 
 
 test('13.16 records tab in context panel shows meeting records', async ({ page }) => {
   await page.goto('/')
-  await page.getByTestId('new-case-button').click()
-  await expect(page.getByTestId('new-case-modal')).toBeVisible()
-  await page.getByTestId('mode-select-chatroom').click()
-  await page.getByTestId('confirm-start-meeting').click()
-  await expect(page.getByTestId('workspace')).toBeVisible()
+  const title = `E2E chatroom records ${Date.now()}`
+  await createChatroomMeeting(page, title, { modelAssignments: defaultModels })
+  await expect(page.getByTestId('conversation-workspace')).toBeVisible()
   await expect(page.getByTestId('workspace-message-feed')).toBeVisible()
 
   // Context panel should have a records tab toggle
@@ -486,9 +480,13 @@ test('13.17 records accessible from courtroom context panel without modal', asyn
   await page.goto('/')
   await page.getByTestId('new-case-button').click()
   await expect(page.getByTestId('new-case-modal')).toBeVisible()
-  await page.getByTestId('mode-select-courtroom').click()
-  await page.getByTestId('confirm-start-meeting').click()
-  await expect(page.getByTestId('workspace')).toBeVisible()
+  await page.getByTestId('mode-select-card-courtroom').getByRole('button', { name: '選擇此模式' }).click()
+  await page.getByLabel('會議名稱', { exact: true }).fill(`E2E courtroom records ${Date.now()}`)
+  await page.getByLabel('目標', { exact: true }).fill('測試法院紀錄分頁')
+  await page.getByTestId('courtroom-case-type-select').selectOption('civil')
+  await page.getByTestId('create-meeting-button').click()
+  await expect(page.getByTestId('new-case-modal')).not.toBeVisible()
+  await expect(page.getByTestId('court-hearing-workspace')).toBeVisible()
 
   // Courtroom context panel should have a records section
   const recordsTab = page.getByTestId('court-context-tab-records')
@@ -503,11 +501,9 @@ test('13.17 records accessible from courtroom context panel without modal', asyn
 
 test('13.18 no meeting-subnav row renders when a meeting is open', async ({ page }) => {
   await page.goto('/')
-  await page.getByTestId('new-case-button').click()
-  await expect(page.getByTestId('new-case-modal')).toBeVisible()
-  await page.getByTestId('mode-select-chatroom').click()
-  await page.getByTestId('confirm-start-meeting').click()
-  await expect(page.getByTestId('workspace')).toBeVisible()
+  const title = `E2E chatroom no-subnav ${Date.now()}`
+  await createChatroomMeeting(page, title, { modelAssignments: defaultModels })
+  await expect(page.getByTestId('conversation-workspace')).toBeVisible()
   await expect(page.getByTestId('workspace-message-feed')).toBeVisible()
 
   // The old meeting-subnav row should NOT exist
@@ -516,41 +512,58 @@ test('13.18 no meeting-subnav row renders when a meeting is open', async ({ page
 
 // ── 13.19 ────────────────────────────────────────────────────────────────────
 
-test('13.19 message feed scrolls via wheel input and auto-scrolls on new messages', async ({ page }) => {
+test('13.19 message feed scrolls via real browser wheel and auto-scrolls during streaming', async ({ page }) => {
   await page.goto('/')
-  await page.getByTestId('new-case-button').click()
-  await expect(page.getByTestId('new-case-modal')).toBeVisible()
-  await page.getByTestId('mode-select-chatroom').click()
-  await page.getByTestId('confirm-start-meeting').click()
-  await expect(page.getByTestId('workspace')).toBeVisible()
+  const title = `E2E chatroom scroll ${Date.now()}`
+  await createChatroomMeeting(page, title, { modelAssignments: defaultModels })
+  await expect(page.getByTestId('conversation-workspace')).toBeVisible()
   await expect(page.getByTestId('workspace-message-feed')).toBeVisible()
 
   const feed = page.getByTestId('workspace-message-feed')
 
-  // Verify feed is scrollable (has overflow)
-  const scrollable = await feed.evaluate((el) => el.scrollHeight > el.clientHeight)
-  // If feed is not scrollable yet (few messages), skip the wheel test
-  if (scrollable) {
-    // Scroll to top first
-    await feed.evaluate((el) => { el.scrollTop = 0 })
-    const topBefore = await feed.evaluate((el) => el.scrollTop)
-
-    // Dispatch a wheel event to simulate mouse wheel scrolling
-    await feed.dispatchEvent('wheel', { deltaY: 200, bubbles: true })
-    // Wait for scroll to process
-    await page.waitForTimeout(100)
-    const topAfter = await feed.evaluate((el) => el.scrollTop)
-
-    // Feed should have scrolled down (or at least not stayed at 0)
-    expect(topAfter).toBeGreaterThanOrEqual(topBefore)
-  }
-
-  // Verify the feed has proper overflow for scrolling
+  // Verify feed has proper overflow for scrolling
   const overflowY = await feed.evaluate((el) => getComputedStyle(el).overflowY)
   expect(overflowY).toBe('auto')
 
   // Verify feed has a constrained height (not unbounded)
   const height = await feed.evaluate((el) => el.clientHeight)
   expect(height).toBeGreaterThan(0)
-  expect(height).toBeLessThan(5000) // sanity check
+  expect(height).toBeLessThan(5000)
+
+  // Send enough messages to make feed scrollable
+  for (let i = 0; i < 8; i++) {
+    await page.getByTestId('chat-message-input').fill(`測試訊息 ${i}`)
+    await page.getByTestId('send-chat-message-button').click()
+    await expect(page.getByTestId('workspace-message-feed')).toContainText(`測試訊息 ${i}`)
+  }
+
+  const scrollable = await feed.evaluate((el) => el.scrollHeight > el.clientHeight)
+  if (scrollable) {
+    // Scroll to top using real browser method
+    await feed.evaluate((el) => { el.scrollTop = 0 })
+    await expect.poll(() => feed.evaluate((el) => el.scrollTop)).toBe(0)
+
+    // Use Playwright's mouse.wheel for real browser-level scrolling
+    const feedBox = await feed.boundingBox()
+    if (feedBox) {
+      await page.mouse.move(feedBox.x + feedBox.width / 2, feedBox.y + feedBox.height / 2)
+      await page.mouse.wheel(0, 300)
+    }
+
+    // Feed should have scrolled away from top
+    await expect.poll(() => feed.evaluate((el) => el.scrollTop), { timeout: 2000 }).toBeGreaterThan(0)
+
+    // Now test auto-scroll during streaming: send @all and verify feed stays near bottom
+    await feed.evaluate((el) => { el.scrollTop = el.scrollHeight })
+    const bottomBefore = await feed.evaluate((el) => el.scrollHeight - el.scrollTop - el.clientHeight)
+    expect(bottomBefore).toBeLessThan(100) // at bottom
+
+    await page.getByTestId('chat-message-input').fill('@all 串流測試')
+    await page.getByTestId('send-chat-message-button').click()
+    // Wait for at least one AI response to arrive
+    await expect(page.getByTestId('workspace-message-feed')).toContainText('顧問', { timeout: 15_000 })
+    // Feed should still be near bottom (auto-scroll kept up)
+    const bottomAfter = await feed.evaluate((el) => el.scrollHeight - el.scrollTop - el.clientHeight)
+    expect(bottomAfter).toBeLessThan(200)
+  }
 })

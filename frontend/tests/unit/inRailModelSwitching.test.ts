@@ -1,7 +1,14 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
-import { projectMeetingWorkspace } from '../../src/meetingWorkspace.ts'
+import {
+  projectMeetingWorkspace,
+  isSameModelAssignment,
+  applyOptimisticModelUpdate,
+  mergeServerParticipantModels,
+} from '../../src/meetingWorkspace.ts'
+
+// ── Fixtures ─────────────────────────────────────────────────────────────────
 
 const baseMode = {
   id: 'chatroom',
@@ -29,6 +36,8 @@ const baseMeeting = {
     },
   ],
 }
+
+// ── Workspace projection tests ────────────────────────────────────────────────
 
 test('workspace projection returns role states for model label rendering', () => {
   const result = projectMeetingWorkspace({
@@ -58,28 +67,148 @@ test('workspace projection role count matches participants', () => {
   )
 })
 
-test('updateSelectedModel same-model guard: selecting current model is a no-op', () => {
-  // Simulate the guard logic from useCouncil.ts updateSelectedModel
-  const selectedModels: Record<string, string> = { Advisor: 'gpt-4o', Critic: 'claude-3' }
-  const role = 'Advisor'
-  const modelId = 'gpt-4o' // same as current
+test('projection reflects role states independent of model assignments', () => {
+  const result = projectMeetingWorkspace({
+    meeting: baseMeeting as any,
+    mode: baseMode as any,
+    eventRoleIdToSeatId: (r) => r,
+  })
 
-  // Guard: if same model, return early (no state change)
-  const before = { ...selectedModels }
-  if (selectedModels[role] !== modelId) {
-    selectedModels[role] = modelId
+  for (const role of result.roles) {
+    assert.ok(['waiting', 'thinking', 'completed', 'failed'].includes(role.state),
+      `Role ${role.roleId} has valid state: ${role.state}`)
   }
-  assert.deepEqual(selectedModels, before, 'State unchanged when selecting same model')
 })
 
-test('updateSelectedModel changes state when selecting a different model', () => {
-  const selectedModels: Record<string, string> = { Advisor: 'gpt-4o', Critic: 'claude-3' }
-  const role = 'Advisor'
-  const modelId = 'gemini-pro' // different from current
+// ── isSameModelAssignment ─────────────────────────────────────────────────────
+// These are the REAL guard checks used by useCouncil.updateSelectedModel.
+// If this function breaks, every call site that prevents redundant saves breaks.
 
-  if (selectedModels[role] !== modelId) {
-    selectedModels[role] = modelId
-  }
-  assert.equal(selectedModels.Advisor, 'gemini-pro', 'Advisor model updated to gemini-pro')
-  assert.equal(selectedModels.Critic, 'claude-3', 'Critic model unchanged')
+test('isSameModelAssignment returns true when current model equals target', () => {
+  const models = { Advisor: 'gpt-4o', Critic: 'claude-3' }
+  assert.ok(isSameModelAssignment(models, 'Advisor', 'gpt-4o'))
+})
+
+test('isSameModelAssignment returns false when current model differs from target', () => {
+  const models = { Advisor: 'gpt-4o', Critic: 'claude-3' }
+  assert.ok(!isSameModelAssignment(models, 'Advisor', 'gemini-pro'))
+})
+
+test('isSameModelAssignment returns false for unknown role', () => {
+  const models = { Advisor: 'gpt-4o' }
+  assert.ok(!isSameModelAssignment(models, 'Unknown', 'gpt-4o'))
+})
+
+test('isSameModelAssignment treats empty-string model as a real value', () => {
+  const models = { Advisor: '' }
+  assert.ok(isSameModelAssignment(models, 'Advisor', ''))
+  assert.ok(!isSameModelAssignment(models, 'Advisor', 'gpt-4o'))
+})
+
+// ── applyOptimisticModelUpdate ────────────────────────────────────────────────
+// This is the REAL state transition used by useCouncil.updateSelectedModel
+// for both the no-meeting path (direct save) and the with-meeting path
+// (optimistic update before API call).
+
+test('applyOptimisticModelUpdate sets the target role model', () => {
+  const models = { Advisor: 'gpt-4o', Critic: 'claude-3' }
+  const next = applyOptimisticModelUpdate(models, 'Advisor', 'gemini-pro')
+  assert.equal(next.Advisor, 'gemini-pro')
+  assert.equal(next.Critic, 'claude-3', 'Other roles untouched')
+})
+
+test('applyOptimisticModelUpdate does not mutate the original object', () => {
+  const models = { Advisor: 'gpt-4o', Critic: 'claude-3' }
+  const next = applyOptimisticModelUpdate(models, 'Advisor', 'gemini-pro')
+  assert.equal(models.Advisor, 'gpt-4o', 'Original Advisor unchanged')
+  assert.notEqual(models, next, 'Different object reference')
+})
+
+test('applyOptimisticModelUpdate adds a new role key if not already present', () => {
+  const models = { Advisor: 'gpt-4o' }
+  const next = applyOptimisticModelUpdate(models, 'Critic', 'claude-3')
+  assert.equal(next.Advisor, 'gpt-4o')
+  assert.equal(next.Critic, 'claude-3')
+})
+
+// ── mergeServerParticipantModels ──────────────────────────────────────────────
+// This is the REAL merge logic used by useCouncil.updateSelectedModel after
+// a successful API response. It re-syncs the client state from the server.
+
+test('mergeServerParticipantModels overwrites all roles from server response', () => {
+  const current = { Advisor: 'gpt-4o', Critic: 'claude-3' }
+  const participants = [
+    { role_id: 'Advisor', model_config_id: 'gemini-pro' },
+    { role_id: 'Critic', model_config_id: 'llama-3' },
+  ]
+  const result = mergeServerParticipantModels(current, participants)
+  assert.deepEqual(result, { Advisor: 'gemini-pro', Critic: 'llama-3' })
+})
+
+test('mergeServerParticipantModels handles null model_config_id as empty string', () => {
+  const current = { Advisor: 'gpt-4o' }
+  const participants = [
+    { role_id: 'Advisor', model_config_id: null },
+  ]
+  const result = mergeServerParticipantModels(current, participants)
+  assert.equal(result.Advisor, '')
+})
+
+test('mergeServerParticipantModels can add roles from server not in current', () => {
+  const current = { Advisor: 'gpt-4o' }
+  const participants = [
+    { role_id: 'Advisor', model_config_id: 'gpt-4o' },
+    { role_id: 'Critic', model_config_id: 'claude-3' },
+  ]
+  const result = mergeServerParticipantModels(current, participants)
+  assert.deepEqual(result, { Advisor: 'gpt-4o', Critic: 'claude-3' })
+})
+
+test('mergeServerParticipantModels drops roles from current not in server response', () => {
+  const current = { Advisor: 'gpt-4o', Critic: 'claude-3', Judge: 'gemini-pro' }
+  const participants = [
+    { role_id: 'Advisor', model_config_id: 'gpt-4o' },
+    { role_id: 'Critic', model_config_id: 'claude-3' },
+  ]
+  const result = mergeServerParticipantModels(current, participants)
+  assert.deepEqual(result, { Advisor: 'gpt-4o', Critic: 'claude-3' })
+  assert.equal((result as any).Judge, undefined, 'Judge removed — server is authoritative')
+})
+
+// ── Integration: end-to-end model switch logic ────────────────────────────────
+// Simulates the full updateSelectedModel flow (guard → optimistic → merge)
+// using the REAL extracted functions, proving they compose correctly.
+
+test('full model switch: guard passes → optimistic applied → server merge overwrites', () => {
+  const initial = { Blue: 'mock-fast', Red: 'mock-fast', Judge: 'mock-fast' }
+
+  // Step 1: guard check — should NOT skip
+  assert.ok(!isSameModelAssignment(initial, 'Blue', 'mock-slow'), 'Guard allows the change')
+
+  // Step 2: optimistic update — Blue changes, others stay
+  const optimistic = applyOptimisticModelUpdate(initial, 'Blue', 'mock-slow')
+  assert.equal(optimistic.Blue, 'mock-slow', 'Blue updated optimistically')
+  assert.equal(optimistic.Red, 'mock-fast', 'Red untouched')
+  assert.equal(optimistic.Judge, 'mock-fast', 'Judge untouched')
+
+  // Step 3: server response — Blue was rejected, server keeps mock-fast
+  const serverParticipants = [
+    { role_id: 'Blue', model_config_id: 'mock-fast' },
+    { role_id: 'Red', model_config_id: 'mock-fast' },
+    { role_id: 'Judge', model_config_id: 'mock-fast' },
+  ]
+  const finalState = mergeServerParticipantModels(optimistic, serverParticipants)
+  assert.equal(finalState.Blue, 'mock-fast', 'Blue reverted to server value')
+  assert.equal(finalState.Red, 'mock-fast', 'Red unchanged')
+  assert.equal(finalState.Judge, 'mock-fast', 'Judge unchanged')
+})
+
+test('full model switch: guard blocks redundant same-model call', () => {
+  const current = { Blue: 'mock-fast', Red: 'mock-fast' }
+  assert.ok(isSameModelAssignment(current, 'Blue', 'mock-fast'),
+    'Same-model guard triggers — no state change should occur')
+  // If the guard were broken, the optimistic update would still produce
+  // the same state, but the API call would be wasted:
+  const wouldBeNoOp = applyOptimisticModelUpdate(current, 'Blue', 'mock-fast')
+  assert.deepEqual(wouldBeNoOp, current, 'Optimistic update is a no-op for same model')
 })

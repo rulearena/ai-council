@@ -144,7 +144,7 @@ const latestChairMessage = computed(() => chairmanEvents.value.at(-1)?.content ?
         :data-testid="`${seatTestIdPrefix}-${role.toLowerCase()}`"
         :data-status="seatStatus(role)"
         :disabled="!selectedMeeting"
-        @click="$emit('seat-click', role)"
+        @click.stop="$emit('seat-click', role)"
       >
         <span class="seat-visual">
           <span v-if="role === 'Chairman' && chairmanSpeaking" class="speech-bubble chairman-bubble">

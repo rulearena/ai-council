@@ -4,7 +4,6 @@ import { updateMeetingSettings } from '../api'
 import { councilKey } from '../composables/useCouncil'
 import { roleDisplayName } from '../presentation'
 import { activeMode } from '../composables/useCouncil'
-import { modelDisplayLabel } from '../providers'
 import { scenes } from '../scenes'
 import {
   buildMeetingSettingsPayload,
@@ -36,9 +35,6 @@ const errors = computed(() => draft.value && selectedMeeting.value
 const invalid = computed(() => Object.values(errors.value).some(Boolean))
 const confirmedCourtroom = computed(() => selectedMeeting.value?.mode_id === 'courtroom' && selectedMeeting.value.courtroom?.status === 'confirmed')
 const caseTypeLocked = computed(() => confirmedCourtroom.value && Boolean(selectedMeeting.value?.case_type))
-const assignmentWarnings = computed(() => selectedMeeting.value?.participants
-  .filter((participant) => participant.model_assignment_warning)
-  .map((participant) => `${displayRole(participant.role_id)}：${participant.model_assignment_warning}`) ?? [])
 const displayRole = (role: string) => roleDisplayName(activeMode.value, selectedMeeting.value?.participants ?? [], role)
 
 function hydrate() {

@@ -596,3 +596,36 @@ export function messageClampPolicy(content: string): MessageClampPolicy {
     lineClamp: 3,
   }
 }
+
+// ── Model-assignment pure helpers ─────────────────────────────────────────────
+// Extracted from useCouncil.updateSelectedModel so the core logic lives in a
+// testable layer that unit tests can import directly (useCouncil.ts itself
+// depends on import.meta.env via api.ts and is incompatible with Node --test).
+
+export function isSameModelAssignment(
+  selectedModels: Record<string, string>,
+  role: string,
+  modelId: string,
+): boolean {
+  return selectedModels[role] === modelId
+}
+
+export function applyOptimisticModelUpdate(
+  selectedModels: Record<string, string>,
+  role: string,
+  modelId: string,
+): Record<string, string> {
+  return { ...selectedModels, [role]: modelId }
+}
+
+export function mergeServerParticipantModels(
+  currentModels: Record<string, string>,
+  participants: Array<{ role_id: string; model_config_id: string | null }>,
+): Record<string, string> {
+  return Object.fromEntries(
+    participants.map((participant) => [
+      participant.role_id,
+      participant.model_config_id ?? '',
+    ]),
+  )
+}
