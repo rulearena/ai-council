@@ -31,7 +31,7 @@ const dirty = computed(() => Boolean(
 ))
 const errors = computed(() => draft.value && selectedMeeting.value
   ? validateMeetingSettingsDraft(draft.value, selectedMeeting.value)
-  : { title: '', goal: '', caseType: '', participantModels: '' })
+  : { title: '', goal: '', caseType: '' })
 const invalid = computed(() => Object.values(errors.value).some(Boolean))
 const confirmedCourtroom = computed(() => selectedMeeting.value?.mode_id === 'courtroom' && selectedMeeting.value.courtroom?.status === 'confirmed')
 const caseTypeLocked = computed(() => confirmedCourtroom.value && Boolean(selectedMeeting.value?.case_type))

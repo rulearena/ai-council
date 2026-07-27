@@ -61,6 +61,16 @@ const materialCount = computed(() => selectedMeeting.value?.case_materials?.evid
   ?? selectedMeeting.value?.case_files?.length
   ?? 0)
 const latestChairMessage = computed(() => chairmanEvents.value.at(-1)?.content ?? '')
+const assignmentWarnings = computed(() => {
+  const participants = selectedMeeting.value?.participants ?? []
+  return participants
+    .filter((p) => p.model_assignment_warning)
+    .map((p) => {
+      const role = workspace.value?.roles.find((r) => r.roleId === p.role_id)
+      const roleName = role?.name ?? p.role_id
+      return `${roleName}：原模型 ${p.model_assignment_warning} 已失效，目前使用替代模型。`
+    })
+})
 const sceneLightboxOpen = ref(false)
 const openModelSeatId = ref<string | null>(null)
 type ContextTab = 'context' | 'records'
@@ -120,10 +130,14 @@ function scrollToBottom() {
 watch(
   () => allMessages.value.length,
   (newLen, oldLen) => {
-    if (newLen > oldLen) {
-      nextTick(() => {
-        if (feedRef.value && isNearBottom(feedRef.value)) scrollToBottom()
-      })
+    if (newLen > oldLen && feedRef.value) {
+      // Snapshot scroll position *before* the DOM re-renders with the new
+      // message.  After nextTick the feed has already grown, so measuring
+      // then would see a large gap and isNearBottom would always fail.
+      const nearBottom = isNearBottom(feedRef.value)
+      if (nearBottom) {
+        nextTick(() => { scrollToBottom() })
+      }
     }
   },
 )
@@ -273,6 +287,9 @@ async function retryRole(roleId: string) {
           :aria-label="`${role.name}詳情`"
           @click.stop="$emit('role-click', role.roleId)"
         >ℹ</button>
+      </div>
+      <div v-if="assignmentWarnings.length" class="assignment-fallback-warning" data-testid="assignment-fallback-warning">
+        <p v-for="(warning, idx) in assignmentWarnings" :key="idx">{{ warning }}</p>
       </div>
     </nav>
 

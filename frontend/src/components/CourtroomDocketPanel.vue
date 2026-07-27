@@ -359,18 +359,21 @@ function ruling(issue: CourtroomIssueProjection) {
         <span class="workspace-role-avatar"><RoleSilhouette color="currentColor" :size="26" /></span>
         <span class="workspace-role-name">主席</span>
       </button>
-      <button
+      <div
         v-for="role in workspace.roles"
         :key="role.roleId"
-        type="button"
         class="workspace-role-button"
         :class="[roleClass(role.roleId), { active: selectedRoleId === role.roleId }]"
         :style="roleColorVars(role.roleId)"
         :data-testid="`role-seat-${role.roleId.toLowerCase()}`"
         :data-status="role.state"
+        role="button"
+        tabindex="0"
         :aria-label="`${role.name}，${roleStateLabel(role.state)}`"
         :aria-pressed="selectedRoleId === role.roleId"
         @click="selectRole(role.roleId)"
+        @keydown.enter="selectRole(role.roleId)"
+        @keydown.space.prevent="selectRole(role.roleId)"
       >
         <span class="workspace-role-avatar">
           <img v-if="roleIcon(role.roleId)" :src="roleIcon(role.roleId)" :alt="role.name" />
@@ -392,7 +395,7 @@ function ruling(issue: CourtroomIssueProjection) {
         >
           <option v-for="model in models" :key="model.id" :value="model.id">{{ modelDisplayLabel(model) }}</option>
         </select>
-      </button>
+      </div>
     </nav>
 
     <section class="workspace-conversation-column" data-testid="court-hearing-record">

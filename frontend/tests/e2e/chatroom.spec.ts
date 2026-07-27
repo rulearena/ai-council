@@ -584,31 +584,28 @@ test('13.19 message feed scrolls via real browser wheel and auto-scrolls during 
   await expect.poll(() => feed.evaluate((el) => el.scrollTop), { timeout: 2000 }).toBeGreaterThan(0)
 
   // ── Auto-scroll assertion ──────────────────────────────────────────────────
-  // Verify the auto-scroll watch (ConversationWorkspace.vue:120-129) keeps
-  // the feed near the bottom when a new message arrives.  The feed is
-  // already scrolled to the bottom from the wheel test above.
+  // Verify the auto-scroll watch (ConversationWorkspace.vue:120-133) keeps
+  // the feed scrolled to the bottom when a new message arrives.
   //
-  // Why gap-based instead of scrollTop-increase: when el.scrollTop is set to
-  // el.scrollHeight the browser clamps it to scrollHeight − clientHeight, so
-  // "scrollTop increased" is unreliable when the feed is already at the
-  // bottom.  The gap (scrollHeight − scrollTop − clientHeight) is the
-  // correct invariant: it stays < 200 px when auto-scroll fires, and grows
-  // to the full content height when it does not.
+  // The correct invariant: after a message appears while the feed is at the
+  // bottom, scrollTop must increase to the new scrollHeight − clientHeight.
+  // Without the watch, scrollTop stays at its old (clamped) value while
+  // scrollHeight grows — a gap opens and scrollTop does not change.
+  // A simple "gap < N" check is unreliable because the browser-clamped
+  // scrollTop already sits at the maximum, producing a small gap even
+  // without auto-scroll.
   await feed.evaluate((el) => { el.scrollTop = el.scrollHeight })
-  const bottomBefore = await feed.evaluate(
-    (el) => el.scrollHeight - el.scrollTop - el.clientHeight,
-  )
-  expect(bottomBefore).toBeLessThan(100) // at bottom
+  const scrollTopBefore = await feed.evaluate((el) => el.scrollTop)
+  expect(scrollTopBefore).toBeGreaterThan(0) // feed is scrolled to bottom
 
   await page.getByTestId('chat-message-input').fill('auto-scroll 驗證')
   await page.getByTestId('send-chat-message-button').click()
-  await expect(feed).toContainText('auto-scroll 驗證')
 
-  // After the message appears, the auto-scroll watch should have fired and
-  // kept the feed near the bottom.  Without the watch the gap would be the
-  // full height of the new message (~60 px human + possible AI response).
-  const bottomAfter = await feed.evaluate(
-    (el) => el.scrollHeight - el.scrollTop - el.clientHeight,
-  )
-  expect(bottomAfter, 'auto-scroll should keep feed near bottom after new message').toBeLessThan(200)
+  // Poll until scrollTop increases — this can only happen when the
+  // auto-scroll watch fires scrollToBottom() after the new message
+  // grows scrollHeight.  Without the watch, scrollTop never changes.
+  await expect.poll(
+    () => feed.evaluate((el) => el.scrollTop),
+    { timeout: 5000 },
+  ).toBeGreaterThan(scrollTopBefore)
 })

@@ -24,7 +24,6 @@ export type MeetingSettingsErrors = {
   title: string
   goal: string
   caseType: string
-  participantModels: string
 }
 
 export function hydrateMeetingSettingsDraft(meeting: MeetingSettingsSource): MeetingSettingsDraft {
@@ -78,9 +77,6 @@ export function validateMeetingSettingsDraft(
     caseType: confirmedCourtroom && !legacyCaseTypeMissing && draft.caseType !== meeting.case_type
       ? '爭點已確認，案件類型只能檢視；重新整理爭點後才可修改。'
       : meeting.mode_id === 'courtroom' && !draft.caseType ? '請選擇民事或刑事。' : '',
-    participantModels: Object.values(draft.participantModels).every(Boolean)
-      ? ''
-      : '請為每個角色選擇模型。',
   }
 }
 

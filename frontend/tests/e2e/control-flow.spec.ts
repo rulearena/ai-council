@@ -625,7 +625,7 @@ test('In-rail model switch rolls back a rejected assignment and shows the error'
   await expect(page.getByTestId('seat-model-label-blue')).toHaveText(/mock-fast/)
 })
 
-test('a delayed assignment save blocks leaving and remains scoped to its meeting', async ({
+test('a delayed assignment save remains scoped to its meeting', async ({
   page,
 }) => {
   await page.goto('/')
@@ -702,7 +702,9 @@ test('a deleted assigned model shows the backend fallback warning without persis
   await page.reload()
   await page.getByTestId('past-topics-button').click()
   await page.getByTestId('meeting-list-item').filter({ hasText: topic }).locator('.meeting-item').click()
-  // Model fallback is now visible in the in-rail model label (shows fallback model name)
+  // Fallback warning banner is visible in the role rail
+  await expect(page.getByTestId('assignment-fallback-warning')).toBeVisible()
+  // Model fallback is also visible in the in-rail model label (shows fallback model name)
   await expect(page.getByTestId('seat-model-label-blue')).toBeVisible()
 
   const projected = await (await page.request.get(`${apiOrigin}/meetings/${meetingId}`)).json()
@@ -819,11 +821,11 @@ async function setRoleModelsInSettings(page: Page, assignments: Record<string, s
   for (const [role, model] of Object.entries(assignments)) {
     const roleLower = role.toLowerCase()
     const label = page.getByTestId(`seat-model-label-${roleLower}`)
-    // If label is not visible (e.g. already in select mode or different view), skip
-    if (!(await label.isVisible().catch(() => false))) continue
+    // At narrow viewports (≤375px) the model label is hidden by responsive CSS —
+    // skip silently.  Any other visibility error (timeout, detached, etc.) propagates.
+    if (!(await label.isVisible())) continue
     const currentText = await label.textContent()
-    const modelDisplay = model // may need adjustment if display differs from id
-    if (currentText?.includes(modelDisplay)) continue
+    if (currentText?.includes(model)) continue
     await label.click()
     const select = page.getByTestId(`seat-model-select-${roleLower}`)
     await expect(select).toBeVisible()
