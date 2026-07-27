@@ -538,8 +538,9 @@ test('13.19 message feed scrolls via real browser wheel and auto-scrolls during 
   // request context to POST directly to the backend, bypassing the
   // composer UI.  This avoids the `sending` ref getting stuck when the
   // backend is under load from prior tests.
+  const apiOrigin = process.env.E2E_API_BASE_URL ?? 'http://127.0.0.1:5009'
   for (let i = 0; i < 20; i++) {
-    await page.request.post(`http://localhost:5009/meetings/${meetingId}/messages`, {
+    await page.request.post(`${apiOrigin}/meetings/${meetingId}/messages`, {
       data: { content: `測試訊息 ${i}` },
     })
     await expect(feed).toContainText(`測試訊息 ${i}`)
