@@ -59,7 +59,6 @@ test('confirmed courtroom settings explain locked goal and case type', () => {
     title: '',
     goal: '爭點已確認，AI 目標只能檢視；重新整理爭點後才可修改。',
     caseType: '爭點已確認，案件類型只能檢視；重新整理爭點後才可修改。',
-    participantModels: '',
   })
 })
 
@@ -72,7 +71,6 @@ test('legacy confirmed courtroom can fill its missing case type through atomic m
     title: '',
     goal: '',
     caseType: '',
-    participantModels: '',
   })
 })
 

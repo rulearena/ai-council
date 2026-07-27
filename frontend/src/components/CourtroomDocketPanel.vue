@@ -135,6 +135,16 @@ const workspace = computed<CourtHearingWorkspaceProjection | null>(() => {
   })
   return projected.family === 'court-hearing' ? projected : null
 })
+const assignmentWarnings = computed(() => {
+  const participants = selectedMeeting.value?.participants ?? []
+  return participants
+    .filter((p) => p.model_assignment_warning)
+    .map((p) => {
+      const role = workspace.value?.roles.find((r) => r.roleId === p.role_id)
+      const roleName = role?.name ?? p.role_id
+      return `${roleName}：原模型 ${p.model_assignment_warning} 已失效，目前使用替代模型。`
+    })
+})
 const selectedRoleId = computed(() => {
   const filter = roleFilter.value
   return filter && filter.meetingId === workspace.value?.meetingId ? filter.roleId : null
@@ -395,6 +405,9 @@ function ruling(issue: CourtroomIssueProjection) {
         >
           <option v-for="model in models" :key="model.id" :value="model.id">{{ modelDisplayLabel(model) }}</option>
         </select>
+      </div>
+      <div v-if="assignmentWarnings.length" class="assignment-fallback-warning" data-testid="assignment-fallback-warning">
+        <p v-for="(warning, idx) in assignmentWarnings" :key="idx">{{ warning }}</p>
       </div>
     </nav>
 
