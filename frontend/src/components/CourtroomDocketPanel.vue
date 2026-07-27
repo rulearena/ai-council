@@ -69,6 +69,7 @@ const {
   updateSelectedModel,
   operationStatusText,
   currentStepProgress,
+  assignmentUpdateError,
 } = store
 
 const drafts = reactive<Record<string, CourtroomDraft>>({})
@@ -142,7 +143,22 @@ const assignmentWarnings = computed(() => {
     .map((p) => {
       const role = workspace.value?.roles.find((r) => r.roleId === p.role_id)
       const roleName = role?.name ?? p.role_id
-      return `${roleName}：原模型 ${p.model_assignment_warning} 已失效，目前使用替代模型。`
+      const warning = p.model_assignment_warning!
+      if (warning.startsWith('No saved model assignment')) {
+        const defaultMatch = warning.match(/using default model '([^']+)'/)
+        const fallbackName = defaultMatch ? resolveModelName(defaultMatch[1]) : ''
+        return fallbackName
+          ? `${roleName}：未指派模型，已自動使用「${fallbackName}」。`
+          : `${roleName}：未指派模型。`
+      }
+      const originalMatch = warning.match(/(?:Assigned|Recovered) model '([^']+)'/)
+      const defaultMatch = warning.match(/using default model '([^']+)'/)
+      const originalName = originalMatch ? resolveModelName(originalMatch[1]) : originalMatch?.[1] ?? ''
+      const fallbackName = defaultMatch ? resolveModelName(defaultMatch[1]) : ''
+      if (originalName && fallbackName) {
+        return `${roleName}：模型「${originalName}」已失效，目前使用「${fallbackName}」。`
+      }
+      return `${roleName}：${warning}`
     })
 })
 const selectedRoleId = computed(() => {
@@ -194,6 +210,11 @@ function roleModelLabel(roleId: string): string {
   const modelId = selectedModels.value[roleId]
   const model = models.value.find((candidate) => candidate.id === modelId)
   return model ? modelDisplayLabel(model) : modelId || '未選模型'
+}
+
+function resolveModelName(modelId: string): string {
+  const model = models.value.find((m) => m.id === modelId)
+  return model ? modelDisplayLabel(model) : modelId
 }
 
 const openModelSeatId = ref<string | null>(null)
@@ -382,8 +403,8 @@ function ruling(issue: CourtroomIssueProjection) {
         :aria-label="`${role.name}，${roleStateLabel(role.state)}`"
         :aria-pressed="selectedRoleId === role.roleId"
         @click="selectRole(role.roleId)"
-        @keydown.enter="selectRole(role.roleId)"
-        @keydown.space.prevent="selectRole(role.roleId)"
+        @keydown.enter.self="selectRole(role.roleId)"
+        @keydown.space.self.prevent="selectRole(role.roleId)"
       >
         <span class="workspace-role-avatar">
           <img v-if="roleIcon(role.roleId)" :src="roleIcon(role.roleId)" :alt="role.name" />
@@ -400,6 +421,7 @@ function ruling(issue: CourtroomIssueProjection) {
         <select v-else class="workspace-role-model-select"
           :data-testid="`seat-model-select-${role.roleId.toLowerCase()}`"
           :value="selectedModels[role.roleId]"
+          :disabled="isMeetingRunning"
           @change="switchSeatModel(role.roleId, ($event.target as HTMLSelectElement).value)"
           @click.stop
         >
@@ -408,6 +430,9 @@ function ruling(issue: CourtroomIssueProjection) {
       </div>
       <div v-if="assignmentWarnings.length" class="assignment-fallback-warning" data-testid="assignment-fallback-warning">
         <p v-for="(warning, idx) in assignmentWarnings" :key="idx">{{ warning }}</p>
+      </div>
+      <div v-if="assignmentUpdateError" class="assignment-update-error" role="alert" data-testid="assignment-update-error">
+        {{ assignmentUpdateError }}
       </div>
     </nav>
 

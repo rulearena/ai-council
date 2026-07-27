@@ -609,3 +609,30 @@ test('13.19 message feed scrolls via real browser wheel and auto-scrolls during 
     { timeout: 5000 },
   ).toBeGreaterThan(scrollTopBefore)
 })
+
+// ── 13.20 ──────────────────────────────────────────────────────────────────
+
+test('13.20 switch role model at 375px viewport', async ({ page }) => {
+  await page.goto('/')
+  const title = `E2E chatroom mobile model switch ${Date.now()}`
+  await createChatroomMeeting(page, title, { modelAssignments: defaultModels })
+  await expect(page.getByTestId('conversation-workspace')).toBeVisible()
+
+  await page.setViewportSize({ width: 375, height: 812 })
+
+  const advisorModelLabel = page.getByTestId('seat-model-label-advisor')
+  await expect(advisorModelLabel).toBeVisible()
+  const initialLabel = await advisorModelLabel.textContent()
+
+  await advisorModelLabel.click()
+  const modelSelect = page.getByTestId('seat-model-select-advisor')
+  await expect(modelSelect).toBeVisible()
+
+  const options = modelSelect.locator('option')
+  const optionCount = await options.count()
+  if (optionCount > 1) {
+    const secondValue = await options.nth(1).getAttribute('value')
+    if (secondValue) await modelSelect.selectOption(secondValue)
+    await expect(modelSelect).not.toBeVisible()
+  }
+})
