@@ -4272,20 +4272,58 @@ test('model select is disabled while meeting is running', async ({ page }) => {
   await createMeetingViaNewCase(page, topic)
   await expect(page.getByTestId('seat-model-label-blue')).toBeVisible()
 
-  // Verify the disabled binding is wired: when running, the select is disabled.
-  // Use the component source to confirm the :disabled="isMeetingRunning" attribute
-  // is present on the select element. The mock meeting settles too quickly to test
-  // live disabled state, so verify the attribute exists in the rendered DOM.
+  // The mock backend settles too quickly for isMeetingRunning to stay true.
+  // Directly set activity_status='running' on the Vue reactive store via
+  // page.evaluate to test the :disabled="isMeetingRunning" binding.
+  // councilKey is a Symbol, so we search provides via getOwnPropertySymbols.
+  const mutated = await page.evaluate(() => {
+    const el = document.querySelector('[data-testid="conversation-workspace"]')
+    if (!el) return false
+    const vnode = (el as any).__vueParentComponent
+    if (!vnode) return false
+    const provides = vnode.provides
+    if (!provides) return false
+    const symbols = Object.getOwnPropertySymbols(provides)
+    for (const sym of symbols) {
+      const candidate = provides[sym]
+      if (candidate?.selectedMeeting?.value?.activity_status !== undefined) {
+        candidate.selectedMeeting.value = {
+          ...candidate.selectedMeeting.value,
+          activity_status: 'running',
+        }
+        return true
+      }
+    }
+    return false
+  })
+  expect(mutated).toBe(true)
+
+  // Open the model select — it should be disabled while running
   await page.getByTestId('seat-model-label-blue').click()
   const select = page.getByTestId('seat-model-select-blue')
   await expect(select).toBeVisible()
-  // The select should have a disabled attribute when isMeetingRunning is true.
-  // Since the mock settles instantly, check the attribute is reactive (present or absent).
-  const hasDisabledAttr = await select.evaluate((el) => el.hasAttribute('disabled'))
-  expect(typeof hasDisabledAttr).toBe('boolean')
-  // Confirm the select is functional (can change model) when not running
-  await select.selectOption('mock-slow')
-  await expect(page.getByTestId('seat-model-label-blue')).toBeVisible()
+  await expect(select).toBeDisabled()
+
+  // Restore normal state
+  await page.evaluate(() => {
+    const el = document.querySelector('[data-testid="conversation-workspace"]')
+    if (!el) return
+    const vnode = (el as any).__vueParentComponent
+    if (!vnode) return
+    const provides = vnode.provides
+    if (!provides) return
+    const symbols = Object.getOwnPropertySymbols(provides)
+    for (const sym of symbols) {
+      const candidate = provides[sym]
+      if (candidate?.selectedMeeting?.value?.activity_status !== undefined) {
+        candidate.selectedMeeting.value = {
+          ...candidate.selectedMeeting.value,
+          activity_status: 'idle',
+        }
+        return
+      }
+    }
+  })
 })
 
 test('fallback warning shows role-specific Chinese text for expired model', async ({
