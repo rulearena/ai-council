@@ -26,8 +26,9 @@
 | Courtroom Async Settlement | `eaa059f`–`b6b2432` | GET／WebSocket 一致 live snapshot、per-meeting lifecycle revision、frontend settlement generation guard 與 deterministic ordering tests（實作計畫：`docs/plans/2026-07-17-courtroom-async-settlement.md`） |
 | Meeting Workspace Conversation | `018df1f`–`ef3c430` | A3-1 時間序工作區、relay／parallel 共用 Conversation、Court Hearing 爭點視圖、parallel arrival-order 即時保存與 terminal 原子 publish（實作計畫：`docs/plans/2026-07-18-meeting-workspace-conversation.md`） |
 | Backlog 91 Chatroom Mode | `0c59c1e`–* | 無流程限制的 AI 聊天室模式：@角色／@all mention fanout、context token budget、聊天室 composer 與 mention autocomplete、Conversation workspace chatroom adaptation（實作計畫：`openspec/changes/ai-chat-room/`） |
+| Backlog 92 Chatroom UX Polish | `f7065a9` | #91 驗收回饋的 8 項 UX 修正：座位互動統一、篩選對稱切換、訊息頭像、chatroom 排第一、場景 lightbox、in-rail 換模型（含法院模式）、TopBar subnav 精簡、auto-scroll 根因修復（實作計畫：`openspec/changes/chatroom-ux-polish/`） |
 
-**目前驗收基線（任何改動後不得低於此）**：後端 `pytest` **650 passed**；frontend unit **99 passed**；前端 `npm run build` 綠；Chromium e2e **105/105 passed**。Backlog #90 已通過 Standards／Spec 雙軸獨立 review，並以 direct Chromium 實際完成建立會議 → 主席補充 → AI 回合 → 角色篩選 → 長文展開 → 案卷 drawer。Backlog #91（chatroom mode）已實作並包含在此基線中。
+**目前驗收基線（任何改動後不得低於此）**：後端 `pytest` **650 passed**；frontend unit **116 passed**；前端 `npm run build` 綠；Chromium e2e **118/118 passed**。Backlog #90 已通過 Standards／Spec 雙軸獨立 review，並以 direct Chromium 實際完成建立會議 → 主席補充 → AI 回合 → 角色篩選 → 長文展開 → 案卷 drawer。Backlog #91（chatroom mode）已實作並包含在此基線中；Backlog #92（chatroom UX polish，#91 驗收回饋）已實作並包含在此基線中，e2e 基線數字由 105 提升至 118（新增 13 案例）。
 
 ## 2. Agent 開發佇列與目前核准批次
 
@@ -131,5 +132,6 @@ Backlog 90「會議工作區與時間序對話介面」已實作、完成法院�
 - Backlog 88 acceptance 修補已實作並再次通過雙軸 review；Human Owner 於 2026-07-17 驗收通過，狀態為 `accepted / done`。
 - Backlog 89 已實作、雙軸 review、597 backend／50 unit／build／90 Chromium、direct browser smoke 與 Human Owner 驗收通過，狀態為 `accepted / done`。
 - Backlog 90 已實作、雙軸 review、605 backend／61 unit／build／94 Chromium 與 direct Chromium smoke 通過，Human Owner 於 2026-07-20 驗收通過，狀態為 `accepted / done`。
-- Backlog 91 自由聊天室模式已實作、通過 650 backend／99 frontend unit／105 e2e 與 direct Chromium smoke，狀態為 `implemented / awaiting acceptance`。
+- Backlog 91 自由聊天室模式已實作、通過 650 backend／99 frontend unit／105 e2e 與 direct Chromium smoke；2026-07-23 Human Owner 驗收發現 9 項 UX 問題（見 backlog 92），視為原需求尚未完成，狀態為 `implemented / acceptance rejected — see #92`。
+- Backlog 92 聊天室工作區 UX 精修已實作，歷經 7 輪 Gate B review-fix 循環（詳見 spec.md §15 #92），最終通過 650 backend／116 frontend unit／118 e2e／build 全綠，已 fast-forward merge 至 main（`f7065a9`），狀態為 `implemented / awaiting acceptance`。Backlog 93（角色自訂）明確裁定不在本批次，記入 backlog。Backlog 94 記錄本批次 13 項 Gate B round 7 遺留 Minor（皆 non-blocker）。#91 與 #92 的 delta specs 待 Human Owner 對 #92 驗收後，於同一次 closeout 一併 sync 至 `openspec/specs/` 並 archive；#91 不獨立 sync/archive。
 - 使用者已裁定：個人版不做多人/帳號（backlog 有註記）；案卷 Phase 2/RAG 仍延後到 backlog 79。
