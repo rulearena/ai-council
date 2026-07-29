@@ -2281,7 +2281,10 @@ test('New Case blocks an empty model catalog and seat nameplates follow persiste
   await expect(page.getByTestId('seat-model-label-blue')).toHaveText('Mock · mock-slow')
   await expect(page.getByTestId('seat-model-label-red')).toHaveText('Mock · mock-fast')
   await expect(page.getByTestId('seat-model-label-judge')).toHaveText('Custom OpenAI-compatible · mock-broken')
-  await expect(page.getByTestId('seat-model-label-blue')).toHaveAttribute('title', 'Mock · mock-slow')
+  // The visible label is ellipsised in the 92px rail, so the full model name must stay
+  // reachable via the tooltip. The tooltip also carries the "click to change" hint, so
+  // this asserts containment rather than an exact match.
+  await expect(page.getByTestId('seat-model-label-blue')).toHaveAttribute('title', /Mock · mock-slow/)
 
   // Changing the model again via in-rail select is saved immediately.
   await page.getByTestId('seat-model-label-blue').click()

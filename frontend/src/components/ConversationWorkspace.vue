@@ -298,6 +298,7 @@ async function retryRole(roleId: string) {
         <button
           type="button"
           class="workspace-role-button"
+          :class="roleClass(role.roleId)"
           :data-testid="`role-seat-${role.roleId.toLowerCase()}`"
           :data-status="role.state"
           :aria-label="`${role.name}，${roleStateLabel(role.state)}`"
