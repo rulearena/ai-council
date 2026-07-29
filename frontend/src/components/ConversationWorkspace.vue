@@ -124,6 +124,26 @@ const messages = computed(() => {
   if (!selectedRoleId.value) return chronological
   return chronological.filter((message) => message.roleId === seatIdToEventRoleId(selectedRoleId.value!))
 })
+
+// Messenger-style grouping (the Human Owner asked for LINE's model): the Chairman's
+// own messages sit on the right with no avatar or name — you already know who you
+// are — and everyone else sits on the left, identified once per run. Repeating the
+// avatar, name and timestamp on every bubble is what made speakers hard to tell
+// apart in the first place.
+const groupedMessages = computed(() =>
+  messages.value.map((message, index, all) => {
+    const previous = all[index - 1]
+    const next = all[index + 1]
+    const sameSpeaker = (a?: WorkspaceMessage, b?: WorkspaceMessage) =>
+      Boolean(a && b && a.kind === b.kind && a.roleId === b.roleId)
+    return {
+      message,
+      isOwn: message.kind === 'human',
+      startsRun: !sameSpeaker(previous, message),
+      endsRun: !sameSpeaker(message, next),
+    }
+  }),
+)
 const allMessages = computed(() => {
   if (!workspace.value) return []
   const seen = new Set<string>()
@@ -352,24 +372,45 @@ async function retryRole(roleId: string) {
           {{ selectedRoleId ? '這個角色還沒有發言。' : '尚未有會議發言；可先記錄主席補充，或啟動第一次審議。' }}
         </p>
         <article
-          v-for="message in messages"
+          v-for="{ message, isOwn, startsRun, endsRun } in groupedMessages"
           :id="`workspace-message-${message.id}`"
           :key="message.id"
           class="workspace-message"
-          :class="[`workspace-message-${message.kind}`, { 'workspace-message-human': message.kind === 'human' }]"
+          :class="[
+            `workspace-message-${message.kind}`,
+            {
+              'workspace-message-human': isOwn,
+              'workspace-message-own': isOwn,
+              'workspace-message-run-start': startsRun,
+              'workspace-message-run-end': endsRun,
+            },
+          ]"
           :style="message.kind === 'ai' || message.kind === 'synthesizer' ? roleColorVars(message.roleId) : undefined"
           data-testid="workspace-message"
           :data-role="message.roleId"
         >
-          <header>
-            <span class="workspace-message-avatar" data-testid="workspace-message-avatar">
+          <!-- Own messages need no identification; others are labelled once per run. -->
+          <span
+            v-if="!isOwn"
+            class="workspace-message-avatar"
+            :class="{ 'is-placeholder': !startsRun }"
+            data-testid="workspace-message-avatar"
+            :aria-hidden="!startsRun"
+          >
+            <template v-if="startsRun">
               <img v-if="roleIcon(message.roleId)" :src="roleIcon(message.roleId)" :alt="message.roleName" />
               <RoleSilhouette v-else :color="message.kind === 'ai' || message.kind === 'synthesizer' ? 'var(--role-color)' : 'currentColor'" :size="20" />
-            </span>
+            </template>
+          </span>
+          <header v-if="!isOwn && startsRun">
             <strong>{{ message.roleName }}</strong>
             <span v-if="message.kind === 'synthesizer'" class="workspace-message-badge">彙整</span>
-            <time v-if="message.createdAt" :datetime="message.createdAt">{{ messageTime(message) }}</time>
           </header>
+          <time
+            v-if="message.createdAt && endsRun"
+            class="workspace-message-time"
+            :datetime="message.createdAt"
+          >{{ messageTime(message) }}</time>
           <p
             class="workspace-message-content"
             :class="{ collapsed: messageClampPolicy(message.content).collapsible && !isExpanded(message) }"

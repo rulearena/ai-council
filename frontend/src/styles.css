@@ -1069,44 +1069,75 @@ h2 {
   text-align: center;
 }
 
+/* Messenger layout: others on the left with the avatar outside the bubble, own
+   messages on the right with no avatar or name. Consecutive messages from the same
+   speaker tuck together and only the first carries identification, the last carries
+   the timestamp — so a run reads as one turn instead of N repeated headers. */
 .workspace-message {
+  position: relative;
   align-self: flex-start;
-  width: min(720px, 88%);
-  padding: 12px 14px;
+  max-width: min(680px, 76%);
+  margin-left: 36px;
+  padding: 10px 14px;
   border: 1px solid var(--role-color, var(--color-border));
   border-radius: 4px 14px 14px 14px;
   background: color-mix(in srgb, var(--role-color, var(--color-surface-muted)) 7%, var(--color-surface));
   box-shadow: var(--shadow-sm);
 }
 
-.workspace-message-human {
+/* Continuation bubbles sit closer and lose the speech-tail corner. */
+.workspace-message:not(.workspace-message-run-start) {
+  margin-top: -8px;
+  border-top-left-radius: 14px;
+}
+
+.workspace-message-own {
   align-self: flex-end;
+  margin-left: 0;
+  margin-right: 4px;
   border-color: rgba(77, 141, 255, 0.55);
   border-radius: 14px 4px 14px 14px;
   background: rgba(37, 99, 235, 0.16);
 }
 
+.workspace-message-own:not(.workspace-message-run-start) {
+  border-top-right-radius: 14px;
+}
+
 .workspace-message-failed { border-color: var(--color-failed); background: var(--color-failed-tint); }
-.workspace-message-system { width: min(660px, 94%); align-self: center; border-style: dashed; }
+.workspace-message-system { align-self: center; margin-left: 0; max-width: min(660px, 94%); border-style: dashed; }
 .workspace-message-synthesizer { border-width: 2px; }
 
 .workspace-message header {
   display: flex;
   align-items: center;
   gap: 8px;
-  margin-bottom: 6px;
+  margin-bottom: 4px;
   color: var(--role-color, var(--color-text));
   font-size: 12px;
 }
 
-.workspace-message header time { margin-left: auto; color: var(--color-text-muted); font-size: 10px; }
+/* Outside the bubble, on the far side from the speaker — LINE's placement. */
+.workspace-message-time {
+  position: absolute;
+  bottom: 2px;
+  color: var(--color-text-muted);
+  font-size: 10px;
+  white-space: nowrap;
+}
+
+.workspace-message:not(.workspace-message-own) .workspace-message-time { left: calc(100% + 6px); }
+.workspace-message-own .workspace-message-time { right: calc(100% + 6px); }
 .workspace-message-badge { padding: 2px 7px; border-radius: var(--radius-pill); background: var(--color-bg-elevated); color: var(--color-text-secondary); font-size: 10px; }
 
 .workspace-message-avatar {
+  position: absolute;
+  top: 0;
+  left: -36px;
   display: inline-grid;
   place-items: center;
-  width: 20px;
-  height: 20px;
+  width: 28px;
+  height: 28px;
   flex-shrink: 0;
   border: 1.5px solid var(--role-color, var(--color-border-strong));
   border-radius: 50%;
@@ -1114,9 +1145,16 @@ h2 {
   overflow: hidden;
 }
 .workspace-message-avatar img {
-  width: 14px;
-  height: 14px;
+  width: 20px;
+  height: 20px;
   object-fit: contain;
+}
+
+/* Continuation bubbles keep the avatar slot reserved but empty, so the run stays
+   aligned without repeating the face. */
+.workspace-message-avatar.is-placeholder {
+  border-color: transparent;
+  background: transparent;
 }
 
 .workspace-message-content {
