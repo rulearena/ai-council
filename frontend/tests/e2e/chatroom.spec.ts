@@ -546,14 +546,24 @@ test('13.19 message feed scrolls via real browser wheel and auto-scrolls during 
     await expect(feed).toContainText(`測試訊息 ${i}`)
   }
 
-  // Force the feed to a constrained height so it must scroll.
-  // The grid layout should do this, but in some viewport/DPI combinations
-  // the feed grows to fit all content instead of clipping.
-  await feed.evaluate((el) => { el.style.maxHeight = '400px' })
+  // The shell is capped at the viewport, so the page itself must never scroll and
+  // the feed must overflow internally — with NO injected height. A previous version
+  // of this test set `el.style.maxHeight = '400px'` here, which manufactured the very
+  // constraint the product CSS was missing and therefore passed against a broken build.
+  const pageScrolls = await page.evaluate(
+    () => document.documentElement.scrollHeight > window.innerHeight,
+  )
+  expect(pageScrolls, 'Page itself must not scroll — only the message feed may').toBe(false)
 
-  // Feed must be scrollable
   const scrollable = await feed.evaluate((el) => el.scrollHeight > el.clientHeight)
-  expect(scrollable, 'Feed must be scrollable after 20 messages').toBe(true)
+  expect(scrollable, 'Feed must overflow internally after 20 messages, unaided').toBe(true)
+
+  // The composer and the role rail are part of the fixed frame: scrolling the feed
+  // must not move them. This is the symptom the Human Owner originally reported.
+  const composer = page.getByTestId('chat-message-input')
+  const rail = page.getByTestId('workspace-role-rail')
+  const composerTopBefore = (await composer.boundingBox())?.y
+  const railTopBefore = (await rail.boundingBox())?.y
 
   // Wait for any pending AI responses from the loop to settle so that the
   // next single message arrives alone (gap < 80px threshold).
@@ -582,6 +592,10 @@ test('13.19 message feed scrolls via real browser wheel and auto-scrolls during 
 
   // Feed should have scrolled away from top
   await expect.poll(() => feed.evaluate((el) => el.scrollTop), { timeout: 2000 }).toBeGreaterThan(0)
+
+  // …and the fixed frame must have stayed put while it did.
+  expect((await composer.boundingBox())?.y, '輸入框必須固定，不得隨捲動移動').toBe(composerTopBefore)
+  expect((await rail.boundingBox())?.y, '角色列必須固定，不得隨捲動移動').toBe(railTopBefore)
 
   // ── Auto-scroll assertion ──────────────────────────────────────────────────
   // Verify the auto-scroll watch (ConversationWorkspace.vue:120-133) keeps

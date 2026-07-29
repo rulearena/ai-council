@@ -240,59 +240,67 @@ async function retryRole(roleId: string) {
 <template>
   <section v-if="workspace && selectedMeeting" class="conversation-workspace" data-testid="conversation-workspace">
     <nav class="workspace-role-rail" data-testid="workspace-role-rail" aria-label="與會角色">
+      <!-- The seat is a plain container; the primary action is a real <button>, so the
+           ℹ control and the model control sit beside it rather than nested inside an
+           interactive element. Keyboard activation comes from the button itself. -->
       <div
-        type="button"
-        class="workspace-role-button workspace-role-chairman"
+        class="workspace-role-seat workspace-role-chairman"
         :class="{ active: selectedRoleId === 'Chairman' }"
-        data-testid="role-seat-chairman"
-        data-status="chairman"
-        role="button"
-        tabindex="0"
-        aria-label="主席"
-        :aria-pressed="selectedRoleId === 'Chairman'"
-        @click="selectRole('Chairman')"
-        @keydown.enter.self="selectRole('Chairman')"
-        @keydown.space.self.prevent="selectRole('Chairman')"
       >
-        <span class="workspace-role-avatar"><RoleSilhouette color="currentColor" :size="26" /></span>
-        <span class="workspace-role-name">主席</span>
+        <button
+          type="button"
+          class="workspace-role-button"
+          data-testid="role-seat-chairman"
+          data-status="chairman"
+          aria-label="主席"
+          :aria-pressed="selectedRoleId === 'Chairman'"
+          @click="selectRole('Chairman')"
+        >
+          <span class="workspace-role-avatar"><RoleSilhouette color="currentColor" :size="26" /></span>
+          <span class="workspace-role-name">主席</span>
+          <span v-if="latestChairMessage" class="visually-hidden">{{ latestChairMessage }}</span>
+        </button>
         <button
           type="button"
           class="workspace-role-info-btn"
           data-testid="role-seat-chairman-info"
           aria-label="主席詳情"
-          @click.stop="$emit('role-click', 'Chairman')"
+          @click="$emit('role-click', 'Chairman')"
         >ℹ</button>
-        <span v-if="latestChairMessage" class="visually-hidden">{{ latestChairMessage }}</span>
       </div>
       <div
         v-for="role in workspace.roles"
         :key="role.roleId"
-        class="workspace-role-button"
+        class="workspace-role-seat"
         :class="[roleClass(role.roleId), { active: selectedRoleId === role.roleId }]"
         :style="roleColorVars(role.roleId)"
-        :data-testid="`role-seat-${role.roleId.toLowerCase()}`"
-        :data-status="role.state"
-        role="button"
-        tabindex="0"
-        :aria-label="`${role.name}，${roleStateLabel(role.state)}`"
-        :aria-pressed="selectedRoleId === role.roleId"
-        @click="selectRole(role.roleId)"
-        @keydown.enter.self="selectRole(role.roleId)"
-        @keydown.space.self.prevent="selectRole(role.roleId)"
       >
-        <span class="workspace-role-avatar">
-          <img v-if="roleIcon(role.roleId)" :src="roleIcon(role.roleId)" :alt="role.name" />
-          <RoleSilhouette v-else :color="'var(--role-color)'" :size="26" />
-          <i v-if="role.state === 'thinking'" class="workspace-thinking-pulse" aria-hidden="true"></i>
-        </span>
-        <span class="workspace-role-name">{{ role.name }}</span>
-        <span class="workspace-role-state">{{ roleStateLabel(role.state) }}</span>
-        <span v-if="openModelSeatId !== role.roleId" class="workspace-role-model"
-          :title="roleModelLabel(role.roleId)"
+        <button
+          type="button"
+          class="workspace-role-button"
+          :data-testid="`role-seat-${role.roleId.toLowerCase()}`"
+          :data-status="role.state"
+          :aria-label="`${role.name}，${roleStateLabel(role.state)}`"
+          :aria-pressed="selectedRoleId === role.roleId"
+          @click="selectRole(role.roleId)"
+        >
+          <span class="workspace-role-avatar">
+            <img v-if="roleIcon(role.roleId)" :src="roleIcon(role.roleId)" :alt="role.name" />
+            <RoleSilhouette v-else :color="'var(--role-color)'" :size="26" />
+            <i v-if="role.state === 'thinking'" class="workspace-thinking-pulse" aria-hidden="true"></i>
+          </span>
+          <span class="workspace-role-name">{{ role.name }}</span>
+          <span class="workspace-role-state">{{ roleStateLabel(role.state) }}</span>
+        </button>
+        <button v-if="openModelSeatId !== role.roleId" type="button" class="workspace-role-model"
+          :title="isMeetingRunning ? '會議執行中無法更換模型' : `目前模型：${roleModelLabel(role.roleId)}（點擊更換）`"
+          :aria-label="`更換${role.name}的模型，目前為 ${roleModelLabel(role.roleId)}`"
           :data-testid="`seat-model-label-${role.roleId.toLowerCase()}`"
-          @click.stop="toggleModelSelect(role.roleId)"
-        >{{ roleModelLabel(role.roleId) }}</span>
+          @click="toggleModelSelect(role.roleId)"
+        >
+          <span class="workspace-role-model-text">{{ roleModelLabel(role.roleId) }}</span>
+          <svg class="workspace-role-model-caret" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 9l6 6 6-6" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </button>
         <select v-else class="workspace-role-model-select"
           :data-testid="`seat-model-select-${role.roleId.toLowerCase()}`"
           :value="selectedModels[role.roleId]"

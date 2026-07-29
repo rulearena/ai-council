@@ -836,25 +836,42 @@ h2 {
   gap: 8px;
 }
 
-.workspace-role-button {
+/* The seat box. Its children — primary button, model switcher, ℹ — are siblings, so
+   no interactive element is nested inside another. */
+.workspace-role-seat {
   position: relative;
   display: grid;
+  /* minmax(0, 1fr) stops a wide child (the model name) from widening the column
+     and overflowing the 92px rail. */
+  grid-template-columns: minmax(0, 1fr);
   justify-items: center;
   gap: 3px;
   min-width: 0;
   padding: 8px 3px;
   border: 1px solid transparent;
-  border-color: transparent;
-  background: transparent;
+  border-radius: var(--radius-md);
   color: var(--color-text-secondary);
-  cursor: pointer;
 }
 
-.workspace-role-button:hover:not(:disabled),
-.workspace-role-button.active {
+.workspace-role-seat:hover,
+.workspace-role-seat:focus-within,
+.workspace-role-seat.active {
   border-color: var(--role-color, var(--color-border-strong));
   background: var(--role-tint, var(--color-bg-elevated));
   color: var(--color-text);
+}
+
+.workspace-role-button {
+  display: grid;
+  justify-items: center;
+  gap: 3px;
+  width: 100%;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
 }
 
 .workspace-role-avatar {
@@ -886,8 +903,7 @@ h2 {
 }
 
 .workspace-role-name,
-.workspace-role-state,
-.workspace-role-model {
+.workspace-role-state {
   display: block;
   max-width: 100%;
   overflow: hidden;
@@ -897,8 +913,51 @@ h2 {
 
 .workspace-role-name { font-size: 11px; font-weight: 700; }
 .workspace-role-state { font-size: 10px; color: var(--color-text-muted); }
-.workspace-role-model { font-family: var(--font-mono); font-size: 8px; color: var(--color-text-muted); cursor: pointer; }
-.workspace-role-model:hover { color: var(--color-text); }
+
+/* Reads as a control, not a status label: bordered, filled, with a caret and a
+   44px-tall hit area. Previously a bare <span> of muted 8px text, which nobody
+   could tell was clickable. */
+.workspace-role-model {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+  min-height: 24px;
+  margin-top: 2px;
+  padding: 3px 2px;
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface);
+  color: var(--color-text-secondary);
+  font-family: var(--font-mono);
+  font-size: 9px;
+  cursor: pointer;
+  transition: border-color var(--transition-fast), background var(--transition-fast), color var(--transition-fast);
+}
+
+.workspace-role-model:hover,
+.workspace-role-model:focus-visible {
+  border-color: var(--role-color, var(--color-primary));
+  background: var(--color-bg-elevated);
+  color: var(--color-text);
+}
+
+.workspace-role-model-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.workspace-role-model-caret {
+  flex: 0 0 auto;
+  width: 10px;
+  height: 10px;
+  opacity: 0.8;
+}
 
 .workspace-role-model-select {
   width: 100%;
@@ -929,11 +988,18 @@ h2 {
   opacity: 0;
   transition: opacity 0.15s;
 }
-.workspace-role-button:hover .workspace-role-info-btn,
+.workspace-role-seat:hover .workspace-role-info-btn,
 .workspace-role-info-btn:focus-visible {
   opacity: 1;
 }
-.workspace-role-button.active {
+
+/* Touch devices have no hover, so a hover-only reveal makes ℹ permanently
+   invisible there — and it is the only way into the role detail view. */
+@media (hover: none) {
+  .workspace-role-info-btn { opacity: 1; }
+}
+
+.workspace-role-seat.active {
   box-shadow: inset 0 0 0 2px var(--role-color, var(--color-border-strong));
 }
 
@@ -2565,9 +2631,12 @@ pre {
 }
 
 @media (max-width: 640px) {
-  .app-shell-court-hearing {
+  /* Narrow layouts stack the workspace vertically and are meant to scroll as a
+     page, so the desktop viewport cap is released here. Keeping it would clip the
+     stacked content instead of letting it scroll. */
+  .app-shell {
     height: auto;
-    min-height: 100vh;
+    min-height: 100dvh;
     overflow: visible;
   }
 
@@ -2676,11 +2745,11 @@ pre {
     border-bottom: 1px solid var(--color-border);
   }
 
-  .workspace-role-button { flex: 0 0 66px; padding: 5px 3px; }
+  .workspace-role-seat { flex: 0 0 66px; padding: 5px 3px; }
   .workspace-role-avatar { width: 34px; height: 34px; }
   .workspace-role-avatar img { width: 22px; height: 22px; }
   .workspace-role-state { display: none; }
-  .workspace-role-model { max-width: 60px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 0.65rem; }
+  .workspace-role-model { max-width: 60px; font-size: 0.65rem; }
   .workspace-conversation-column { min-height: 70dvh; }
   .workspace-conversation-header { min-height: 55px; padding: 8px 12px; }
   .workspace-message-feed { padding: 14px 10px; }
