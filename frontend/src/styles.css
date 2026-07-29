@@ -816,12 +816,20 @@ h2 {
    the old `calc(100dvh - 116px)` assumed a top-bar height that no longer exists
    and was overridden by `flex: 1` anyway. */
 .conversation-workspace {
+  --rail-width: 116px;
   flex: 1;
   min-height: 0;
   display: grid;
-  grid-template-columns: 92px minmax(0, 1fr) minmax(230px, 300px);
+  grid-template-columns: var(--rail-width) minmax(0, 1fr) minmax(240px, 300px);
   border-top: 1px solid var(--color-border-faint);
   background: var(--color-bg);
+}
+
+/* Collapsing the context panel has to give its width back to the transcript —
+   otherwise the column keeps its track and the panel just shrinks inside it,
+   leaving ~248px of dead space. */
+.conversation-workspace.context-collapsed {
+  grid-template-columns: var(--rail-width) minmax(0, 1fr) 52px;
 }
 
 .workspace-role-rail {
@@ -911,8 +919,8 @@ h2 {
   white-space: nowrap;
 }
 
-.workspace-role-name { font-size: 11px; font-weight: 700; }
-.workspace-role-state { font-size: 10px; color: var(--color-text-muted); }
+.workspace-role-name { font-size: 12px; font-weight: 700; }
+.workspace-role-state { font-size: 11px; color: var(--color-text-muted); }
 
 /* Reads as a control, not a status label: bordered, filled, with a caret and a
    44px-tall hit area. Previously a bare <span> of muted 8px text, which nobody
@@ -925,15 +933,15 @@ h2 {
   width: 100%;
   min-width: 0;
   max-width: 100%;
-  min-height: 24px;
-  margin-top: 2px;
-  padding: 3px 2px;
+  min-height: 32px;
+  margin-top: 4px;
+  padding: 5px 4px;
   border: 1px solid var(--color-border-strong);
   border-radius: var(--radius-sm);
   background: var(--color-surface);
   color: var(--color-text-secondary);
   font-family: var(--font-mono);
-  font-size: 9px;
+  font-size: 11px;
   cursor: pointer;
   transition: border-color var(--transition-fast), background var(--transition-fast), color var(--transition-fast);
 }
@@ -962,7 +970,8 @@ h2 {
 .workspace-role-model-select {
   width: 100%;
   font-family: var(--font-mono);
-  font-size: 8px;
+  font-size: 11px;
+  min-height: 32px;
   color: var(--color-text);
   background: var(--color-surface);
   border: 1px solid var(--color-border);
@@ -1259,6 +1268,62 @@ h2 {
   font-size: 12px;
 }
 
+/* The timeline was designed for a wide drawer. Dropped into the ~300px context
+   panel each entry cost ~150px: the action column stole a third of the width, the
+   flex row wrapped one field per line, and every entry repeated the role name and
+   a "completed" badge that is true of nearly all of them. Scanning 20 messages
+   meant scrolling forever. */
+/* Flex (not the wide-drawer grid) so the secondary actions sit side by side under
+   the entry instead of claiming one full row each. They stay visible and clickable
+   — hiding them behind hover would break both touch and the e2e suite. */
+.records-inline .timeline-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0 6px;
+  margin-top: 4px;
+}
+
+.records-inline .timeline-main { flex: 1 1 100%; }
+
+.records-inline .timeline-row > .btn {
+  margin: 0 0 6px 8px;
+  padding: 2px 9px;
+  font-size: 11px;
+}
+
+.records-inline .timeline-main {
+  gap: 2px 8px;
+  padding: 6px 8px;
+}
+
+/* Role identity is already carried by the coloured badge and left border. */
+.records-inline .timeline-main > strong {
+  order: 3;
+  flex-basis: 100%;
+  color: var(--color-text-muted);
+  font-size: 11px;
+  font-weight: 400;
+}
+
+/* Only surface a status that needs attention; "completed" is the norm here. */
+.records-inline .status-badge[data-status="completed"] {
+  display: none;
+}
+
+.records-inline .timeline-main > small {
+  margin-left: auto;
+  color: var(--color-text-muted);
+  font-size: 11px;
+}
+
+.records-inline .timeline-content {
+  flex-basis: 100%;
+  margin: 2px 0 0;
+  color: var(--color-text);
+}
+
+
 .scene-lightbox {
   width: min(90vw, 800px);
 }
@@ -1364,6 +1429,15 @@ h2 {
 
 .advanced-options {
   position: relative;
+}
+
+/* The legacy title/goal form is a blocking gate — nothing may run until it is
+   saved — so it has to outrank the advanced-options popover, which is anchored
+   above the action bar and would otherwise cover its save button whenever the
+   column is narrow enough for the row to wrap. */
+.meeting-goal-migration {
+  position: relative;
+  z-index: 21;
 }
 
 .advanced-options-panel {

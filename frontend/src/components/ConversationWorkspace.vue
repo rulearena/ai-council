@@ -258,7 +258,12 @@ async function retryRole(roleId: string) {
 </script>
 
 <template>
-  <section v-if="workspace && selectedMeeting" class="conversation-workspace" data-testid="conversation-workspace">
+  <section
+    v-if="workspace && selectedMeeting"
+    class="conversation-workspace"
+    :class="{ 'context-collapsed': contextCollapsed }"
+    data-testid="conversation-workspace"
+  >
     <nav class="workspace-role-rail" data-testid="workspace-role-rail" aria-label="與會角色">
       <!-- The seat is a plain container; the primary action is a real <button>, so the
            ℹ control and the model control sit beside it rather than nested inside an

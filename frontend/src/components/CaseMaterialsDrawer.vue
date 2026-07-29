@@ -14,7 +14,7 @@ import {
 } from '../api'
 import { activeMode, councilKey } from '../composables/useCouncil'
 import { roleDisplayName } from '../presentation'
-import { materialImpactGuidance } from '../meetingWorkspace'
+import { materialImpactGuidance, materialVocabulary } from '../meetingWorkspace'
 import Drawer from './Drawer.vue'
 
 const props = defineProps<{ show: boolean }>()
@@ -33,6 +33,8 @@ const participants = computed(() => selectedMeeting.value?.participants ?? [])
 const displayRole = (role: string) => roleDisplayName(activeMode.value, participants.value, role)
 
 const pendingImpactGuidance = computed(() => materialImpactGuidance(selectedMeeting.value?.mode_id ?? ''))
+// 法庭用「證物／案卷」，其他模式用中性的「附件」。
+const vocab = computed(() => materialVocabulary(selectedMeeting.value?.mode_id ?? ''))
 
 function caughtMessage(caught: unknown): string {
   return caught instanceof ApiError && typeof caught.detail === 'string'
@@ -131,18 +133,18 @@ async function toggle(item: VersionedCaseMaterial, kind: 'evidence' | 'note') {
 </script>
 
 <template>
-  <Drawer :show="show" title="案卷與證據" test-id="case-materials-drawer" close-test-id="case-materials-close-button" @close="$emit('close')">
+  <Drawer :show="show" :title="vocab.panelTitle" test-id="case-materials-drawer" close-test-id="case-materials-close-button" @close="$emit('close')">
     <div v-if="materialsLoadError" class="error" data-testid="materials-load-error">
       <p>{{ materialsLoadError }}</p>
       <button type="button" class="btn btn-secondary btn-sm" data-testid="retry-materials-load-button" :disabled="materialsLoading" @click="selectedMeeting && loadMaterials(selectedMeeting.meeting_id)">重新載入</button>
     </div>
     <template v-if="selectedMeeting && materials">
       <section v-if="materials.pending_impact" class="materials-impact-warning" data-testid="materials-impact-warning">
-        <strong>案卷已在 AI 發言後變更</strong>
+        <strong>{{ vocab.changedTitle }}</strong>
         <p>{{ pendingImpactGuidance }}</p>
       </section>
       <section class="materials-section">
-        <h3>證物（{{ materials.evidence.filter(item => item.status === 'active').length }}）</h3>
+        <h3>{{ vocab.itemPlural }}（{{ materials.evidence.filter(item => item.status === 'active').length }}）</h3>
         <article v-for="item in materials.evidence" :key="item.id" class="material-card" :data-status="item.status" :data-material-id="item.id" data-testid="case-evidence-card">
           <header><strong>{{ item.citation_anchor }} · {{ latest(item).title }}</strong><span>v{{ item.active_version }} · {{ item.status === 'active' ? '使用中' : '已停用' }}</span></header>
           <p>{{ latest(item).content }}</p>
@@ -151,7 +153,7 @@ async function toggle(item: VersionedCaseMaterial, kind: 'evidence' | 'note') {
         </article>
       </section>
       <section class="materials-section">
-        <h3>案件備註（{{ materials.notes.filter(item => item.status === 'active').length }}）</h3>
+        <h3>{{ vocab.notePlural }}（{{ materials.notes.filter(item => item.status === 'active').length }}）</h3>
         <article v-for="item in materials.notes" :key="item.id" class="material-card" :data-status="item.status" :data-material-id="item.id" data-testid="case-note-card">
           <header><strong>{{ latest(item).title }}</strong><span>v{{ item.active_version }} · {{ item.status === 'active' ? '使用中' : '已停用' }}</span></header>
           <p>{{ latest(item).content }}</p>
@@ -160,8 +162,8 @@ async function toggle(item: VersionedCaseMaterial, kind: 'evidence' | 'note') {
         </article>
       </section>
       <form class="material-form" data-testid="case-material-form" @submit.prevent="saveMaterial">
-        <h3>{{ editingId ? '建立新版本' : formKind === 'evidence' ? '新增證物' : '新增案件備註' }}</h3>
-        <div v-if="!editingId" class="segmented"><button type="button" :class="{ active: formKind === 'evidence' }" @click="formKind = 'evidence'">證物</button><button type="button" :class="{ active: formKind === 'note' }" @click="formKind = 'note'">案件備註</button></div>
+        <h3>{{ editingId ? '建立新版本' : formKind === 'evidence' ? vocab.addItem : vocab.addNote }}</h3>
+        <div v-if="!editingId" class="segmented"><button type="button" :class="{ active: formKind === 'evidence' }" @click="formKind = 'evidence'">{{ vocab.itemPlural }}</button><button type="button" :class="{ active: formKind === 'note' }" @click="formKind = 'note'">{{ vocab.notePlural }}</button></div>
         <label>標題<input v-model="form.title" :disabled="loading" /></label>
         <label>內容<textarea v-model="form.content" :disabled="loading" /></label>
         <fieldset><legend>可見角色</legend><label v-for="participant in participants" :key="participant.role_id"><input v-model="form.visibleRoles" type="checkbox" :value="participant.role_id" />{{ displayRole(participant.role_id) }}</label></fieldset>
@@ -169,6 +171,6 @@ async function toggle(item: VersionedCaseMaterial, kind: 'evidence' | 'note') {
         <div><button type="submit" class="btn btn-primary" :disabled="loading || !form.title.trim() || !form.content.trim() || !form.visibleRoles.length">{{ editingId ? '保存新版本' : '新增' }}</button><button v-if="editingId" type="button" class="btn btn-secondary" @click="clearForm">取消</button></div>
       </form>
     </template>
-    <p v-else-if="!materialsLoadError" class="empty-state">{{ selectedMeeting ? '正在載入案卷…' : '請先選擇會議。' }}</p>
+    <p v-else-if="!materialsLoadError" class="empty-state">{{ selectedMeeting ? vocab.loading : '請先選擇會議。' }}</p>
   </Drawer>
 </template>

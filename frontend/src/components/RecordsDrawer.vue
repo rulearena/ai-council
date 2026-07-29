@@ -5,7 +5,7 @@ import Drawer from './Drawer.vue'
 import RoleSilhouette from './RoleSilhouette.vue'
 import { ApiError, getCaseMaterials, getDeliberations, getTranscript, promoteMessageToCaseNote, transcriptDownloadUrl } from '../api'
 import type { CaseMaterials, Deliberations, MeetingEvent, VersionedCaseMaterial } from '../api'
-import { nextHistorySelection } from '../meetingWorkspace'
+import { materialVocabulary, nextHistorySelection } from '../meetingWorkspace'
 import { eventRoleDisplayName, roleDisplayName, statusDisplayLabel, stepDisplayLabel } from '../presentation'
 
 const props = defineProps<{ show: boolean; inline?: boolean }>()
@@ -26,6 +26,9 @@ const {
   openMeeting,
   runAction,
 } = store
+
+// 與案卷抽屜共用同一組模式感知用語：法庭說「證物／案件備註」，其他模式說「附件／備註」。
+const vocab = computed(() => materialVocabulary(selectedMeeting.value?.mode_id ?? ''))
 
 type RecordsTab = 'timeline' | 'transcript' | 'debug'
 const activeTab = ref<RecordsTab>('timeline')
@@ -256,8 +259,8 @@ async function promoteToCaseNote() {
     <p v-if="!browsingCurrent" class="archive-notice">正在查看封存輪次。這裡只能閱讀或下載，不會替換目前會議，也不能編輯或重試。</p>
     <section v-if="!browsingCurrent" class="archived-materials" data-testid="archived-materials-snapshot">
       <template v-if="archivedMaterials">
-        <h3>本輪使用的案卷（修訂 {{ archivedMaterials.revision }}）</h3>
-        <p>以下是這一輪審議當時可用的證據與備註，不會替換目前案卷。</p>
+        <h3>本輪使用的{{ vocab.panelTitle }}（修訂 {{ archivedMaterials.revision }}）</h3>
+        <p>以下是這一輪當時可用的{{ vocab.itemPlural }}與{{ vocab.notePlural }}，不會替換目前內容。</p>
         <article v-for="item in archivedMaterials.evidence" :key="`evidence-${item.id}`" data-testid="archived-evidence-card">
           <strong>證據：{{ activeMaterialVersion(item)?.title }}</strong>
           <span>v{{ item.active_version }} · {{ item.status === 'active' ? '使用中' : '已停用' }}</span>
@@ -270,13 +273,13 @@ async function promoteToCaseNote() {
           <p>{{ activeMaterialVersion(item)?.content }}</p>
           <small>可見：{{ visibleRoleNames(item) }}</small>
         </article>
-        <p v-if="!archivedMaterials.evidence.length && !archivedMaterials.notes.length">本輪沒有案卷資料。</p>
+        <p v-if="!archivedMaterials.evidence.length && !archivedMaterials.notes.length">本輪沒有{{ vocab.panelTitle }}資料。</p>
       </template>
-      <p v-else-if="archivedMaterialsUnavailable" data-testid="archived-materials-unavailable">這個舊輪次沒有記錄案卷修訂，因此無法還原當時的證據與備註；目前案卷不受影響。</p>
-      <p v-else>正在載入本輪案卷…</p>
+      <p v-else-if="archivedMaterialsUnavailable" data-testid="archived-materials-unavailable">這個舊輪次沒有記錄修訂，因此無法還原當時的{{ vocab.itemPlural }}與{{ vocab.notePlural }}；目前內容不受影響。</p>
+      <p v-else>{{ vocab.loading }}</p>
     </section>
     <form v-if="promotionEvent" class="material-form" data-testid="promote-case-note-form" @submit.prevent="promoteToCaseNote">
-      <h3>轉為案件備註</h3>
+      <h3>轉為{{ vocab.notePlural }}</h3>
       <label>備註標題<input v-model="promotionTitle" data-testid="promote-case-note-title" :disabled="loading" /></label>
       <fieldset><legend>可見角色</legend><label v-for="participant in participants" :key="participant.role_id"><input v-model="promotionVisibleRoles" type="checkbox" :value="participant.role_id" :disabled="loading" />{{ displayParticipantRole(participant.role_id) }}</label></fieldset>
       <div><button type="submit" class="btn btn-primary" data-testid="confirm-promote-case-note" :disabled="loading || !promotionTitle.trim() || !promotionVisibleRoles.length">建立備註</button><button type="button" class="btn btn-secondary" :disabled="loading" @click="promotionEvent = null">取消</button></div>
@@ -356,7 +359,7 @@ async function promoteToCaseNote() {
           data-testid="promote-case-note-button"
           :disabled="loading || isTerminalMeeting"
           @click="beginPromotion(event)"
-        >轉為案件備註</button>
+        >轉為{{ vocab.notePlural }}</button>
         <button
           v-if="event.role === 'Human' && event.step_id === 'human-message' && !event.corrects_event_id"
           type="button"

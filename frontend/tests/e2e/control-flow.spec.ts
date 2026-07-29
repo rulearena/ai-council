@@ -2845,7 +2845,8 @@ test('archived records show their historical case-material revision without repl
   await expect(page.getByTestId('archived-materials-unavailable')).toHaveCount(0)
   await page.getByTestId('retry-records-load-button').click()
   const snapshot = page.getByTestId('archived-materials-snapshot')
-  await expect(snapshot).toContainText('本輪使用的案卷（修訂 1）')
+  // 非法庭模式使用中性用語（見 materialVocabulary）；法庭才說「案卷／證物」。
+  await expect(snapshot).toContainText('本輪使用的附件與資料（修訂 1）')
   await expect(page.getByTestId('archived-evidence-card')).toContainText('原始證據')
   await expect(page.getByTestId('archived-evidence-card')).toContainText('v1 · 使用中')
   await expect(page.getByTestId('archived-evidence-card')).toContainText('可見：藍軍、裁判')
@@ -2881,8 +2882,8 @@ test('archived records explain when a legacy epoch has no recoverable material r
   const epochSelect = page.getByTestId('records-epoch-select')
   const archivedEpoch = await epochSelect.locator('option').first().getAttribute('value')
   await epochSelect.selectOption(archivedEpoch!)
-  await expect(page.getByTestId('archived-materials-unavailable')).toContainText('無法還原當時的證據與備註')
-  await expect(page.getByTestId('archived-materials-unavailable')).toContainText('目前案卷不受影響')
+  await expect(page.getByTestId('archived-materials-unavailable')).toContainText('無法還原當時的附件與備註')
+  await expect(page.getByTestId('archived-materials-unavailable')).toContainText('目前內容不受影響')
 })
 
 test('versioned evidence and promoted notes trigger a visible restart gate', async ({ page }) => {

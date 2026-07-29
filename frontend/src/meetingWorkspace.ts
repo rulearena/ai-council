@@ -95,6 +95,43 @@ export function materialImpactGuidance(modeId: string): string {
     : '為避免新舊資料混用，目前已暫停 AI。請到「流程操作」輸入原因並重開全部審議。'
 }
 
+export type MaterialVocabulary = {
+  panelTitle: string
+  itemPlural: string
+  notePlural: string
+  addItem: string
+  addNote: string
+  changedTitle: string
+  loading: string
+}
+
+/**
+ * 「證物／案卷」是法庭用語。其他模式（聊天室、接力、平行）附加的只是參考檔案，
+ * 沿用法庭詞彙會讓使用者困惑，因此依模式切換，與 materialImpactGuidance 一致。
+ */
+export function materialVocabulary(modeId: string): MaterialVocabulary {
+  if (modeId === 'courtroom') {
+    return {
+      panelTitle: '案卷與證據',
+      itemPlural: '證物',
+      notePlural: '案件備註',
+      addItem: '新增證物',
+      addNote: '新增案件備註',
+      changedTitle: '案卷已在 AI 發言後變更',
+      loading: '正在載入案卷…',
+    }
+  }
+  return {
+    panelTitle: '附件與資料',
+    itemPlural: '附件',
+    notePlural: '備註',
+    addItem: '新增附件',
+    addNote: '新增備註',
+    changedTitle: '附件已在 AI 發言後變更',
+    loading: '正在載入附件…',
+  }
+}
+
 type WorkspaceParticipant = {
   role_id: string
   display_name?: string | null
