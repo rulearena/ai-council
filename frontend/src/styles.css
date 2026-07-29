@@ -286,13 +286,13 @@ h2 {
 
 /* ---------- App shell: top bar / stage / action bar, stacked vertically ---------- */
 
+/* The shell is capped at the viewport so the page itself never scrolls: the only
+   scroll container is the message feed. Without the cap the shell grows with the
+   transcript, which drags the composer and both rails out of view. Court hearing
+   already relied on this; it now applies to every mode. */
 .app-shell {
   display: flex;
   flex-direction: column;
-  min-height: 100vh;
-}
-
-.app-shell-court-hearing {
   height: 100dvh;
   min-height: 0;
   overflow: hidden;
@@ -812,12 +812,14 @@ h2 {
 
 /* ---------- Conversation workspace: role rail / chronological feed / context ---------- */
 
+/* Height comes from the shell's flex row, not a hardcoded viewport subtraction —
+   the old `calc(100dvh - 116px)` assumed a top-bar height that no longer exists
+   and was overridden by `flex: 1` anyway. */
 .conversation-workspace {
   flex: 1;
   min-height: 0;
   display: grid;
   grid-template-columns: 92px minmax(0, 1fr) minmax(230px, 300px);
-  height: calc(100dvh - 116px);
   border-top: 1px solid var(--color-border-faint);
   background: var(--color-bg);
 }
