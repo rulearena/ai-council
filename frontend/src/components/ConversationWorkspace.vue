@@ -178,6 +178,21 @@ watch(
   },
 )
 
+// A chat opens on its newest message, not its oldest. Without this the feed sat at
+// scrollTop 0 showing the start of the transcript, and anything the Chairman sent
+// landed off-screen below — the composer cleared, nothing visibly happened, and it
+// read as "the message didn't send".
+onMounted(() => { nextTick(() => { scrollToBottom() }) })
+watch(() => selectedMeeting.value?.meeting_id, () => {
+  nextTick(() => { scrollToBottom() })
+})
+
+// Sending is an explicit act: always jump to your own message, wherever the feed was.
+function onOwnMessageSent() {
+  quotedMessage.value = null
+  nextTick(() => { scrollToBottom() })
+}
+
 function roleState(roleId: string) {
   return workspace.value?.roles.find((role) => role.roleId === roleId)?.state ?? 'waiting'
 }
@@ -457,7 +472,7 @@ async function retryRole(roleId: string) {
         :material-count="materialCount"
         v-model:quoted-message="quotedMessage"
         @open-materials="emit('open-materials')"
-        @message-sent="quotedMessage = null"
+        @message-sent="onOwnMessageSent"
       />
       <ActionBar v-else embedded @open-materials="emit('open-materials')" />
     </section>

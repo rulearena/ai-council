@@ -629,6 +629,50 @@ test('13.19 message feed scrolls via real browser wheel and auto-scrolls during 
   ).toBeGreaterThan(scrollTopBefore)
 })
 
+// ── 13.21 ────────────────────────────────────────────────────────────────────
+
+test('13.21 feed opens on the newest message and a sent message is always visible', async ({ page }) => {
+  test.setTimeout(60_000)
+  await page.setViewportSize({ width: 1024, height: 600 })
+  await page.goto('/')
+  const title = `E2E chatroom open-at-bottom ${Date.now()}`
+  const meetingId = await createChatroomMeeting(page, title, { modelAssignments: defaultModels })
+  const feed = page.getByTestId('workspace-message-feed')
+  await expect(feed).toBeVisible()
+
+  // Seed enough history to overflow, straight through the API.
+  const apiOrigin = process.env.E2E_API_BASE_URL ?? 'http://127.0.0.1:5009'
+  for (let i = 0; i < 20; i++) {
+    await page.request.post(`${apiOrigin}/meetings/${meetingId}/messages`, {
+      data: { content: `歷史訊息 ${i}` },
+    })
+  }
+  await expect(feed).toContainText('歷史訊息 19')
+  expect(await feed.evaluate((el) => el.scrollHeight > el.clientHeight)).toBe(true)
+
+  // Reopen the meeting: a chat must land on its newest message, not its oldest.
+  await page.reload()
+  await page.getByTestId('past-topics-button').click()
+  await page.getByTestId('meeting-list-item').filter({ hasText: title }).locator('.meeting-item').click()
+  await expect(feed).toBeVisible()
+  await expect(feed).toContainText('歷史訊息 19')
+  await expect
+    .poll(() => feed.evaluate((el) => el.scrollHeight - el.scrollTop - el.clientHeight), { timeout: 5000 })
+    .toBeLessThan(80)
+
+  // Scroll away, then send: the Chairman's own message must be brought into view.
+  // Without this the composer cleared while the feed stayed put, which reads as
+  // "the message never sent".
+  await feed.evaluate((el) => { el.scrollTop = 0 })
+  await expect.poll(() => feed.evaluate((el) => el.scrollTop)).toBe(0)
+  await page.getByTestId('chat-message-input').fill('送出後必須看得到')
+  await page.getByTestId('send-chat-message-button').click()
+  await expect(feed).toContainText('送出後必須看得到')
+  await expect
+    .poll(() => feed.evaluate((el) => el.scrollHeight - el.scrollTop - el.clientHeight), { timeout: 5000 })
+    .toBeLessThan(80)
+})
+
 // ── 13.20 ──────────────────────────────────────────────────────────────────
 
 test('13.20 switch role model at 375px viewport', async ({ page }) => {
