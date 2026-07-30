@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { computed, nextTick, ref, useId, watch } from 'vue'
 import type { ChairmanParticipant } from '../chairmanActions'
 import {
   detectMentionTrigger,
@@ -8,6 +8,7 @@ import {
   selectMentionOption,
   shouldShowMentionAutocomplete,
 } from '../composables/useMentionAutocomplete'
+import type { MentionOption } from '../composables/useMentionAutocomplete'
 
 const props = defineProps<{
   modelValue: string
@@ -32,6 +33,23 @@ const menuItems = computed(() => {
 
 const showMenu = computed(() => isOpen.value && menuItems.value.length > 0)
 
+// The menu is the listbox and the composer's textarea is what keeps focus, so the
+// active option has to be named by id for a screen reader to follow the selection.
+const uid = useId()
+const menuId = `mention-menu-${uid}`
+const optionId = (index: number) => `${menuId}-option-${index}`
+const activeOptionId = computed(() => (showMenu.value ? optionId(activeIndex.value) : undefined))
+
+const menuRef = ref<HTMLUListElement | null>(null)
+watch([activeIndex, showMenu], () => {
+  if (!showMenu.value) return
+  // The menu caps its height and scrolls, so arrowing past the fold has to bring the
+  // active option along or keyboard navigation walks out of sight.
+  nextTick(() => {
+    menuRef.value?.querySelector('.mention-option-active')?.scrollIntoView({ block: 'nearest' })
+  })
+})
+
 watch(() => props.modelValue, (text) => {
   if (!shouldShowMentionAutocomplete(props.modeCategory)) {
     isOpen.value = false
@@ -48,73 +66,55 @@ watch(() => props.modelValue, (text) => {
   }
 })
 
-function onInput(event: Event) {
-  const target = event.target as HTMLTextAreaElement
-  const text = target.value
-  emit('update:modelValue', text)
-
-  if (!shouldShowMentionAutocomplete(props.modeCategory)) {
-    isOpen.value = false
-    return
-  }
-
-  const trigger = detectMentionTrigger(text)
-  if (trigger.triggered) {
-    isOpen.value = true
-    filterText.value = trigger.filterText
-    activeIndex.value = 0
-  } else {
-    isOpen.value = false
-  }
+const NAVIGATION_KEYS: Record<string, 'escape' | 'enter' | 'tab' | 'arrow-down' | 'arrow-up'> = {
+  Escape: 'escape',
+  Enter: 'enter',
+  Tab: 'tab',
+  ArrowDown: 'arrow-down',
+  ArrowUp: 'arrow-up',
 }
 
-function onKeyDown(event: KeyboardEvent) {
-  if (!isOpen.value) return
+/**
+ * Handles a keystroke aimed at the open menu. Returns whether the key was consumed, so
+ * the composer knows to stop rather than also treating Enter as send.
+ */
+function handleKeyDown(event: KeyboardEvent): boolean {
+  // Only claim a key when there is actually a menu to act on. `isOpen` can be true with
+  // nothing matching the filter, and claiming Enter there would swallow it entirely:
+  // no option to select, and no send either.
+  if (!showMenu.value) return false
 
-  if (event.key === 'Escape') {
-    event.preventDefault()
-    isOpen.value = false
-    return
-  }
+  const key = NAVIGATION_KEYS[event.key]
+  if (!key) return false
 
-  if (event.key === 'ArrowDown') {
-    event.preventDefault()
-    const result = resolveMentionInsertion(
-      { open: true, filterText: filterText.value, activeIndex: activeIndex.value },
-      'arrow-down',
-      menuItems.value,
-    )
-    if (result.action === 'navigate') activeIndex.value = result.newActiveIndex
-    return
-  }
+  const result = resolveMentionInsertion(
+    { open: true, filterText: filterText.value, activeIndex: activeIndex.value },
+    key,
+    menuItems.value,
+  )
+  event.preventDefault()
 
-  if (event.key === 'ArrowUp') {
-    event.preventDefault()
-    const result = resolveMentionInsertion(
-      { open: true, filterText: filterText.value, activeIndex: activeIndex.value },
-      'arrow-up',
-      menuItems.value,
-    )
-    if (result.action === 'navigate') activeIndex.value = result.newActiveIndex
-    return
-  }
+  if (result.action === 'navigate') activeIndex.value = result.newActiveIndex
+  else if (result.action === 'select') applySelection(result.selectedOption)
+  else isOpen.value = false
 
-  if (event.key === 'Enter' || event.key === 'Tab') {
-    event.preventDefault()
-    selectItem(activeIndex.value)
-    return
-  }
+  return true
+}
+
+function applySelection(option: MentionOption) {
+  const result = selectMentionOption(props.modelValue, option)
+  emit('update:modelValue', result.text)
+  emit('mention-inserted', option.role_id)
+  isOpen.value = false
 }
 
 function selectItem(index: number) {
   const item = menuItems.value[index]
   if (!item) return
-
-  const result = selectMentionOption(props.modelValue, item)
-  emit('update:modelValue', result.text)
-  emit('mention-inserted', item.role_id)
-  isOpen.value = false
+  applySelection(item)
 }
+
+defineExpose({ handleKeyDown, menuId, activeOptionId, isExpanded: showMenu })
 
 function onMouseenter(index: number) {
   activeIndex.value = index
@@ -127,10 +127,21 @@ function optionLabel(item: { role_id: string; display_name?: string | null; name
 </script>
 
 <template>
-  <div class="mention-autocomplete" data-testid="mention-autocomplete" role="listbox" aria-label="提及成員">
-    <ul v-if="showMenu" class="mention-menu" data-testid="mention-menu">
+  <div class="mention-autocomplete" data-testid="mention-autocomplete">
+    <!-- The listbox role belongs on the menu itself: on the wrapper it announced an
+         empty listbox the whole time the menu was closed. -->
+    <ul
+      v-if="showMenu"
+      :id="menuId"
+      ref="menuRef"
+      class="mention-menu"
+      data-testid="mention-menu"
+      role="listbox"
+      aria-label="提及成員"
+    >
       <li
         v-for="(item, index) in menuItems"
+        :id="optionId(index)"
         :key="item.role_id"
         class="mention-option"
         :class="{ 'mention-option-active': index === activeIndex }"

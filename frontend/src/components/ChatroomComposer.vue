@@ -30,8 +30,22 @@ const sending = ref(false)
 // Enter unable to send at all, which is worse than the bug being fixed here.
 const composing = ref(false)
 
-function onEnterKey(event: KeyboardEvent) {
+const mentionMenu = ref<InstanceType<typeof MentionAutocomplete> | null>(null)
+const mentionExpanded = computed(() => Boolean(mentionMenu.value?.isExpanded))
+const mentionMenuId = computed(() => (mentionExpanded.value ? mentionMenu.value?.menuId : undefined))
+const mentionActiveOptionId = computed(() => mentionMenu.value?.activeOptionId)
+
+function onTextareaKeydown(event: KeyboardEvent) {
+  // The input method comes first and gets every key: Enter confirms a candidate, the
+  // arrows move through them. Nothing here may act until composition is over.
   if (composing.value || event.isComposing) return
+
+  // The mention menu owns the arrows, Enter, Tab and Escape while it is open, and
+  // reports whether it consumed the key so Enter is not also read as send.
+  if (mentionMenu.value?.handleKeyDown(event)) return
+
+  if (event.key !== 'Enter') return
+  if (event.shiftKey || event.ctrlKey || event.altKey || event.metaKey) return
   event.preventDefault()
   void handleSend()
 }
@@ -90,6 +104,7 @@ async function handleSend() {
       >＋{{ props.materialCount ? `（${props.materialCount}）` : '' }}</button>
       <div class="chatroom-composer-input-wrap">
         <MentionAutocomplete
+          ref="mentionMenu"
           v-model="messageText"
           :participants="participants"
           mode-category="chatroom"
@@ -103,10 +118,14 @@ async function handleSend() {
           placeholder="輸入訊息…"
           :disabled="disabled"
           rows="1"
+          aria-autocomplete="list"
+          :aria-expanded="mentionExpanded"
+          :aria-controls="mentionMenuId"
+          :aria-activedescendant="mentionActiveOptionId"
           @compositionstart="composing = true"
           @compositionend="composing = false"
           @blur="composing = false"
-          @keydown.enter.exact="onEnterKey"
+          @keydown="onTextareaKeydown"
         />
       </div>
       <button

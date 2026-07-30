@@ -741,6 +741,94 @@ test('13.23 confirming an IME candidate with Enter does not send the half-typed 
   await expect(input).toHaveValue('')
 })
 
+// ── 13.24 ────────────────────────────────────────────────────────────────────
+
+test('13.24 the mention menu is fully operable from the keyboard', async ({ page }) => {
+  await page.goto('/')
+  const title = `E2E chatroom mention keys ${Date.now()}`
+  await createChatroomMeeting(page, title, { modelAssignments: defaultModels })
+
+  const input = page.getByTestId('chat-message-input')
+  const options = page.getByTestId('mention-option')
+  const menu = page.getByTestId('mention-menu')
+
+  await input.fill('@')
+  await expect(menu).toBeVisible()
+
+  // The menu opens on the first option — 全體成員 — and says so where a screen reader
+  // following the textarea will hear it.
+  await expect(options.nth(0)).toHaveAttribute('aria-selected', 'true')
+  await expect(input).toHaveAttribute('aria-activedescendant', /-option-0$/)
+  await expect(input).toHaveAttribute('aria-expanded', 'true')
+
+  await input.press('ArrowDown')
+  await expect(options.nth(1)).toHaveAttribute('aria-selected', 'true')
+  await expect(options.nth(0)).toHaveAttribute('aria-selected', 'false')
+  await expect(input).toHaveAttribute('aria-activedescendant', /-option-1$/)
+
+  // ArrowUp wraps back past the top rather than sticking.
+  await input.press('ArrowUp')
+  await input.press('ArrowUp')
+  await expect(options.nth(4)).toHaveAttribute('aria-selected', 'true')
+
+  // Escape dismisses without touching the draft and without sending.
+  await input.press('Escape')
+  await expect(menu).not.toBeVisible()
+  await expect(input).toHaveValue('@')
+  await expect(page.getByTestId('workspace-message')).toHaveCount(0)
+
+  // Enter picks the highlighted option instead of sending the draft — the menu owns
+  // the key while it is open, which is the whole point of it being reachable at all.
+  await input.fill('@Advis')
+  await expect(menu).toBeVisible()
+  await input.press('ArrowDown')
+  await input.press('Enter')
+  await expect(menu).not.toBeVisible()
+  await expect(input).toHaveValue('@Advisor ')
+  await expect(page.getByTestId('workspace-message')).toHaveCount(0)
+
+  // With the menu closed, Enter goes back to meaning send.
+  await input.press('Enter')
+  await expect(page.getByTestId('workspace-message-feed')).toContainText('@Advisor')
+  await expect(input).toHaveValue('')
+})
+
+// ── 13.25 ────────────────────────────────────────────────────────────────────
+
+test('13.25 an open mention menu ignores keys that belong to the input method', async ({ page }) => {
+  await page.goto('/')
+  const title = `E2E chatroom mention ime ${Date.now()}`
+  await createChatroomMeeting(page, title, { modelAssignments: defaultModels })
+
+  const input = page.getByTestId('chat-message-input')
+  const options = page.getByTestId('mention-option')
+
+  await input.fill('@')
+  await expect(page.getByTestId('mention-menu')).toBeVisible()
+
+  // An IME uses the arrows to walk its candidate list and Enter to accept one. With the
+  // mention menu open those keystrokes must still reach the input method untouched,
+  // otherwise wiring up the menu just recreates the bug fixed in 13.23 one layer up.
+  await input.evaluate((el: HTMLTextAreaElement) => {
+    el.dispatchEvent(new CompositionEvent('compositionstart', { bubbles: true }))
+    for (const key of ['ArrowDown', 'ArrowDown', 'Enter']) {
+      el.dispatchEvent(new KeyboardEvent('keydown', { key, isComposing: true, bubbles: true }))
+    }
+  })
+
+  await expect(options.nth(0)).toHaveAttribute('aria-selected', 'true')
+  await expect(page.getByTestId('mention-menu')).toBeVisible()
+  await expect(input).toHaveValue('@')
+  await expect(page.getByTestId('workspace-message')).toHaveCount(0)
+
+  // Once composition ends the menu answers to the keyboard again.
+  await input.evaluate((el: HTMLTextAreaElement) => {
+    el.dispatchEvent(new CompositionEvent('compositionend', { bubbles: true }))
+  })
+  await input.press('ArrowDown')
+  await expect(options.nth(1)).toHaveAttribute('aria-selected', 'true')
+})
+
 // ── 13.20 ──────────────────────────────────────────────────────────────────
 
 test('13.20 switch role model at 375px viewport', async ({ page }) => {
