@@ -446,15 +446,20 @@ test('13.15 switch role model directly from the role rail', async ({ page }) => 
   const modelSelect = page.getByTestId('seat-model-select-advisor')
   await expect(modelSelect).toBeVisible()
 
-  // Select a different model (pick second option if available)
+  // No `if (optionCount > 1)` guard: a catalogue too small to switch within is a
+  // broken fixture, not a reason to silently skip. The previous guarded version
+  // reported green while a chatroom model switch was 500-ing on the backend,
+  // because switchSeatModel closes the select even when the save fails.
   const options = modelSelect.locator('option')
-  const optionCount = await options.count()
-  if (optionCount > 1) {
-    const secondValue = await options.nth(1).getAttribute('value')
-    if (secondValue) await modelSelect.selectOption(secondValue)
-    // The label should update (or at least the select should close)
-    await expect(modelSelect).not.toBeVisible()
-  }
+  expect(await options.count(), '模型目錄至少需要兩個模型才能測換模型').toBeGreaterThan(1)
+  const secondValue = await options.nth(1).getAttribute('value')
+  expect(secondValue).toBeTruthy()
+  await modelSelect.selectOption(secondValue!)
+
+  // Assert the switch actually took effect — closing the select proves nothing.
+  await expect(advisorModelLabel).toBeVisible()
+  await expect(advisorModelLabel).not.toHaveText(initialLabel ?? '')
+  await expect(page.getByTestId('assignment-update-error')).toHaveCount(0)
 })
 
 // ── 13.16 ────────────────────────────────────────────────────────────────────
@@ -642,11 +647,15 @@ test('13.20 switch role model at 375px viewport', async ({ page }) => {
   const modelSelect = page.getByTestId('seat-model-select-advisor')
   await expect(modelSelect).toBeVisible()
 
+  // Unguarded, and asserting the switch persisted rather than that the select closed
+  // — see 13.15 for why the old guarded form could not detect a failing save.
   const options = modelSelect.locator('option')
-  const optionCount = await options.count()
-  if (optionCount > 1) {
-    const secondValue = await options.nth(1).getAttribute('value')
-    if (secondValue) await modelSelect.selectOption(secondValue)
-    await expect(modelSelect).not.toBeVisible()
-  }
+  expect(await options.count(), '模型目錄至少需要兩個模型才能測換模型').toBeGreaterThan(1)
+  const secondValue = await options.nth(1).getAttribute('value')
+  expect(secondValue).toBeTruthy()
+  await modelSelect.selectOption(secondValue!)
+
+  await expect(advisorModelLabel).toBeVisible()
+  await expect(advisorModelLabel).not.toHaveText(initialLabel ?? '')
+  await expect(page.getByTestId('assignment-update-error')).toHaveCount(0)
 })

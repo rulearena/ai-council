@@ -198,13 +198,24 @@ class UpdateMeetingSettingsRequest(BaseModel):
     scene: Literal["meeting-room", "courtroom", "default-chamber"]
     participant_models: dict[str, str]
 
-    @field_validator("title", "goal")
+    # `goal` is deliberately absent here: chatroom meetings are created without one
+    # (see CreateMeetingRequest.normalize_goal), so a blanket non-blank rule made every
+    # chatroom settings save 422 and — because update_participant_models reuses this
+    # model internally — every chatroom model switch a 500. Whether a blank goal is
+    # acceptable depends on the meeting's mode, which this request cannot see, so the
+    # check lives in the endpoint.
+    @field_validator("title")
     @classmethod
     def require_non_blank(cls, value: str) -> str:
         stripped = value.strip()
         if not stripped:
             raise ValueError("must not be blank")
         return stripped
+
+    @field_validator("goal")
+    @classmethod
+    def normalize_goal(cls, value: str) -> str:
+        return value.strip()
 
 
 class CourtroomIssueRequest(BaseModel):
@@ -1440,6 +1451,14 @@ def create_app(
         """Replace meeting settings through a recoverable metadata/event commit."""
         reject_running_meeting(jobs, meeting_id)
         current = metadata_store.get(meeting_id)
+        # Mirrors CreateMeetingRequest.normalize_goal: every mode but chatroom requires a
+        # goal. Enforced here rather than on the request model because only the stored
+        # metadata knows the mode.
+        if str(current.get("mode_id") or DEFAULT_MODE_ID) != "chatroom" and not request.goal:
+            raise HTTPException(
+                status_code=422,
+                detail="Meeting goal must not be blank",
+            )
         pending = current.get("pending_meeting_settings")
         recovered_pending = False
         if isinstance(pending, dict):

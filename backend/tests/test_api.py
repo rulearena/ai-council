@@ -3685,6 +3685,98 @@ def test_create_chatroom_meeting_without_goal(tmp_path: Path) -> None:
     assert metadata["goal"] == ""
 
 
+def test_chatroom_participant_models_update_without_goal(tmp_path: Path) -> None:
+    """換模型不得因為聊天室沒有目標而失敗。
+
+    這個端點內部沿用完整的設定驗證器，而該驗證器曾無條件要求 goal 非空，
+    使得所有聊天室會議換模型一律 500（未處理例外，回應還缺 CORS 標頭，
+    瀏覽器只會顯示 "Failed to fetch"）。
+    """
+    client = TestClient(
+        create_test_app(
+            tmp_path,
+            models_yaml=(
+                "models:\n"
+                "  - id: mock-fast\n"
+                "    adapter: mock\n"
+                "  - id: mock-alt\n"
+                "    adapter: mock\n"
+            ),
+        )
+    )
+    created = client.post(
+        "/meetings",
+        json={"title": "自由聊天", "mode_id": "chatroom"},
+    ).json()
+    meeting_id = created["meeting_id"]
+    role_ids = [participant["role_id"] for participant in created["participants"]]
+
+    response = client.put(
+        f"/meetings/{meeting_id}/participant-models",
+        json={"models": {role_id: "mock-alt" for role_id in role_ids}},
+    )
+
+    assert response.status_code == 200, response.text
+    projected = client.get(f"/meetings/{meeting_id}").json()
+    assert {p["role_id"]: p["model_config_id"] for p in projected["participants"]} == {
+        role_id: "mock-alt" for role_id in role_ids
+    }
+    assert projected["goal"] is None
+
+
+def test_chatroom_settings_update_keeps_goal_optional(tmp_path: Path) -> None:
+    """聊天室存設定（改標題／場景）不得被空目標擋下。"""
+    client = TestClient(create_test_app(tmp_path))
+    created = client.post(
+        "/meetings",
+        json={"title": "自由聊天", "mode_id": "chatroom"},
+    ).json()
+    meeting_id = created["meeting_id"]
+    role_ids = [participant["role_id"] for participant in created["participants"]]
+
+    response = client.put(
+        f"/meetings/{meeting_id}/settings",
+        json={
+            "expected_revision": created["settings_revision"],
+            "title": "改過的聊天室名稱",
+            "goal": "",
+            "case_type": None,
+            "scene": "meeting-room",
+            "participant_models": {role_id: "mock-fast" for role_id in role_ids},
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    projected = client.get(f"/meetings/{meeting_id}").json()
+    assert projected["title"] == "改過的聊天室名稱"
+    assert projected["goal"] is None
+
+
+def test_relay_settings_update_still_requires_goal(tmp_path: Path) -> None:
+    """非聊天室模式仍必須有目標——放寬只適用於聊天室。"""
+    client = TestClient(create_test_app(tmp_path))
+    created = client.post(
+        "/meetings",
+        json={"title": "紅藍對抗", "goal": "評估方案", "mode_id": "red-blue"},
+    ).json()
+    meeting_id = created["meeting_id"]
+    role_ids = [participant["role_id"] for participant in created["participants"]]
+
+    response = client.put(
+        f"/meetings/{meeting_id}/settings",
+        json={
+            "expected_revision": created["settings_revision"],
+            "title": "紅藍對抗",
+            "goal": "   ",
+            "case_type": None,
+            "scene": "meeting-room",
+            "participant_models": {role_id: "mock-fast" for role_id in role_ids},
+        },
+    )
+
+    assert response.status_code == 422, response.text
+
+
 def test_create_chatroom_meeting_with_goal(tmp_path: Path) -> None:
     client = TestClient(create_test_app(tmp_path))
 
