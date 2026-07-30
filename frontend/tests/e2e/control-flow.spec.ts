@@ -2799,7 +2799,9 @@ test('archived records show their historical case-material revision without repl
     caseFiles: [{ title: '原始證據', content: '第一版內容', visibleRoles: ['Blue', 'Judge'] }],
   })
   const apiOrigin = process.env.E2E_API_BASE_URL ?? 'http://127.0.0.1:5009'
-  const initialMaterials = await (await page.request.get(`${apiOrigin}/meetings/${meetingId}/materials`)).json()
+  const materialsResponse = await page.request.get(`${apiOrigin}/meetings/${meetingId}/materials`)
+  expect(materialsResponse.ok(), `materials fetch returned ${materialsResponse.status()}`).toBeTruthy()
+  const initialMaterials = await materialsResponse.json()
   const evidenceId = initialMaterials.evidence[0].id as string
   const noted = await page.request.post(`${apiOrigin}/meetings/${meetingId}/materials/notes`, {
     data: {

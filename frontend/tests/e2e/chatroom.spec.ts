@@ -545,9 +545,13 @@ test('13.19 message feed scrolls via real browser wheel and auto-scrolls during 
   // backend is under load from prior tests.
   const apiOrigin = process.env.E2E_API_BASE_URL ?? 'http://127.0.0.1:5009'
   for (let i = 0; i < 20; i++) {
-    await page.request.post(`${apiOrigin}/meetings/${meetingId}/messages`, {
+    const posted = await page.request.post(`${apiOrigin}/meetings/${meetingId}/messages`, {
       data: { content: `測試訊息 ${i}` },
     })
+    // Without this the injection silently 404s when E2E_API_BASE_URL is unset and the
+    // default port holds a different backend, and the real cause surfaces ten seconds
+    // later as an unexplained empty feed.
+    expect(posted.ok(), `injecting 測試訊息 ${i} returned ${posted.status()}`).toBeTruthy()
     await expect(feed).toContainText(`測試訊息 ${i}`)
   }
 
@@ -643,9 +647,10 @@ test('13.21 feed opens on the newest message and a sent message is always visibl
   // Seed enough history to overflow, straight through the API.
   const apiOrigin = process.env.E2E_API_BASE_URL ?? 'http://127.0.0.1:5009'
   for (let i = 0; i < 20; i++) {
-    await page.request.post(`${apiOrigin}/meetings/${meetingId}/messages`, {
+    const posted = await page.request.post(`${apiOrigin}/meetings/${meetingId}/messages`, {
       data: { content: `歷史訊息 ${i}` },
     })
+    expect(posted.ok(), `injecting 歷史訊息 ${i} returned ${posted.status()}`).toBeTruthy()
   }
   await expect(feed).toContainText('歷史訊息 19')
   expect(await feed.evaluate((el) => el.scrollHeight > el.clientHeight)).toBe(true)
@@ -698,6 +703,42 @@ test('13.22 a mentioned role shows a thinking indicator until it answers', async
   // …and it must clear once the answer lands.
   await waitForRoleMessage(page, '顧問')
   await expect(thinking).toHaveCount(0, { timeout: 20_000 })
+})
+
+// ── 13.23 ────────────────────────────────────────────────────────────────────
+
+test('13.23 confirming an IME candidate with Enter does not send the half-typed line', async ({ page }) => {
+  await page.goto('/')
+  const title = `E2E chatroom ime ${Date.now()}`
+  await createChatroomMeeting(page, title, { modelAssignments: defaultModels })
+  const feed = page.getByTestId('workspace-message-feed')
+  await expect(feed).toBeVisible()
+
+  const input = page.getByTestId('chat-message-input')
+  await input.fill('hello')
+
+  // Typing Chinese means composing: the pre-edit text is not committed to the model
+  // until compositionend, and the Enter that confirms the candidate belongs to the
+  // input method. Sending on it shipped only the already-committed 'hello' and threw
+  // the Chinese away — exactly what the Chairman saw.
+  await input.evaluate((el: HTMLTextAreaElement) => {
+    el.dispatchEvent(new CompositionEvent('compositionstart', { bubbles: true }))
+    el.value = 'hello 你好'
+    el.dispatchEvent(new Event('input', { bubbles: true }))
+    el.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', isComposing: true, bubbles: true }))
+  })
+
+  // Committing the candidate, then a genuine Enter, sends the whole line.
+  await input.evaluate((el: HTMLTextAreaElement) => {
+    el.dispatchEvent(new CompositionEvent('compositionend', { bubbles: true }))
+  })
+  await input.press('Enter')
+
+  // Waiting for the complete line first makes the count assertion sound: a send fired
+  // by the composing Enter would have been queued earlier, so it would already be here.
+  await expect(feed).toContainText('hello 你好')
+  await expect(page.getByTestId('workspace-message')).toHaveCount(1)
+  await expect(input).toHaveValue('')
 })
 
 // ── 13.20 ──────────────────────────────────────────────────────────────────

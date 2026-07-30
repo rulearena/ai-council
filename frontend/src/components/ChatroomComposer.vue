@@ -22,6 +22,19 @@ const emit = defineEmits<{
 const store = inject(councilKey)!
 const messageText = ref('')
 const sending = ref(false)
+// While an IME is composing, Enter belongs to the input method — it confirms the
+// candidate. Sending on it fired before the composed text was committed, so the
+// Chinese was lost and only the text typed before it went out. `isComposing` alone
+// is not reliable across IMEs, so the composition events are tracked as well. Blur
+// clears the flag too: if compositionend ever failed to fire, a stuck flag would leave
+// Enter unable to send at all, which is worse than the bug being fixed here.
+const composing = ref(false)
+
+function onEnterKey(event: KeyboardEvent) {
+  if (composing.value || event.isComposing) return
+  event.preventDefault()
+  void handleSend()
+}
 
 const canSend = computed(() => {
   if (props.disabled || sending.value) return false
@@ -90,7 +103,10 @@ async function handleSend() {
           placeholder="輸入訊息…"
           :disabled="disabled"
           rows="1"
-          @keydown.enter.exact.prevent="handleSend"
+          @compositionstart="composing = true"
+          @compositionend="composing = false"
+          @blur="composing = false"
+          @keydown.enter.exact="onEnterKey"
         />
       </div>
       <button
