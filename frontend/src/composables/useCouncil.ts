@@ -38,6 +38,8 @@ import {
   getModels,
   getTranscript,
   requestRoleResponse,
+  sendChatMention,
+  sendChatMessage,
   requestRoleSequence,
   reopenMeeting,
   restartDeliberation,
@@ -1089,6 +1091,41 @@ export function useCouncil() {
     }))
   }
 
+  // The chatroom composer used to call the API modules directly, which meant its
+  // sends never touched pendingRoles — so a mentioned role showed no thinking bubble
+  // and no seat pulse, and the Chairman had no way to tell whether anything was
+  // happening. Routing through here gives chatroom the same in-progress feedback
+  // relay and parallel already had.
+  //
+  // Deliberately no openMeeting()/refresh here: the live event stream already delivers
+  // the new events. Re-opening the meeting mid-send re-renders the workspace and wipes
+  // the composer's own draft state, which left the send button disabled on the next
+  // message.
+  async function sendChatroomMessage(
+    meetingId: string,
+    content: string,
+    quotedEventId?: string,
+  ): Promise<boolean> {
+    return runAction(async () => {
+      await sendChatMessage(meetingId, content, quotedEventId)
+    })
+  }
+
+  async function sendChatroomMention(
+    meetingId: string,
+    content: string,
+    mentions: string[],
+    quotedEventId?: string,
+  ): Promise<boolean> {
+    // '@all' resolves to every participant so each seat reports its own progress.
+    const queuedRoles = mentions.includes('all')
+      ? (selectedMeeting.value?.participants ?? []).map((participant) => participant.role_id)
+      : mentions
+    return runWithPendingRoles(pendingRoles.value, queuedRoles, () => runAction(async () => {
+      await sendChatMention(meetingId, content, mentions, quotedEventId)
+    }))
+  }
+
   async function requestSelectedRoleSequence(): Promise<boolean> {
     // selectedSequencePreset can be undefined when the active mode's roster can't build
     // any presets (fewer than 2 members, or no adjudicator - see sequencePresets above,
@@ -1262,6 +1299,8 @@ export function useCouncil() {
     submitChairmanAction,
     correctSelectedMessage,
     requestSelectedRoleResponse,
+    sendChatroomMessage,
+    sendChatroomMention,
     requestSelectedRoleSequence,
     retrySelectedStep,
     copyMeetingInfo,

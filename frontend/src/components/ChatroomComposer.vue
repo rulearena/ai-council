@@ -1,8 +1,8 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, inject, ref } from 'vue'
 import type { ChairmanParticipant } from '../chairmanActions'
-import { sendChatMessage, sendChatMention } from '../api'
 import { parseAndSendChatMessage } from '../composables/useChatroomComposer'
+import { councilKey } from '../composables/useCouncil'
 import MentionAutocomplete from './MentionAutocomplete.vue'
 
 const props = defineProps<{
@@ -19,6 +19,7 @@ const emit = defineEmits<{
   'message-sent': []
 }>()
 
+const store = inject(councilKey)!
 const messageText = ref('')
 const sending = ref(false)
 
@@ -32,8 +33,8 @@ async function handleSend() {
   sending.value = true
   try {
     const boundary = {
-      sendChatMessage,
-      sendChatMention,
+      sendChatMessage: store.sendChatroomMessage,
+      sendChatMention: store.sendChatroomMention,
     }
     const result = await parseAndSendChatMessage({
       content: messageText.value,

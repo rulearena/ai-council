@@ -673,6 +673,33 @@ test('13.21 feed opens on the newest message and a sent message is always visibl
     .toBeLessThan(80)
 })
 
+// ── 13.22 ────────────────────────────────────────────────────────────────────
+
+test('13.22 a mentioned role shows a thinking indicator until it answers', async ({ page }) => {
+  test.setTimeout(60_000)
+  await page.goto('/')
+  const title = `E2E chatroom thinking ${Date.now()}`
+  // mock-slow leaves a window in which the in-progress state is observable.
+  await createChatroomMeeting(page, title, {
+    modelAssignments: { ...defaultModels, Advisor: 'mock-slow' },
+  })
+  await expect(page.getByTestId('conversation-workspace')).toBeVisible()
+
+  await sendChatMessage(page, '@Advisor 請回覆')
+
+  // Without this the Chairman had no way to tell whether a mentioned role was working:
+  // the chatroom composer bypassed the store, so pendingRoles was never populated and
+  // neither the feed bubble nor the seat pulse ever appeared.
+  const thinking = page.getByTestId('workspace-thinking-message')
+  await expect(thinking).toBeVisible({ timeout: 10_000 })
+  await expect(thinking).toContainText('顧問')
+  await expect(page.getByTestId('role-seat-advisor')).toHaveAttribute('data-status', 'thinking')
+
+  // …and it must clear once the answer lands.
+  await waitForRoleMessage(page, '顧問')
+  await expect(thinking).toHaveCount(0, { timeout: 20_000 })
+})
+
 // ── 13.20 ──────────────────────────────────────────────────────────────────
 
 test('13.20 switch role model at 375px viewport', async ({ page }) => {
