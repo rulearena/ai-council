@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import io
 import json
 import logging
 import os
@@ -17,7 +18,7 @@ from typing import Any, Callable, Literal
 from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import JSONResponse, PlainTextResponse, Response
+from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, Response
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from ai_council.meetings.execution_state import (
@@ -31,6 +32,14 @@ from ai_council.meetings.case_materials import (
     CaseMaterials,
     CaseMaterialsView,
     CaseMaterialValidationError,
+)
+from ai_council.meetings.attachments import (
+    AttachmentLimits,
+    AttachmentStore,
+    MultipartUploadError,
+    classify_extension,
+    mime_type_for_extension,
+    parse_upload_part,
 )
 from ai_council.meetings.deliberation import (
     DeliberationEpochs,
@@ -361,8 +370,10 @@ def create_app(
     prompt_dir: Path | str,
     start_model_health_checks: bool = True,
     case_file_limits: CaseFileLimits | None = None,
+    attachment_limits: AttachmentLimits | None = None,
 ) -> FastAPI:
     limits = case_file_limits or CaseFileLimits.from_environment()
+    attachment_limits = attachment_limits or AttachmentLimits.from_environment()
     app = FastAPI()
     app.add_middleware(
         CORSMiddleware,
@@ -408,6 +419,7 @@ def create_app(
     metadata_store = MeetingMetadataStore(data_path)
     repository = MeetingRepository(data_path)
     case_materials = CaseMaterials(repository)
+    attachments = AttachmentStore(repository)
     courtroom_workflow = CourtroomWorkflowService(metadata_store, repository)
     execution_state_store = MeetingExecutionStateStore(data_path)
     model_repository = ModelConfigRepository(model_config_path)
@@ -741,6 +753,7 @@ def create_app(
             if mode is None:
                 raise HTTPException(status_code=500, detail=f"Missing default mode: {DEFAULT_MODE_ID}")
             material_summary = case_materials.summary(meeting_id)
+            attachment_summary = attachments.summary(meeting_id)
             summaries.append(
                 {
                     **project_meeting_summary(
@@ -761,6 +774,10 @@ def create_app(
                         "active_note_count": material_summary.active_note_count,
                         "pending_impact": material_summary.pending_impact,
                     },
+                    "attachments_summary": {
+                        "count": attachment_summary.count,
+                        "total_bytes": attachment_summary.total_bytes,
+                    },
                     "materials_revision": material_summary.revision,
                 }
             )
@@ -780,6 +797,7 @@ def create_app(
         events = deliberation.active_events
         workflow_events = deliberation.workflow_events
         material_view = case_materials.view(meeting_id)
+        attachment_summary = attachments.summary(meeting_id)
         return {
             **project_meeting_summary(
                 metadata,
@@ -796,6 +814,10 @@ def create_app(
             "case_materials": project_case_materials(
                 material_view, active_epoch_id=deliberation.active_epoch.id
             ),
+            "attachments_summary": {
+                "count": attachment_summary.count,
+                "total_bytes": attachment_summary.total_bytes,
+            },
         }
 
     def validate_material_roles(
@@ -1916,6 +1938,77 @@ def create_app(
             event["quoted_event_id"] = resolved_quote
         repository.append_event(meeting_id, event)
         return event
+
+    @app.post("/meetings/{meeting_id}/attachments")
+    @meeting_transitions.synchronized
+    async def upload_meeting_attachment(
+        meeting_id: str,
+        request: Request,
+    ) -> dict[str, Any]:
+        reject_running_meeting(jobs, meeting_id)
+        metadata_store.get(meeting_id)
+        reject_terminal_meeting(repository, meeting_id)
+        content_type = request.headers.get("content-type", "")
+        body = await request.body()
+        try:
+            filename, content = parse_upload_part(body, content_type)
+        except MultipartUploadError as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
+        extension = Path(filename).suffix.lower()
+        if classify_extension(extension) == "text":
+            raise HTTPException(
+                status_code=400,
+                detail="Text files (.txt/.md) must be ingested via the case-files flow",
+            )
+        size = len(content)
+        if size > attachment_limits.per_file_bytes:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"File exceeds the per-file attachment limit "
+                    f"of {attachment_limits.per_file_bytes} bytes"
+                ),
+            )
+        if attachments.summary(meeting_id).total_bytes + size > attachment_limits.per_meeting_bytes:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"Meeting exceeds the total attachment quota "
+                    f"of {attachment_limits.per_meeting_bytes} bytes"
+                ),
+            )
+        file_id = f"attachment-{uuid.uuid4().hex}"
+        attachments.save_blob(meeting_id, file_id, io.BytesIO(content))
+        return attachments.record_attachment(
+            meeting_id,
+            file_id=file_id,
+            filename=filename,
+            size=size,
+            mime_type=mime_type_for_extension(extension),
+            extension=extension,
+        )
+
+    @app.get("/meetings/{meeting_id}/attachments/{file_id}")
+    def download_meeting_attachment(meeting_id: str, file_id: str) -> FileResponse:
+        metadata_store.get(meeting_id)
+        event = attachments.attachment_event(meeting_id, file_id)
+        if event is None:
+            raise HTTPException(status_code=404, detail=f"Unknown attachment: {file_id}")
+        try:
+            blob = attachments.blob_path(meeting_id, file_id)
+        except ValueError:
+            raise HTTPException(
+                status_code=404, detail=f"Unknown attachment: {file_id}"
+            ) from None
+        mime_type = str(event.get("mime_type") or "application/octet-stream")
+        filename = str(event.get("filename") or file_id)
+        disposition = "inline" if mime_type.startswith("image/") else "attachment"
+        return FileResponse(
+            blob,
+            media_type=mime_type,
+            filename=filename,
+            content_disposition_type=disposition,
+        )
 
     @app.post("/meetings/{meeting_id}/messages/{event_id}/correct")
     @meeting_transitions.synchronized

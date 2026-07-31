@@ -7142,3 +7142,328 @@ def wait_for_model_status(
             return model
         time.sleep(0.01)
     raise AssertionError(f"Model did not reach status: {expected_status}")
+
+
+def _upload_attachment(
+    client: TestClient,
+    meeting_id: str,
+    *,
+    filename: str,
+    content: bytes,
+    content_type: str,
+) -> tuple[int, dict[str, object]]:
+    response = client.post(
+        f"/meetings/{meeting_id}/attachments",
+        files={"file": (filename, content, content_type)},
+    )
+    return response.status_code, response.json()
+
+
+def _create_chatroom_meeting(client: TestClient) -> str:
+    return client.post(
+        "/meetings",
+        json={"title": "附件測試", "mode_id": "chatroom"},
+    ).json()["meeting_id"]
+
+
+def test_upload_binary_attachment_writes_blob_and_event(tmp_path: Path) -> None:
+    app = create_test_app(tmp_path)
+    client = TestClient(app)
+    meeting_id = _create_chatroom_meeting(client)
+    pdf_bytes = b"%PDF-1.4 fake pdf content"
+
+    status, body = _upload_attachment(
+        client,
+        meeting_id,
+        filename="report.pdf",
+        content=pdf_bytes,
+        content_type="application/pdf",
+    )
+
+    assert status == 200
+    assert body["step_id"] == "attachment-added"
+    assert body["role"] == "Human"
+    assert body["status"] == "completed"
+    assert body["meeting_id"] == meeting_id
+    assert body["filename"] == "report.pdf"
+    assert body["size"] == len(pdf_bytes)
+    assert body["mime_type"] == "application/pdf"
+    assert body["extension"] == ".pdf"
+    assert body["file_id"].startswith("attachment-")
+
+    blob = (
+        tmp_path / "data" / "meetings" / meeting_id / "attachments" / body["file_id"]
+    )
+    assert blob.read_bytes() == pdf_bytes
+
+    events = client.get(f"/meetings/{meeting_id}").json()["events"]
+    attachment_events = [e for e in events if e["step_id"] == "attachment-added"]
+    assert len(attachment_events) == 1
+    assert attachment_events[0]["file_id"] == body["file_id"]
+
+
+def test_upload_text_file_rejected_by_attachment_endpoint(tmp_path: Path) -> None:
+    app = create_test_app(tmp_path)
+    client = TestClient(app)
+    meeting_id = _create_chatroom_meeting(client)
+
+    for filename in ("note.txt", "note.md"):
+        status, body = _upload_attachment(
+            client,
+            meeting_id,
+            filename=filename,
+            content="# 標題\n內容".encode("utf-8"),
+            content_type="text/plain",
+        )
+        assert status == 400
+        assert "case" in body["detail"].lower() or "text" in body["detail"].lower()
+
+    events = client.get(f"/meetings/{meeting_id}").json()["events"]
+    assert [e for e in events if e["step_id"] == "attachment-added"] == []
+    assert not (tmp_path / "data" / "meetings" / meeting_id / "attachments").exists()
+
+
+def test_upload_rejects_oversized_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("AI_COUNCIL_MAX_ATTACHMENT_BYTES", "10")
+    app = create_test_app(tmp_path)
+    client = TestClient(app)
+    meeting_id = _create_chatroom_meeting(client)
+
+    status, body = _upload_attachment(
+        client,
+        meeting_id,
+        filename="big.png",
+        content=b"x" * 11,
+        content_type="image/png",
+    )
+
+    assert status == 400
+    assert "limit" in body["detail"].lower()
+    events = client.get(f"/meetings/{meeting_id}").json()["events"]
+    assert [e for e in events if e["step_id"] == "attachment-added"] == []
+    assert not (tmp_path / "data" / "meetings" / meeting_id / "attachments").exists()
+
+
+def test_upload_rejects_meeting_over_aggregate_quota(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("AI_COUNCIL_MAX_TOTAL_ATTACHMENT_BYTES", "10")
+    app = create_test_app(tmp_path)
+    client = TestClient(app)
+    meeting_id = _create_chatroom_meeting(client)
+
+    status, _ = _upload_attachment(
+        client,
+        meeting_id,
+        filename="a.zip",
+        content=b"a" * 6,
+        content_type="application/zip",
+    )
+    assert status == 200
+
+    status, body = _upload_attachment(
+        client,
+        meeting_id,
+        filename="b.zip",
+        content=b"b" * 6,
+        content_type="application/zip",
+    )
+    assert status == 400
+    assert "limit" in body["detail"].lower() or "quota" in body["detail"].lower()
+    events = client.get(f"/meetings/{meeting_id}").json()["events"]
+    assert len([e for e in events if e["step_id"] == "attachment-added"]) == 1
+
+
+def test_unknown_extension_falls_back_to_octet_stream(tmp_path: Path) -> None:
+    app = create_test_app(tmp_path)
+    client = TestClient(app)
+    meeting_id = _create_chatroom_meeting(client)
+
+    status, body = _upload_attachment(
+        client,
+        meeting_id,
+        filename="archive.xyz",
+        content=b"data",
+        content_type="application/octet-stream",
+    )
+
+    assert status == 200
+    assert body["mime_type"] == "application/octet-stream"
+    assert body["extension"] == ".xyz"
+
+
+def test_download_attachment_serves_blob(tmp_path: Path) -> None:
+    app = create_test_app(tmp_path)
+    client = TestClient(app)
+    meeting_id = _create_chatroom_meeting(client)
+    pdf_bytes = b"%PDF-1.4 fake pdf content"
+    file_id = _upload_attachment(
+        client,
+        meeting_id,
+        filename="report.pdf",
+        content=pdf_bytes,
+        content_type="application/pdf",
+    )[1]["file_id"]
+
+    response = client.get(f"/meetings/{meeting_id}/attachments/{file_id}")
+
+    assert response.status_code == 200
+    assert response.content == pdf_bytes
+    assert response.headers["content-type"] == "application/pdf"
+    assert response.headers["content-disposition"].startswith("attachment")
+    assert "report.pdf" in response.headers["content-disposition"]
+
+
+def test_download_image_served_inline(tmp_path: Path) -> None:
+    app = create_test_app(tmp_path)
+    client = TestClient(app)
+    meeting_id = _create_chatroom_meeting(client)
+    png_bytes = b"\x89PNG\r\n\x1a\n fake png"
+    file_id = _upload_attachment(
+        client,
+        meeting_id,
+        filename="photo.png",
+        content=png_bytes,
+        content_type="image/png",
+    )[1]["file_id"]
+
+    response = client.get(f"/meetings/{meeting_id}/attachments/{file_id}")
+
+    assert response.status_code == 200
+    assert response.content == png_bytes
+    assert response.headers["content-type"] == "image/png"
+    assert response.headers["content-disposition"].startswith("inline")
+
+
+def test_download_unknown_file_id_404(tmp_path: Path) -> None:
+    app = create_test_app(tmp_path)
+    client = TestClient(app)
+    meeting_id = _create_chatroom_meeting(client)
+
+    response = client.get(f"/meetings/{meeting_id}/attachments/attachment-unknown")
+
+    assert response.status_code == 404
+
+
+def test_download_unknown_meeting_404(tmp_path: Path) -> None:
+    app = create_test_app(tmp_path)
+    client = TestClient(app)
+
+    response = client.get("/meetings/meeting-nope/attachments/attachment-x")
+
+    assert response.status_code == 404
+
+
+def test_attachments_summary_in_meeting_payloads(tmp_path: Path) -> None:
+    app = create_test_app(tmp_path)
+    client = TestClient(app)
+    meeting_id = _create_chatroom_meeting(client)
+    _upload_attachment(client, meeting_id, filename="a.pdf", content=b"a", content_type="application/pdf")
+    _upload_attachment(client, meeting_id, filename="b.zip", content=b"bb", content_type="application/zip")
+
+    meeting = client.get(f"/meetings/{meeting_id}").json()
+    assert meeting["attachments_summary"] == {"count": 2, "total_bytes": 3}
+
+    listing = client.get("/meetings").json()
+    entry = next(item for item in listing if item["meeting_id"] == meeting_id)
+    assert entry["attachments_summary"] == {"count": 2, "total_bytes": 3}
+
+
+def test_upload_attachment_rejected_on_terminal_meeting(tmp_path: Path) -> None:
+    app = create_test_app(tmp_path)
+    client = TestClient(app)
+    meeting_id = _create_chatroom_meeting(client)
+    client.post(f"/meetings/{meeting_id}/close")
+
+    status, body = _upload_attachment(
+        client,
+        meeting_id,
+        filename="after.pdf",
+        content=b"pdf",
+        content_type="application/pdf",
+    )
+
+    assert status == 409
+    assert body["detail"] == "Meeting is terminal: closed"
+
+
+def test_upload_attachment_rejected_on_running_meeting(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    model_entered = threading.Event()
+    release_model = threading.Event()
+    original_complete = MockModelAdapter.complete
+
+    def slow_complete(self, request):
+        model_entered.set()
+        release_model.wait(timeout=2)
+        return original_complete(self, request)
+
+    monkeypatch.setattr(MockModelAdapter, "complete", slow_complete)
+    app = create_test_app(tmp_path)
+    client = TestClient(app)
+    meeting_id = client.post("/meetings", json={"title": "執行中", "goal": "執行中"}).json()["meeting_id"]
+
+    try:
+        response = client.post(
+            f"/meetings/{meeting_id}/start",
+            json={"models": {"Blue": "mock-fast", "Red": "mock-fast", "Judge": "mock-fast"}},
+        )
+        assert response.status_code == 202
+        assert model_entered.wait(timeout=1)
+
+        status, body = _upload_attachment(
+            client,
+            meeting_id,
+            filename="during.pdf",
+            content=b"pdf",
+            content_type="application/pdf",
+        )
+        assert status == 409
+        assert body["detail"] == "Meeting is already running"
+    finally:
+        release_model.set()
+
+
+def test_binary_attachment_download_not_restricted_by_visible_roles(
+    tmp_path: Path,
+) -> None:
+    app = create_test_app(tmp_path)
+    client = TestClient(app)
+    meeting_id = client.post(
+        "/meetings",
+        json={
+            "title": "角色會議",
+            "goal": "討論",
+            "participants": [
+                {"role_id": "Blue", "model_config_id": "mock-fast"},
+                {"role_id": "Red", "model_config_id": "mock-fast"},
+                {"role_id": "Judge", "model_config_id": "mock-fast"},
+            ],
+        },
+    ).json()["meeting_id"]
+
+    evidence = client.post(
+        f"/meetings/{meeting_id}/materials/evidence",
+        json={
+            "revision": 0,
+            "title": "限縮角色",
+            "content": "只有 Blue 能看",
+            "visible_roles": ["Blue"],
+        },
+    )
+    assert evidence.status_code == 200
+
+    file_id = _upload_attachment(
+        client,
+        meeting_id,
+        filename="shared.zip",
+        content=b"zip-bytes",
+        content_type="application/zip",
+    )[1]["file_id"]
+
+    download = client.get(f"/meetings/{meeting_id}/attachments/{file_id}")
+    assert download.status_code == 200
+    assert download.content == b"zip-bytes"
