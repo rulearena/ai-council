@@ -83,9 +83,6 @@ Independent verification:
 - 執行指令
 - 實際結果
 - 未驗證範圍
-
-Findings:
-- Blocking | Major | Minor | Nit
 ```
 
 每條 finding 附 location（file:line 或 section）、對應 contract（spec／工單／repo rule）、問題描述、風險與 required fix（必須達成的結果，不提供 patch）。
