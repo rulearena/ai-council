@@ -8,6 +8,7 @@ import {
   getCaseMaterials,
   setCaseEvidenceActive,
   setCaseNoteActive,
+  uploadAttachment,
   ApiError,
   type CaseMaterials,
   type VersionedCaseMaterial,
@@ -20,7 +21,7 @@ import Modal from './Modal.vue'
 const props = defineProps<{ show: boolean }>()
 defineEmits<{ close: [] }>()
 const store = inject(councilKey)!
-const { selectedMeeting, loading, runAction, openMeeting } = store
+const { selectedMeeting, loading, runAction, openMeeting, isMeetingRunning } = store
 const materials = ref<CaseMaterials | null>(null)
 const localError = ref('')
 const materialsLoadError = ref('')
@@ -36,10 +37,80 @@ const pendingImpactGuidance = computed(() => materialImpactGuidance(selectedMeet
 // 法庭用「證物／案卷」，其他模式用中性的「附件」。
 const vocab = computed(() => materialVocabulary(selectedMeeting.value?.mode_id ?? ''))
 
+type UploadEntry = {
+  key: string
+  filename: string
+  status: 'uploading' | 'done' | 'error'
+  error?: string
+  retryFile?: File
+}
+const uploads = ref<UploadEntry[]>([])
+const uploadDisabled = computed(() => loading.value || Boolean(isMeetingRunning.value))
+
 function caughtMessage(caught: unknown): string {
   return caught instanceof ApiError && typeof caught.detail === 'string'
     ? caught.detail
     : caught instanceof Error ? caught.message : String(caught)
+}
+
+function textExtension(filename: string): boolean {
+  return /\.(txt|md)$/i.test(filename)
+}
+
+function routeTextFileToCaseForm(file: File) {
+  formKind.value = 'evidence'
+  editingId.value = null
+  form.title = file.name.replace(/\.(txt|md)$/i, '')
+  form.visibleRoles = participants.value.map((item) => item.role_id)
+  void file.text().then((content) => {
+    form.content = content
+  })
+}
+
+async function startUpload(entry: UploadEntry) {
+  const file = entry.retryFile
+  const meetingId = selectedMeeting.value?.meeting_id
+  if (!file || !meetingId) return
+  entry.status = 'uploading'
+  entry.error = undefined
+  try {
+    await uploadAttachment(meetingId, file)
+    entry.status = 'done'
+    // The meeting payload carries attachments_summary + the new attachment event,
+    // so the ＋ count and the feed bubble both come from one refresh.
+    await openMeeting(meetingId)
+  } catch (caught) {
+    entry.status = 'error'
+    entry.error = caughtMessage(caught)
+  }
+}
+
+function onFileSelected(event: Event) {
+  const input = event.target as HTMLInputElement
+  const files = Array.from(input.files ?? [])
+  input.value = ''
+  for (const file of files) {
+    if (textExtension(file.name)) {
+      routeTextFileToCaseForm(file)
+    } else {
+      const entry: UploadEntry = {
+        key: `${file.name}-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+        filename: file.name,
+        status: 'uploading',
+        retryFile: file,
+      }
+      uploads.value.push(entry)
+      void startUpload(entry)
+    }
+  }
+}
+
+function retryUpload(entry: UploadEntry) {
+  void startUpload(entry)
+}
+
+function dismissUpload(entry: UploadEntry) {
+  uploads.value = uploads.value.filter((item) => item.key !== entry.key)
 }
 
 async function loadMaterials(id: string) {
@@ -65,6 +136,7 @@ watch([() => props.show, () => selectedMeeting.value?.meeting_id], ([show, id]) 
   ++materialsGeneration
   materials.value = null
   materialsLoadError.value = ''
+  uploads.value = []
   if (!show || !id) return
   void loadMaterials(id)
 }, { immediate: true })
@@ -144,6 +216,31 @@ async function toggle(item: VersionedCaseMaterial, kind: 'evidence' | 'note') {
         <p>{{ pendingImpactGuidance }}</p>
       </section>
       <section class="materials-section">
+        <label class="attachment-upload-zone" data-testid="attachment-upload-zone">
+          <input
+            type="file"
+            class="visually-hidden"
+            data-testid="attachment-upload-input"
+            multiple
+            :disabled="uploadDisabled"
+            @change="onFileSelected"
+          />
+          <strong>{{ uploadDisabled ? '會議執行中，暫時無法上傳' : `上傳${vocab.itemPlural}` }}</strong>
+          <small>點此選擇檔案；.txt／.md 會進入{{ vocab.itemPlural }}列表，其餘立即上傳為{{ vocab.itemPlural }}</small>
+        </label>
+        <ul v-if="uploads.length" class="attachment-upload-list" data-testid="attachment-upload-list">
+          <li v-for="entry in uploads" :key="entry.key" :data-status="entry.status" :data-testid="`attachment-upload-${entry.key}`">
+            <span class="attachment-upload-name">{{ entry.filename }}</span>
+            <span class="attachment-upload-state">
+              {{ entry.status === 'uploading' ? '上傳中…' : entry.status === 'done' ? '已上傳' : '上傳失敗' }}
+            </span>
+            <button v-if="entry.status === 'error'" type="button" class="btn btn-ghost btn-sm" data-testid="attachment-upload-retry" @click="retryUpload(entry)">重試</button>
+            <button v-if="entry.status === 'error'" type="button" class="btn btn-ghost btn-sm" data-testid="attachment-upload-dismiss" @click="dismissUpload(entry)">略過</button>
+            <small v-if="entry.error" class="error" data-testid="attachment-upload-error">{{ entry.error }}</small>
+          </li>
+        </ul>
+      </section>
+      <section class="materials-section">
         <h3>{{ vocab.itemPlural }}（{{ materials.evidence.filter(item => item.status === 'active').length }}）</h3>
         <article v-for="item in materials.evidence" :key="item.id" class="material-card" :data-status="item.status" :data-material-id="item.id" data-testid="case-evidence-card">
           <header><strong>{{ item.citation_anchor }} · {{ latest(item).title }}</strong><span>v{{ item.active_version }} · {{ item.status === 'active' ? '使用中' : '已停用' }}</span></header>
@@ -174,3 +271,77 @@ async function toggle(item: VersionedCaseMaterial, kind: 'evidence' | 'note') {
     <p v-else-if="!materialsLoadError" class="empty-state">{{ selectedMeeting ? vocab.loading : '請先選擇會議。' }}</p>
   </Modal>
 </template>
+
+<style scoped>
+.attachment-upload-zone {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 14px 12px;
+  border: 1px dashed var(--border, #ccc);
+  border-radius: 8px;
+  cursor: pointer;
+  text-align: center;
+}
+
+.attachment-upload-zone:has(input:disabled) {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+.attachment-upload-zone small {
+  opacity: 0.7;
+}
+
+.attachment-upload-list {
+  list-style: none;
+  margin: 8px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.attachment-upload-list li {
+  display: grid;
+  grid-template-columns: 1fr auto auto auto;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border: 1px solid var(--border, #eee);
+  border-radius: 6px;
+  font-size: 0.9em;
+}
+
+.attachment-upload-list li[data-status='done'] {
+  background: var(--bg-muted, #f6f9f6);
+}
+
+.attachment-upload-list li[data-status='error'] {
+  background: var(--bg-muted, #fdf5f5);
+}
+
+.attachment-upload-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.attachment-upload-state {
+  opacity: 0.75;
+  font-size: 0.85em;
+}
+
+.attachment-upload-list li[data-status='error'] small {
+  grid-column: 1 / -1;
+}
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+</style>

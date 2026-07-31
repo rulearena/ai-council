@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, inject, ref, watch } from 'vue'
 import { activeMode, councilKey, formatDateTime, sequencePresets } from '../composables/useCouncil'
+import { materialCountFor } from '../meetingWorkspace'
 import { nextMeetingMigrationDraft } from '../meetingMigration'
 import { roleDisplayName, stepDisplayLabel } from '../presentation'
 
@@ -37,9 +38,7 @@ const {
 } = store
 
 const advancedOpen = ref(false)
-const materialCount = computed(() => selectedMeeting.value?.case_materials?.evidence.filter((item) => item.status === 'active').length
-  ?? selectedMeeting.value?.case_files?.length
-  ?? 0)
+const materialCount = computed(() => materialCountFor(selectedMeeting.value))
 const migrationTitle = ref('')
 const migrationGoal = ref('')
 const restartReason = ref('')
