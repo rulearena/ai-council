@@ -61,6 +61,12 @@ export type Meeting = {
   events?: MeetingEvent[]
   courtroom: CourtroomProjection | null
   case_materials?: CaseMaterials
+  attachments_summary?: AttachmentSummary
+}
+
+export type AttachmentSummary = {
+  count: number
+  total_bytes: number
 }
 
 export type DeliberationSummary = {
@@ -300,6 +306,11 @@ export type MeetingEvent = {
   adapter_stderr_excerpt?: string
   error?: string
   corrects_event_id?: string
+  file_id?: string
+  filename?: string
+  size?: number
+  mime_type?: string
+  extension?: string
 }
 
 export type MeetingStreamEvent = {
@@ -659,6 +670,28 @@ export async function correctMeetingMessage(
   content: string,
 ): Promise<MeetingEvent> {
   return postJson(`/meetings/${meetingId}/messages/${eventId}/correct`, { content })
+}
+
+/**
+ * Upload a binary chat attachment. Multipart form-data with a single `file` part;
+ * the backend routes .txt/.md into the case-files flow itself and rejects them here.
+ * Resolves to the appended `attachment-added` metadata event.
+ */
+export async function uploadAttachment(meetingId: string, file: File): Promise<MeetingEvent> {
+  const formData = new FormData()
+  formData.append('file', file)
+  const response = await fetch(`${API_BASE}/meetings/${meetingId}/attachments`, {
+    method: 'POST',
+    body: formData,
+  })
+  if (!response.ok) {
+    throw new ApiError(`POST /meetings/${meetingId}/attachments failed: ${response.status}`, response.status, await readErrorDetail(response))
+  }
+  return response.json()
+}
+
+export function attachmentDownloadUrl(meetingId: string, fileId: string): string {
+  return `${API_BASE}/meetings/${meetingId}/attachments/${encodeURIComponent(fileId)}`
 }
 
 export async function requestRoleResponse(
