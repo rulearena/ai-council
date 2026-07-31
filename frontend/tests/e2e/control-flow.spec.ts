@@ -4434,3 +4434,19 @@ test('keyboard Enter on info button does not change role filter', async ({ page 
   // The role filter should still be active (info button opens details, not filter)
   await expect(page.getByTestId('workspace-clear-role-filter')).toBeVisible()
 })
+
+test('courtroom unified materials modal uses evidence wording for the upload zone', async ({ page }) => {
+  await page.goto('/')
+  const topic = `E2E courtroom attachment wording ${Date.now()}`
+  await createMeetingViaNewCase(page, topic, { modeId: 'courtroom' })
+
+  // Courtroom renders the docket panel with the embedded action bar's ＋ button.
+  await page.getByTestId('workspace-open-materials').click()
+  const panel = page.getByTestId('case-materials-modal')
+  await expect(panel).toBeVisible()
+
+  // The upload zone and panel title localise to 證物, not 附件.
+  await expect(panel).toContainText('上傳證物')
+  await expect(panel).toContainText('案卷與證據')
+  await expect(panel.getByTestId('attachment-upload-zone')).not.toContainText('附件')
+})

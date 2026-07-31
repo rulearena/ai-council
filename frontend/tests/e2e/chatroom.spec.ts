@@ -890,3 +890,100 @@ test('13.20 switch role model at 375px viewport', async ({ page }) => {
   await expect(advisorModelLabel).not.toHaveText(initialLabel ?? '')
   await expect(page.getByTestId('assignment-update-error')).toHaveCount(0)
 })
+
+// ── chatroom binary attachments (backlog #96) ────────────────────────────────
+
+async function openMaterialsModal(page: Page) {
+  await page.getByTestId('workspace-open-materials').click()
+  await expect(page.getByTestId('case-materials-modal')).toBeVisible()
+}
+
+test('binary attachment uploads immediately and renders as an image bubble with lightbox', async ({ page }) => {
+  await page.goto('/')
+  const title = `E2E chatroom attachment ${Date.now()}`
+  await createChatroomMeeting(page, title, { modelAssignments: defaultModels })
+
+  // A fresh meeting has neither evidence nor attachments, so the + button shows no count.
+  await expect(page.getByTestId('workspace-open-materials')).not.toContainText('（')
+
+  await openMaterialsModal(page)
+  const png = Buffer.from(
+    'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==',
+    'base64',
+  )
+  await page.getByTestId('attachment-upload-input').setInputFiles({
+    name: '現場照片.png',
+    mimeType: 'image/png',
+    buffer: png,
+  })
+
+  // The bubble appears in the feed once the upload completes (immediate upload, no text).
+  const bubble = page.getByTestId('attachment-image')
+  await expect(bubble).toBeVisible({ timeout: 15_000 })
+
+  // The modal stays open for further uploads; close it to interact with the feed.
+  await page.getByTestId('case-materials-close-button').click()
+  await expect(page.getByTestId('case-materials-modal')).not.toBeVisible()
+
+  // The ＋ count now totals binary attachments (1) plus active case-files (0).
+  await expect(page.getByTestId('workspace-open-materials')).toContainText('（1）')
+
+  // Clicking the thumbnail opens a full-size lightbox.
+  await bubble.click()
+  const lightbox = page.getByTestId('attachment-lightbox')
+  await expect(lightbox).toBeVisible()
+  await page.getByTestId('attachment-lightbox-close').click()
+  await expect(lightbox).not.toBeVisible()
+})
+
+test('pdf attachment renders as a download card with the file_id download endpoint', async ({ page }) => {
+  await page.goto('/')
+  const title = `E2E chatroom pdf ${Date.now()}`
+  await createChatroomMeeting(page, title, { modelAssignments: defaultModels })
+
+  await openMaterialsModal(page)
+  await page.getByTestId('attachment-upload-input').setInputFiles({
+    name: '報告.pdf',
+    mimeType: 'application/pdf',
+    buffer: Buffer.from('%PDF-1.4 fake pdf content'),
+  })
+
+  await expect(page.getByTestId('attachment-filename')).toHaveText('報告.pdf', { timeout: 15_000 })
+  const card = page.locator('[data-testid^="attachment-download-"]').first()
+  await expect(card).toBeVisible()
+  const href = await card.getAttribute('href')
+  expect(href).toMatch(/\/meetings\/[^/]+\/attachments\/attachment-[a-f0-9]+$/)
+  await expect(card).toHaveAttribute('download', '')
+
+  // Downloading through the card hits the backend's file_id download endpoint.
+  const response = await page.request.get(href!)
+  expect(response.status()).toBe(200)
+  expect(await response.body()).toEqual(Buffer.from('%PDF-1.4 fake pdf content'))
+})
+
+test('.txt upload is ingested into case-files and never becomes a chat bubble', async ({ page }) => {
+  await page.goto('/')
+  const title = `E2E chatroom txt ${Date.now()}`
+  await createChatroomMeeting(page, title, { modelAssignments: defaultModels })
+
+  await openMaterialsModal(page)
+  await page.getByTestId('attachment-upload-input').setInputFiles({
+    name: '摘要.txt',
+    mimeType: 'text/plain',
+    buffer: Buffer.from('這是文字摘要內容', 'utf-8'),
+  })
+
+  // The file lands in the case-file form (prefilled) instead of uploading directly.
+  const form = page.getByTestId('case-material-form')
+  await expect(form.getByLabel('標題')).toHaveValue('摘要')
+  await expect(form.getByLabel('內容')).toHaveValue('這是文字摘要內容')
+
+  await page.getByRole('button', { name: '新增', exact: true }).click()
+  await expect(page.getByTestId('case-evidence-card')).toBeVisible()
+  await expect(page.getByTestId('case-evidence-card')).toContainText('摘要')
+
+  // Text case-files never appear as bubbles in the feed.
+  await expect(page.getByTestId('attachment-image')).toHaveCount(0)
+  await expect(page.getByTestId('workspace-message')).toHaveCount(0)
+  await expect(page.getByTestId('workspace-open-materials')).toContainText('（1）')
+})
