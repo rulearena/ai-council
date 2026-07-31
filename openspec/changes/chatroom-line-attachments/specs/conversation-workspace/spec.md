@@ -1,7 +1,7 @@
 ## MODIFIED Requirements
 
 ### Requirement: Case file entry point in chatroom composer
-The chatroom composer SHALL include a "+" button or equivalent that opens the unified case-files and attachment upload/management flow. The "+" entry point SHALL present a single modal combining a file-upload zone and the existing case-files list, and SHALL work identically in relay/parallel modes. `.txt/.md/.markdown` files are ingested into the versioned case-files flow; PDF/PNG/JPG files are uploaded as binary chat attachments. An "附件（N）" count SHALL total both binary attachments and text case-files.
+The chatroom composer SHALL include a "+" button or equivalent that opens the unified case-files and attachment upload/management flow. The "+" entry point SHALL present a single modal combining a file-upload zone and the existing case-files list, and SHALL work identically in relay/parallel modes. `.txt` and `.md` files are ingested into the versioned case-files flow; all other file types are uploaded as binary chat attachments. An "附件（N）" count SHALL total both binary attachments and text case-files.
 
 #### Scenario: Case files accessible from chatroom
 - **WHEN** the user clicks the case file entry point in chatroom mode
