@@ -10,7 +10,7 @@ import RoleDrawer from './components/RoleDrawer.vue'
 import ModeHelpDrawer from './components/ModeHelpDrawer.vue'
 import CourtroomDocketPanel from './components/CourtroomDocketPanel.vue'
 import MeetingSettingsDrawer from './components/MeetingSettingsDrawer.vue'
-import CaseMaterialsDrawer from './components/CaseMaterialsDrawer.vue'
+import CaseMaterialsModal from './components/CaseMaterialsModal.vue'
 import ConversationWorkspace from './components/ConversationWorkspace.vue'
 import { canLeaveMeetingSettings } from './meetingSettingsNavigation'
 
@@ -77,7 +77,7 @@ function onSeatClick(role: CouncilRole | 'Chairman') {
     <NewCaseModal :show="openModal === 'new-case'" @close="closeModal" />
     <RoleDrawer :role="openRole" @close="openRole = null" />
     <MeetingSettingsDrawer :show="meetingSettingsOpen" @close="meetingSettingsOpen = false" />
-    <CaseMaterialsDrawer :show="materialsOpen" @close="materialsOpen = false" />
+    <CaseMaterialsModal :show="materialsOpen" @close="materialsOpen = false" />
     <ModeHelpDrawer :show="modeHelpOpen" @close="modeHelpOpen = false" />
   </main>
 </template>

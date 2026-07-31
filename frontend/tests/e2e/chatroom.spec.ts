@@ -829,6 +829,37 @@ test('13.25 an open mention menu ignores keys that belong to the input method', 
   await expect(options.nth(1)).toHaveAttribute('aria-selected', 'true')
 })
 
+// ── 13.26 ────────────────────────────────────────────────────────────────────
+
+test('13.26 the composer plus button opens materials as a centred modal', async ({ page }) => {
+  await page.goto('/')
+  const title = `E2E chatroom materials modal ${Date.now()}`
+  await createChatroomMeeting(page, title, { modelAssignments: defaultModels })
+
+  await page.getByTestId('workspace-open-materials').click()
+  const panel = page.getByTestId('case-materials-modal')
+  await expect(panel).toBeVisible()
+
+  // A drawer is pinned to one edge and runs the full height; a modal sits centred and
+  // stops short of it. Asserting the gaps distinguishes the two, where merely finding
+  // the panel would pass either way.
+  const box = await panel.boundingBox()
+  const viewport = page.viewportSize()
+  if (!box || !viewport) throw new Error('materials panel has no box')
+  const leftGap = box.x
+  const rightGap = viewport.width - (box.x + box.width)
+  expect(rightGap).toBeGreaterThan(0)
+  expect(Math.abs(leftGap - rightGap)).toBeLessThanOrEqual(2)
+  expect(box.height).toBeLessThan(viewport.height)
+
+  // A chatroom has attachments, not exhibits — the courtroom wording does not belong.
+  await expect(panel).toContainText('附件')
+  await expect(panel).not.toContainText('證物')
+
+  await page.getByTestId('case-materials-close-button').click()
+  await expect(panel).not.toBeVisible()
+})
+
 // ── 13.20 ──────────────────────────────────────────────────────────────────
 
 test('13.20 switch role model at 375px viewport', async ({ page }) => {

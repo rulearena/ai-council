@@ -106,7 +106,7 @@ test('conversation workspace keeps the role rail, chronological feed, and compos
   await expect(page.getByTestId('workspace-message-feed')).toContainText('先確認本次討論的判斷標準。')
 
   await page.getByTestId('workspace-open-materials').click()
-  await expect(page.getByTestId('case-materials-drawer')).toBeVisible()
+  await expect(page.getByTestId('case-materials-modal')).toBeVisible()
   await page.getByTestId('case-materials-close-button').click()
 
   await page.reload()
@@ -2306,6 +2306,53 @@ test('New Case blocks an empty model catalog and seat nameplates follow persiste
     .click()
 })
 
+test('court hearing seats match the conversation workspace and its scene enlarges', async ({ page }) => {
+  await page.goto('/')
+  const topic = `E2E court seat parity ${Date.now()}`
+  await createMeetingViaNewCase(page, topic, {
+    modeId: 'courtroom',
+    goal: '逐一判斷各爭點，最後作成全案判決。',
+  })
+  await expect(page.getByTestId('court-hearing-workspace')).toBeVisible()
+
+  // Seats are real buttons rather than divs wearing a button role, and the Chairman is
+  // built the same way as everyone else — the inconsistency this panel used to carry.
+  for (const seat of ['role-seat-chairman', 'role-seat-defense']) {
+    const button = page.getByTestId(seat)
+    await expect(button).toHaveJSProperty('tagName', 'BUTTON')
+    await expect(button).not.toHaveAttribute('role', 'button')
+  }
+
+  await page.getByTestId('chair-message-input').fill('主席庭審補充')
+  await page.getByTestId('send-chair-message-button').click()
+  await expect(page.getByTestId('court-hearing-general-record')).toContainText('主席庭審補充')
+
+  // The primary click filters and toggles off again, identically for both kinds of seat.
+  const clearFilter = page.getByTestId('workspace-clear-role-filter')
+  for (const seat of ['role-seat-chairman', 'role-seat-defense']) {
+    await page.getByTestId(seat).click()
+    await expect(clearFilter).toBeVisible()
+    await page.getByTestId(seat).click()
+    await expect(clearFilter).not.toBeVisible()
+  }
+
+  // The ℹ control opens the role detail and leaves the filter alone.
+  for (const seat of ['role-seat-chairman-info', 'role-seat-defense-info']) {
+    await page.getByTestId(seat).click()
+    await expect(page.getByTestId('role-drawer')).toBeVisible()
+    await page.getByTestId('role-drawer-close-button').click()
+    await expect(page.getByTestId('role-drawer')).not.toBeVisible()
+    await expect(clearFilter).not.toBeVisible()
+  }
+
+  const sceneDetails = page.getByTestId('workspace-scene-details')
+  await sceneDetails.locator('summary').click()
+  // Clicking a seat selects that role, so the enlarge click has to land on bare scene.
+  // In the courtroom layout a seat sits dead centre, which is where a default click goes.
+  await sceneDetails.getByTestId('scene-enlarge-trigger').click({ position: { x: 4, y: 4 } })
+  await expect(page.getByTestId('scene-lightbox-modal')).toBeVisible()
+})
+
 test('courtroom handles two confirmed issues one at a time before the final verdict', async ({
   page,
 }) => {
@@ -3068,7 +3115,7 @@ test('meeting drawers remain usable at 375px and dirty close requires confirmati
 
   await page.getByTestId('workspace-open-materials').click()
   await expect.poll(async () => {
-    const box = await page.getByTestId('case-materials-drawer').boundingBox()
+    const box = await page.getByTestId('case-materials-modal').boundingBox()
     return box ? box.x + box.width : Number.POSITIVE_INFINITY
   }).toBeLessThanOrEqual(375)
   await page.getByTestId('case-materials-close-button').click()

@@ -42,6 +42,7 @@ import { modelDisplayLabel } from '../providers'
 import type { SceneConfig } from '../scenes'
 import ActionBar from './ActionBar.vue'
 import CouncilStage from './CouncilStage.vue'
+import Modal from './Modal.vue'
 import RecordsDrawer from './RecordsDrawer.vue'
 import RoleSilhouette from './RoleSilhouette.vue'
 
@@ -79,6 +80,7 @@ const localError = ref('')
 const roleFilter = ref<WorkspaceRoleFilter | null>(null)
 const expandedMessageIds = ref(new Set<string>())
 const contextCollapsed = ref(false)
+const sceneLightboxOpen = ref(false)
 type CourtContextTab = 'context' | 'records'
 const activeCourtContextTab = ref<CourtContextTab>('context')
 
@@ -386,38 +388,68 @@ function ruling(issue: CourtroomIssueProjection) {
 <template>
   <section v-if="isCourtroom && courtroom && workspace && selectedMeeting" class="conversation-workspace court-hearing-workspace" data-testid="court-hearing-workspace">
     <nav class="workspace-role-rail" data-testid="workspace-role-rail" aria-label="法庭角色">
-      <button type="button" class="workspace-role-button workspace-role-chairman" data-testid="role-seat-chairman" data-status="chairman" aria-label="主席" @click="emit('role-click', 'Chairman')">
-        <span class="workspace-role-avatar"><RoleSilhouette color="currentColor" :size="26" /></span>
-        <span class="workspace-role-name">主席</span>
-      </button>
+      <!-- Same seat contract as the conversation workspace: the seat is a plain
+           container, its primary action is a real <button> that filters the docket, and
+           the ℹ and model controls sit beside it instead of nested inside another
+           interactive element. The Chairman seat behaves like every other seat. -->
+      <div
+        class="workspace-role-seat workspace-role-chairman"
+        :class="{ active: selectedRoleId === 'Chairman' }"
+      >
+        <button
+          type="button"
+          class="workspace-role-button"
+          data-testid="role-seat-chairman"
+          data-status="chairman"
+          aria-label="主席"
+          :aria-pressed="selectedRoleId === 'Chairman'"
+          @click="selectRole('Chairman')"
+        >
+          <span class="workspace-role-avatar"><RoleSilhouette color="currentColor" :size="26" /></span>
+          <span class="workspace-role-name">主席</span>
+        </button>
+        <button
+          type="button"
+          class="workspace-role-info-btn"
+          data-testid="role-seat-chairman-info"
+          aria-label="主席詳情"
+          @click="emit('role-click', 'Chairman')"
+        >ℹ</button>
+      </div>
       <div
         v-for="role in workspace.roles"
         :key="role.roleId"
-        class="workspace-role-button"
+        class="workspace-role-seat"
         :class="[roleClass(role.roleId), { active: selectedRoleId === role.roleId }]"
         :style="roleColorVars(role.roleId)"
-        :data-testid="`role-seat-${role.roleId.toLowerCase()}`"
-        :data-status="role.state"
-        role="button"
-        tabindex="0"
-        :aria-label="`${role.name}，${roleStateLabel(role.state)}`"
-        :aria-pressed="selectedRoleId === role.roleId"
-        @click="selectRole(role.roleId)"
-        @keydown.enter.self="selectRole(role.roleId)"
-        @keydown.space.self.prevent="selectRole(role.roleId)"
       >
-        <span class="workspace-role-avatar">
-          <img v-if="roleIcon(role.roleId)" :src="roleIcon(role.roleId)" :alt="role.name" />
-          <RoleSilhouette v-else :color="'var(--role-color)'" :size="26" />
-          <i v-if="role.state === 'thinking'" class="workspace-thinking-pulse" aria-hidden="true"></i>
-        </span>
-        <span class="workspace-role-name">{{ role.name }}</span>
-        <span class="workspace-role-state">{{ roleStateLabel(role.state) }}</span>
-        <span v-if="openModelSeatId !== role.roleId" class="workspace-role-model"
-          :title="roleModelLabel(role.roleId)"
+        <button
+          type="button"
+          class="workspace-role-button"
+          :class="roleClass(role.roleId)"
+          :data-testid="`role-seat-${role.roleId.toLowerCase()}`"
+          :data-status="role.state"
+          :aria-label="`${role.name}，${roleStateLabel(role.state)}`"
+          :aria-pressed="selectedRoleId === role.roleId"
+          @click="selectRole(role.roleId)"
+        >
+          <span class="workspace-role-avatar">
+            <img v-if="roleIcon(role.roleId)" :src="roleIcon(role.roleId)" :alt="role.name" />
+            <RoleSilhouette v-else :color="'var(--role-color)'" :size="26" />
+            <i v-if="role.state === 'thinking'" class="workspace-thinking-pulse" aria-hidden="true"></i>
+          </span>
+          <span class="workspace-role-name">{{ role.name }}</span>
+          <span class="workspace-role-state">{{ roleStateLabel(role.state) }}</span>
+        </button>
+        <button v-if="openModelSeatId !== role.roleId" type="button" class="workspace-role-model"
+          :title="isMeetingRunning ? '會議執行中無法更換模型' : `目前模型：${roleModelLabel(role.roleId)}（點擊更換）`"
+          :aria-label="`更換${role.name}的模型，目前為 ${roleModelLabel(role.roleId)}`"
           :data-testid="`seat-model-label-${role.roleId.toLowerCase()}`"
-          @click.stop="toggleModelSelect(role.roleId)"
-        >{{ roleModelLabel(role.roleId) }}</span>
+          @click="toggleModelSelect(role.roleId)"
+        >
+          <span class="workspace-role-model-text">{{ roleModelLabel(role.roleId) }}</span>
+          <svg class="workspace-role-model-caret" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 9l6 6 6-6" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </button>
         <select v-else class="workspace-role-model-select"
           :data-testid="`seat-model-select-${role.roleId.toLowerCase()}`"
           :value="selectedModels[role.roleId]"
@@ -427,6 +459,13 @@ function ruling(issue: CourtroomIssueProjection) {
         >
           <option v-for="model in models" :key="model.id" :value="model.id">{{ modelDisplayLabel(model) }}</option>
         </select>
+        <button
+          type="button"
+          class="workspace-role-info-btn"
+          :data-testid="`role-seat-${role.roleId.toLowerCase()}-info`"
+          :aria-label="`${role.name}詳情`"
+          @click.stop="emit('role-click', role.roleId)"
+        >ℹ</button>
       </div>
       <div v-if="assignmentWarnings.length" class="assignment-fallback-warning" data-testid="assignment-fallback-warning">
         <p v-for="(warning, idx) in assignmentWarnings" :key="idx">{{ warning }}</p>
@@ -602,7 +641,7 @@ function ruling(issue: CourtroomIssueProjection) {
           <button type="button" class="btn btn-primary" data-testid="courtroom-primary-action" :disabled="busy || isMeetingRunning || primaryAction.disabled" @click="startOrContinueMeeting">{{ isMeetingRunning ? '執行中…' : primaryLabel }}</button>
         </div>
         <section><span>庭審補充</span><p>下方輸入框只會記錄補充，或請後端允許的指定角色回應；不會裁定或推進正式流程。</p></section>
-        <details class="workspace-scene-details"><summary>角色場景（次要狀態視圖）</summary><CouncilStage :scene="scene" seat-test-id-prefix="scene-role-seat" model-test-id-prefix="scene-seat-model-label" @seat-click="emit('role-click', $event)" /></details>
+        <details class="workspace-scene-details" data-testid="workspace-scene-details"><summary>角色場景（次要狀態視圖）</summary><CouncilStage :scene="scene" seat-test-id-prefix="scene-role-seat" model-test-id-prefix="scene-seat-model-label" @seat-click="emit('role-click', $event)" @scene-click="sceneLightboxOpen = true" /></details>
         </template>
         <div v-else data-testid="court-context-records-section">
           <RecordsDrawer :show="true" inline />
@@ -610,4 +649,14 @@ function ruling(issue: CourtroomIssueProjection) {
       </div>
     </aside>
   </section>
+
+  <Modal :show="sceneLightboxOpen" title="場景全覽" test-id="scene-lightbox-modal" @close="sceneLightboxOpen = false">
+    <div class="scene-lightbox">
+      <CouncilStage
+        :scene="scene"
+        seat-test-id-prefix="lb-role-seat"
+        model-test-id-prefix="lb-seat-model-label"
+      />
+    </div>
+  </Modal>
 </template>

@@ -15,7 +15,7 @@ import {
 import { activeMode, councilKey } from '../composables/useCouncil'
 import { roleDisplayName } from '../presentation'
 import { materialImpactGuidance, materialVocabulary } from '../meetingWorkspace'
-import Drawer from './Drawer.vue'
+import Modal from './Modal.vue'
 
 const props = defineProps<{ show: boolean }>()
 defineEmits<{ close: [] }>()
@@ -133,7 +133,7 @@ async function toggle(item: VersionedCaseMaterial, kind: 'evidence' | 'note') {
 </script>
 
 <template>
-  <Drawer :show="show" :title="vocab.panelTitle" test-id="case-materials-drawer" close-test-id="case-materials-close-button" @close="$emit('close')">
+  <Modal :show="show" :title="vocab.panelTitle" test-id="case-materials-modal" close-test-id="case-materials-close-button" @close="$emit('close')">
     <div v-if="materialsLoadError" class="error" data-testid="materials-load-error">
       <p>{{ materialsLoadError }}</p>
       <button type="button" class="btn btn-secondary btn-sm" data-testid="retry-materials-load-button" :disabled="materialsLoading" @click="selectedMeeting && loadMaterials(selectedMeeting.meeting_id)">重新載入</button>
@@ -172,5 +172,5 @@ async function toggle(item: VersionedCaseMaterial, kind: 'evidence' | 'note') {
       </form>
     </template>
     <p v-else-if="!materialsLoadError" class="empty-state">{{ selectedMeeting ? vocab.loading : '請先選擇會議。' }}</p>
-  </Drawer>
+  </Modal>
 </template>
