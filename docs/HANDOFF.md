@@ -30,7 +30,7 @@
 
 **目前驗收基線（任何改動後不得低於此）**：後端 `pytest` **653 passed**；frontend unit **116 passed**；前端 `npm run build` 綠；Chromium e2e **125/125 passed**（基線在 main `ebc49f2`）。Backlog #90 已通過 Standards／Spec 雙軸獨立 review，並以 direct Chromium 實際完成建立會議 → 主席補充 → AI 回合 → 角色篩選 → 長文展開 → 案卷 drawer。Backlog #91（chatroom mode）已實作並包含在此基線中；Backlog #92（chatroom UX polish，#91 驗收回饋）已實作並包含在此基線中，e2e 基線數字由 105 提升至 118（新增 13 案例）、再經第二輪修正提升至 125。
 
-**2026-07-30 第二輪驗收修正（已於 2026-07-31 Gate B 通過並 merge 至 main `ebc49f2`）**：Human Owner 於 2026-07-30 驗收 #92 時判定「只有第 9 點有做到」，退回重修。該分支共 13 commits（`943faa3`…`7b62add` 12 commits + 文件 commit `ebc49f2`，base 為 main `2ee4147`），e2e 由 118 提升至 125。內容：app-shell 視窗高度上限（此前只有法院模式有，導致 composer 隨滾輪移動）、座位改為真正的 `<button>` 並統一主席與角色行為、脈絡欄收合回收中間欄空間、紀錄密度、mode 感知的案卷用語、LINE 式訊息版面、訊息串開在最新處並跟隨自己送出、聊天室換模型 500（`UpdateMeetingSettingsRequest` 對 chatroom 強制 goal）、被 @ 角色的思考氣泡（聊天室 composer 繞過 store 導致 `pendingRoles` 從未填入）、中文選字 Enter 誤送出、提及選單鍵盤操作（`onKeyDown` 為死程式碼）、案卷 `+` 改為置中彈出視窗、法院模式套用同一套座位契約並補場景放大。獨立 Reviewer 於 2026-07-31 對 fixed range `2ee4147...ebc49f2` 審查，Verdict `pass`（無 Blocking/Major，Minor 均已裁定，詳見 spec.md §15 #92／#94），Orchestrator 已 fast-forward merge exact reviewed HEAD 並重跑 post-merge checks（653／116／build 全綠）。**狀態：`implemented / awaiting acceptance`。** Human Owner 於驗收期間另發現「+」無檔案上傳（與 round-2 無關的既有缺口），已裁定開新 backlog #96（LINE 式聊天附件），待本批驗收後另行排程。
+**2026-07-30 第二輪驗收修正（已於 2026-07-31 Gate B 通過並 merge 至 main `ebc49f2`）**：Human Owner 於 2026-07-30 驗收 #92 時判定「只有第 9 點有做到」，退回重修。該分支共 13 commits（`943faa3`…`7b62add` 12 commits + 文件 commit `ebc49f2`，base 為 main `2ee4147`），e2e 由 118 提升至 125。內容：app-shell 視窗高度上限（此前只有法院模式有，導致 composer 隨滾輪移動）、座位改為真正的 `<button>` 並統一主席與角色行為、脈絡欄收合回收中間欄空間、紀錄密度、mode 感知的案卷用語、LINE 式訊息版面、訊息串開在最新處並跟隨自己送出、聊天室換模型 500（`UpdateMeetingSettingsRequest` 對 chatroom 強制 goal）、被 @ 角色的思考氣泡（聊天室 composer 繞過 store 導致 `pendingRoles` 從未填入）、中文選字 Enter 誤送出、提及選單鍵盤操作（`onKeyDown` 為死程式碼）、案卷 `+` 改為置中彈出視窗、法院模式套用同一套座位契約並補場景放大。獨立 Reviewer 於 2026-07-31 對 fixed range `2ee4147...ebc49f2` 審查，Verdict `pass`（無 Blocking/Major，Minor 均已裁定，詳見 spec.md §15 #92／#94），Orchestrator 已 fast-forward merge exact reviewed HEAD 並重跑 post-merge checks（653／116／build 全綠）。**狀態：`accepted / done`（2026-07-31 Human Owner 驗收通過）。** Human Owner 於驗收期間另發現「+」無檔案上傳（與 round-2 無關的既有缺口），已裁定開新 backlog #96（LINE 式聊天附件）。#91 與 #92 已於同一次 closeout 一併完成 delta specs sync 至 `openspec/specs/` 並 archive。
 
 ## 2. Agent 開發佇列與目前核准批次
 
@@ -64,7 +64,7 @@ Backlog 90「會議工作區與時間序對話介面」已實作、完成法院�
 
 **目前待決事項（2026-07-31）**：
 
-1. `chatroom-ux-round2` 已於 2026-07-31 Gate B 通過並 fast-forward merge 至 main（`ebc49f2`），狀態 `implemented / awaiting acceptance`，等待 Human Owner 完成 #92 驗收（驗收項目見 Orchestrator 提供的操作清單；其中「+」上傳檔案屬 backlog #96，不屬本批驗收範圍）。驗收通過前不得 archive #91／#92 delta specs。
+1. backlog #92（`chatroom-ux-round2`）已於 2026-07-31 由 Human Owner 驗收通過，狀態 `accepted / done`；#91 與 #92 已於同一次 closeout 一併完成 delta specs sync 至 `openspec/specs/` 並 archive（`openspec/changes/archive/2026-07-31-*`），本待決項已關閉。驗收期間另裁定「+」上傳檔案屬 backlog #96，不屬本批驗收範圍。
 2. Human Owner 的角色模型綁的是訂閱制 CLI，額度已用盡（約 2026-08-05 前後重置），期間 AI 不會回應；要驗 UI 需先把角色換回 `mock-fast`／`mock-slow`。
 3. 法院場景「點擊放大」可發現性：場景正中央為座位、座位帶 `@click.stop`，該處點擊只選取角色不放大，空白處才放大。屬分層行為非失效，是否改為明確的放大按鈕待 Human Owner 決定（會同時影響聊天室）。
 4. backlog #94 第 ① 項（`spec.md` 完成狀態標記時機與 `reviewer.md` 要求衝突）需 Human Owner 擇一為準，非程式碼工作。
@@ -145,6 +145,6 @@ Backlog 90「會議工作區與時間序對話介面」已實作、完成法院�
 - Backlog 88 acceptance 修補已實作並再次通過雙軸 review；Human Owner 於 2026-07-17 驗收通過，狀態為 `accepted / done`。
 - Backlog 89 已實作、雙軸 review、597 backend／50 unit／build／90 Chromium、direct browser smoke 與 Human Owner 驗收通過，狀態為 `accepted / done`。
 - Backlog 90 已實作、雙軸 review、605 backend／61 unit／build／94 Chromium 與 direct Chromium smoke 通過，Human Owner 於 2026-07-20 驗收通過，狀態為 `accepted / done`。
-- Backlog 91 自由聊天室模式已實作、通過 650 backend／99 frontend unit／105 e2e 與 direct Chromium smoke；2026-07-23 Human Owner 驗收發現 9 項 UX 問題（見 backlog 92），視為原需求尚未完成，狀態為 `implemented / acceptance rejected — see #92`。
-- Backlog 92 聊天室工作區 UX 精修已實作，歷經 7 輪 Gate B review-fix 循環（詳見 spec.md §15 #92），最終通過 650 backend／116 frontend unit／118 e2e／build 全綠，已 fast-forward merge 至 main（`f7065a9`），狀態為 `implemented / awaiting acceptance`。Backlog 93（角色自訂）明確裁定不在本批次，記入 backlog。Backlog 94 記錄本批次 13 項 Gate B round 7 遺留 Minor（皆 non-blocker）。#91 與 #92 的 delta specs 待 Human Owner 對 #92 驗收後，於同一次 closeout 一併 sync 至 `openspec/specs/` 並 archive；#91 不獨立 sync/archive。
+- Backlog 91 自由聊天室模式已實作、通過 650 backend／99 frontend unit／105 e2e 與 direct Chromium smoke；2026-07-23 Human Owner 驗收發現 9 項 UX 問題（見 backlog 92），視為原需求尚未完成，狀態為 `implemented / acceptance rejected — see #92`；2026-07-31 依 #92 驗收通過，狀態為 `accepted / done`。
+- Backlog 92 聊天室工作區 UX 精修已實作，歷經 7 輪 Gate B review-fix 循環（詳見 spec.md §15 #92），最終通過 650 backend／116 frontend unit／118 e2e／build 全綠，已 fast-forward merge 至 main（`f7065a9`），並於 2026-07-31 完成 round-2 修正（`ebc49f2`）。Backlog 93（角色自訂）明確裁定不在本批次，記入 backlog。Backlog 94 記錄本批次 13 項 Gate B round 7 遺留 Minor（皆 non-blocker）。2026-07-31 Human Owner 驗收 #92 通過，狀態為 `accepted / done`；#91 與 #92 的 delta specs 已於同一次 closeout 一併 sync 至 `openspec/specs/` 並 archive（`openspec/changes/archive/2026-07-31-*`）；#91 不獨立 sync/archive。
 - 使用者已裁定：個人版不做多人/帳號（backlog 有註記）；案卷 Phase 2/RAG 仍延後到 backlog 79。
