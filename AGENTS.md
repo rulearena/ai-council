@@ -10,12 +10,8 @@
 
 - This file defines shared repository policy only. Every agent and runtime reads the same rules.
 - Do not infer an Executor, Reviewer, or Orchestrator role from this file, the runtime name, tool availability, prior conversations, or model identity. Roles are vendor-neutral: which AI tool executes which role is decided by the Human Owner per session, in that tool's window, and is never recorded in these docs.
-- Four roles exist: Human Owner, Orchestrator, Executor, Reviewer — definitions and the full change lifecycle (including the pre-Gate-A steps: requirement discussion and `spec.md §15` backlog registration) are in `docs/agents/multi-agent-development.md`.
-- The caller or Human Owner must explicitly assign the active role by supplying one of the dedicated prompts:
-  - Orchestrator: `docs/agent-prompts/orchestrator.md`
-  - Executor: `docs/agent-prompts/executor.md`
-  - Review-only Reviewer: `docs/agent-prompts/reviewer.md`
-- Reading order for any assigned role: `AGENTS.md` (shared policy) → `docs/agents/multi-agent-development.md` (cross-role process) → your role prompt. Role prompts contain only role-specific rules and do not repeat the other two layers.
+- AIDLC bootstrap：先讀取本專案綁定檔（`docs/agents/workflow-bindings.md`）；依其 §0 的固定 workflow source 載入中央主規範與目前角色 prompt。來源、綁定或目前角色缺漏時維持唯讀並詢問 Human Owner。
+- Four roles exist: Human Owner, Orchestrator, Executor, Reviewer — project-specific change lifecycle rules (including the pre-Gate-A steps: requirement discussion and `spec.md §15` backlog registration) are in `docs/agents/multi-agent-development.md`.
 - If no role is explicitly assigned, remain read-only and ask the Human Owner which role applies before creating artifacts, modifying files, committing, merging, archiving, or cleaning worktrees.
 - Execution and review for the same change must be performed by different agent sessions. A role override must name one exact task, does not persist to later tasks, and does not broaden filesystem or product authority.
 
