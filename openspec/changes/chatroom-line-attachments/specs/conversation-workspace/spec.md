@@ -22,7 +22,7 @@ The chatroom composer SHALL include a "+" button or equivalent that opens the un
 ## ADDED Requirements
 
 ### Requirement: Attachment bubbles in chat feed
-Binary attachment metadata SHALL be rendered in the chat feed as message bubbles: image attachments (PNG/JPG) SHALL display an inline thumbnail that opens a lightbox view on click; PDF attachments SHALL display a card with filename, size, and a download control. Text case-files SHALL NOT appear as chat bubbles. Downloading an attachment SHALL use the file_id-based download endpoint.
+Binary attachment metadata SHALL be rendered in the chat feed as message bubbles: image attachments (PNG/JPG) SHALL display an inline thumbnail that opens a lightbox view on click; PDF attachments SHALL display a card with filename, size, and a download control; any other binary file type SHALL display a generic file card with filename, size, and a download control (same structure as the PDF card). Text case-files SHALL NOT appear as chat bubbles. Downloading an attachment SHALL use the file_id-based download endpoint.
 
 #### Scenario: Image renders as thumbnail with lightbox
 - **WHEN** the chat feed contains an image attachment bubble
@@ -31,6 +31,11 @@ Binary attachment metadata SHALL be rendered in the chat feed as message bubbles
 
 #### Scenario: PDF renders as download card
 - **WHEN** the chat feed contains a PDF attachment bubble
+- **THEN** the bubble shows a card with the filename and size
+- **AND** a download control fetches the file by file_id
+
+#### Scenario: Generic binary renders as download card
+- **WHEN** the chat feed contains a binary attachment bubble of a non-image, non-PDF type (for example, a `.zip`)
 - **THEN** the bubble shows a card with the filename and size
 - **AND** a download control fetches the file by file_id
 

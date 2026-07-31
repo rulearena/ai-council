@@ -41,9 +41,9 @@
 
 ## 6. Frontend: attachment bubbles in feed
 
-- [ ] 6.1 Project `attachment-added` events to message-feed bubbles in `ConversationWorkspace.vue` message card (image thumbnail + lightbox; PDF card with filename/size/download)
+- [ ] 6.1 Project `attachment-added` events to message-feed bubbles in `ConversationWorkspace.vue` message card (image thumbnail + lightbox; PDF card and generic binary file card with filename/size/download)
 - [ ] 6.2 Ensure text case-files never render as chat bubbles (existing modal-only behavior preserved)
-- [ ] 6.3 Frontend unit tests for bubble projection (image vs PDF vs text-not-a-bubble) and lightbox behavior
+- [ ] 6.3 Frontend unit tests for bubble projection (image vs PDF vs generic binary card vs text-not-a-bubble) and lightbox behavior
 - [ ] 6.4 Playwright e2e: upload an image through `+`, assert bubble + thumbnail + download; upload a PDF, assert card; upload a non-text non-image file (e.g. `.zip`), assert binary bubble + download; upload a `.txt`, assert it goes through case-files and never appears as a bubble
 
 ## 7. Docs and wiring

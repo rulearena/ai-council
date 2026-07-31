@@ -43,7 +43,7 @@ Append an event of kind `attachment-added` via `repository.append_event` (`repos
 ### D5: Frontend — unified modal and feed projection
 - `CaseMaterialsModal.vue` gains an upload zone above the existing case-files list. File selection immediately POSTs (per decision #6); per-file status (uploading / done / error) renders inline with retry. The modal is reused across modes; courtroom labels binary attachments and case-files with "證物" wording (existing mode-aware terminology from #92 round 2).
 - "附件（N）" count = binary attachment events + active case-files. The count source comes from the meeting payload: extend `GET /meetings/{meeting_id}` `case_materials_summary` (or add an `attachments_summary`) so the label stays truthful on reload.
-- Message feed: events of kind `attachment-added` project to bubbles. Images render inline thumbnail; clicking opens a lightbox (reusing the existing modal/overlay pattern). PDFs render a card with filename/size + download link to the endpoint. Text case-files never render as bubbles.
+- Message feed: events of kind `attachment-added` project to bubbles. Images render inline thumbnail; clicking opens a lightbox (reusing the existing modal/overlay pattern). PDFs and any other binary type render a card with filename/size + download link to the endpoint (PDF card and generic binary card share one component). Text case-files never render as bubbles.
 - *Alternative considered*: separate attachment component file per type — rejected; keep a single `AttachmentBubble`-style render inside the message card with a small type switch.
 
 ### D6: Attach timing, errors, and append-only rule
