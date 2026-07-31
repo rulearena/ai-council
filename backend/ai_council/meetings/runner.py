@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any, Callable, Literal, Protocol, TypedDict
 
+from ai_council.meetings.attachments import ATTACHMENT_EVENT_KIND
 from ai_council.meetings.chatroom_context import ChatroomContextBuilder
 from ai_council.meetings.execution_state import ActiveExecutionState, MeetingExecutionStateStore
 from ai_council.meetings.deliberation import DeliberationEpochs
@@ -1431,9 +1432,13 @@ class MeetingRunner:
         return audit
 
     def _active_events(self, meeting_id: str) -> list[dict[str, Any]]:
-        return DeliberationEpochs.view(
-            self.repository.read_events(meeting_id)
-        ).active_events
+        return [
+            event
+            for event in DeliberationEpochs.view(
+                self.repository.read_events(meeting_id)
+            ).active_events
+            if event.get("step_id") != ATTACHMENT_EVENT_KIND
+        ]
 
     def _event_id(self, meeting_id: str, legacy_event_id: str) -> str:
         return DeliberationEpochs.view(

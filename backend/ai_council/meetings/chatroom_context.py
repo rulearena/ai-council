@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 from typing import Any
 
+from ai_council.meetings.attachments import ATTACHMENT_EVENT_KIND
 from ai_council.meetings.transcript import TranscriptProjector
 
 
@@ -39,7 +40,10 @@ class ChatroomContextBuilder:
     ) -> str:
         meeting_id = events[0].get("meeting_id") if events else None
         filtered = [
-            e for e in events if e.get("meeting_id") == meeting_id
+            e
+            for e in events
+            if e.get("meeting_id") == meeting_id
+            and e.get("step_id") != ATTACHMENT_EVENT_KIND
         ]
 
         quoted_event = None

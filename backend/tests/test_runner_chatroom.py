@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import io
 import json
 import re
 import time
@@ -9,6 +10,7 @@ from unittest.mock import patch
 import pytest
 
 from ai_council.meetings.repository import MeetingRepository
+from ai_council.meetings.attachments import AttachmentStore
 from ai_council.meetings.runner import (
     MeetingRunner,
     RunnerAdapters,
@@ -55,6 +57,42 @@ def build_chatroom_runner(
         prompt_renderer=PromptRenderer(prompt_dir),
         adapters=RunnerAdapters(by_name={"mock": adapter}),
     )
+
+
+def test_chat_directed_prompt_excludes_binary_attachment_metadata(
+    tmp_path: Path,
+) -> None:
+    adapter = FakeAdapter([VALID_OUTPUT])
+    runner = build_chatroom_runner(tmp_path, adapter)
+    repository = runner.repository
+    attachments = AttachmentStore(repository)
+    file_id = "attachment-secret-report"
+    attachments.save_blob("meeting-1", file_id, io.BytesIO(b"%PDF fake"))
+    attachments.record_attachment(
+        "meeting-1",
+        file_id=file_id,
+        filename="top-secret-report.pdf",
+        size=9,
+        mime_type="application/pdf",
+        extension=".pdf",
+    )
+    model_assignments = {"Blue": ModelConfig(id="mock-blue", adapter="mock")}
+
+    runner.chat_respond_as_role(
+        meeting_id="meeting-1",
+        goal="如何改善團隊溝通？",
+        role="Blue",
+        role_display_name="藍軍",
+        instruction="@Blue 你覺得怎麼樣？",
+        model_assignments=model_assignments,
+    )
+
+    assert len(adapter.requests) == 1
+    prompt = adapter.requests[0].prompt
+    assert "@Blue 你覺得怎麼樣？" in prompt
+    assert "top-secret-report.pdf" not in prompt
+    assert "attachment-added" not in prompt
+    assert "file_id" not in prompt
 
 
 def test_chat_directed_single_role_response(tmp_path: Path) -> None:
