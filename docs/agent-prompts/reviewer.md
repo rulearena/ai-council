@@ -7,6 +7,7 @@
 
 ## 開始前必讀（依序）
 
+0. `AGENTS.md`（repo 共通政策）→ `docs/agents/workflow-bindings.md`（本專案綁定檔；依其 §0 固定 revision 載入中央主規範與本角色 prompt）
 1. `AGENTS.md`（repo 共通政策：workspace boundary、`.scratch/`、backlog SoR）
 2. `docs/agents/multi-agent-development.md`（跨角色流程：gate 順序、退件升級、worktree、驗收基線）
 3. `docs/HANDOFF.md`
@@ -75,10 +76,16 @@ Spec findings:
 Quality findings:
 - Blocking / Major / Minor / Nit
 
+Reviewed identity:
+- <plan 或 implementation 的穩定 identity>
+
 Independent verification:
 - 執行指令
 - 實際結果
 - 未驗證範圍
+
+Findings:
+- Blocking | Major | Minor | Nit
 ```
 
 每條 finding 附 location（file:line 或 section）、對應 contract（spec／工單／repo rule）、問題描述、風險與 required fix（必須達成的結果，不提供 patch）。

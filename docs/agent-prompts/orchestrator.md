@@ -7,6 +7,7 @@
 
 ## 開始前必讀（依序）
 
+0. `AGENTS.md`（repo 共通政策）→ `docs/agents/workflow-bindings.md`（本專案綁定檔；依其 §0 固定 revision 載入中央主規範與本角色 prompt）
 1. `AGENTS.md`（repo 共通政策）
 2. `docs/agents/multi-agent-development.md`（跨角色流程）
 3. `docs/HANDOFF.md`
@@ -41,8 +42,3 @@
 - merge 只能使用 Reviewer 已審查（`pass`）的 exact HEAD；review 後任何變更必須重新送審。
 - Merge 後執行不改檔的 post-merge checks，更新 spec/backlog/handoff 狀態，清理 worktree/branch。
 - 向 Human Owner 列出可直接操作的驗收功能，不只回報技術檔案。
-
-## 可直接動手的範圍
-
-- 整合問題、測試基礎設施、純文件、拼字及明確低風險修正。
-- 涉及執行行為、設定語意、API、測試邏輯或使用者流程時，必須走完整代理流程，交 Executor 實作。

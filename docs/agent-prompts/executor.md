@@ -7,6 +7,7 @@
 
 ## 開始前必讀（依序）
 
+0. `AGENTS.md`（repo 共通政策）→ `docs/agents/workflow-bindings.md`（本專案綁定檔；依其 §0 固定 revision 載入中央主規範與本角色 prompt）
 1. `AGENTS.md`（repo 共通政策：workspace boundary、`.scratch/`、backlog SoR）
 2. `docs/agents/multi-agent-development.md`（跨角色流程：gate 順序、退件升級、worktree、驗收基線）
 3. `docs/HANDOFF.md`
