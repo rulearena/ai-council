@@ -70,7 +70,7 @@ Backlog 90「會議工作區與時間序對話介面」已實作、完成法院�
 3. 法院場景「點擊放大」可發現性：場景正中央為座位、座位帶 `@click.stop`，該處點擊只選取角色不放大，空白處才放大。屬分層行為非失效，是否改為明確的放大按鈕待 Human Owner 決定（會同時影響聊天室）。
 4. backlog #94 第 ① 項（`spec.md` 完成狀態標記時機與 `reviewer.md` 要求衝突）需 Human Owner 擇一為準，非程式碼工作。
 5. Human Owner 先前的「行銷」會議遺失，不在隔離區也不在 repo，尚未回復。
-6. **backlog #96（LINE 式聊天附件）已登錄 spec.md §15，非核准實作批次**：Human Owner 於 #92 驗收時裁定「+」需可上傳檔案並以訊息氣泡顯示、可下載；`.txt/.md` 讀全文注入既有案卷契約，PDF／圖片等二進位附件儲存不注入 prompt，需新後端端點。此需求反轉 #90「不建立另一套訊息附件契約」決策，須先完成需求討論、登錄（已完成）、再開 OpenSpec proposal 走 Gate A。
+6. **backlog #96（LINE 式聊天附件）**：`chatroom-line-attachments` OpenSpec change 已於 2026-07-31 Gate A 通過（fixed range `afd2c43...3b930a5`），Human Owner 已裁決檔案路由依 #96 原文（文字僅 `.txt/.md`；其餘一律二進位）。**下一步為實作（Gate B）**，依 `openspec/changes/chatroom-line-attachments/tasks.md`。
 7. **AIDLC bootstrap 已上線（2026-07-31，backlog #97）**：所有新 session 依 `docs/agents/workflow-bindings.md` §0 載入中央工作流；後續開發流程（含 #96 的 proposal → Gate A → 實作 → Gate B → closeout）應依綁定檔 §3-§4 執行。
 
 **下一批候選**：backlog #94 遺留 Minor（②③④⑤⑥⑦⑨⑩⑭⑮，其中 ⑧⑪⑫⑬ 已於 2026-07-30 修畢、⑭⑮ 為 2026-07-31 Gate B 審查新增，勿重做）、#95 遺留的 `MeetingsModal.vue` `@keyup.enter` 中文選字提早觸發，以及 backlog #96（LINE 式聊天附件，需先開 OpenSpec proposal）。尚未建立 OpenSpec change，須先登錄 `spec.md` §15 再提 proposal。#96 是否與 #94/#95 同批或獨立批次由 Human Owner 裁定。
