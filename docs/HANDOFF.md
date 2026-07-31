@@ -27,6 +27,7 @@
 | Meeting Workspace Conversation | `018df1f`–`ef3c430` | A3-1 時間序工作區、relay／parallel 共用 Conversation、Court Hearing 爭點視圖、parallel arrival-order 即時保存與 terminal 原子 publish（實作計畫：`docs/plans/2026-07-18-meeting-workspace-conversation.md`） |
 | Backlog 91 Chatroom Mode | `0c59c1e`–* | 無流程限制的 AI 聊天室模式：@角色／@all mention fanout、context token budget、聊天室 composer 與 mention autocomplete、Conversation workspace chatroom adaptation（實作計畫：`openspec/changes/ai-chat-room/`） |
 | Backlog 92 Chatroom UX Polish | `f7065a9` | #91 驗收回饋的 8 項 UX 修正：座位互動統一、篩選對稱切換、訊息頭像、chatroom 排第一、場景 lightbox、in-rail 換模型（含法院模式）、TopBar subnav 精簡、auto-scroll 根因修復（實作計畫：`openspec/changes/chatroom-ux-polish/`） |
+| VibeCoding Workflow 採用（AIDLC） | `96e083c` | 新增 `docs/agents/workflow-bindings.md`（§0-§6）；AGENTS/CLAUDE 政策入口 bootstrap；三份角色 prompt 修正（中央 source：`VibeCoding_Workflow` @ `de1aca4918`） |
 
 **目前驗收基線（任何改動後不得低於此）**：後端 `pytest` **653 passed**；frontend unit **116 passed**；前端 `npm run build` 綠；Chromium e2e **125/125 passed**（基線在 main `ebc49f2`）。Backlog #90 已通過 Standards／Spec 雙軸獨立 review，並以 direct Chromium 實際完成建立會議 → 主席補充 → AI 回合 → 角色篩選 → 長文展開 → 案卷 drawer。Backlog #91（chatroom mode）已實作並包含在此基線中；Backlog #92（chatroom UX polish，#91 驗收回饋）已實作並包含在此基線中，e2e 基線數字由 105 提升至 118（新增 13 案例）、再經第二輪修正提升至 125。
 
@@ -70,6 +71,7 @@ Backlog 90「會議工作區與時間序對話介面」已實作、完成法院�
 4. backlog #94 第 ① 項（`spec.md` 完成狀態標記時機與 `reviewer.md` 要求衝突）需 Human Owner 擇一為準，非程式碼工作。
 5. Human Owner 先前的「行銷」會議遺失，不在隔離區也不在 repo，尚未回復。
 6. **backlog #96（LINE 式聊天附件）已登錄 spec.md §15，非核准實作批次**：Human Owner 於 #92 驗收時裁定「+」需可上傳檔案並以訊息氣泡顯示、可下載；`.txt/.md` 讀全文注入既有案卷契約，PDF／圖片等二進位附件儲存不注入 prompt，需新後端端點。此需求反轉 #90「不建立另一套訊息附件契約」決策，須先完成需求討論、登錄（已完成）、再開 OpenSpec proposal 走 Gate A。
+7. **AIDLC bootstrap 已上線（2026-07-31，backlog #97）**：所有新 session 依 `docs/agents/workflow-bindings.md` §0 載入中央工作流；後續開發流程（含 #96 的 proposal → Gate A → 實作 → Gate B → closeout）應依綁定檔 §3-§4 執行。
 
 **下一批候選**：backlog #94 遺留 Minor（②③④⑤⑥⑦⑨⑩⑭⑮，其中 ⑧⑪⑫⑬ 已於 2026-07-30 修畢、⑭⑮ 為 2026-07-31 Gate B 審查新增，勿重做）、#95 遺留的 `MeetingsModal.vue` `@keyup.enter` 中文選字提早觸發，以及 backlog #96（LINE 式聊天附件，需先開 OpenSpec proposal）。尚未建立 OpenSpec change，須先登錄 `spec.md` §15 再提 proposal。#96 是否與 #94/#95 同批或獨立批次由 Human Owner 裁定。
 
@@ -123,7 +125,7 @@ Backlog 90「會議工作區與時間序對話介面」已實作、完成法院�
 
 ## 5. 工作規範（使用者的既定政策）
 
-- **角色分工（2026-07-20 起）**：目前由 OpenCode 擔任 Implementer／Integrator，負責 artifacts、隔離 worktree、TDD、review 修正、完整 gates、merge 與清理；Codex 擔任 review-only Reviewer，執行 artifacts、implementation 與 acceptance closeout 三個獨立 checkpoint，不改檔、不補 patch、不 merge。`AGENTS.md` 只保存兩邊共用政策，不會自動指派角色；每個新 session 必須由 caller／Human Owner 明確套用 `docs/agent-prompts/` 內對應 prompt，未指定時保持唯讀並詢問。完整規範見 `docs/agents/multi-agent-development.md`。
+- **角色分工（2026-07-31 起，AIDLC bootstrap）**：先讀 `docs/agents/workflow-bindings.md` 依 §0 固定 revision 載入中央主規範與角色 prompt。三角色由 Human Owner 確認皆以 session runtime 模型（目前 `opencode/big-pickle`）擔任：Orchestrator 執行並可派遣 subagent 擔任 Executor（`.worktrees/<slice>` 實作）與獨立 Reviewer（唯讀、固定輸出）；Execution 與 review 必須不同 agent session。未指定角色時保持唯讀並詢問 Human Owner。完整規範見中央 workflow source 的 `docs/agents/multi-agent-development.md`。
 - **OpenSpec（2026-07-20 起）**：新能力、跨模組架構、資料格式與 product-surface change 使用 OpenSpec proposal → specs → design → tasks；`spec.md` §15 仍是唯一 backlog SoR，既有 `.scratch/` 不搬移，小型 scoped fix 可繼續使用。OpenSpec apply-ready 不取代 Codex Gate A；Gate B ready 後才能 merge。Human Owner acceptance 後，在獨立 closeout worktree 完成 accepted/done → sync → archive → commit → Codex closeout review → exact-HEAD merge。CLI 一律透過 `scripts/openspec-local` 停用 telemetry 並限制 runtime 在 workspace。
 - **一個 feature 一個 worktree**（前後端可共用），完成即 merge 回 main 並刪 worktree/branch。已由 Human Owner 核准的整批工作，可依 `docs/agents/multi-agent-development.md` 的規範自主、連續執行，不需逐項重新取得授權；只有 Human Owner 明確指定的純治理文件、拼字或不影響行為的 trivial 修改可直接 main。
 - **TDD**：先寫 failing test、確認紅燈（且紅得有意義——參考兩份留檔計畫裡的紅燈驗證寫法）、再實作。
