@@ -6,7 +6,7 @@ Human Owner acceptance of #92 (2026-07-31) revealed the chatroom's `+` button pr
 
 - **New binary attachment store**: files are stored as blobs in a data-dir attachments directory (`<meeting_id>/attachments/`), keyed by `file_id`; metadata (filename, size, mime_type, file_id) is appended as events to `events.jsonl`. Downloads resolve the real path by `file_id`.
 - **New upload/download endpoints**: an upload endpoint (multipart) appends the metadata event and stores the blob; a download endpoint serves the blob by `file_id`. No delete or deactivate in v1 (events are append-only history).
-- **File-type routing and limits**: `.txt/.md/.markdown` follow the existing versioned case-files contract (per-file char limit, visible_roles, revision) and are AI-visible. PDF/PNG/JPG are binary attachments (10 MB/file, 50 MB/meeting, env-overridable) and are AI-invisible. Other types are rejected in v1.
+- **File-type routing and limits**: `.txt/.md` follow the existing versioned case-files contract (per-file char limit, visible_roles, revision) and are AI-visible. All other file types are stored as binary attachments (10 MB/file, 50 MB/meeting, env-overridable) and are AI-invisible.
 - **Binary attachments are visible/downloadable to all participants**; text files keep the existing case-files `visible_roles`.
 - **Unified `+` modal**: the existing `CaseMaterialsModal` gains an upload zone on top of the existing case-files list. "附件（N）" count = binary + text attachments total. Courtroom mode reuses the same modal with "證物" wording.
 - **Chat feed presentation**: images render as inline thumbnails with a lightbox; PDFs render as cards (filename/size/download); text files only appear in the case-files modal, never as chat bubbles.

@@ -1,7 +1,7 @@
 ## 1. Backend: attachment storage layer
 
 - [ ] 1.1 Add `backend/ai_council/meetings/attachments.py` with `AttachmentLimits` dataclass (per_file_bytes, per_meeting_bytes) and an environment-driven `from_environment()` mirroring `_positive_integer_environment`; default 10 MB / 50 MB
-- [ ] 1.2 Add extension → category routing (`text` for .txt/.md/.markdown, `binary` for .pdf/.png/.jpg/.jpeg, else rejected) and a fixed extension → MIME map
+- [ ] 1.2 Add extension → category routing (`text` for `.txt`/`.md`, `binary` for everything else) and a fixed extension → MIME map with `application/octet-stream` fallback
 - [ ] 1.3 Implement blob write: `save_blob(meeting_id, file_id, stream) -> Path` writing under `data_dir/meetings/<meeting_id>/attachments/<file_id>`
 - [ ] 1.4 Implement metadata event append: `record_attachment(meeting_id, file_id, filename, size, mime_type)` via `repository.append_event` with kind `attachment-added` and standard `event_id`/`step_id`/`role: "Human"` fields
 - [ ] 1.5 Implement aggregate quota projection from `attachment-added` events (no separate counter file)
@@ -11,7 +11,7 @@
 ## 2. Backend: upload/download endpoints
 
 - [ ] 2.1 Add `POST /meetings/{meeting_id}/attachments` (multipart, one file) with `meeting_transitions.synchronized` guard; validate meeting exists/not terminal; reject running meeting like `add_meeting_message`
-- [ ] 2.2 Enforce extension whitelist, per-file size limit, and per-meeting aggregate quota; return 400 with clear error message on rejection (no blob/event written)
+- [ ] 2.2 Enforce per-file size limit and per-meeting aggregate quota; return 400 with clear error message on rejection (no blob/event written)
 - [ ] 2.3 Write blob then append metadata event; return the metadata event JSON
 - [ ] 2.4 Add `GET /meetings/{meeting_id}/attachments/{file_id}` serving the blob with metadata MIME, `Content-Disposition: attachment` (inline for images), 404 for unknown file_id
 - [ ] 2.5 Wire `attachments_summary` (count + total bytes) into `GET /meetings/{meeting_id}` and `GET /meetings` list payload so the frontend count stays truthful on reload
@@ -24,11 +24,12 @@
 ## 4. Backend: deterministic tests
 
 - [ ] 4.1 Tests: blob written before event; event carries file_id/filename/size/mime_type
-- [ ] 4.2 Tests: extension routing (.txt/.md → text contract path; .pdf/.png/.jpg → binary; .zip → rejected with no blob/event)
+- [ ] 4.2 Tests: extension routing (`.txt`/`.md` → text contract path; a non-text type such as `.zip` → binary attachment stored with metadata event)
 - [ ] 4.3 Tests: per-file and per-meeting size limits enforced (default and env-overridden)
 - [ ] 4.4 Tests: download by file_id resolves real path, returns correct content-type, 404 for unknown id
 - [ ] 4.5 Tests: unknown file_id rejected; meeting deletion removes attachment blobs
 - [ ] 4.6 Tests: `attachments_summary` counts and bytes correct in meeting payloads
+- [ ] 4.7 Tests: binary attachment download is NOT restricted by `visible_roles` (any participant can download) while text case-files still honor `visible_roles`
 
 ## 5. Frontend: unified `+` modal with upload zone
 
@@ -43,7 +44,7 @@
 - [ ] 6.1 Project `attachment-added` events to message-feed bubbles in `ConversationWorkspace.vue` message card (image thumbnail + lightbox; PDF card with filename/size/download)
 - [ ] 6.2 Ensure text case-files never render as chat bubbles (existing modal-only behavior preserved)
 - [ ] 6.3 Frontend unit tests for bubble projection (image vs PDF vs text-not-a-bubble) and lightbox behavior
-- [ ] 6.4 Playwright e2e: upload an image through `+`, assert bubble + thumbnail + download; upload a PDF, assert card; upload unsupported type, assert inline error
+- [ ] 6.4 Playwright e2e: upload an image through `+`, assert bubble + thumbnail + download; upload a PDF, assert card; upload a non-text non-image file (e.g. `.zip`), assert binary bubble + download; upload a `.txt`, assert it goes through case-files and never appears as a bubble
 
 ## 7. Docs and wiring
 

@@ -2,7 +2,7 @@
 
 Chatroom UX acceptance (#92, 2026-07-31) surfaced that the `+` button and its "附件（N）" label promise uploads that do not exist: `CaseMaterialsModal.vue` only handles text case-files (`title + content + visible_roles`), and the only binary upload in the system is `NewCaseModal.vue`, which reads `.txt/.md` as text. The backend has no binary attachment contract: `case_materials.py` `MaterialVersion` is `title+content` only, and `repository.py` persists `case_files.json` plus an append-only `events.jsonl`. Backlog #96 (Human Owner approved scope expansion) mandates LINE-style attachments. This reverses spec.md #90's "no second message-attachment contract" decision.
 
-Eight grilling decisions are locked (recorded in `CONTEXT.md`): blob storage + metadata events; `.txt/.md/.markdown` → existing case-files contract, PDF/PNG/JPG → binary, others rejected; binary visible to all participants; image thumbnail + lightbox, PDF card, text stays in modal only; unified `+` modal with total "附件（N）" count, courtroom "證物" wording; immediate upload on selection; no delete/deactivate; AI unaware of binary attachments.
+Eight grilling decisions are locked (recorded in `CONTEXT.md`): blob storage + metadata events; `.txt/.md` → existing case-files contract, all other file types → binary attachments; binary visible to all participants; image thumbnail + lightbox, PDF card, text stays in modal only; unified `+` modal with total "附件（N）" count, courtroom "證物" wording; immediate upload on selection; no delete/deactivate; AI unaware of binary attachments.
 
 ## Goals / Non-Goals
 
@@ -30,9 +30,8 @@ Append an event of kind `attachment-added` via `repository.append_event` (`repos
 - *Alternative considered*: a separate `attachments.json` like `case_files.json` — rejected: violates the decision that metadata is append-only history, and would create a second source of truth not driven by events.
 
 ### D3: File-type routing and limits follow the case-file pattern
-- `.txt/.md/.markdown` → existing `CaseMaterials.add_evidence`/`add_note` path (per-file char limit, `visible_roles`, revisioning, `pending_impact`). The unified modal shows these in the existing case-files list, never as bubbles.
-- PDF/PNG/JPG(JPEG) → binary attachment. Defaults 10 MB/file and 50 MB/meeting, read from environment variables with the same `_positive_integer_environment` pattern (`api.py:130`). MIME is inferred from extension via a fixed mapping (not trusted from client headers); extension is whitelisted.
-- Anything else → rejected with a 400 and inline error; no blob or event written.
+- `.txt/.md` → existing `CaseMaterials.add_evidence`/`add_note` path (per-file char limit, `visible_roles`, revisioning, `pending_impact`). The unified modal shows these in the existing case-files list, never as bubbles.
+- All other file types → binary attachment. Defaults 10 MB/file and 50 MB/meeting, read from environment variables with the same `_positive_integer_environment` pattern (`api.py:130`). MIME is inferred from a fixed extension→MIME map (not trusted from client headers); unknown extensions fall back to `application/octet-stream`.
 - *Alternative considered*: sniffing content via `python-magic` — rejected: adds a dependency; a fixed extension→MIME map is sufficient for a local single-user app.
 
 ### D4: Upload and download endpoints

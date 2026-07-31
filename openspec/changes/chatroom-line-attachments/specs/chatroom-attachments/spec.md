@@ -17,7 +17,7 @@ The system SHALL store binary chat attachments as immutable blobs in a data-dir 
 - **THEN** the system returns a not-found error
 
 ### Requirement: Attachment file-type routing
-Uploaded files SHALL be routed by extension: `.txt`, `.md`, and `.markdown` files follow the existing versioned case-files contract (AI-visible, per-file character limit, `visible_roles`, revisioning); PDF, PNG, and JPG/JPEG files are stored as binary attachments. Any other file type SHALL be rejected in v1.
+Uploaded files SHALL be routed by extension: `.txt` and `.md` files follow the existing versioned case-files contract (AI-visible, per-file character limit, `visible_roles`, revisioning); all other file types SHALL be stored as binary attachments.
 
 #### Scenario: Text file uses case-files contract
 - **WHEN** the user uploads a `.txt` file via the `+` modal
@@ -29,9 +29,10 @@ Uploaded files SHALL be routed by extension: `.txt`, `.md`, and `.markdown` file
 - **THEN** the file is stored as a binary attachment with a metadata event
 - **AND** it appears as a downloadable card in the chat feed
 
-#### Scenario: Unsupported type rejected
+#### Scenario: Non-text file stored as binary
 - **WHEN** the user uploads a `.zip` file via the `+` modal
-- **THEN** the upload is rejected with an inline error and no blob is stored
+- **THEN** the file is stored as a binary attachment with a metadata event
+- **AND** it appears as a downloadable card in the chat feed
 
 ### Requirement: Attachment size limits
 Binary attachments SHALL be limited to 10 MB per file and 50 MB total per meeting by default. These limits SHALL be overridable via environment variables. Text attachments SHALL use the existing case-files character limits.
@@ -55,10 +56,10 @@ Binary attachments SHALL be visible and downloadable to all participants of the 
 ### Requirement: AI unaware of binary attachments
 Binary attachments SHALL NOT be injected into the model prompt and SHALL NOT be mentioned in the AI context. The AI SHALL have no knowledge that binary attachments exist in the meeting.
 
-#### Scenario: AI output ignores binary attachment
+#### Scenario: AI context excludes binary attachments
 - **WHEN** a binary attachment exists in the meeting and an AI role responds
-- **THEN** the response contains no reference to the attachment
-- **AND** the prompt sent to the model contains no attachment metadata
+- **THEN** the prompt and context assembled for the model contain no attachment metadata
+- **AND** the AI response does not reference the attachment (manual acceptance description; LLM output is not deterministically testable)
 
 ### Requirement: Attachments are append-only
 Binary attachments SHALL NOT be deletable or deactivatable in v1. An uploaded attachment, its blob, and its metadata event SHALL remain for the lifetime of the meeting.
