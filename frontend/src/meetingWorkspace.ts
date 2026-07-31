@@ -155,6 +155,11 @@ type WorkspaceEvent = {
   issue_id?: string
   issue_phase?: 'charge' | 'defense' | 'rebuttal' | 'ruling'
   interaction_type?: string
+  file_id?: string
+  filename?: string
+  size?: number
+  mime_type?: string
+  extension?: string
   parsed_output?: {
     summary?: string
     decision?: string
@@ -593,6 +598,32 @@ export function nextWorkspaceRoleFilter(
   if (!roleId) return null
   if (previous?.meetingId === meetingId && previous.roleId === roleId) return null
   return { meetingId, roleId }
+}
+
+/**
+ * 附件事件（attachment-added）沒有文字內容，由 AttachmentBubble 呈現，
+ * 不走一般文字氣泡。AI 對附件一無所知，因此它也不是 AI 發言。
+ */
+export function isAttachmentEvent(event: { step_id?: string }): boolean {
+  return event.step_id === 'attachment-added'
+}
+
+export function formatAttachmentSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
+}
+
+export function materialCountFor(meeting: {
+  case_materials?: { evidence?: Array<{ status: string }> } | null
+  case_files?: Array<unknown> | null
+  attachments_summary?: { count: number } | null
+} | null | undefined): number {
+  if (!meeting) return 0
+  const evidence = meeting.case_materials?.evidence?.filter((item) => item.status === 'active').length
+    ?? meeting.case_files?.length
+    ?? 0
+  return evidence + (meeting.attachments_summary?.count ?? 0)
 }
 
 function allWorkspaceMessages(workspace: MeetingWorkspaceProjection): WorkspaceMessage[] {

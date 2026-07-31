@@ -10,7 +10,9 @@ import {
   type CouncilRole,
 } from '../composables/useCouncil'
 import {
+  isAttachmentEvent,
   latestWorkspaceMessageTarget,
+  materialCountFor,
   messageClampPolicy,
   nextWorkspaceRoleFilter,
   projectMeetingWorkspace,
@@ -24,6 +26,7 @@ import {
 import type { SceneConfig } from '../scenes'
 import { modelDisplayLabel } from '../providers'
 import ActionBar from './ActionBar.vue'
+import AttachmentBubble from './AttachmentBubble.vue'
 import ChatroomComposer from './ChatroomComposer.vue'
 import CouncilStage from './CouncilStage.vue'
 import Modal from './Modal.vue'
@@ -58,9 +61,7 @@ const contextCollapsed = ref(false)
 const mobileContextOpen = ref(false)
 const quotedMessage = ref<{ eventId: string; preview: string } | null>(null)
 const isChatroom = computed(() => shouldShowChatroomComposer(activeMode.value.category))
-const materialCount = computed(() => selectedMeeting.value?.case_materials?.evidence.filter((item) => item.status === 'active').length
-  ?? selectedMeeting.value?.case_files?.length
-  ?? 0)
+const materialCount = computed(() => materialCountFor(selectedMeeting.value))
 const latestChairMessage = computed(() => chairmanEvents.value.at(-1)?.content ?? '')
 const assignmentWarnings = computed(() => {
   const participants = selectedMeeting.value?.participants ?? []
@@ -432,19 +433,26 @@ async function retryRole(roleId: string) {
             class="workspace-message-time"
             :datetime="message.createdAt"
           >{{ messageTime(message) }}</time>
-          <p
-            class="workspace-message-content"
-            :class="{ collapsed: messageClampPolicy(message.content).collapsible && !isExpanded(message) }"
-          >{{ message.content || (message.kind === 'failed' ? '本次回應失敗。' : '（沒有文字內容）') }}</p>
-          <button
-            v-if="messageClampPolicy(message.content).collapsible"
-            type="button"
-            class="workspace-message-toggle"
-            :aria-expanded="isExpanded(message)"
-            :aria-controls="`workspace-message-${message.id}`"
-            :data-testid="`workspace-message-toggle-${message.id}`"
-            @click="toggleMessage(message.id)"
-          >{{ isExpanded(message) ? '收合長文' : '展開完整發言' }}</button>
+          <AttachmentBubble
+            v-if="isAttachmentEvent(message.event)"
+            :meeting-id="selectedMeeting.meeting_id"
+            :event="message.event"
+          />
+          <template v-else>
+            <p
+              class="workspace-message-content"
+              :class="{ collapsed: messageClampPolicy(message.content).collapsible && !isExpanded(message) }"
+            >{{ message.content || (message.kind === 'failed' ? '本次回應失敗。' : '（沒有文字內容）') }}</p>
+            <button
+              v-if="messageClampPolicy(message.content).collapsible"
+              type="button"
+              class="workspace-message-toggle"
+              :aria-expanded="isExpanded(message)"
+              :aria-controls="`workspace-message-${message.id}`"
+              :data-testid="`workspace-message-toggle-${message.id}`"
+              @click="toggleMessage(message.id)"
+            >{{ isExpanded(message) ? '收合長文' : '展開完整發言' }}</button>
+          </template>
           <button
             v-if="isChatroom && message.kind !== 'human' && message.kind !== 'system'"
             type="button"
