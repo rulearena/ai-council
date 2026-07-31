@@ -24,7 +24,7 @@
 | 專案根目錄 | `/Users/chrischiu/SynologyDrive/Project/AI_Council` |
 | 主分支 | main |
 | 專案政策入口 | `AGENTS.md`、`CLAUDE.md` |
-| 專案必讀文件 | `docs/agents/multi-agent-development.md`、`docs/agent-prompts/{orchestrator,executor,reviewer}.md`、`docs/HANDOFF.md`、`CONTEXT.md`、`spec.md` §15（依閱讀順序） |
+| 專案必讀文件 | `docs/agents/multi-agent-development.md`（本專案自有內容；與 §0 中央規範為不同文件。三角色分工、gate 順序、acceptance 以 §0 載入的中央規範為準；專案特定工具與 §5 不可破壞規則以本檔為準）、`docs/agent-prompts/{orchestrator,executor,reviewer}.md`、`docs/HANDOFF.md`、`CONTEXT.md`、`spec.md` §15（依閱讀順序） |
 
 ## 2. 三角色執行者與模型（Human Owner 核准）
 
@@ -38,7 +38,7 @@
 
 | 階段／檢查點 | 唯一控制入口 | 調用方式或專案指引位置 | Canonical 輸出／狀態 | 負責角色 |
 |---|---|---|---|---|
-| Idea — 需求探索 | `/grill-with-docs` | `.opencode/skills/`、`.claude/skills/` | `spec.md` §15 backlog 登錄 | Orchestrator |
+| Idea — 需求探索 | `/grill-with-docs` | `.claude/skills/grill-with-docs/` | `spec.md` §15 backlog 登錄 | Orchestrator |
 | Plan — 實作規劃 | `scripts/openspec-local` proposal/change | `openspec/changes/{change}/`（`.opencode/commands/opsx-propose.md`） | proposal、delta specs、design、tasks | Orchestrator |
 | review(doc) | AI Council Gate A Reviewer procedure | `docs/agent-prompts/reviewer.md` §Gate A | Verdict 摘要 + reviewed plan identity（記入 `spec.md` §15） | Reviewer |
 | Execute — 實作驅動 | `scripts/openspec-local apply` | `.opencode/commands/opsx-apply.md` | 固定 implementation identity（base...HEAD commit） | Executor |
