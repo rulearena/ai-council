@@ -28,9 +28,9 @@
 | Backlog 91 Chatroom Mode | `0c59c1e`–* | 無流程限制的 AI 聊天室模式：@角色／@all mention fanout、context token budget、聊天室 composer 與 mention autocomplete、Conversation workspace chatroom adaptation（實作計畫：`openspec/changes/ai-chat-room/`） |
 | Backlog 92 Chatroom UX Polish | `f7065a9` | #91 驗收回饋的 8 項 UX 修正：座位互動統一、篩選對稱切換、訊息頭像、chatroom 排第一、場景 lightbox、in-rail 換模型（含法院模式）、TopBar subnav 精簡、auto-scroll 根因修復（實作計畫：`openspec/changes/chatroom-ux-polish/`） |
 
-**目前驗收基線（任何改動後不得低於此）**：後端 `pytest` **653 passed**；frontend unit **116 passed**；前端 `npm run build` 綠；Chromium e2e **125/125 passed**（基線在 `chatroom-ux-round2` 分支上；main 仍為 653／116／build／118）。Backlog #90 已通過 Standards／Spec 雙軸獨立 review，並以 direct Chromium 實際完成建立會議 → 主席補充 → AI 回合 → 角色篩選 → 長文展開 → 案卷 drawer。Backlog #91（chatroom mode）已實作並包含在此基線中；Backlog #92（chatroom UX polish，#91 驗收回饋）已實作並包含在此基線中，e2e 基線數字由 105 提升至 118（新增 13 案例）。
+**目前驗收基線（任何改動後不得低於此）**：後端 `pytest` **653 passed**；frontend unit **116 passed**；前端 `npm run build` 綠；Chromium e2e **125/125 passed**（基線在 main `ebc49f2`）。Backlog #90 已通過 Standards／Spec 雙軸獨立 review，並以 direct Chromium 實際完成建立會議 → 主席補充 → AI 回合 → 角色篩選 → 長文展開 → 案卷 drawer。Backlog #91（chatroom mode）已實作並包含在此基線中；Backlog #92（chatroom UX polish，#91 驗收回饋）已實作並包含在此基線中，e2e 基線數字由 105 提升至 118（新增 13 案例）、再經第二輪修正提升至 125。
 
-**2026-07-30 第二輪驗收修正（分支 `chatroom-ux-round2`，尚未合併）**：Human Owner 於 2026-07-30 驗收 #92 時判定「只有第 9 點有做到」，退回重修。該分支 11 個 commit（`943faa3`…`7b62add`，base 為 main `2ee4147`），e2e 由 118 提升至 125。內容：app-shell 視窗高度上限（此前只有法院模式有，導致 composer 隨滾輪移動）、座位改為真正的 `<button>` 並統一主席與角色行為、脈絡欄收合回收中間欄空間、紀錄密度、mode 感知的案卷用語、LINE 式訊息版面、訊息串開在最新處並跟隨自己送出、聊天室換模型 500（`UpdateMeetingSettingsRequest` 對 chatroom 強制 goal）、被 @ 角色的思考氣泡（聊天室 composer 繞過 store 導致 `pendingRoles` 從未填入）、中文選字 Enter 誤送出、提及選單鍵盤操作（`onKeyDown` 為死程式碼）、案卷 `+` 改為置中彈出視窗、法院模式套用同一套座位契約並補場景放大。**狀態：`implemented / awaiting acceptance`，等待 Human Owner 驗收後才可 merge。**
+**2026-07-30 第二輪驗收修正（已於 2026-07-31 Gate B 通過並 merge 至 main `ebc49f2`）**：Human Owner 於 2026-07-30 驗收 #92 時判定「只有第 9 點有做到」，退回重修。該分支共 13 commits（`943faa3`…`7b62add` 12 commits + 文件 commit `ebc49f2`，base 為 main `2ee4147`），e2e 由 118 提升至 125。內容：app-shell 視窗高度上限（此前只有法院模式有，導致 composer 隨滾輪移動）、座位改為真正的 `<button>` 並統一主席與角色行為、脈絡欄收合回收中間欄空間、紀錄密度、mode 感知的案卷用語、LINE 式訊息版面、訊息串開在最新處並跟隨自己送出、聊天室換模型 500（`UpdateMeetingSettingsRequest` 對 chatroom 強制 goal）、被 @ 角色的思考氣泡（聊天室 composer 繞過 store 導致 `pendingRoles` 從未填入）、中文選字 Enter 誤送出、提及選單鍵盤操作（`onKeyDown` 為死程式碼）、案卷 `+` 改為置中彈出視窗、法院模式套用同一套座位契約並補場景放大。獨立 Reviewer 於 2026-07-31 對 fixed range `2ee4147...ebc49f2` 審查，Verdict `pass`（無 Blocking/Major，Minor 均已裁定，詳見 spec.md §15 #92／#94），Orchestrator 已 fast-forward merge exact reviewed HEAD 並重跑 post-merge checks（653／116／build 全綠）。**狀態：`implemented / awaiting acceptance`。** Human Owner 於驗收期間另發現「+」無檔案上傳（與 round-2 無關的既有缺口），已裁定開新 backlog #96（LINE 式聊天附件），待本批驗收後另行排程。
 
 ## 2. Agent 開發佇列與目前核准批次
 
@@ -64,13 +64,14 @@ Backlog 90「會議工作區與時間序對話介面」已實作、完成法院�
 
 **目前待決事項（2026-07-31）**：
 
-1. `chatroom-ux-round2` 尚未驗收也尚未合併。在其上再疊新批次即是先前出問題的模式，建議先驗收＋merge 再開下一批。
+1. `chatroom-ux-round2` 已於 2026-07-31 Gate B 通過並 fast-forward merge 至 main（`ebc49f2`），狀態 `implemented / awaiting acceptance`，等待 Human Owner 完成 #92 驗收（驗收項目見 Orchestrator 提供的操作清單；其中「+」上傳檔案屬 backlog #96，不屬本批驗收範圍）。驗收通過前不得 archive #91／#92 delta specs。
 2. Human Owner 的角色模型綁的是訂閱制 CLI，額度已用盡（約 2026-08-05 前後重置），期間 AI 不會回應；要驗 UI 需先把角色換回 `mock-fast`／`mock-slow`。
 3. 法院場景「點擊放大」可發現性：場景正中央為座位、座位帶 `@click.stop`，該處點擊只選取角色不放大，空白處才放大。屬分層行為非失效，是否改為明確的放大按鈕待 Human Owner 決定（會同時影響聊天室）。
 4. backlog #94 第 ① 項（`spec.md` 完成狀態標記時機與 `reviewer.md` 要求衝突）需 Human Owner 擇一為準，非程式碼工作。
 5. Human Owner 先前的「行銷」會議遺失，不在隔離區也不在 repo，尚未回復。
+6. **backlog #96（LINE 式聊天附件）已登錄 spec.md §15，非核准實作批次**：Human Owner 於 #92 驗收時裁定「+」需可上傳檔案並以訊息氣泡顯示、可下載；`.txt/.md` 讀全文注入既有案卷契約，PDF／圖片等二進位附件儲存不注入 prompt，需新後端端點。此需求反轉 #90「不建立另一套訊息附件契約」決策，須先完成需求討論、登錄（已完成）、再開 OpenSpec proposal 走 Gate A。
 
-**下一批候選**：backlog #94 遺留 Minor（②③④⑤⑥⑦⑨⑩，其中 ⑧⑪⑫⑬ 已於 2026-07-30 修畢，勿重做）與 #95 遺留的 `MeetingsModal.vue` `@keyup.enter` 中文選字提早觸發。尚未建立 OpenSpec change，須先登錄 `spec.md` §15 再提 proposal。
+**下一批候選**：backlog #94 遺留 Minor（②③④⑤⑥⑦⑨⑩⑭⑮，其中 ⑧⑪⑫⑬ 已於 2026-07-30 修畢、⑭⑮ 為 2026-07-31 Gate B 審查新增，勿重做）、#95 遺留的 `MeetingsModal.vue` `@keyup.enter` 中文選字提早觸發，以及 backlog #96（LINE 式聊天附件，需先開 OpenSpec proposal）。尚未建立 OpenSpec change，須先登錄 `spec.md` §15 再提 proposal。#96 是否與 #94/#95 同批或獨立批次由 Human Owner 裁定。
 
 **Human Owner follow-up**：新角色立繪由使用者自行產圖，不屬於 agent 開發佇列或產品執行批次。
 
