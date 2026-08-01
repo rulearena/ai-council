@@ -34,7 +34,7 @@ VERDICT_DECISIONS = {
     "reject",
     "insufficient-evidence",
 }
-EVIDENCE_REF_PATTERN = re.compile(r"\[證物[零一二三四五六七八九十百千萬]+\]")
+EVIDENCE_REF_PATTERN = re.compile(r"\[(?:證物|附件)[零一二三四五六七八九十百千萬]+\]")
 STRUCTURED_VERDICT_FIELDS = {
     "summary",
     "decision",

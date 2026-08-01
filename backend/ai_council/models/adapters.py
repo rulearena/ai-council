@@ -154,7 +154,7 @@ def _visible_case_file_anchors(prompt: str) -> list[str]:
     start += len(heading)
     end = prompt.find("\n\nPrior transcript:", start)
     case_files_block = prompt[start:] if end == -1 else prompt[start:end]
-    anchors = re.findall(r"^### (\[證物[^\[\]\n]+\])", case_files_block, re.MULTILINE)
+    anchors = re.findall(r"^### (\[(?:證物|附件)[^\[\]\n]+\])", case_files_block, re.MULTILINE)
     return list(dict.fromkeys(anchors))
 
 

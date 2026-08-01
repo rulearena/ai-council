@@ -776,7 +776,7 @@ def create_app(
                 model_pricing={},
                 meeting_assignments=meeting_assignments,
             ),
-            "case_files": case_file_manifest(case_files),
+            "case_files": case_file_manifest(case_files, mode_id=mode.id),
             "materials_revision": 0,
         }
 
@@ -856,9 +856,13 @@ def create_app(
                 workflow_events=workflow_events,
             ),
             "events": project_events(events),
-            "case_files": active_case_evidence_projection(material_view),
+            "case_files": active_case_evidence_projection(
+                material_view, mode_id=metadata.get("mode_id")
+            ),
             "case_materials": project_case_materials(
-                material_view, active_epoch_id=deliberation.active_epoch.id
+                material_view,
+                active_epoch_id=deliberation.active_epoch.id,
+                mode_id=metadata.get("mode_id"),
             ),
             "attachments_summary": {
                 "count": attachment_summary.count,
@@ -922,13 +926,15 @@ def create_app(
         active_epoch_id = DeliberationEpochs.view(
             repository.read_events(meeting_id)
         ).active_epoch.id
-        return project_case_materials(view, active_epoch_id=active_epoch_id)
+        return project_case_materials(
+            view, active_epoch_id=active_epoch_id, mode_id=metadata.get("mode_id")
+        )
 
     @app.get("/meetings/{meeting_id}/materials")
     def get_case_materials(
         meeting_id: str, revision: int | None = None
     ) -> dict[str, Any]:
-        metadata_store.get(meeting_id)
+        metadata = metadata_store.get(meeting_id)
         active_epoch_id = DeliberationEpochs.view(
             repository.read_events(meeting_id)
         ).active_epoch.id
@@ -940,7 +946,9 @@ def create_app(
             )
         except CaseMaterialValidationError as error:
             raise HTTPException(status_code=404, detail=str(error)) from error
-        return project_case_materials(view, active_epoch_id=active_epoch_id)
+        return project_case_materials(
+            view, active_epoch_id=active_epoch_id, mode_id=metadata.get("mode_id")
+        )
 
     @app.post("/meetings/{meeting_id}/materials/evidence")
     @meeting_transitions.synchronized
@@ -3092,7 +3100,17 @@ def normalize_case_files(
     return case_files
 
 
-def case_file_manifest(case_files: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def evidence_anchor_label(mode_id: str | None) -> str:
+    return "附件" if mode_id and mode_id != "courtroom" else "證物"
+
+
+def localize_evidence_anchor(anchor: str, mode_id: str | None) -> str:
+    return anchor.replace("證物", "附件") if evidence_anchor_label(mode_id) == "附件" else anchor
+
+
+def case_file_manifest(
+    case_files: list[dict[str, Any]], *, mode_id: str | None
+) -> list[dict[str, Any]]:
     return [
         {
             "id": str(item["id"]),
@@ -3102,7 +3120,7 @@ def case_file_manifest(case_files: list[dict[str, Any]]) -> list[dict[str, Any]]
             "visible_roles": list(item["visible_roles"]),
             "size": int(item["size"]),
         }
-        for item in project_case_files(case_files)
+        for item in project_case_files(case_files, mode_id=mode_id)
     ]
 
 
@@ -3138,7 +3156,9 @@ def chinese_integer(value: int) -> str:
     return f"{section(high)}萬{separator}{section(low) if low else ''}"
 
 
-def project_case_files(case_files: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def project_case_files(
+    case_files: list[dict[str, Any]], *, mode_id: str | None
+) -> list[dict[str, Any]]:
     projected: list[dict[str, Any]] = []
     for position, item in enumerate(case_files, start=1):
         evidence_index = int(item.get("evidence_index", position))
@@ -3146,14 +3166,17 @@ def project_case_files(case_files: list[dict[str, Any]]) -> list[dict[str, Any]]
             {
                 **item,
                 "evidence_index": evidence_index,
-                "citation_anchor": str(item.get("citation_anchor") or citation_anchor(evidence_index)),
+                "citation_anchor": localize_evidence_anchor(
+                    str(item.get("citation_anchor") or citation_anchor(evidence_index)),
+                    mode_id,
+                ),
             }
         )
     return projected
 
 
 def project_case_materials(
-    view: CaseMaterialsView, *, active_epoch_id: str
+    view: CaseMaterialsView, *, active_epoch_id: str, mode_id: str | None
 ) -> dict[str, Any]:
     def project_version(version: Any) -> dict[str, Any]:
         return {
@@ -3180,7 +3203,7 @@ def project_case_materials(
             {
                 "id": item.id,
                 "evidence_index": item.evidence_index,
-                "citation_anchor": item.citation_anchor,
+                "citation_anchor": localize_evidence_anchor(item.citation_anchor, mode_id),
                 "status": item.status,
                 "active_version": item.active_version,
                 "versions": [project_version(version) for version in item.versions],
@@ -3210,7 +3233,9 @@ def project_case_materials(
     }
 
 
-def active_case_material_prompt_items(view: CaseMaterialsView) -> list[dict[str, Any]]:
+def active_case_material_prompt_items(
+    view: CaseMaterialsView, *, mode_id: str | None
+) -> list[dict[str, Any]]:
     items: list[dict[str, Any]] = []
     for evidence in view.evidence:
         if evidence.status != "active":
@@ -3225,7 +3250,7 @@ def active_case_material_prompt_items(view: CaseMaterialsView) -> list[dict[str,
                 "kind": "evidence",
                 "id": evidence.id,
                 "evidence_index": evidence.evidence_index,
-                "citation_anchor": evidence.citation_anchor,
+                "citation_anchor": localize_evidence_anchor(evidence.citation_anchor, mode_id),
                 "version": evidence.active_version,
                 "title": version.title,
                 "content": version.content,
@@ -3252,10 +3277,12 @@ def active_case_material_prompt_items(view: CaseMaterialsView) -> list[dict[str,
     return items
 
 
-def active_case_evidence_projection(view: CaseMaterialsView) -> list[dict[str, Any]]:
+def active_case_evidence_projection(
+    view: CaseMaterialsView, *, mode_id: str | None
+) -> list[dict[str, Any]]:
     return [
         {key: value for key, value in item.items() if key not in {"kind", "version"}}
-        for item in active_case_material_prompt_items(view)
+        for item in active_case_material_prompt_items(view, mode_id=mode_id)
         if item["kind"] == "evidence"
     ]
 
@@ -3266,11 +3293,12 @@ def meeting_inputs_for_runner(
     *,
     materials_revision: int | None = None,
 ) -> dict[str, Any]:
+    mode_id = metadata.get("mode_id")
     inputs: dict[str, Any] = dict(metadata.get("inputs") or {})
     inputs.pop(CASE_FILES_BY_ROLE_INPUT, None)
-    inputs[CASE_EVIDENCE_BY_ROLE_INPUT] = case_evidence_by_role(case_files)
+    inputs[CASE_EVIDENCE_BY_ROLE_INPUT] = case_evidence_by_role(case_files, mode_id=mode_id)
     if case_files:
-        inputs[CASE_FILES_BY_ROLE_INPUT] = case_files_by_role(case_files)
+        inputs[CASE_FILES_BY_ROLE_INPUT] = case_files_by_role(case_files, mode_id=mode_id)
     if materials_revision is not None:
         inputs[MATERIALS_REVISION_INPUT] = materials_revision
     return inputs
@@ -3281,7 +3309,7 @@ def material_inputs_for_runner(
 ) -> dict[str, Any]:
     inputs = meeting_inputs_for_runner(
         metadata,
-        active_case_material_prompt_items(view),
+        active_case_material_prompt_items(view, mode_id=metadata.get("mode_id")),
         materials_revision=view.revision,
     )
     latest = view.revision_history[-1]
@@ -3293,7 +3321,10 @@ def material_inputs_for_runner(
     return inputs
 
 
-def case_files_by_role(case_files: list[dict[str, Any]]) -> dict[str, str]:
+def case_files_by_role(
+    case_files: list[dict[str, Any]], *, mode_id: str | None
+) -> dict[str, str]:
+    label = evidence_anchor_label(mode_id)
     grouped: dict[str, list[str]] = {}
     for item in case_files:
         title = str(item.get("title", "")).strip()
@@ -3303,12 +3334,13 @@ def case_files_by_role(case_files: list[dict[str, Any]]) -> dict[str, str]:
         if item.get("kind") == "note":
             block = f"### 案件備註：{title}\n{content}"
         else:
-            block = f"### {item['citation_anchor']} {title}\n{content}"
+            anchor = localize_evidence_anchor(str(item["citation_anchor"]), mode_id)
+            block = f"### {anchor} {title}\n{content}"
         for role in item.get("visible_roles") or []:
             grouped.setdefault(str(role), []).append(block)
     instruction = (
-        "引用案卷中的事實或主張時，必須附上對應的 [證物…] 引用錨點；"
-        "不可假造不存在的證物錨點。"
+        f"引用案卷中的事實或主張時，必須附上對應的 [{label}…] 引用錨點；"
+        f"不可假造不存在的{label}錨點。"
     )
     rendered = {
         role: instruction + "\n\n" + "\n\n".join(blocks)
@@ -3319,7 +3351,7 @@ def case_files_by_role(case_files: list[dict[str, Any]]) -> dict[str, str]:
 
 
 def case_evidence_by_role(
-    case_files: list[dict[str, Any]],
+    case_files: list[dict[str, Any]], *, mode_id: str | None
 ) -> dict[str, list[dict[str, Any]]]:
     grouped: dict[str, list[dict[str, Any]]] = {}
     for item in case_files:
@@ -3327,7 +3359,7 @@ def case_evidence_by_role(
             continue
         block = {
             "id": item["id"],
-            "citation_anchor": item["citation_anchor"],
+            "citation_anchor": localize_evidence_anchor(str(item["citation_anchor"]), mode_id),
             "version": item["version"],
             "content": item["content"],
         }
@@ -4086,7 +4118,9 @@ def project_meeting_summary(
             project_participants(mode, metadata),
             events=events,
         ),
-        "case_files": case_file_manifest(metadata.get("case_files") or []),
+        "case_files": case_file_manifest(
+            metadata.get("case_files") or [], mode_id=metadata.get("mode_id")
+        ),
         "courtroom": project_courtroom(metadata, workflow_events),
         "deliberation": {
             "active_epoch_id": deliberation.active_epoch.id,
