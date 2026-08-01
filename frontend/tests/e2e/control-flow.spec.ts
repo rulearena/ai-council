@@ -43,7 +43,9 @@ async function createMeetingViaNewCase(
   for (const [index, file] of (options.caseFiles ?? []).entries()) {
     const fileNumber = index + 1
     await page.getByTestId('add-case-file-button').click()
-    const expectedAnchor = fileNumber === 1 ? '[證物一]' : '[證物二]'
+    const expectedAnchor = modeId === 'courtroom'
+      ? fileNumber === 1 ? '[證物一]' : '[證物二]'
+      : fileNumber === 1 ? '[附件一]' : '[附件二]'
     await expect(page.getByTestId(`case-file-${fileNumber}-evidence-anchor`)).toHaveText(
       expectedAnchor,
     )
@@ -977,7 +979,7 @@ test('user can run a mock meeting and add chair feedback', async ({ page }) => {
   await expect(page.getByTestId('workspace-message-feed')).toContainText('裁決')
   await expect(page.getByTestId('workspace-message-feed')).toContainText('有條件核准')
   await expect(page.getByTestId('workspace-message-feed')).toContainText('Mock finding')
-  await expect(page.getByTestId('workspace-message-feed')).toContainText('[證物一]')
+  await expect(page.getByTestId('workspace-message-feed')).toContainText('[附件一]')
   await expect(page.getByTestId('workspace-message-feed')).toContainText('Verify the result.')
   await expect(page.getByTestId('workspace-message-feed')).toContainText('Is more evidence available?')
   await page.getByTestId('workspace-clear-role-filter').click()
@@ -2836,7 +2838,7 @@ test('ordinary restart archives the prior epoch without duplicating evidence', a
 
   await page.getByTestId('workspace-open-materials').click()
   await expect(page.getByTestId('case-evidence-card')).toHaveCount(1)
-  await expect(page.getByTestId('case-evidence-card')).toContainText('[證物一]')
+  await expect(page.getByTestId('case-evidence-card')).toContainText('[附件一]')
   await expect(page.getByTestId('case-evidence-card')).toContainText('v1')
 })
 
@@ -3000,7 +3002,7 @@ test('versioned evidence and promoted notes trigger a visible restart gate', asy
   await expect(page.getByTestId('advanced-options-panel')).toHaveCount(0)
   await page.getByTestId('workspace-open-materials').click()
   await expect(page.getByTestId('materials-impact-warning')).toHaveCount(0)
-  await expect(page.getByTestId('case-evidence-card')).toContainText('[證物一]')
+  await expect(page.getByTestId('case-evidence-card')).toContainText('[附件一]')
   await expect(page.getByTestId('case-evidence-card')).toContainText('v2')
   await expect(page.getByTestId('case-note-card')).toContainText('固定案件事實')
 })
