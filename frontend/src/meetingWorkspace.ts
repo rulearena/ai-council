@@ -95,6 +95,14 @@ export function materialImpactGuidance(modeId: string): string {
     : '為避免新舊資料混用，目前已暫停 AI。請到「流程操作」輸入原因並重開全部審議。'
 }
 
+/**
+ * 是否有 AI 已發言（Human/System 以外的角色完成回應）。有 AI 發言後變更案卷
+ * 會觸發 material_change_impact，AI 將暫停並需重開審議，因此需要先確認。
+ */
+export function hasAiOutput(events: Array<{ role: string; status?: string }> | undefined): boolean {
+  return (events ?? []).some((event) => !['Human', 'System'].includes(event.role) && event.status === 'completed')
+}
+
 export type MaterialVocabulary = {
   panelTitle: string
   itemPlural: string
@@ -130,6 +138,16 @@ export function materialVocabulary(modeId: string): MaterialVocabulary {
     changedTitle: '附件已在 AI 發言後變更',
     loading: '正在載入附件…',
   }
+}
+
+/**
+ * AI 已發言時，儲存或停用案卷前顯示的確認訊息。用語與 materialImpactGuidance
+ * 一致：法庭用「證物／案卷」，其他模式用中性的「附件／資料」。
+ */
+export function materialImpactConfirmMessage(vocab: MaterialVocabulary): string {
+  return vocab.itemPlural === '證物'
+    ? '此變更會納入 AI 可見的案卷與證物；儲存後 AI 會暫停並需重開審議，確定儲存？'
+    : '此變更會納入 AI 可見的附件與資料；儲存後 AI 會暫停並需重開審議，確定儲存？'
 }
 
 type WorkspaceParticipant = {
