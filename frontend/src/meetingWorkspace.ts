@@ -150,6 +150,44 @@ export function materialImpactConfirmMessage(modeId: string): string {
     : '此變更會納入 AI 可見的附件與資料；儲存後 AI 會暫停並需重開審議，確定儲存？'
 }
 
+const ANCHOR_DIGITS = '零一二三四五六七八九'
+
+/**
+ * 引用錨點與後端 `citation_anchor` 同源：法院用「證物」，其他模式（聊天室、接力、平行）
+ * 用中性的「附件」，與 materialVocabulary 一致。
+ */
+export function draftEvidenceAnchor(index: number, modeId: string): string {
+  const section = (value: number) => {
+    let result = ''
+    let pendingZero = false
+    for (const [divisor, unit] of [
+      [1000, '千'],
+      [100, '百'],
+      [10, '十'],
+      [1, ''],
+    ] as const) {
+      const digit = Math.floor(value / divisor)
+      value %= divisor
+      if (digit) {
+        if (pendingZero && result) result += ANCHOR_DIGITS[0]
+        if (!(divisor === 10 && digit === 1 && !result)) result += ANCHOR_DIGITS[digit]
+        result += unit
+        pendingZero = false
+      } else if (result && value) {
+        pendingZero = true
+      }
+    }
+    return result
+  }
+  const high = Math.floor(index / 10_000)
+  const low = index % 10_000
+  const numeral = high
+    ? `${section(high)}萬${low && low < 1000 ? ANCHOR_DIGITS[0] : ''}${low ? section(low) : ''}`
+    : section(low)
+  const label = modeId === 'courtroom' ? '證物' : '附件'
+  return `[${label}${numeral}]`
+}
+
 type WorkspaceParticipant = {
   role_id: string
   display_name?: string | null
