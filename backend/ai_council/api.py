@@ -147,6 +147,52 @@ def _positive_integer_environment(name: str, default: int) -> int:
     return value
 
 
+# A multipart request body carries boundary + part headers on top of the file
+# bytes themselves, so a declared Content-Length is always a little above the
+# file size.  This slack lets the per-file limit be enforced against the parsed
+# file while still bounding how much of the request is ever buffered.
+_MULTIPART_OVERHEAD_BYTES = 64 * 1024
+
+
+async def _read_upload_body(request: Request, file_limit_bytes: int) -> bytes:
+    """Read a multipart upload body without buffering beyond the per-file limit.
+
+    A declared ``Content-Length`` well over the limit is rejected before any
+    body bytes are read; otherwise the body is streamed and the same bound is
+    enforced as chunks arrive.  The exact per-file check still runs against the
+    parsed file content, so the contract (over-limit writes no blob/event)
+    is unchanged.
+    """
+    bound = file_limit_bytes + _MULTIPART_OVERHEAD_BYTES
+    declared = request.headers.get("content-length")
+    if declared:
+        try:
+            if int(declared) > bound:
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        f"File exceeds the per-file attachment limit "
+                        f"of {file_limit_bytes} bytes"
+                    ),
+                )
+        except ValueError:
+            pass
+    chunks: list[bytes] = []
+    total = 0
+    async for chunk in request.stream():
+        total += len(chunk)
+        if total > bound:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"File exceeds the per-file attachment limit "
+                    f"of {file_limit_bytes} bytes"
+                ),
+            )
+        chunks.append(chunk)
+    return b"".join(chunks)
+
+
 class MeetingParticipantRequest(BaseModel):
     role_id: str
     model_config_id: str | None = None
@@ -1949,7 +1995,7 @@ def create_app(
         metadata_store.get(meeting_id)
         reject_terminal_meeting(repository, meeting_id)
         content_type = request.headers.get("content-type", "")
-        body = await request.body()
+        body = await _read_upload_body(request, attachment_limits.per_file_bytes)
         try:
             filename, content = parse_upload_part(body, content_type)
         except MultipartUploadError as error:

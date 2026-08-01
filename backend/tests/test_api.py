@@ -7246,6 +7246,32 @@ def test_upload_rejects_oversized_file(
     assert not (tmp_path / "data" / "meetings" / meeting_id / "attachments").exists()
 
 
+def test_upload_rejects_declared_oversize_before_buffering(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("AI_COUNCIL_MAX_ATTACHMENT_BYTES", "10")
+    app = create_test_app(tmp_path)
+    client = TestClient(app)
+    meeting_id = _create_chatroom_meeting(client)
+
+    # A declared Content-Length far beyond the per-file limit is rejected from
+    # the header alone, before the body is read or the blob/event written.
+    response = client.post(
+        f"/meetings/{meeting_id}/attachments",
+        content=b"tiny body that must not be buffered",
+        headers={
+            "content-type": "multipart/form-data; boundary=zzz",
+            "content-length": "999999999",
+        },
+    )
+
+    assert response.status_code == 400
+    assert "limit" in response.json()["detail"].lower()
+    events = client.get(f"/meetings/{meeting_id}").json()["events"]
+    assert [e for e in events if e["step_id"] == "attachment-added"] == []
+    assert not (tmp_path / "data" / "meetings" / meeting_id / "attachments").exists()
+
+
 def test_upload_rejects_meeting_over_aggregate_quota(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

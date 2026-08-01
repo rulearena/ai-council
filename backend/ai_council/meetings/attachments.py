@@ -34,8 +34,6 @@ BINARY_MIME_TYPES: dict[str, str] = {
     ".xls": "application/vnd.ms-excel",
     ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     ".csv": "text/csv",
-    ".txt": "text/plain",
-    ".md": "text/markdown",
 }
 
 

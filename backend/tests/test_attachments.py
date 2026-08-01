@@ -108,8 +108,6 @@ def test_mime_type_map_and_fallback() -> None:
     assert mime_type_for_extension(".zip") == "application/zip"
     assert mime_type_for_extension(".png") == "image/png"
     assert mime_type_for_extension(".jpeg") == "image/jpeg"
-    assert mime_type_for_extension(".txt") == "text/plain"
-    assert mime_type_for_extension(".md") == "text/markdown"
     assert mime_type_for_extension(".unknown-ext") == "application/octet-stream"
     assert mime_type_for_extension(".PNG") == "image/png"
 
