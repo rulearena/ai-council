@@ -28,6 +28,7 @@ import {
   type CourtroomDraft,
 } from '../courtroomWorkspace'
 import {
+  isAttachmentEvent,
   latestWorkspaceMessageTarget,
   messageClampPolicy,
   nextWorkspaceRoleFilter,
@@ -41,6 +42,7 @@ import {
 import { modelDisplayLabel } from '../providers'
 import type { SceneConfig } from '../scenes'
 import ActionBar from './ActionBar.vue'
+import AttachmentBubble from './AttachmentBubble.vue'
 import CouncilStage from './CouncilStage.vue'
 import Modal from './Modal.vue'
 import RecordsDrawer from './RecordsDrawer.vue'
@@ -501,8 +503,16 @@ function ruling(issue: CourtroomIssueProjection) {
               :data-role="message.roleId"
             >
               <header><strong>{{ message.roleName }}</strong><time v-if="message.createdAt" :datetime="message.createdAt">{{ messageTime(message) }}</time></header>
-              <p class="workspace-message-content" :class="{ collapsed: messageClampPolicy(message.content).collapsible && !isExpanded(message) }">{{ message.content || '（沒有文字內容）' }}</p>
-              <button v-if="messageClampPolicy(message.content).collapsible" type="button" class="workspace-message-toggle" :aria-expanded="isExpanded(message)" @click="toggleMessage(message.id)">{{ isExpanded(message) ? '收合長文' : '展開完整發言' }}</button>
+              <AttachmentBubble
+                v-if="isAttachmentEvent(message.event)"
+                :meeting-id="meetingId"
+                :event="message.event"
+                attachment-label="證物"
+              />
+              <template v-else>
+                <p class="workspace-message-content" :class="{ collapsed: messageClampPolicy(message.content).collapsible && !isExpanded(message) }">{{ message.content || '（沒有文字內容）' }}</p>
+                <button v-if="messageClampPolicy(message.content).collapsible" type="button" class="workspace-message-toggle" :aria-expanded="isExpanded(message)" @click="toggleMessage(message.id)">{{ isExpanded(message) ? '收合長文' : '展開完整發言' }}</button>
+              </template>
             </article>
           </section>
 
@@ -566,8 +576,16 @@ function ruling(issue: CourtroomIssueProjection) {
                   :data-role="message.roleId"
                 >
                   <header><strong>{{ message.roleName }}</strong><time v-if="message.createdAt" :datetime="message.createdAt">{{ messageTime(message) }}</time></header>
-                  <p class="workspace-message-content" :class="{ collapsed: messageClampPolicy(message.content).collapsible && !isExpanded(message) }">{{ message.content || '（沒有文字內容）' }}</p>
-                  <button v-if="messageClampPolicy(message.content).collapsible" type="button" class="workspace-message-toggle" :aria-expanded="isExpanded(message)" @click="toggleMessage(message.id)">{{ isExpanded(message) ? '收合長文' : '展開完整發言' }}</button>
+                  <AttachmentBubble
+                    v-if="isAttachmentEvent(message.event)"
+                    :meeting-id="meetingId"
+                    :event="message.event"
+                    attachment-label="證物"
+                  />
+                  <template v-else>
+                    <p class="workspace-message-content" :class="{ collapsed: messageClampPolicy(message.content).collapsible && !isExpanded(message) }">{{ message.content || '（沒有文字內容）' }}</p>
+                    <button v-if="messageClampPolicy(message.content).collapsible" type="button" class="workspace-message-toggle" :aria-expanded="isExpanded(message)" @click="toggleMessage(message.id)">{{ isExpanded(message) ? '收合長文' : '展開完整發言' }}</button>
+                  </template>
                 </article>
                 <p v-if="selectedRoleId && !filteredMessages(phase.messages).length" class="court-filter-empty">此階段沒有這個角色的發言。</p>
               </section>
@@ -576,8 +594,16 @@ function ruling(issue: CourtroomIssueProjection) {
                 <h3>庭審補充</h3>
                 <article v-for="message in filteredMessages(issueGroup(issue.id)?.otherMessages ?? [])" :id="`court-message-${message.id}`" :key="message.id" class="court-hearing-message" :data-role="message.roleId">
                   <header><strong>{{ message.roleName }}</strong><time v-if="message.createdAt" :datetime="message.createdAt">{{ messageTime(message) }}</time></header>
-                  <p class="workspace-message-content" :class="{ collapsed: messageClampPolicy(message.content).collapsible && !isExpanded(message) }">{{ message.content || '（沒有文字內容）' }}</p>
-                  <button v-if="messageClampPolicy(message.content).collapsible" type="button" class="workspace-message-toggle" :aria-expanded="isExpanded(message)" @click="toggleMessage(message.id)">{{ isExpanded(message) ? '收合長文' : '展開完整發言' }}</button>
+                  <AttachmentBubble
+                    v-if="isAttachmentEvent(message.event)"
+                    :meeting-id="meetingId"
+                    :event="message.event"
+                    attachment-label="證物"
+                  />
+                  <template v-else>
+                    <p class="workspace-message-content" :class="{ collapsed: messageClampPolicy(message.content).collapsible && !isExpanded(message) }">{{ message.content || '（沒有文字內容）' }}</p>
+                    <button v-if="messageClampPolicy(message.content).collapsible" type="button" class="workspace-message-toggle" :aria-expanded="isExpanded(message)" @click="toggleMessage(message.id)">{{ isExpanded(message) ? '收合長文' : '展開完整發言' }}</button>
+                  </template>
                 </article>
               </section>
 

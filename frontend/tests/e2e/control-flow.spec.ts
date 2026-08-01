@@ -4450,3 +4450,45 @@ test('courtroom unified materials modal uses evidence wording for the upload zon
   await expect(panel).toContainText('案卷與證據')
   await expect(panel.getByTestId('attachment-upload-zone')).not.toContainText('附件')
 })
+
+test('courtroom attachment upload renders an evidence bubble in the docket record', async ({ page }) => {
+  await page.goto('/')
+  const topic = `E2E courtroom attachment bubble ${Date.now()}`
+  await createMeetingViaNewCase(page, topic, { modeId: 'courtroom' })
+
+  await page.getByTestId('workspace-open-materials').click()
+  const panel = page.getByTestId('case-materials-modal')
+  await expect(panel).toBeVisible()
+
+  const png = Buffer.from(
+    'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==',
+    'base64',
+  )
+  await page.getByTestId('attachment-upload-input').setInputFiles({
+    name: '現場照片.png',
+    mimeType: 'image/png',
+    buffer: png,
+  })
+
+  // The bubble appears in the courtroom general record (immediate upload, no text).
+  const record = page.getByTestId('court-hearing-general-record')
+  await expect(record.getByTestId('attachment-image')).toBeVisible({ timeout: 15_000 })
+  await expect(record).not.toContainText('（沒有文字內容）')
+
+  // The ＋ count now totals the binary attachment.
+  await expect(page.getByTestId('workspace-open-materials')).toContainText('（1）')
+
+  // Close the modal, then open the lightbox to reach the download link and confirm
+  // the file_id endpoint serves the blob in the courtroom too.
+  await page.getByTestId('case-materials-close-button').click()
+  await expect(panel).not.toBeVisible()
+  await record.getByTestId('attachment-image').click()
+  const lightbox = page.getByTestId('attachment-lightbox')
+  await expect(lightbox).toBeVisible()
+  const card = lightbox.locator('[data-testid^="attachment-download-"]').first()
+  const href = await card.getAttribute('href')
+  expect(href).toMatch(/\/meetings\/[^/]+\/attachments\/attachment-[a-f0-9]+$/)
+  const response = await page.request.get(href!)
+  expect(response.status()).toBe(200)
+  expect(await response.body()).toEqual(png)
+})

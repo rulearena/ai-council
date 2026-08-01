@@ -961,6 +961,33 @@ test('pdf attachment renders as a download card with the file_id download endpoi
   expect(await response.body()).toEqual(Buffer.from('%PDF-1.4 fake pdf content'))
 })
 
+test('generic binary upload (zip) renders a download card with size and file_id endpoint', async ({ page }) => {
+  await page.goto('/')
+  const title = `E2E chatroom zip ${Date.now()}`
+  await createChatroomMeeting(page, title, { modelAssignments: defaultModels })
+
+  await openMaterialsModal(page)
+  const zipBytes = Buffer.from('PK\x03\x04 fake zip bytes for the generic card')
+  await page.getByTestId('attachment-upload-input').setInputFiles({
+    name: '素材包.zip',
+    mimeType: 'application/zip',
+    buffer: zipBytes,
+  })
+
+  await expect(page.getByTestId('attachment-filename')).toHaveText('素材包.zip', { timeout: 15_000 })
+  await expect(page.getByTestId('attachment-size')).toHaveText(`${zipBytes.length} B`)
+  const card = page.locator('[data-testid^="attachment-download-"]').first()
+  await expect(card).toBeVisible()
+  const href = await card.getAttribute('href')
+  expect(href).toMatch(/\/meetings\/[^/]+\/attachments\/attachment-[a-f0-9]+$/)
+  await expect(card).toHaveAttribute('download', '')
+
+  // A generic (non-image, non-PDF) card still resolves through the file_id endpoint.
+  const response = await page.request.get(href!)
+  expect(response.status()).toBe(200)
+  expect(await response.body()).toEqual(zipBytes)
+})
+
 test('.txt upload is ingested into case-files and never becomes a chat bubble', async ({ page }) => {
   await page.goto('/')
   const title = `E2E chatroom txt ${Date.now()}`
