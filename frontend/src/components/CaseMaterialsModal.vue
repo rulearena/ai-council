@@ -14,6 +14,14 @@ import {
   type VersionedCaseMaterial,
 } from '../api'
 import { activeMode, councilKey } from '../composables/useCouncil'
+import {
+  createUploadEntry,
+  uploadFailed,
+  uploadStarted,
+  uploadStatusLabel,
+  uploadSucceeded,
+  type UploadEntry,
+} from '../attachmentUpload'
 import { roleDisplayName } from '../presentation'
 import { materialImpactGuidance, materialVocabulary } from '../meetingWorkspace'
 import Modal from './Modal.vue'
@@ -37,13 +45,6 @@ const pendingImpactGuidance = computed(() => materialImpactGuidance(selectedMeet
 // 法庭用「證物／案卷」，其他模式用中性的「附件」。
 const vocab = computed(() => materialVocabulary(selectedMeeting.value?.mode_id ?? ''))
 
-type UploadEntry = {
-  key: string
-  filename: string
-  status: 'uploading' | 'done' | 'error'
-  error?: string
-  retryFile?: File
-}
 const uploads = ref<UploadEntry[]>([])
 const uploadDisabled = computed(() => loading.value || Boolean(isMeetingRunning.value))
 
@@ -67,21 +68,23 @@ function routeTextFileToCaseForm(file: File) {
   })
 }
 
+function replaceUpload(entry: UploadEntry, next: UploadEntry) {
+  uploads.value = uploads.value.map((item) => (item.key === entry.key ? next : item))
+}
+
 async function startUpload(entry: UploadEntry) {
   const file = entry.retryFile
   const meetingId = selectedMeeting.value?.meeting_id
   if (!file || !meetingId) return
-  entry.status = 'uploading'
-  entry.error = undefined
+  replaceUpload(entry, uploadStarted(entry))
   try {
     await uploadAttachment(meetingId, file)
-    entry.status = 'done'
+    replaceUpload(entry, uploadSucceeded(entry))
     // The meeting payload carries attachments_summary + the new attachment event,
     // so the ＋ count and the feed bubble both come from one refresh.
     await openMeeting(meetingId)
   } catch (caught) {
-    entry.status = 'error'
-    entry.error = caughtMessage(caught)
+    replaceUpload(entry, uploadFailed(entry, caughtMessage(caught)))
   }
 }
 
@@ -93,14 +96,8 @@ function onFileSelected(event: Event) {
     if (textExtension(file.name)) {
       routeTextFileToCaseForm(file)
     } else {
-      const entry: UploadEntry = {
-        key: `${file.name}-${Date.now()}-${Math.random().toString(36).slice(2)}`,
-        filename: file.name,
-        status: 'uploading',
-        retryFile: file,
-      }
-      uploads.value.push(entry)
-      void startUpload(entry)
+      uploads.value = [...uploads.value, createUploadEntry(file)]
+      void startUpload(uploads.value.at(-1)!)
     }
   }
 }
@@ -232,7 +229,7 @@ async function toggle(item: VersionedCaseMaterial, kind: 'evidence' | 'note') {
           <li v-for="entry in uploads" :key="entry.key" :data-status="entry.status" :data-testid="`attachment-upload-${entry.key}`">
             <span class="attachment-upload-name">{{ entry.filename }}</span>
             <span class="attachment-upload-state">
-              {{ entry.status === 'uploading' ? '上傳中…' : entry.status === 'done' ? '已上傳' : '上傳失敗' }}
+              {{ uploadStatusLabel(entry.status) }}
             </span>
             <button v-if="entry.status === 'error'" type="button" class="btn btn-ghost btn-sm" data-testid="attachment-upload-retry" @click="retryUpload(entry)">重試</button>
             <button v-if="entry.status === 'error'" type="button" class="btn btn-ghost btn-sm" data-testid="attachment-upload-dismiss" @click="dismissUpload(entry)">略過</button>

@@ -2,6 +2,13 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 
 import {
+  createUploadEntry,
+  uploadFailed,
+  uploadStarted,
+  uploadStatusLabel,
+  uploadSucceeded,
+} from '../../src/attachmentUpload.ts'
+import {
   formatAttachmentSize,
   isAttachmentEvent,
   materialCountFor,
@@ -93,4 +100,79 @@ test('attachment event projects as a Human chat message with no text', () => {
   assert.equal(attachmentMessage.event.filename, '照片.png')
   assert.equal(attachmentMessage.event.mime_type, 'image/png')
   assert.equal(attachmentMessage.event.size, 2048)
+})
+
+const courtroomMode = {
+  id: 'courtroom',
+  category: 'courtroom',
+  roles: [{ id: 'Judge', name: '法官' }, { id: 'Advocate', name: '辯護人' }],
+}
+
+const courtroomMeeting = {
+  meeting_id: 'meeting-court',
+  mode_id: 'courtroom',
+  activity_status: 'idle' as const,
+  participants: [
+    { role_id: 'Judge', display_name: '法官' },
+    { role_id: 'Advocate', display_name: '辯護人' },
+  ],
+  courtroom: {
+    status: 'draft',
+    issues: [],
+    current_issue_id: null,
+    final_status: 'pending',
+    available_actions: [],
+    case_type: null,
+    requires_case_type: false,
+  },
+  events: [
+    {
+      event_id: 'attachment-court-1', meeting_id: 'meeting-court', step_id: 'attachment-added',
+      role: 'Human', attempt: 1, status: 'completed',
+      file_id: 'attachment-court123', filename: '證物照.png', size: 4096,
+      mime_type: 'image/png', extension: '.png',
+      created_at: '2025-01-01T00:00:01Z',
+    },
+  ],
+}
+
+test('courtroom projection keeps attachment events in the general record', () => {
+  const workspace = projectMeetingWorkspace({ meeting: courtroomMeeting, mode: courtroomMode })
+  assert.equal(workspace.family, 'court-hearing')
+  if (workspace.family !== 'court-hearing') return
+  const record = workspace.ungroupedMessages
+  assert.equal(record.length, 1)
+  assert.equal(isAttachmentEvent(record[0].event), true)
+  assert.equal(record[0].kind, 'human')
+  assert.equal(record[0].roleId, 'Human')
+  assert.equal(record[0].content, '')
+  assert.equal(record[0].event.file_id, 'attachment-court123')
+})
+
+test('upload state machine: uploading → done', () => {
+  const entry = createUploadEntry(new File(['zip-bytes'], 'bundle.zip'))
+  assert.equal(entry.status, 'uploading')
+  assert.equal(entry.retryFile?.name, 'bundle.zip')
+  const done = uploadSucceeded(entry)
+  assert.equal(done.status, 'done')
+  assert.equal(done.error, undefined)
+})
+
+test('upload state machine: uploading → error → retry → done', () => {
+  const entry = createUploadEntry(new File(['zip-bytes'], 'bundle.zip'))
+  const failed = uploadFailed(entry, 'per-file limit exceeded')
+  assert.equal(failed.status, 'error')
+  assert.equal(failed.error, 'per-file limit exceeded')
+  const retried = uploadStarted(failed)
+  assert.equal(retried.status, 'uploading')
+  assert.equal(retried.error, undefined)
+  assert.equal(retried.retryFile, entry.retryFile)
+  const done = uploadSucceeded(retried)
+  assert.equal(done.status, 'done')
+})
+
+test('upload status labels cover uploading/done/error', () => {
+  assert.equal(uploadStatusLabel('uploading'), '上傳中…')
+  assert.equal(uploadStatusLabel('done'), '已上傳')
+  assert.equal(uploadStatusLabel('error'), '上傳失敗')
 })

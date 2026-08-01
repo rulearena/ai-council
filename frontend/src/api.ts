@@ -673,9 +673,10 @@ export async function correctMeetingMessage(
 }
 
 /**
- * Upload a binary chat attachment. Multipart form-data with a single `file` part;
- * the backend routes .txt/.md into the case-files flow itself and rejects them here.
- * Resolves to the appended `attachment-added` metadata event.
+ * Upload a binary chat attachment. Multipart form-data with a single `file` part.
+ * Text files (.txt/.md) are routed to the case-files form in the UI instead of
+ * this endpoint, which rejects them with a 400. Resolves to the appended
+ * `attachment-added` metadata event.
  */
 export async function uploadAttachment(meetingId: string, file: File): Promise<MeetingEvent> {
   const formData = new FormData()
