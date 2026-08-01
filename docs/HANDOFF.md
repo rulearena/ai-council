@@ -70,7 +70,7 @@ Backlog 90「會議工作區與時間序對話介面」已實作、完成法院�
 3. 法院場景「點擊放大」可發現性：場景正中央為座位、座位帶 `@click.stop`，該處點擊只選取角色不放大，空白處才放大。屬分層行為非失效，是否改為明確的放大按鈕待 Human Owner 決定（會同時影響聊天室）。
 4. backlog #94 第 ① 項（`spec.md` 完成狀態標記時機與 `reviewer.md` 要求衝突）需 Human Owner 擇一為準，非程式碼工作。
 5. Human Owner 先前的「行銷」會議遺失，不在隔離區也不在 repo，尚未回復。
-6. **backlog #96（LINE 式聊天附件）**：`chatroom-line-attachments` 已 Gate A 通過（`afd2c43...3b930a5`）並完成實作與 Gate B 審查（fixed range `0187664...3c44b01`，`pass`，post-merge checks 681 backend／126 unit／build 綠），已 merge 至 main（`3c44b01`），狀態 `implemented / awaiting acceptance`。**下一步為 Human Owner 驗收**；附件（binary，AI 看不見）與案卷（text，AI 看得見）路由、可下載、附件永久不刪除皆依 #96。
+6. **backlog #96（LINE 式聊天附件）**：`chatroom-line-attachments` 已 Gate A 通過（`afd2c43...3b930a5`）並完成實作與 Gate B 審查（fixed range `0187664...3c44b01`，`pass`，post-merge checks 681 backend／126 unit／build 綠），已 merge 至 main（`3c44b01`）。**2026-08-01 驗收修正**：Human Owner 上傳 `.txt`（依契約路由案卷＋#88 暫停）發現無事前警告，裁決加「存檔前警告」；已於 fix `16c1b34...efd0bc1`（Gate B round2 `pass`，post-merge checks 133 unit／build 綠）完成並 merge（`efd0bc1`）。狀態 `implemented / awaiting acceptance`，**正在重新驗收**。附件（binary，AI 看不見）與案卷（text，AI 看得見）路由、可下載、附件永久不刪除皆依 #96。
 7. **AIDLC bootstrap 已上線（2026-07-31，backlog #97）**：所有新 session 依 `docs/agents/workflow-bindings.md` §0 載入中央工作流；後續開發流程（含 #96 的 proposal → Gate A → 實作 → Gate B → closeout）應依綁定檔 §3-§4 執行。
 
 **下一批候選**：backlog #94 遺留 Minor（②③④⑤⑥⑦⑨⑩⑭⑮，其中 ⑧⑪⑫⑬ 已於 2026-07-30 修畢、⑭⑮ 為 2026-07-31 Gate B 審查新增，勿重做）、#95 遺留的 `MeetingsModal.vue` `@keyup.enter` 中文選字提早觸發，以及 backlog #96（LINE 式聊天附件，需先開 OpenSpec proposal）。尚未建立 OpenSpec change，須先登錄 `spec.md` §15 再提 proposal。#96 是否與 #94/#95 同批或獨立批次由 Human Owner 裁定。
