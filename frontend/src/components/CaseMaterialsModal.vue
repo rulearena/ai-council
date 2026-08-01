@@ -23,7 +23,7 @@ import {
   type UploadEntry,
 } from '../attachmentUpload'
 import { roleDisplayName } from '../presentation'
-import { materialImpactGuidance, materialVocabulary } from '../meetingWorkspace'
+import { hasAiOutput, materialImpactConfirmMessage, materialImpactGuidance, materialVocabulary } from '../meetingWorkspace'
 import Modal from './Modal.vue'
 
 const props = defineProps<{ show: boolean }>()
@@ -44,6 +44,8 @@ const displayRole = (role: string) => roleDisplayName(activeMode.value, particip
 const pendingImpactGuidance = computed(() => materialImpactGuidance(selectedMeeting.value?.mode_id ?? ''))
 // 法庭用「證物／案卷」，其他模式用中性的「附件」。
 const vocab = computed(() => materialVocabulary(selectedMeeting.value?.mode_id ?? ''))
+// AI 已發言後變更案卷會觸發 material_change_impact（AI 暫停並需重開審議），先請使用者確認。
+const aiHasSpoken = computed(() => hasAiOutput(selectedMeeting.value?.events ?? []))
 
 const uploads = ref<UploadEntry[]>([])
 const uploadDisabled = computed(() => loading.value || Boolean(isMeetingRunning.value))
@@ -162,6 +164,7 @@ function edit(item: VersionedCaseMaterial, kind: 'evidence' | 'note') {
 async function saveMaterial() {
   const meetingId = selectedMeeting.value?.meeting_id
   if (!meetingId || !materials.value || !form.title.trim() || !form.content.trim() || !form.visibleRoles.length) return
+  if (aiHasSpoken.value && !window.confirm(materialImpactConfirmMessage(vocab.value))) return
   const payload = { revision: materials.value.revision, title: form.title.trim(), content: form.content.trim(), visible_roles: [...form.visibleRoles] }
   localError.value = ''
   const generation = ++materialsGeneration
@@ -188,6 +191,7 @@ async function saveMaterial() {
 async function toggle(item: VersionedCaseMaterial, kind: 'evidence' | 'note') {
   const meetingId = selectedMeeting.value?.meeting_id
   if (!meetingId || !materials.value) return
+  if (aiHasSpoken.value && !window.confirm(materialImpactConfirmMessage(vocab.value))) return
   const active = item.status !== 'active'
   const generation = ++materialsGeneration
   await runAction(async () => {
