@@ -144,8 +144,8 @@ export function materialVocabulary(modeId: string): MaterialVocabulary {
  * AI 已發言時，儲存或停用案卷前顯示的確認訊息。用語與 materialImpactGuidance
  * 一致：法庭用「證物／案卷」，其他模式用中性的「附件／資料」。
  */
-export function materialImpactConfirmMessage(vocab: MaterialVocabulary): string {
-  return vocab.itemPlural === '證物'
+export function materialImpactConfirmMessage(modeId: string): string {
+  return modeId === 'courtroom'
     ? '此變更會納入 AI 可見的案卷與證物；儲存後 AI 會暫停並需重開審議，確定儲存？'
     : '此變更會納入 AI 可見的附件與資料；儲存後 AI 會暫停並需重開審議，確定儲存？'
 }

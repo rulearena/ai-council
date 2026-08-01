@@ -164,7 +164,7 @@ function edit(item: VersionedCaseMaterial, kind: 'evidence' | 'note') {
 async function saveMaterial() {
   const meetingId = selectedMeeting.value?.meeting_id
   if (!meetingId || !materials.value || !form.title.trim() || !form.content.trim() || !form.visibleRoles.length) return
-  if (aiHasSpoken.value && !window.confirm(materialImpactConfirmMessage(vocab.value))) return
+  if (aiHasSpoken.value && !window.confirm(materialImpactConfirmMessage(selectedMeeting.value?.mode_id ?? ''))) return
   const payload = { revision: materials.value.revision, title: form.title.trim(), content: form.content.trim(), visible_roles: [...form.visibleRoles] }
   localError.value = ''
   const generation = ++materialsGeneration
@@ -191,7 +191,7 @@ async function saveMaterial() {
 async function toggle(item: VersionedCaseMaterial, kind: 'evidence' | 'note') {
   const meetingId = selectedMeeting.value?.meeting_id
   if (!meetingId || !materials.value) return
-  if (aiHasSpoken.value && !window.confirm(materialImpactConfirmMessage(vocab.value))) return
+  if (aiHasSpoken.value && !window.confirm(materialImpactConfirmMessage(selectedMeeting.value?.mode_id ?? ''))) return
   const active = item.status !== 'active'
   const generation = ++materialsGeneration
   await runAction(async () => {

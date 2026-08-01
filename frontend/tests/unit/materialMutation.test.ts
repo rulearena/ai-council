@@ -4,7 +4,6 @@ import test from 'node:test'
 import {
   hasAiOutput,
   materialImpactConfirmMessage,
-  materialVocabulary,
 } from '../../src/meetingWorkspace.ts'
 
 test('hasAiOutput is true when a completed non-Human/System event exists', () => {
@@ -37,8 +36,8 @@ test('hasAiOutput ignores incomplete AI events but sees a completed one', () => 
 })
 
 test('materialImpactConfirmMessage differs between courtroom and other modes', () => {
-  const courtroom = materialImpactConfirmMessage(materialVocabulary('courtroom'))
-  const chatroom = materialImpactConfirmMessage(materialVocabulary('chatroom'))
+  const courtroom = materialImpactConfirmMessage('courtroom')
+  const chatroom = materialImpactConfirmMessage('chatroom')
   assert.notEqual(courtroom, chatroom)
   assert.match(courtroom, /證物/)
   assert.match(courtroom, /案卷/)
@@ -47,7 +46,7 @@ test('materialImpactConfirmMessage differs between courtroom and other modes', (
 
 test('materialImpactConfirmMessage mentions pausing and reopening in both modes', () => {
   for (const modeId of ['courtroom', 'chatroom', 'relay', 'parallel']) {
-    const message = materialImpactConfirmMessage(materialVocabulary(modeId))
+    const message = materialImpactConfirmMessage(modeId)
     assert.match(message, /暫停/)
     assert.match(message, /重開審議/)
     assert.match(message, /確定儲存/)
