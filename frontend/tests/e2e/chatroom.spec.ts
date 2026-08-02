@@ -1067,13 +1067,21 @@ test('.txt upload is ingested into case-files and never becomes a chat bubble', 
     buffer: Buffer.from('這是文字摘要內容', 'utf-8'),
   })
 
-  // Text files land in the case-file form (prefilled) instead of uploading directly.
-  // The form lives in the sidebar panel, so open it via the quick menu first.
-  await page.getByTestId('materials-quick-menu-button').click()
-  await page.getByTestId('materials-menu-manage').click()
+  // Picking a .txt routes to the case-file form on its own: onPickedFiles opens the
+  // sidebar materials page (openMaterialsTab) before the draft is read, so no manual
+  // "quick menu → manage" step is needed — asserting active here guards that seam.
+  await expect(page.getByTestId('context-tab-materials')).toHaveClass(/active/, { timeout: 15_000 })
+
   const form = page.getByTestId('case-material-form')
   await expect(form.getByLabel('標題')).toHaveValue('摘要', { timeout: 15_000 })
   await expect(form.getByLabel('內容')).toHaveValue('這是文字摘要內容')
+
+  // The prefilled draft selects every role (chatroom has 4 participants).
+  const roleChecks = form.locator('input[type="checkbox"]')
+  await expect(roleChecks).toHaveCount(4)
+  for (const checkbox of await roleChecks.all()) {
+    await expect(checkbox).toBeChecked()
+  }
 
   await page.getByRole('button', { name: '新增', exact: true }).click()
   await expect(page.getByTestId('case-evidence-card')).toBeVisible()
