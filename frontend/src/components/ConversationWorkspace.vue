@@ -579,7 +579,7 @@ async function retryRole(roleId: string) {
         </details>
         <p v-if="isMeetingRunning" class="workspace-live-note">完成的回應會立即出現在時間序中，不必等待整輪結束。</p>
         </template>
-        <div v-else data-testid="context-records-section">
+        <div v-else-if="activeContextTab === 'records'" data-testid="context-records-section">
           <RecordsDrawer :show="true" inline />
         </div>
         <MaterialsPanel

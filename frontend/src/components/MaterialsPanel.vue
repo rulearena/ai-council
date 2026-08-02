@@ -274,6 +274,7 @@ async function toggle(item: VersionedCaseMaterial, kind: 'evidence' | 'note') {
   display: flex;
   flex-direction: column;
   gap: 12px;
+  min-width: 0;
 }
 
 .attachment-upload-list {
@@ -283,6 +284,7 @@ async function toggle(item: VersionedCaseMaterial, kind: 'evidence' | 'note') {
   display: flex;
   flex-direction: column;
   gap: 6px;
+  min-width: 0;
 }
 
 .attachment-upload-list li {
@@ -294,6 +296,7 @@ async function toggle(item: VersionedCaseMaterial, kind: 'evidence' | 'note') {
   border: 1px solid var(--color-border);
   border-radius: 6px;
   font-size: 0.9em;
+  min-width: 0;
 }
 
 .attachment-upload-list li[data-status='done'] {
@@ -305,6 +308,7 @@ async function toggle(item: VersionedCaseMaterial, kind: 'evidence' | 'note') {
 }
 
 .attachment-upload-name {
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -337,6 +341,11 @@ async function toggle(item: VersionedCaseMaterial, kind: 'evidence' | 'note') {
   display: flex;
   flex-direction: column;
   gap: 6px;
+  min-width: 0;
+}
+
+.materials-attachment-row {
+  min-width: 0;
 }
 
 .materials-attachment-row a {
@@ -356,6 +365,7 @@ async function toggle(item: VersionedCaseMaterial, kind: 'evidence' | 'note') {
 }
 
 .materials-attachment-row strong {
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
