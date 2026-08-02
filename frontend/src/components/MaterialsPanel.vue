@@ -132,8 +132,10 @@ watch(
       loadedMeetingId = id
       materials.value = null
       void loadMaterials(id)
-    } else if (!materials.value) {
-      // 同一會議重新啟用但先前載入被中斷（例如 inactive 期間的 stale response 被丟棄）。
+    } else if (!materials.value || materials.value.pending_impact) {
+      // pending_impact 是伺服器依「目前 epoch」計算的有效值；快取可能因
+      // restart/abandon 已過時。重新啟用同一會議而快取仍帶 pending_impact 時
+      // 重載一次，讓案卷影響警告隨新 epoch 消失（其餘情況保留 state 不重載）。
       void loadMaterials(id)
     }
   },
