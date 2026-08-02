@@ -118,10 +118,10 @@ function onFileSelected(event: Event) {
   gap: 2px;
   min-width: 150px;
   padding: 6px;
-  background: var(--bg, #fff);
-  border: 1px solid var(--border, #ddd);
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
   border-radius: 8px;
-  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.12);
+  box-shadow: var(--shadow-md);
 }
 
 .materials-menu-item {
@@ -132,20 +132,22 @@ function onFileSelected(event: Event) {
   background: none;
   font: inherit;
   cursor: pointer;
+  color: var(--color-text);
 }
 
 .materials-menu-item:hover:not(:disabled) {
-  background: var(--bg-muted, #f5f5f5);
+  background: var(--color-surface-muted);
 }
 
 .materials-menu-item:disabled {
   opacity: 0.55;
   cursor: not-allowed;
+  color: var(--color-text-muted);
 }
 
 .materials-menu-hint {
   padding: 0 10px 6px;
-  opacity: 0.7;
+  color: var(--color-text-muted);
   font-size: 0.82em;
 }
 

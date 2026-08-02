@@ -291,17 +291,17 @@ async function toggle(item: VersionedCaseMaterial, kind: 'evidence' | 'note') {
   align-items: center;
   gap: 8px;
   padding: 6px 8px;
-  border: 1px solid var(--border, #eee);
+  border: 1px solid var(--color-border);
   border-radius: 6px;
   font-size: 0.9em;
 }
 
 .attachment-upload-list li[data-status='done'] {
-  background: var(--bg-muted, #f6f9f6);
+  background: var(--color-completed-tint);
 }
 
 .attachment-upload-list li[data-status='error'] {
-  background: var(--bg-muted, #fdf5f5);
+  background: var(--color-failed-tint);
 }
 
 .attachment-upload-name {
@@ -311,7 +311,7 @@ async function toggle(item: VersionedCaseMaterial, kind: 'evidence' | 'note') {
 }
 
 .attachment-upload-state {
-  opacity: 0.75;
+  color: var(--color-text-muted);
   font-size: 0.85em;
 }
 
@@ -345,14 +345,14 @@ async function toggle(item: VersionedCaseMaterial, kind: 'evidence' | 'note') {
   justify-content: space-between;
   gap: 8px;
   padding: 6px 8px;
-  border: 1px solid var(--border, #eee);
+  border: 1px solid var(--color-border);
   border-radius: 6px;
   text-decoration: none;
   color: inherit;
 }
 
 .materials-attachment-row a:hover {
-  border-color: var(--accent, #888);
+  border-color: var(--color-border-strong);
 }
 
 .materials-attachment-row strong {
@@ -363,14 +363,14 @@ async function toggle(item: VersionedCaseMaterial, kind: 'evidence' | 'note') {
 
 .materials-attachment-row small {
   flex: none;
-  opacity: 0.65;
+  color: var(--color-text-muted);
 }
 
 .materials-impact-warning {
   padding: 10px 12px;
-  border: 1px solid var(--warning, #d99a2b);
+  border: 1px solid rgba(245, 178, 66, 0.5);
   border-radius: 8px;
-  background: var(--bg-muted, #fdf8ef);
+  background: rgba(245, 178, 66, 0.1);
 }
 
 .materials-impact-warning p {
@@ -379,7 +379,7 @@ async function toggle(item: VersionedCaseMaterial, kind: 'evidence' | 'note') {
 
 .material-card {
   padding: 8px 10px;
-  border: 1px solid var(--border, #eee);
+  border: 1px solid var(--color-border);
   border-radius: 8px;
   display: flex;
   flex-direction: column;
@@ -437,22 +437,22 @@ async function toggle(item: VersionedCaseMaterial, kind: 'evidence' | 'note') {
 
 .segmented button {
   padding: 4px 10px;
-  border: 1px solid var(--border, #ccc);
+  border: 1px solid var(--color-border);
   border-radius: 6px;
   background: none;
   cursor: pointer;
 }
 
 .segmented button.active {
-  background: var(--accent-muted, #e8e8f0);
+  background: var(--color-surface-muted);
 }
 
 .error {
-  color: var(--danger, #c00);
+  color: var(--color-danger);
   font-size: 0.9em;
 }
 
 .empty-state {
-  opacity: 0.7;
+  color: var(--color-text-muted);
 }
 </style>
