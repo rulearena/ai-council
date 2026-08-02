@@ -13,6 +13,7 @@ function setup(options: {
   uploadAttachment?: (meetingId: string, file: File) => Promise<unknown>
   openMeeting?: (meetingId: string) => Promise<unknown>
   openMaterialsTab?: () => void
+  routeTextToCaseFiles?: () => boolean
 } = {}) {
   const meetingId = ref<string | undefined>('meeting-a')
   const uploaded: Array<{ meetingId: string; file: File }> = []
@@ -28,6 +29,7 @@ function setup(options: {
       await options.openMeeting?.(id)
     },
     openMaterialsTab: options.openMaterialsTab,
+    routeTextToCaseFiles: options.routeTextToCaseFiles,
   })
   return {
     ...composable,
@@ -69,6 +71,22 @@ test('onPickedFiles never uploads a text file through the attachment boundary', 
   onPickedFiles([new File(['文字'], 'notes.txt', { type: 'text/plain' })])
   await flush()
   assert.equal(uploaded.length, 0)
+})
+
+test('routeTextToCaseFiles=false sends .txt files through the attachment boundary', async () => {
+  const { uploads, uploaded, refreshed, textDraft, onPickedFiles } = setup({
+    routeTextToCaseFiles: () => false,
+  })
+  onPickedFiles([new File(['文字內容'], 'notes.txt', { type: 'text/plain' })])
+  await flush()
+
+  assert.equal(uploaded.length, 1)
+  assert.equal(uploaded[0].meetingId, 'meeting-a')
+  assert.equal(uploaded[0].file.name, 'notes.txt')
+  assert.equal(uploads.value.length, 1)
+  assert.equal(uploads.value[0].status, 'done')
+  assert.deepEqual(refreshed, ['meeting-a'])
+  assert.equal(textDraft.value, null)
 })
 
 test('startUpload marks an entry failed when the boundary rejects', async () => {
