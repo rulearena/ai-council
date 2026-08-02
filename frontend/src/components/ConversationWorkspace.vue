@@ -78,6 +78,7 @@ const {
   uploadAttachment,
   openMeeting: (meetingId) => store.openMeeting(meetingId),
   openMaterialsTab: () => openMaterialsTab(),
+  routeTextToCaseFiles: () => !isChatroom,
 })
 const uploadDisabled = computed(() => loading.value || Boolean(isMeetingRunning.value))
 const latestChairMessage = computed(() => chairmanEvents.value.at(-1)?.content ?? '')
@@ -506,7 +507,6 @@ async function retryRole(roleId: string) {
         :upload-disabled="uploadDisabled"
         v-model:quoted-message="quotedMessage"
         @pick-files="onPickedFiles"
-        @manage-materials="openMaterialsTab"
         @message-sent="onOwnMessageSent"
       />
       <ActionBar
@@ -588,6 +588,7 @@ async function retryRole(roleId: string) {
           :meeting-id="selectedMeeting.meeting_id"
           :uploads="uploadList"
           :text-draft="textDraftRef"
+          :simple="isChatroom"
           @retry-upload="retryUpload"
           @dismiss-upload="dismissUpload"
           @text-draft-consumed="textDraftRef = null"

@@ -2,8 +2,7 @@
 import { computed, inject, ref } from 'vue'
 import type { ChairmanParticipant } from '../chairmanActions'
 import { parseAndSendChatMessage } from '../composables/useChatroomComposer'
-import { activeMode, councilKey } from '../composables/useCouncil'
-import MaterialsQuickMenu from './MaterialsQuickMenu.vue'
+import { councilKey } from '../composables/useCouncil'
 import MentionAutocomplete from './MentionAutocomplete.vue'
 
 const props = defineProps<{
@@ -16,7 +15,6 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   'pick-files': [files: File[]]
-  'manage-materials': []
   'update:quotedMessage': [value: null]
   'message-sent': []
 }>()
@@ -24,6 +22,21 @@ const emit = defineEmits<{
 const store = inject(councilKey)!
 const messageText = ref('')
 const sending = ref(false)
+// LINE 風格「＋」直接開原生檔案選取器；常駐隱藏 input 可被 e2e 直接
+// setInputFiles。上傳鎖（uploadDisabled）由父層計算（loading || running）。
+const attachmentInput = ref<HTMLInputElement | null>(null)
+
+function onAttachmentClick() {
+  if (props.uploadDisabled) return
+  attachmentInput.value?.click()
+}
+
+function onAttachmentSelected(event: Event) {
+  const input = event.target as HTMLInputElement
+  const files = Array.from(input.files ?? [])
+  input.value = ''
+  if (files.length) emit('pick-files', files)
+}
 // While an IME is composing, Enter belongs to the input method — it confirms the
 // candidate. Sending on it fired before the composed text was committed, so the
 // Chinese was lost and only the text typed before it went out. `isComposing` alone
@@ -96,13 +109,25 @@ async function handleSend() {
       >×</button>
     </div>
     <div class="chatroom-composer-row">
-      <MaterialsQuickMenu
-        :meeting-id="meetingId"
-        :mode-id="activeMode.id"
-        :disabled="uploadDisabled"
-        @pick-files="emit('pick-files', $event)"
-        @manage-materials="emit('manage-materials')"
-      />
+      <div class="chatroom-composer-attachment">
+        <button
+          type="button"
+          class="btn btn-secondary workspace-materials-button"
+          data-testid="chatroom-attachment-button"
+          aria-label="上傳附件"
+          :disabled="uploadDisabled"
+          @click="onAttachmentClick"
+        >＋</button>
+        <input
+          ref="attachmentInput"
+          type="file"
+          class="visually-hidden"
+          data-testid="attachment-upload-input"
+          multiple
+          :disabled="uploadDisabled"
+          @change="onAttachmentSelected"
+        />
+      </div>
       <div class="chatroom-composer-input-wrap">
         <MentionAutocomplete
           ref="mentionMenu"
@@ -184,6 +209,19 @@ async function handleSend() {
   display: flex;
   align-items: flex-end;
   gap: 8px;
+}
+
+.chatroom-composer-attachment {
+  flex: none;
+}
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
 }
 
 .chatroom-composer-input-wrap {
