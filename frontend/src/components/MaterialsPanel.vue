@@ -30,11 +30,13 @@ import {
 // 上傳與管理已拆分：＋ 快速選單負責上傳（二進位立即上傳、.txt/.md 預填表單），
 // 這裡只負責管理（進度列、evidence/notes CRUD、附件清單）。
 // `active` 用於載入時機與 generation guard；tab 之間以 v-show 保留 state，不重載。
+// `simple`（聊天室）隱藏表單／備註／版本管理，只保留進度列、附件清單與只讀 evidence。
 const props = defineProps<{
   active: boolean
   meetingId: string
   uploads: UploadEntry[]
   textDraft: TextDraft | null
+  simple?: boolean
 }>()
 
 const emit = defineEmits<{
@@ -241,11 +243,11 @@ async function toggle(item: VersionedCaseMaterial, kind: 'evidence' | 'note') {
           <header><strong>{{ item.citation_anchor }} · {{ latest(item).title }}</strong><span>v{{ item.active_version }} · {{ item.status === 'active' ? '使用中' : '已停用' }}</span></header>
           <p>{{ latest(item).content }}</p>
           <small>可見：{{ latest(item).visible_roles.map(displayRole).join('、') }}</small>
-          <div><button type="button" class="btn btn-secondary btn-sm" @click="edit(item, 'evidence')">建立新版本</button><button type="button" class="btn btn-ghost btn-sm" :data-testid="item.status === 'active' ? 'deactivate-evidence-button' : 'reactivate-evidence-button'" @click="toggle(item, 'evidence')">{{ item.status === 'active' ? '停用' : '重新啟用' }}</button></div>
+          <div v-if="!simple"><button type="button" class="btn btn-secondary btn-sm" @click="edit(item, 'evidence')">建立新版本</button><button type="button" class="btn btn-ghost btn-sm" :data-testid="item.status === 'active' ? 'deactivate-evidence-button' : 'reactivate-evidence-button'" @click="toggle(item, 'evidence')">{{ item.status === 'active' ? '停用' : '重新啟用' }}</button></div>
         </article>
       </section>
 
-      <section class="materials-section">
+      <section v-if="!simple" class="materials-section">
         <h3>{{ vocab.notePlural }}（{{ materials.notes.filter(item => item.status === 'active').length }}）</h3>
         <article v-for="item in materials.notes" :key="item.id" class="material-card" :data-status="item.status" :data-material-id="item.id" data-testid="case-note-card">
           <header><strong>{{ latest(item).title }}</strong><span>v{{ item.active_version }} · {{ item.status === 'active' ? '使用中' : '已停用' }}</span></header>
@@ -255,7 +257,7 @@ async function toggle(item: VersionedCaseMaterial, kind: 'evidence' | 'note') {
         </article>
       </section>
 
-      <form class="material-form" data-testid="case-material-form" @submit.prevent="saveMaterial">
+      <form v-if="!simple" class="material-form" data-testid="case-material-form" @submit.prevent="saveMaterial">
         <h3>{{ editingId ? '建立新版本' : formKind === 'evidence' ? vocab.addItem : vocab.addNote }}</h3>
         <div v-if="!editingId" class="segmented"><button type="button" :class="{ active: formKind === 'evidence' }" @click="formKind = 'evidence'">{{ vocab.itemPlural }}</button><button type="button" :class="{ active: formKind === 'note' }" @click="formKind = 'note'">{{ vocab.notePlural }}</button></div>
         <label>標題<input v-model="form.title" :disabled="loading" /></label>
