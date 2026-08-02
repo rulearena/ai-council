@@ -36,6 +36,14 @@ BINARY_MIME_TYPES: dict[str, str] = {
     ".csv": "text/csv",
 }
 
+# Text files mirror into the case-files contract, but still record an attachment
+# event so the chat feed shows a downloadable card. These MIME types let the
+# frontend render the reader variant instead of a generic binary card.
+TEXT_MIME_TYPES: dict[str, str] = {
+    ".txt": "text/plain",
+    ".md": "text/markdown",
+}
+
 
 @dataclass
 class AttachmentLimits:
@@ -73,6 +81,8 @@ def classify_extension(extension: str) -> str:
 
 
 def mime_type_for_extension(extension: str) -> str:
+    if extension.lower() in TEXT_EXTENSIONS:
+        return TEXT_MIME_TYPES.get(extension.lower(), "text/plain")
     return BINARY_MIME_TYPES.get(extension.lower(), "application/octet-stream")
 
 

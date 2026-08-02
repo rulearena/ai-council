@@ -918,7 +918,12 @@ def create_app(
         reject_running_meeting(jobs, meeting_id)
         metadata = metadata_store.get(meeting_id)
         try:
-            view = operation(metadata, material_change_impact(meeting_id))
+            impact = (
+                None
+                if meeting_mode(mode_catalog, metadata).category == "chatroom"
+                else material_change_impact(meeting_id)
+            )
+            view = operation(metadata, impact)
         except CaseMaterialConflict as error:
             raise HTTPException(status_code=409, detail=str(error)) from error
         except CaseMaterialValidationError as error:
@@ -2000,7 +2005,7 @@ def create_app(
         request: Request,
     ) -> dict[str, Any]:
         reject_running_meeting(jobs, meeting_id)
-        metadata_store.get(meeting_id)
+        metadata = metadata_store.get(meeting_id)
         reject_terminal_meeting(repository, meeting_id)
         content_type = request.headers.get("content-type", "")
         body = await _read_upload_body(request, attachment_limits.per_file_bytes)
@@ -2009,7 +2014,9 @@ def create_app(
         except MultipartUploadError as error:
             raise HTTPException(status_code=400, detail=str(error)) from error
         extension = Path(filename).suffix.lower()
-        if classify_extension(extension) == "text":
+        mode = meeting_mode(mode_catalog, metadata)
+        is_text = classify_extension(extension) == "text"
+        if is_text and mode.category != "chatroom":
             raise HTTPException(
                 status_code=400,
                 detail="Text files (.txt/.md) must be ingested via the case-files flow",
@@ -2029,6 +2036,58 @@ def create_app(
                 detail=(
                     f"Meeting exceeds the total attachment quota "
                     f"of {attachment_limits.per_meeting_bytes} bytes"
+                ),
+            )
+        if is_text:
+            # Chatroom text files mirror into the AI-visible case-files contract
+            # before anything is persisted, so a rejected mirror never leaves a
+            # half-written blob/attachment event behind. The mirror reuses the
+            # write-side mutation helper, which disables pending-impact gating
+            # for chatroom mode.
+            text_content = content.decode("utf-8", errors="replace")
+            material_limits = versioned_limits()
+            if len(text_content) > material_limits.per_item_chars:
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        f"文字檔超過 case-files 單份字元上限 "
+                        f"（{material_limits.per_item_chars} 字元）"
+                    ),
+                )
+            current = case_materials.view(meeting_id)
+            existing_chars = 0
+            for item in [*current.evidence, *current.notes]:
+                if item.status != "active":
+                    continue
+                active = next(
+                    version
+                    for version in item.versions
+                    if version.version == item.active_version
+                )
+                existing_chars += active.size
+            if existing_chars + len(text_content) > material_limits.total_chars:
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        f"文字檔超過 case-files 總量字元上限 "
+                        f"（{material_limits.total_chars} 字元）"
+                    ),
+                )
+            visible_roles = [
+                str(participant["role_id"])
+                for participant in project_participants(mode, metadata)
+            ]
+            validate_material_roles(metadata, visible_roles)
+            perform_material_mutation(
+                meeting_id,
+                lambda metadata, impact: case_materials.add_evidence(
+                    meeting_id,
+                    expected_revision=current.revision,
+                    title=Path(filename).stem,
+                    content=text_content,
+                    visible_roles=visible_roles,
+                    limits=material_limits,
+                    impact=impact,
                 ),
             )
         file_id = f"attachment-{uuid.uuid4().hex}"
@@ -2290,7 +2349,9 @@ def create_app(
     ]:
         metadata = metadata_store.get(meeting_id)
         reject_terminal_meeting(repository, meeting_id)
-        material_view = require_case_materials_ready(repository, case_materials, meeting_id)
+        material_view = require_case_materials_ready(
+            repository, case_materials, meeting_id, ignore_pending_impact=True
+        )
         mode = meeting_mode(mode_catalog, metadata)
         if mode.category != "chatroom":
             raise HTTPException(status_code=409, detail="Mode does not support chat mentions")
@@ -3372,13 +3433,19 @@ def require_case_materials_ready(
     repository: MeetingRepository,
     materials: CaseMaterials,
     meeting_id: str,
+    *,
+    ignore_pending_impact: bool = False,
 ) -> CaseMaterialsView:
     view = materials.view(meeting_id)
     impact = view.pending_impact
     active_epoch_id = DeliberationEpochs.view(
         repository.read_events(meeting_id)
     ).active_epoch.id
-    if impact is not None and impact.get("deliberation_epoch_id") == active_epoch_id:
+    if (
+        not ignore_pending_impact
+        and impact is not None
+        and impact.get("deliberation_epoch_id") == active_epoch_id
+    ):
         raise HTTPException(
             status_code=409,
             detail="Case materials changed; restart deliberation before AI execution",
