@@ -831,22 +831,20 @@ test('13.25 an open mention menu ignores keys that belong to the input method', 
 
 // ── 13.26 ────────────────────────────────────────────────────────────────────
 
-test('13.26 the composer plus button opens a quick menu; manage opens the sidebar panel', async ({ page }) => {
+test('13.26 the composer plus button opens the file picker directly, no quick menu; the materials tab manages data', async ({ page }) => {
   await page.goto('/')
   const title = `E2E chatroom materials menu ${Date.now()}`
   await createChatroomMeeting(page, title, { modelAssignments: defaultModels })
 
-  // The ＋ button opens a small menu (upload + manage) instead of a centred modal.
-  await page.getByTestId('materials-quick-menu-button').click()
-  await expect(page.getByTestId('materials-menu-upload')).toBeVisible()
-  await expect(page.getByTestId('materials-menu-manage')).toBeVisible()
+  // The ＋ button no longer opens a menu: it maps straight to the native picker,
+  // so the old quick-menu elements are gone and nothing appears on click.
+  await page.getByTestId('chatroom-attachment-button').click()
+  await expect(page.getByTestId('materials-menu')).toHaveCount(0)
+  await expect(page.getByTestId('materials-menu-upload')).toHaveCount(0)
+  await expect(page.getByTestId('materials-menu-manage')).toHaveCount(0)
 
-  // A chatroom has attachments, not exhibits — the courtroom wording does not belong.
-  await expect(page.getByTestId('materials-menu-upload')).toHaveText('上傳附件')
-  await expect(page.getByTestId('materials-menu-upload')).not.toContainText('證物')
-
-  // Manage switches the sidebar to the materials panel rather than opening a modal.
-  await page.getByTestId('materials-menu-manage').click()
+  // Data management lives on the sidebar materials tab, still a panel not a modal.
+  await page.getByTestId('context-tab-materials').click()
   await expect(page.getByTestId('context-tab-materials')).toHaveClass(/active/)
   await expect(page.getByTestId('context-tab-materials')).toContainText('資料')
   await expect(page.getByTestId('case-materials-modal')).toHaveCount(0)
@@ -894,7 +892,7 @@ test('binary attachment uploads immediately and renders as an image bubble with 
   await createChatroomMeeting(page, title, { modelAssignments: defaultModels })
 
   // A fresh meeting has neither evidence nor attachments, so the ＋ button shows no count.
-  await expect(page.getByTestId('materials-quick-menu-button')).not.toContainText('（')
+  await expect(page.getByTestId('chatroom-attachment-button')).not.toContainText('（')
 
   const png = Buffer.from(
     'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==',
@@ -1005,7 +1003,7 @@ test('the materials page lists uploaded attachments with their download links', 
   expect(await response.body()).toEqual(zipBytes)
 })
 
-test('the materials quick-menu upload is locked while the meeting runs', async ({ page }) => {
+test('the composer attachment upload is locked while the meeting runs', async ({ page }) => {
   await page.goto('/')
   const title = `E2E chatroom running lock ${Date.now()}`
   await createChatroomMeeting(page, title, { modelAssignments: defaultModels })
@@ -1041,54 +1039,81 @@ test('the materials quick-menu upload is locked while the meeting runs', async (
 
   expect(await setActivityStatus('running')).toBe(true)
 
-  // Upload is locked while running, with a hint; management stays available (管理不受鎖).
-  await page.getByTestId('materials-quick-menu-button').click()
-  await expect(page.getByTestId('materials-menu-upload')).toBeDisabled()
-  await expect(page.getByTestId('materials-menu-hint')).toBeVisible()
-  await expect(page.getByTestId('materials-menu-hint')).toContainText('會議執行中，暫時無法上傳')
-  await expect(page.getByTestId('materials-menu-manage')).toBeEnabled()
+  // Upload is locked while running: the ＋ button and its file input are disabled.
+  await expect(page.getByTestId('chatroom-attachment-button')).toBeDisabled()
+  await expect(page.getByTestId('attachment-upload-input')).toBeDisabled()
 
   // The upload lock must not leak into the composer itself: the input, mentions and
-  // send stay usable while a meeting runs — only the ＋ menu's upload entry is locked.
+  // send stay usable while a meeting runs — only attachment upload is locked.
   await expect(page.getByTestId('chat-message-input')).toBeEnabled()
 
   // Restore normal state so the meeting is not left half-mutated.
   expect(await setActivityStatus('idle')).toBe(true)
 })
 
-test('.txt upload is ingested into case-files and never becomes a chat bubble', async ({ page }) => {
+test('.txt upload becomes a reader card in the feed and is ingested into case-files', async ({ page }) => {
   await page.goto('/')
   const title = `E2E chatroom txt ${Date.now()}`
   await createChatroomMeeting(page, title, { modelAssignments: defaultModels })
 
+  const textContent = '這是文字摘要內容'
   await page.getByTestId('attachment-upload-input').setInputFiles({
     name: '摘要.txt',
     mimeType: 'text/plain',
-    buffer: Buffer.from('這是文字摘要內容', 'utf-8'),
+    buffer: Buffer.from(textContent, 'utf-8'),
   })
 
-  // Picking a .txt routes to the case-file form on its own: onPickedFiles opens the
-  // sidebar materials page (openMaterialsTab) before the draft is read, so no manual
-  // "quick menu → manage" step is needed — asserting active here guards that seam.
-  await expect(page.getByTestId('context-tab-materials')).toHaveClass(/active/, { timeout: 15_000 })
+  // Chatroom text files upload straight through the attachment boundary: no case-file
+  // form prefill, and the feed shows a text card (not a binary bubble).
+  await expect(page.getByTestId('case-material-form')).toHaveCount(0)
+  const textCard = page.getByTestId('attachment-text')
+  await expect(textCard).toBeVisible({ timeout: 15_000 })
+  await expect(textCard).toContainText('摘要.txt')
 
-  const form = page.getByTestId('case-material-form')
-  await expect(form.getByLabel('標題')).toHaveValue('摘要', { timeout: 15_000 })
-  await expect(form.getByLabel('內容')).toHaveValue('這是文字摘要內容')
+  // Opening the card shows the full text in the reader modal.
+  await textCard.click()
+  const reader = page.getByTestId('attachment-reader')
+  await expect(reader).toBeVisible()
+  await expect(page.getByTestId('attachment-reader-content')).toHaveText(textContent, { timeout: 15_000 })
 
-  // The prefilled draft selects every role (chatroom has 4 participants).
-  const roleChecks = form.locator('input[type="checkbox"]')
-  await expect(roleChecks).toHaveCount(4)
-  for (const checkbox of await roleChecks.all()) {
-    await expect(checkbox).toBeChecked()
-  }
+  // The reader carries a download link to the blob.
+  const download = reader.locator('[data-testid^="attachment-download-"]')
+  const href = await download.getAttribute('href')
+  expect(href).toMatch(/\/meetings\/[^/]+\/attachments\/attachment-[a-f0-9]+$/)
+  const response = await page.request.get(href!)
+  expect(response.status()).toBe(200)
+  expect(await response.text()).toEqual(textContent)
 
-  await page.getByRole('button', { name: '新增', exact: true }).click()
+  await page.getByTestId('attachment-reader-close').click()
+  await expect(reader).not.toBeVisible()
+
+  // The text is mirrored into case-files: the sidebar shows one active evidence card
+  // and the tab counts it once (the mirrored attachment event is not double-counted).
+  await page.getByTestId('context-tab-materials').click()
   await expect(page.getByTestId('case-evidence-card')).toBeVisible()
   await expect(page.getByTestId('case-evidence-card')).toContainText('摘要')
-
-  // Text case-files never appear as bubbles in the feed.
-  await expect(page.getByTestId('attachment-image')).toHaveCount(0)
-  await expect(page.getByTestId('workspace-message')).toHaveCount(0)
   await expect(page.getByTestId('context-tab-materials')).toContainText('（1）')
+})
+
+test('chatroom materials page is read-only: no notes, no add form, no version buttons', async ({ page }) => {
+  await page.goto('/')
+  const title = `E2E chatroom simple materials ${Date.now()}`
+  await createChatroomMeeting(page, title, { modelAssignments: defaultModels })
+
+  // Ingest one text file so the materials page has content to render.
+  await page.getByTestId('attachment-upload-input').setInputFiles({
+    name: '補充說明.md',
+    mimeType: 'text/markdown',
+    buffer: Buffer.from('# 補充說明', 'utf-8'),
+  })
+  await expect(page.getByTestId('attachment-text')).toBeVisible({ timeout: 15_000 })
+
+  await page.getByTestId('context-tab-materials').click()
+  await expect(page.getByTestId('case-evidence-card')).toBeVisible()
+
+  // Chatroom is a simplified, read-only materials surface.
+  await expect(page.getByTestId('case-material-form')).toHaveCount(0)
+  await expect(page.getByTestId('case-note-card')).toHaveCount(0)
+  await expect(page.getByTestId('deactivate-evidence-button')).toHaveCount(0)
+  await expect(page.getByRole('button', { name: '建立新版本' })).toHaveCount(0)
 })
