@@ -7202,10 +7202,68 @@ def test_upload_binary_attachment_writes_blob_and_event(tmp_path: Path) -> None:
     assert attachment_events[0]["file_id"] == body["file_id"]
 
 
-def test_upload_text_file_rejected_by_attachment_endpoint(tmp_path: Path) -> None:
+def test_upload_text_file_in_chatroom_ingests_evidence_and_attachment(
+    tmp_path: Path,
+) -> None:
     app = create_test_app(tmp_path)
     client = TestClient(app)
     meeting_id = _create_chatroom_meeting(client)
+
+    cases = [
+        ("note.txt", "text/plain", ".txt", "這是純文字內容"),
+        ("大綱.md", "text/markdown", ".md", "# 標題\n內容"),
+    ]
+    for filename, expected_mime, extension, text_content in cases:
+        status, body = _upload_attachment(
+            client,
+            meeting_id,
+            filename=filename,
+            content=text_content.encode("utf-8"),
+            content_type=expected_mime,
+        )
+        assert status == 200
+        assert body["step_id"] == "attachment-added"
+        assert body["mime_type"] == expected_mime
+        assert body["extension"] == extension
+        assert body["filename"] == filename
+        assert body["size"] == len(text_content.encode("utf-8"))
+
+        # The same upload is mirrored into the AI-visible case-files contract:
+        # title = stem, content = full text, every role can see it, active.
+        meeting = client.get(f"/meetings/{meeting_id}").json()
+        evidence = meeting["case_materials"]["evidence"]
+        assert evidence[-1]["status"] == "active"
+        active_version = evidence[-1]["versions"][0]
+        assert active_version["title"] == Path(filename).stem
+        assert active_version["content"] == text_content
+        assert set(active_version["visible_roles"]) == {
+            "Advisor",
+            "Critic",
+            "Strategist",
+            "Analyst",
+        }
+
+        # The blob serves the full text through the file_id download endpoint.
+        download = client.get(f"/meetings/{meeting_id}/attachments/{body['file_id']}")
+        assert download.status_code == 200
+        assert download.content == text_content.encode("utf-8")
+
+    events = client.get(f"/meetings/{meeting_id}").json()["events"]
+    attachment_events = [e for e in events if e["step_id"] == "attachment-added"]
+    assert len(attachment_events) == 2
+    blob_dir = tmp_path / "data" / "meetings" / meeting_id / "attachments"
+    assert sorted(p.name for p in blob_dir.iterdir()) == sorted(
+        e["file_id"] for e in attachment_events
+    )
+
+
+def test_upload_text_file_in_non_chatroom_still_rejected(tmp_path: Path) -> None:
+    app = create_test_app(tmp_path)
+    client = TestClient(app)
+    meeting_id = client.post(
+        "/meetings",
+        json={"title": "接力", "goal": "討論方案", "mode_id": "red-blue"},
+    ).json()["meeting_id"]
 
     for filename in ("note.txt", "note.md"):
         status, body = _upload_attachment(
@@ -7221,6 +7279,127 @@ def test_upload_text_file_rejected_by_attachment_endpoint(tmp_path: Path) -> Non
     events = client.get(f"/meetings/{meeting_id}").json()["events"]
     assert [e for e in events if e["step_id"] == "attachment-added"] == []
     assert not (tmp_path / "data" / "meetings" / meeting_id / "attachments").exists()
+
+
+def test_upload_text_file_over_case_material_char_limit_rejected(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("AI_COUNCIL_MAX_CASE_FILE_CHARS", "10")
+    app = create_test_app(tmp_path)
+    client = TestClient(app)
+    meeting_id = _create_chatroom_meeting(client)
+
+    status, body = _upload_attachment(
+        client,
+        meeting_id,
+        filename="long.txt",
+        content="超過十個字元上限的內容啊啊啊啊".encode("utf-8"),
+        content_type="text/plain",
+    )
+
+    assert status == 400
+    assert "字元" in body["detail"] or "char" in body["detail"].lower()
+    events = client.get(f"/meetings/{meeting_id}").json()["events"]
+    assert [e for e in events if e["step_id"] == "attachment-added"] == []
+    assert not (tmp_path / "data" / "meetings" / meeting_id / "attachments").exists()
+
+
+def test_chatroom_material_change_after_ai_output_does_not_gate_ai(
+    tmp_path: Path,
+) -> None:
+    app = create_test_app(tmp_path)
+    client = TestClient(app)
+    meeting_id = _create_chatroom_meeting(client)
+
+    response = client.post(
+        f"/meetings/{meeting_id}/chat/mention",
+        json={"content": "Advisor 你怎麼看？", "mentions": ["Advisor"]},
+    )
+    assert response.status_code == 202
+    wait_for_event_count(client, meeting_id, 2)
+
+    changed = client.post(
+        f"/meetings/{meeting_id}/materials/evidence",
+        json={
+            "revision": 0,
+            "title": "補充資料",
+            "content": "新內容",
+            "visible_roles": ["Advisor", "Critic", "Strategist", "Analyst"],
+        },
+    )
+    assert changed.status_code == 200
+    assert changed.json()["pending_impact"] is None
+
+    again = client.post(
+        f"/meetings/{meeting_id}/chat/mention",
+        json={"content": "Advisor 再看一次？", "mentions": ["Advisor"]},
+    )
+    assert again.status_code == 202
+
+
+def test_relay_material_change_after_ai_output_still_gates_ai(tmp_path: Path) -> None:
+    client = TestClient(create_test_app(tmp_path))
+    meeting_id = client.post(
+        "/meetings",
+        json={"title": "接力守門", "goal": "使用當前事實", "mode_id": "red-blue"},
+    ).json()["meeting_id"]
+    assert client.post(f"/meetings/{meeting_id}/start", json={}).status_code == 202
+    wait_for_activity(client, meeting_id, "completed")
+
+    changed = client.post(
+        f"/meetings/{meeting_id}/materials/evidence",
+        json={
+            "revision": 0,
+            "title": "後到證物",
+            "content": "LATE_EVIDENCE",
+            "visible_roles": ["Blue", "Red", "Judge"],
+        },
+    )
+    assert changed.status_code == 200
+    assert changed.json()["pending_impact"]["deliberation_epoch_id"] == "epoch-1"
+
+    blocked = client.post(f"/meetings/{meeting_id}/start", json={})
+    assert blocked.status_code == 409
+    assert "materials changed" in blocked.json()["detail"].lower()
+
+
+def test_chatroom_mention_recovers_when_legacy_pending_impact_present(
+    tmp_path: Path,
+) -> None:
+    app = create_test_app(tmp_path)
+    client = TestClient(app)
+    meeting_id = _create_chatroom_meeting(client)
+
+    # A round 1-5 meeting could already carry a pending_impact flag. The chatroom
+    # read side must ignore it (no data migration), so an old meeting unlocks.
+    assert client.post(
+        f"/meetings/{meeting_id}/materials/evidence",
+        json={
+            "revision": 0,
+            "title": "既有附件",
+            "content": "舊內容",
+            "visible_roles": ["Advisor", "Critic", "Strategist", "Analyst"],
+        },
+    ).status_code == 200
+    document_path = (
+        tmp_path / "data" / "meetings" / meeting_id / "case_files.json"
+    )
+    document = json.loads(document_path.read_text(encoding="utf-8"))
+    document["pending_impact"] = {
+        "deliberation_epoch_id": "epoch-1",
+        "reason": "prompt_material_changed_after_ai_output",
+    }
+    document_path.write_text(json.dumps(document), encoding="utf-8")
+    assert (
+        client.get(f"/meetings/{meeting_id}").json()["case_materials"]["pending_impact"]
+        is not None
+    )
+
+    response = client.post(
+        f"/meetings/{meeting_id}/chat/mention",
+        json={"content": "Advisor 你怎麼看？", "mentions": ["Advisor"]},
+    )
+    assert response.status_code == 202
 
 
 def test_upload_rejects_oversized_file(
