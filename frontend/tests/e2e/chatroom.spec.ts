@@ -971,6 +971,91 @@ test('generic binary upload (zip) renders a download card with size and file_id 
   expect(await response.body()).toEqual(zipBytes)
 })
 
+test('the materials page lists uploaded attachments with their download links', async ({ page }) => {
+  await page.goto('/')
+  const title = `E2E chatroom attachment list ${Date.now()}`
+  await createChatroomMeeting(page, title, { modelAssignments: defaultModels })
+
+  // Upload a binary file to produce an attachment event (immediate upload, no text).
+  const zipBytes = Buffer.from('PK\x03\x04 fake zip bytes for the sidebar list')
+  await page.getByTestId('attachment-upload-input').setInputFiles({
+    name: '素材包.zip',
+    mimeType: 'application/zip',
+    buffer: zipBytes,
+  })
+  await expect(page.getByTestId('attachment-filename')).toHaveText('素材包.zip', { timeout: 15_000 })
+
+  // Open the sidebar materials page while it is active (the section is gated on
+  // `active && attachments.length`) and assert the attachment event is listed.
+  await page.getByTestId('context-tab-materials').click()
+  await expect(page.getByTestId('context-tab-materials')).toHaveClass(/active/)
+  await expect(page.getByTestId('materials-attachment-list')).toBeVisible()
+  const row = page.getByTestId('materials-attachment-row')
+  await expect(row).toHaveCount(1)
+  await expect(row).toContainText('素材包.zip')
+
+  // The row's download link points at the file_id endpoint and serves the blob.
+  const download = row.locator('[data-testid^="materials-attachment-download-"]')
+  await expect(download).toBeVisible()
+  const href = await download.getAttribute('href')
+  expect(href).toMatch(/\/meetings\/[^/]+\/attachments\/attachment-[a-f0-9]+$/)
+  await expect(download).toHaveAttribute('download', '')
+  const response = await page.request.get(href!)
+  expect(response.status()).toBe(200)
+  expect(await response.body()).toEqual(zipBytes)
+})
+
+test('the materials quick-menu upload is locked while the meeting runs', async ({ page }) => {
+  await page.goto('/')
+  const title = `E2E chatroom running lock ${Date.now()}`
+  await createChatroomMeeting(page, title, { modelAssignments: defaultModels })
+
+  // The mock backend settles too quickly for isMeetingRunning to stay true.
+  // Directly set activity_status='running' on the Vue reactive store via
+  // page.evaluate (councilKey is a Symbol, so search provides via getOwnPropertySymbols).
+  // Wait for the events WebSocket's initial snapshot to be applied first: if we mutate
+  // before that snapshot lands, the snapshot reassigns selectedMeeting with the real
+  // backend status ('idle') and silently undoes the mutation.
+  await page.waitForTimeout(500)
+  const setActivityStatus = (status: 'running' | 'idle') =>
+    page.evaluate((nextStatus) => {
+      const el = document.querySelector('[data-testid="conversation-workspace"]')
+      if (!el) return false
+      const vnode = (el as any).__vueParentComponent
+      if (!vnode) return false
+      const provides = vnode.provides
+      if (!provides) return false
+      const symbols = Object.getOwnPropertySymbols(provides)
+      for (const sym of symbols) {
+        const candidate = provides[sym]
+        if (candidate?.selectedMeeting?.value?.activity_status !== undefined) {
+          candidate.selectedMeeting.value = {
+            ...candidate.selectedMeeting.value,
+            activity_status: nextStatus,
+          }
+          return true
+        }
+      }
+      return false
+    }, status)
+
+  expect(await setActivityStatus('running')).toBe(true)
+
+  // Upload is locked while running, with a hint; management stays available (管理不受鎖).
+  await page.getByTestId('materials-quick-menu-button').click()
+  await expect(page.getByTestId('materials-menu-upload')).toBeDisabled()
+  await expect(page.getByTestId('materials-menu-hint')).toBeVisible()
+  await expect(page.getByTestId('materials-menu-hint')).toContainText('會議執行中，暫時無法上傳')
+  await expect(page.getByTestId('materials-menu-manage')).toBeEnabled()
+
+  // The upload lock must not leak into the composer itself: the input, mentions and
+  // send stay usable while a meeting runs — only the ＋ menu's upload entry is locked.
+  await expect(page.getByTestId('chat-message-input')).toBeEnabled()
+
+  // Restore normal state so the meeting is not left half-mutated.
+  expect(await setActivityStatus('idle')).toBe(true)
+})
+
 test('.txt upload is ingested into case-files and never becomes a chat bubble', async ({ page }) => {
   await page.goto('/')
   const title = `E2E chatroom txt ${Date.now()}`
