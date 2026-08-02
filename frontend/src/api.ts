@@ -673,10 +673,11 @@ export async function correctMeetingMessage(
 }
 
 /**
- * Upload a binary chat attachment. Multipart form-data with a single `file` part.
- * Text files (.txt/.md) are routed to the case-files form in the UI instead of
- * this endpoint, which rejects them with a 400. Resolves to the appended
- * `attachment-added` metadata event.
+ * Upload a chat attachment. Multipart form-data with a single `file` part.
+ * Resolves to the appended `attachment-added` metadata event. In chatroom mode
+ * .txt/.md files are accepted here too and are mirrored into case-files by the
+ * backend; in other modes they are rejected with a 400 (they keep going through
+ * the case-files form instead).
  */
 export async function uploadAttachment(meetingId: string, file: File): Promise<MeetingEvent> {
   const formData = new FormData()
