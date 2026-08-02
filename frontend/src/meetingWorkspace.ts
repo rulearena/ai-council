@@ -673,16 +673,34 @@ export function formatAttachmentSize(bytes: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
 }
 
+// Text uploads (chatroom) now produce BOTH an evidence entry and an
+// attachment event, so counting `evidence + attachments_summary.count` would
+// show N+1 for N data items. Count attachment events while excluding the text
+// MIME types that were mirrored into evidence, then add active evidence. When
+// `events` is absent (pure list projection — in practice `selectedMeeting`
+// always carries events) fall back to `attachments_summary.count`; that branch
+// is near-dead and kept only for type safety. Courtroom is unaffected because
+// its .txt files never create an attachment event.
+const TEXT_ATTACHMENT_MIMES = new Set(['text/plain', 'text/markdown'])
+
 export function materialCountFor(meeting: {
   case_materials?: { evidence?: Array<{ status: string }> } | null
   case_files?: Array<unknown> | null
   attachments_summary?: { count: number } | null
+  events?: Array<{ step_id?: string; mime_type?: string }> | null
 } | null | undefined): number {
   if (!meeting) return 0
   const evidence = meeting.case_materials?.evidence?.filter((item) => item.status === 'active').length
     ?? meeting.case_files?.length
     ?? 0
-  return evidence + (meeting.attachments_summary?.count ?? 0)
+  const attachmentCount = meeting.events
+    ? meeting.events.filter(
+        (event) =>
+          event.step_id === 'attachment-added' &&
+          !TEXT_ATTACHMENT_MIMES.has(event.mime_type ?? ''),
+      ).length
+    : (meeting.attachments_summary?.count ?? 0)
+  return evidence + attachmentCount
 }
 
 function allWorkspaceMessages(workspace: MeetingWorkspaceProjection): WorkspaceMessage[] {
