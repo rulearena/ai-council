@@ -105,6 +105,7 @@ export function hasAiOutput(events: Array<{ role: string; status?: string }> | u
 
 export type MaterialVocabulary = {
   panelTitle: string
+  tabLabel: string
   itemPlural: string
   notePlural: string
   addItem: string
@@ -121,6 +122,7 @@ export function materialVocabulary(modeId: string): MaterialVocabulary {
   if (modeId === 'courtroom') {
     return {
       panelTitle: '案卷與證據',
+      tabLabel: '案卷',
       itemPlural: '證物',
       notePlural: '案件備註',
       addItem: '新增證物',
@@ -131,6 +133,7 @@ export function materialVocabulary(modeId: string): MaterialVocabulary {
   }
   return {
     panelTitle: '附件與資料',
+    tabLabel: '資料',
     itemPlural: '附件',
     notePlural: '備註',
     addItem: '新增附件',
