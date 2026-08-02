@@ -107,9 +107,11 @@ test('conversation workspace keeps the role rail, chronological feed, and compos
   await page.getByTestId('send-chair-message-button').click()
   await expect(page.getByTestId('workspace-message-feed')).toContainText('先確認本次討論的判斷標準。')
 
-  await page.getByTestId('workspace-open-materials').click()
-  await expect(page.getByTestId('case-materials-modal')).toBeVisible()
-  await page.getByTestId('case-materials-close-button').click()
+  await page.getByTestId('materials-quick-menu-button').click()
+  await page.getByTestId('materials-menu-manage').click()
+  await expect(page.getByTestId('context-tab-materials')).toHaveClass(/active/)
+  await expect(page.getByTestId('context-tab-materials')).toContainText('資料')
+  await page.getByTestId('context-tab-context').click()
 
   await page.reload()
   await page.getByTestId('past-topics-button').click()
@@ -2820,7 +2822,7 @@ test('ordinary restart archives the prior epoch without duplicating evidence', a
   await page.getByTestId('restart-reason-input').fill('改用新的評估方向')
   await page.getByTestId('restart-deliberation-button').click()
   await expect(page.getByTestId('operation-status')).toContainText('狀態：尚未開始')
-  await expect(page.getByTestId('workspace-open-materials')).toContainText('（1）')
+  await expect(page.getByTestId('context-tab-materials')).toContainText('（1）')
 
   await page.getByTestId('context-tab-records').click()
   const epochSelect = page.getByTestId('records-epoch-select')
@@ -2836,7 +2838,7 @@ test('ordinary restart archives the prior epoch without duplicating evidence', a
   await expect(page.getByTestId('download-all-epochs')).toHaveAttribute('href', /epoch=all/)
   await page.getByTestId('context-tab-context').click()
 
-  await page.getByTestId('workspace-open-materials').click()
+  await page.getByTestId('context-tab-materials').click()
   await expect(page.getByTestId('case-evidence-card')).toHaveCount(1)
   await expect(page.getByTestId('case-evidence-card')).toContainText('[附件一]')
   await expect(page.getByTestId('case-evidence-card')).toContainText('v1')
@@ -2905,7 +2907,7 @@ test('archived records show their historical case-material revision without repl
   await expect(page.getByTestId('archived-note-card')).toContainText('可見：紅軍、裁判')
   await page.getByTestId('context-tab-context').click()
 
-  await page.getByTestId('workspace-open-materials').click()
+  await page.getByTestId('context-tab-materials').click()
   await expect(page.getByTestId('case-evidence-card')).toContainText('目前證據')
   await expect(page.getByTestId('case-evidence-card')).toContainText('v2')
   await expect(page.getByTestId('case-evidence-card')).toContainText('第二版目前內容')
@@ -2954,18 +2956,18 @@ test('versioned evidence and promoted notes trigger a visible restart gate', asy
   await promotionForm.getByTestId('confirm-promote-case-note').click()
   await promoted
   await page.getByTestId('context-tab-context').click()
-  await page.getByTestId('workspace-open-materials').click()
+  await page.getByTestId('context-tab-materials').click()
   await expect(page.getByTestId('case-note-card')).toContainText('固定案件事實')
   await expect(page.getByTestId('case-note-card')).toContainText('可見：藍軍、紅軍')
   await page.getByTestId('deactivate-note-button').click()
   await expect(page.getByTestId('case-note-card')).toContainText('已停用')
   await page.getByTestId('reactivate-note-button').click()
   await expect(page.getByTestId('case-note-card')).toContainText('使用中')
-  await page.getByTestId('case-materials-close-button').click()
+  await page.getByTestId('context-tab-context').click()
 
   await page.getByTestId('start-meeting-button').click()
   await expect(page.getByTestId('operation-status')).toContainText('狀態：已完成', { timeout: 15000 })
-  await page.getByTestId('workspace-open-materials').click()
+  await page.getByTestId('context-tab-materials').click()
   await page.getByTestId('case-evidence-card').getByRole('button', { name: '建立新版本' }).click()
   const form = page.getByTestId('case-material-form')
   await form.getByLabel('內容').fill('補充後的第二版內容')
@@ -2991,7 +2993,7 @@ test('versioned evidence and promoted notes trigger a visible restart gate', asy
   await page.getByTestId('reactivate-evidence-button').click()
   await expect(page.getByTestId('case-evidence-card')).toContainText('使用中')
   await expect(page.getByTestId('materials-impact-warning')).toContainText('輸入原因並重開全部審議')
-  await page.getByTestId('case-materials-close-button').click()
+  await page.getByTestId('context-tab-context').click()
 
   await openAdvancedOptions(page)
   await expect(page.getByText('案卷已變更，必須完成其中一種重開才能繼續 AI。')).toBeVisible()
@@ -3000,7 +3002,7 @@ test('versioned evidence and promoted notes trigger a visible restart gate', asy
   await page.getByTestId('restart-deliberation-button').click()
   await restarted
   await expect(page.getByTestId('advanced-options-panel')).toHaveCount(0)
-  await page.getByTestId('workspace-open-materials').click()
+  await page.getByTestId('context-tab-materials').click()
   await expect(page.getByTestId('materials-impact-warning')).toHaveCount(0)
   await expect(page.getByTestId('case-evidence-card')).toContainText('[附件一]')
   await expect(page.getByTestId('case-evidence-card')).toContainText('v2')
@@ -3130,12 +3132,13 @@ test('meeting drawers remain usable at 375px and dirty close requires confirmati
   await expect(drawer).not.toBeVisible()
   await expect(page.getByTestId('meeting-title-display')).toHaveText(topic)
 
-  await page.getByTestId('workspace-open-materials').click()
+  await page.getByTestId('materials-quick-menu-button').click()
+  await page.getByTestId('materials-menu-manage').click()
   await expect.poll(async () => {
-    const box = await page.getByTestId('case-materials-modal').boundingBox()
+    const box = await page.getByTestId('workspace-context-panel').boundingBox()
     return box ? box.x + box.width : Number.POSITIVE_INFINITY
   }).toBeLessThanOrEqual(375)
-  await page.getByTestId('case-materials-close-button').click()
+  await page.getByTestId('workspace-context-toggle').click()
 
   await createMeetingViaNewCase(page, `E2E narrow courtroom ${Date.now()}`, { modeId: 'courtroom', caseType: 'civil' })
   await page.getByTestId('add-courtroom-issue-button').click()
@@ -3214,15 +3217,15 @@ test('late records and case-material responses from another meeting are discarde
     await route.fulfill({ response })
   })
   const requestedMaterials = page.waitForRequest((request) => request.url().endsWith(`/meetings/${meetingAId}/materials`))
-  await page.getByTestId('workspace-open-materials').click()
+  await page.getByTestId('context-tab-materials').click()
   await requestedMaterials
-  await page.getByTestId('case-materials-close-button').click()
+  await page.getByTestId('context-tab-context').click()
   await page.getByTestId('past-topics-button').click()
   await page.getByTestId('meeting-list-item').filter({ hasText: topicB }).locator('.meeting-item').click()
-  await page.getByTestId('workspace-open-materials').click()
+  await page.getByTestId('context-tab-materials').click()
   releaseMaterials()
   await expect(page.getByTestId('case-evidence-card')).toHaveCount(0)
-  await page.getByTestId('case-materials-close-button').click()
+  await page.getByTestId('context-tab-context').click()
 
   await page.getByTestId('past-topics-button').click()
   await page.getByTestId('meeting-list-item').filter({ hasText: topicA }).locator('.meeting-item').click()
@@ -3315,7 +3318,7 @@ test('records and case-material initial load errors stay local and can be retrie
     }
     await route.continue()
   })
-  await page.getByTestId('workspace-open-materials').click()
+  await page.getByTestId('context-tab-materials').click()
   await expect(page.getByTestId('materials-load-error')).toContainText('案卷暫時無法載入')
   await page.getByTestId('retry-materials-load-button').click()
   await expect(page.getByTestId('case-material-form')).toBeVisible()
@@ -4452,30 +4455,28 @@ test('keyboard Enter on info button does not change role filter', async ({ page 
   await expect(page.getByTestId('workspace-clear-role-filter')).toBeVisible()
 })
 
-test('courtroom unified materials modal uses evidence wording for the upload zone', async ({ page }) => {
+test('courtroom materials wording localises to 證物 and 案卷', async ({ page }) => {
   await page.goto('/')
   const topic = `E2E courtroom attachment wording ${Date.now()}`
   await createMeetingViaNewCase(page, topic, { modeId: 'courtroom' })
 
   // Courtroom renders the docket panel with the embedded action bar's ＋ button.
-  await page.getByTestId('workspace-open-materials').click()
-  const panel = page.getByTestId('case-materials-modal')
-  await expect(panel).toBeVisible()
+  // The quick menu upload entry localises to 證物, not 附件.
+  await page.getByTestId('materials-quick-menu-button').click()
+  await expect(page.getByTestId('materials-menu-upload')).toHaveText('上傳證物')
+  await expect(page.getByTestId('materials-menu-upload')).not.toContainText('附件')
 
-  // The upload zone and panel title localise to 證物, not 附件.
-  await expect(panel).toContainText('上傳證物')
-  await expect(panel).toContainText('案卷與證據')
-  await expect(panel.getByTestId('attachment-upload-zone')).not.toContainText('附件')
+  // Manage switches the courtroom sidebar to the 案卷 tab rather than opening a modal.
+  await page.getByTestId('materials-menu-manage').click()
+  await expect(page.getByTestId('court-context-tab-materials')).toHaveClass(/active/)
+  await expect(page.getByTestId('court-context-tab-materials')).toContainText('案卷（0）')
+  await expect(page.getByTestId('case-materials-modal')).toHaveCount(0)
 })
 
 test('courtroom attachment upload renders an evidence bubble in the docket record', async ({ page }) => {
   await page.goto('/')
   const topic = `E2E courtroom attachment bubble ${Date.now()}`
   await createMeetingViaNewCase(page, topic, { modeId: 'courtroom' })
-
-  await page.getByTestId('workspace-open-materials').click()
-  const panel = page.getByTestId('case-materials-modal')
-  await expect(panel).toBeVisible()
 
   const png = Buffer.from(
     'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==',
@@ -4492,13 +4493,11 @@ test('courtroom attachment upload renders an evidence bubble in the docket recor
   await expect(record.getByTestId('attachment-image')).toBeVisible({ timeout: 15_000 })
   await expect(record).not.toContainText('（沒有文字內容）')
 
-  // The ＋ count now totals the binary attachment.
-  await expect(page.getByTestId('workspace-open-materials')).toContainText('（1）')
+  // The courtroom 案卷 tab now totals the binary attachment.
+  await expect(page.getByTestId('court-context-tab-materials')).toContainText('（1）')
 
-  // Close the modal, then open the lightbox to reach the download link and confirm
-  // the file_id endpoint serves the blob in the courtroom too.
-  await page.getByTestId('case-materials-close-button').click()
-  await expect(panel).not.toBeVisible()
+  // Open the lightbox to reach the download link and confirm the file_id endpoint
+  // serves the blob in the courtroom too.
   await record.getByTestId('attachment-image').click()
   const lightbox = page.getByTestId('attachment-lightbox')
   await expect(lightbox).toBeVisible()

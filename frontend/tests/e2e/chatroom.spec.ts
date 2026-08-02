@@ -831,33 +831,25 @@ test('13.25 an open mention menu ignores keys that belong to the input method', 
 
 // ── 13.26 ────────────────────────────────────────────────────────────────────
 
-test('13.26 the composer plus button opens materials as a centred modal', async ({ page }) => {
+test('13.26 the composer plus button opens a quick menu; manage opens the sidebar panel', async ({ page }) => {
   await page.goto('/')
-  const title = `E2E chatroom materials modal ${Date.now()}`
+  const title = `E2E chatroom materials menu ${Date.now()}`
   await createChatroomMeeting(page, title, { modelAssignments: defaultModels })
 
-  await page.getByTestId('workspace-open-materials').click()
-  const panel = page.getByTestId('case-materials-modal')
-  await expect(panel).toBeVisible()
-
-  // A drawer is pinned to one edge and runs the full height; a modal sits centred and
-  // stops short of it. Asserting the gaps distinguishes the two, where merely finding
-  // the panel would pass either way.
-  const box = await panel.boundingBox()
-  const viewport = page.viewportSize()
-  if (!box || !viewport) throw new Error('materials panel has no box')
-  const leftGap = box.x
-  const rightGap = viewport.width - (box.x + box.width)
-  expect(rightGap).toBeGreaterThan(0)
-  expect(Math.abs(leftGap - rightGap)).toBeLessThanOrEqual(2)
-  expect(box.height).toBeLessThan(viewport.height)
+  // The ＋ button opens a small menu (upload + manage) instead of a centred modal.
+  await page.getByTestId('materials-quick-menu-button').click()
+  await expect(page.getByTestId('materials-menu-upload')).toBeVisible()
+  await expect(page.getByTestId('materials-menu-manage')).toBeVisible()
 
   // A chatroom has attachments, not exhibits — the courtroom wording does not belong.
-  await expect(panel).toContainText('附件')
-  await expect(panel).not.toContainText('證物')
+  await expect(page.getByTestId('materials-menu-upload')).toHaveText('上傳附件')
+  await expect(page.getByTestId('materials-menu-upload')).not.toContainText('證物')
 
-  await page.getByTestId('case-materials-close-button').click()
-  await expect(panel).not.toBeVisible()
+  // Manage switches the sidebar to the materials panel rather than opening a modal.
+  await page.getByTestId('materials-menu-manage').click()
+  await expect(page.getByTestId('context-tab-materials')).toHaveClass(/active/)
+  await expect(page.getByTestId('context-tab-materials')).toContainText('資料')
+  await expect(page.getByTestId('case-materials-modal')).toHaveCount(0)
 })
 
 // ── 13.20 ──────────────────────────────────────────────────────────────────
@@ -892,21 +884,18 @@ test('13.20 switch role model at 375px viewport', async ({ page }) => {
 })
 
 // ── chatroom binary attachments (backlog #96) ────────────────────────────────
-
-async function openMaterialsModal(page: Page) {
-  await page.getByTestId('workspace-open-materials').click()
-  await expect(page.getByTestId('case-materials-modal')).toBeVisible()
-}
+// The ＋ button lives in the composer; the always-mounted file input accepts
+// uploads directly. Binary files upload immediately; .txt/.md prefill the
+// sidebar panel's case-file form.
 
 test('binary attachment uploads immediately and renders as an image bubble with lightbox', async ({ page }) => {
   await page.goto('/')
   const title = `E2E chatroom attachment ${Date.now()}`
   await createChatroomMeeting(page, title, { modelAssignments: defaultModels })
 
-  // A fresh meeting has neither evidence nor attachments, so the + button shows no count.
-  await expect(page.getByTestId('workspace-open-materials')).not.toContainText('（')
+  // A fresh meeting has neither evidence nor attachments, so the ＋ button shows no count.
+  await expect(page.getByTestId('materials-quick-menu-button')).not.toContainText('（')
 
-  await openMaterialsModal(page)
   const png = Buffer.from(
     'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==',
     'base64',
@@ -921,12 +910,8 @@ test('binary attachment uploads immediately and renders as an image bubble with 
   const bubble = page.getByTestId('attachment-image')
   await expect(bubble).toBeVisible({ timeout: 15_000 })
 
-  // The modal stays open for further uploads; close it to interact with the feed.
-  await page.getByTestId('case-materials-close-button').click()
-  await expect(page.getByTestId('case-materials-modal')).not.toBeVisible()
-
   // The ＋ count now totals binary attachments (1) plus active case-files (0).
-  await expect(page.getByTestId('workspace-open-materials')).toContainText('（1）')
+  await expect(page.getByTestId('context-tab-materials')).toContainText('（1）')
 
   // Clicking the thumbnail opens a full-size lightbox.
   await bubble.click()
@@ -941,7 +926,6 @@ test('pdf attachment renders as a download card with the file_id download endpoi
   const title = `E2E chatroom pdf ${Date.now()}`
   await createChatroomMeeting(page, title, { modelAssignments: defaultModels })
 
-  await openMaterialsModal(page)
   await page.getByTestId('attachment-upload-input').setInputFiles({
     name: '報告.pdf',
     mimeType: 'application/pdf',
@@ -966,7 +950,6 @@ test('generic binary upload (zip) renders a download card with size and file_id 
   const title = `E2E chatroom zip ${Date.now()}`
   await createChatroomMeeting(page, title, { modelAssignments: defaultModels })
 
-  await openMaterialsModal(page)
   const zipBytes = Buffer.from('PK\x03\x04 fake zip bytes for the generic card')
   await page.getByTestId('attachment-upload-input').setInputFiles({
     name: '素材包.zip',
@@ -993,16 +976,18 @@ test('.txt upload is ingested into case-files and never becomes a chat bubble', 
   const title = `E2E chatroom txt ${Date.now()}`
   await createChatroomMeeting(page, title, { modelAssignments: defaultModels })
 
-  await openMaterialsModal(page)
   await page.getByTestId('attachment-upload-input').setInputFiles({
     name: '摘要.txt',
     mimeType: 'text/plain',
     buffer: Buffer.from('這是文字摘要內容', 'utf-8'),
   })
 
-  // The file lands in the case-file form (prefilled) instead of uploading directly.
+  // Text files land in the case-file form (prefilled) instead of uploading directly.
+  // The form lives in the sidebar panel, so open it via the quick menu first.
+  await page.getByTestId('materials-quick-menu-button').click()
+  await page.getByTestId('materials-menu-manage').click()
   const form = page.getByTestId('case-material-form')
-  await expect(form.getByLabel('標題')).toHaveValue('摘要')
+  await expect(form.getByLabel('標題')).toHaveValue('摘要', { timeout: 15_000 })
   await expect(form.getByLabel('內容')).toHaveValue('這是文字摘要內容')
 
   await page.getByRole('button', { name: '新增', exact: true }).click()
@@ -1012,5 +997,5 @@ test('.txt upload is ingested into case-files and never becomes a chat bubble', 
   // Text case-files never appear as bubbles in the feed.
   await expect(page.getByTestId('attachment-image')).toHaveCount(0)
   await expect(page.getByTestId('workspace-message')).toHaveCount(0)
-  await expect(page.getByTestId('workspace-open-materials')).toContainText('（1）')
+  await expect(page.getByTestId('context-tab-materials')).toContainText('（1）')
 })
