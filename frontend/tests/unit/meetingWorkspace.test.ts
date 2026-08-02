@@ -7,6 +7,7 @@ import {
   isMeetingSettingsDirty,
   latestWorkspaceMessageTarget,
   materialImpactGuidance,
+  materialVocabulary,
   messageClampPolicy,
   nextHistorySelection,
   nextWorkspaceRoleFilter,
@@ -507,4 +508,12 @@ test('court hearing groups saved events by backend issue and phase and passes ac
   )
   assert.deepEqual(workspace.ungroupedMessages.map((message) => message.id), ['note'])
   assert.deepEqual(workspace.capabilities.directedRoleIds, [])
+})
+
+test('materialVocabulary tabLabel uses 案卷 for courtroom and 資料 elsewhere', () => {
+  assert.equal(materialVocabulary('courtroom').tabLabel, '案卷')
+  assert.equal(materialVocabulary('chatroom').tabLabel, '資料')
+  assert.equal(materialVocabulary('relay').tabLabel, '資料')
+  assert.equal(materialVocabulary('parallel').tabLabel, '資料')
+  assert.equal(materialVocabulary('red-blue').tabLabel, '資料')
 })
