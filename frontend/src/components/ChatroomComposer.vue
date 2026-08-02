@@ -2,7 +2,7 @@
 import { computed, inject, ref } from 'vue'
 import type { ChairmanParticipant } from '../chairmanActions'
 import { parseAndSendChatMessage } from '../composables/useChatroomComposer'
-import { councilKey } from '../composables/useCouncil'
+import { activeMode, councilKey } from '../composables/useCouncil'
 import MaterialsQuickMenu from './MaterialsQuickMenu.vue'
 import MentionAutocomplete from './MentionAutocomplete.vue'
 
@@ -97,6 +97,7 @@ async function handleSend() {
     <div class="chatroom-composer-row">
       <MaterialsQuickMenu
         :meeting-id="meetingId"
+        :mode-id="activeMode.id"
         :disabled="disabled"
         @pick-files="emit('pick-files', $event)"
         @manage-materials="emit('manage-materials')"

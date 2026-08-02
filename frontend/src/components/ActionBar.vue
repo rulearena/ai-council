@@ -196,6 +196,7 @@ const showPrimaryCta = computed(() => (
       <MaterialsQuickMenu
         v-if="embedded"
         :meeting-id="selectedMeeting?.meeting_id ?? ''"
+        :mode-id="selectedMeeting?.mode_id ?? ''"
         :disabled="materialsLocked"
         @pick-files="emit('pick-files', $event)"
         @manage-materials="emit('manage-materials')"

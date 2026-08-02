@@ -1,11 +1,13 @@
 <script setup lang="ts">
-import { onMounted, onUnmounted, ref, watch } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
+import { materialVocabulary } from '../meetingWorkspace'
 
 // LINE 風格的「＋」：只負責上傳與跳到資料管理，計數顯示在側欄資料頁籤。
 // 上傳鎖（disabled）由父層計算（loading || isMeetingRunning）；「資料管理」
 // 不受鎖。常駐 DOM 的隱藏 file input 可被 e2e 直接 setInputFiles，不需先開選單。
 const props = defineProps<{
   meetingId: string
+  modeId: string
   disabled?: boolean
   uploadHint?: string
 }>()
@@ -14,6 +16,9 @@ const emit = defineEmits<{
   'pick-files': [files: File[]]
   'manage-materials': []
 }>()
+
+// 上傳選單沿用 mode 感知用語：法庭「上傳證物」，其他模式「上傳附件」。
+const uploadLabel = computed(() => `上傳${materialVocabulary(props.modeId).itemPlural}`)
 
 const menuOpen = ref(false)
 const fileInput = ref<HTMLInputElement | null>(null)
@@ -76,7 +81,7 @@ function onFileSelected(event: Event) {
         data-testid="materials-menu-upload"
         :disabled="disabled"
         @click="onUploadClick"
-      >上傳檔案</button>
+      >{{ uploadLabel }}</button>
       <small v-if="disabled" class="materials-menu-hint" data-testid="materials-menu-hint">{{ uploadHint || '會議執行中，暫時無法上傳' }}</small>
       <button
         type="button"
