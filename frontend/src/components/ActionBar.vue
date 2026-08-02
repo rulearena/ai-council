@@ -198,6 +198,7 @@ const showPrimaryCta = computed(() => (
         :meeting-id="selectedMeeting?.meeting_id ?? ''"
         :mode-id="selectedMeeting?.mode_id ?? ''"
         :disabled="materialsLocked"
+        :upload-hint="selectedMeeting ? undefined : '請先選擇會議'"
         @pick-files="emit('pick-files', $event)"
         @manage-materials="emit('manage-materials')"
       />

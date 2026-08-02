@@ -224,12 +224,14 @@ async function toggle(item: VersionedCaseMaterial, kind: 'evidence' | 'note') {
       <section v-if="active && attachments.length" class="materials-section" data-testid="materials-attachment-list">
         <h3>{{ vocab.itemPlural }}檔案（{{ attachments.length }}）</h3>
         <ul class="materials-attachment-list">
-          <li v-for="event in attachments" :key="event.event_id" class="materials-attachment-row" data-testid="materials-attachment-row">
-            <a v-if="event.file_id" :href="attachmentDownloadUrl(props.meetingId, event.file_id)" download :data-testid="`materials-attachment-download-${event.file_id}`">
-              <strong>{{ event.filename ?? event.file_id }}</strong>
-              <small>{{ formatAttachmentSize(event.size ?? 0) }}</small>
-            </a>
-          </li>
+          <template v-for="event in attachments" :key="event.event_id">
+            <li v-if="event.file_id" class="materials-attachment-row" data-testid="materials-attachment-row">
+              <a :href="attachmentDownloadUrl(props.meetingId, event.file_id)" download :data-testid="`materials-attachment-download-${event.file_id}`">
+                <strong>{{ event.filename ?? event.file_id }}</strong>
+                <small>{{ formatAttachmentSize(event.size ?? 0) }}</small>
+              </a>
+            </li>
+          </template>
         </ul>
       </section>
 
@@ -263,7 +265,7 @@ async function toggle(item: VersionedCaseMaterial, kind: 'evidence' | 'note') {
         <div><button type="submit" class="btn btn-primary" :disabled="loading || !form.title.trim() || !form.content.trim() || !form.visibleRoles.length">{{ editingId ? '保存新版本' : '新增' }}</button><button v-if="editingId" type="button" class="btn btn-secondary" @click="clearForm">取消</button></div>
       </form>
     </template>
-    <p v-else-if="!materialsLoadError" class="empty-state">{{ selectedMeeting ? vocab.loading : '請先選擇會議。' }}</p>
+    <p v-else-if="!materialsLoadError" class="empty-state">{{ vocab.loading }}</p>
   </div>
 </template>
 
