@@ -16,6 +16,10 @@ const props = defineProps<{
 }>()
 
 const lightboxOpen = ref(false)
+const readerOpen = ref(false)
+const readerContent = ref('')
+const readerLoading = ref(false)
+const readerError = ref('')
 
 const filename = computed(() => props.event.filename ?? props.event.file_id ?? '附件')
 const size = computed(() => formatAttachmentSize(props.event.size ?? 0))
@@ -25,15 +29,57 @@ const downloadUrl = computed(() => {
 })
 const isImage = computed(() => props.event.mime_type?.startsWith('image/') ?? false)
 const isPdf = computed(() => props.event.mime_type === 'application/pdf')
+const isText = computed(() =>
+  props.event.mime_type === 'text/plain' || props.event.mime_type === 'text/markdown',
+)
 
 function openLightbox() {
   if (downloadUrl.value) lightboxOpen.value = true
+}
+
+async function openReader() {
+  if (!downloadUrl.value || readerOpen.value) return
+  readerOpen.value = true
+  readerLoading.value = true
+  readerError.value = ''
+  readerContent.value = ''
+  try {
+    const response = await fetch(downloadUrl.value)
+    if (!response.ok) throw new Error(`HTTP ${response.status}`)
+    readerContent.value = await response.text()
+  } catch (caught) {
+    readerError.value = caught instanceof Error ? caught.message : String(caught)
+  } finally {
+    readerLoading.value = false
+  }
 }
 </script>
 
 <template>
   <div class="attachment-bubble">
-    <template v-if="isImage && downloadUrl">
+    <template v-if="isText && downloadUrl">
+      <button
+        type="button"
+        class="attachment-card attachment-card-text"
+        data-testid="attachment-text"
+        :aria-label="`檢視文字附件 ${filename}`"
+        @click="openReader"
+      >
+        <span class="attachment-card-icon" aria-hidden="true">文</span>
+        <span class="attachment-card-meta">
+          <strong data-testid="attachment-filename">{{ filename }}</strong>
+          <small data-testid="attachment-size">{{ size }}</small>
+        </span>
+        <span class="attachment-card-download">檢視內容</span>
+      </button>
+      <Modal :show="readerOpen" :title="filename" test-id="attachment-reader" close-test-id="attachment-reader-close" @close="readerOpen = false">
+        <p v-if="readerLoading" class="attachment-reader-status" data-testid="attachment-reader-status">讀取中…</p>
+        <p v-else-if="readerError" class="attachment-reader-status attachment-reader-error" data-testid="attachment-reader-error">{{ readerError }}</p>
+        <pre v-else class="attachment-reader-content" data-testid="attachment-reader-content">{{ readerContent }}</pre>
+        <a class="btn btn-secondary btn-sm" :href="downloadUrl" download :data-testid="`attachment-download-${event.file_id}`">下載檔案</a>
+      </Modal>
+    </template>
+    <template v-else-if="isImage && downloadUrl">
       <button
         type="button"
         class="attachment-thumb"
@@ -108,8 +154,37 @@ function openLightbox() {
   max-width: 260px;
 }
 
+button.attachment-card {
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
+}
+
+button.attachment-card:hover {
+  border-color: var(--accent, #888);
+}
+
 .attachment-card:hover {
   border-color: var(--accent, #888);
+}
+
+.attachment-reader-content {
+  max-height: 60vh;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  background: var(--bg-muted, #f5f5f5);
+  padding: 12px;
+  border-radius: 6px;
+  font-size: 0.92em;
+}
+
+.attachment-reader-status {
+  opacity: 0.7;
+}
+
+.attachment-reader-error {
+  color: var(--danger, #c00);
 }
 
 .attachment-card-icon {
