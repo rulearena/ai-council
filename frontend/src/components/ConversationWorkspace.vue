@@ -503,7 +503,7 @@ async function retryRole(roleId: string) {
         v-if="isChatroom"
         :meeting-id="selectedMeeting.meeting_id"
         :participants="selectedMeeting.participants"
-        :disabled="uploadDisabled"
+        :upload-disabled="uploadDisabled"
         v-model:quoted-message="quotedMessage"
         @pick-files="onPickedFiles"
         @manage-materials="openMaterialsTab"

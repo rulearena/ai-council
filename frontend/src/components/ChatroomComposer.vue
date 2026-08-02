@@ -11,6 +11,7 @@ const props = defineProps<{
   participants: ChairmanParticipant[]
   quotedMessage: { eventId: string; preview: string } | null
   disabled?: boolean
+  uploadDisabled?: boolean
 }>()
 
 const emit = defineEmits<{
@@ -98,7 +99,7 @@ async function handleSend() {
       <MaterialsQuickMenu
         :meeting-id="meetingId"
         :mode-id="activeMode.id"
-        :disabled="disabled"
+        :disabled="uploadDisabled"
         @pick-files="emit('pick-files', $event)"
         @manage-materials="emit('manage-materials')"
       />
