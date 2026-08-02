@@ -5,29 +5,44 @@ import {
   addCaseEvidenceVersion,
   addCaseNote,
   addCaseNoteVersion,
+  attachmentDownloadUrl,
   getCaseMaterials,
   setCaseEvidenceActive,
   setCaseNoteActive,
-  uploadAttachment,
   ApiError,
   type CaseMaterials,
   type VersionedCaseMaterial,
 } from '../api'
 import { activeMode, councilKey } from '../composables/useCouncil'
-import {
-  createUploadEntry,
-  uploadFailed,
-  uploadStarted,
-  uploadStatusLabel,
-  uploadSucceeded,
-  type UploadEntry,
-} from '../attachmentUpload'
+import { uploadStatusLabel, type UploadEntry } from '../attachmentUpload'
+import { type TextDraft } from '../materialUploads'
 import { roleDisplayName } from '../presentation'
-import { hasAiOutput, materialImpactConfirmMessage, materialImpactGuidance, materialVocabulary } from '../meetingWorkspace'
-import Modal from './Modal.vue'
+import {
+  formatAttachmentSize,
+  hasAiOutput,
+  isAttachmentEvent,
+  materialImpactConfirmMessage,
+  materialImpactGuidance,
+  materialVocabulary,
+} from '../meetingWorkspace'
 
-const props = defineProps<{ show: boolean }>()
-defineEmits<{ close: [] }>()
+// 資料管理內容（原 CaseMaterialsModal 的管理部分），渲染於側欄資料頁。
+// 上傳與管理已拆分：＋ 快速選單負責上傳（二進位立即上傳、.txt/.md 預填表單），
+// 這裡只負責管理（進度列、evidence/notes CRUD、附件清單）。
+// `active` 用於載入時機與 generation guard；tab 之間以 v-show 保留 state，不重載。
+const props = defineProps<{
+  active: boolean
+  meetingId: string
+  uploads: UploadEntry[]
+  textDraft: TextDraft | null
+}>()
+
+const emit = defineEmits<{
+  'retry-upload': [entry: UploadEntry]
+  'dismiss-upload': [entry: UploadEntry]
+  'text-draft-consumed': []
+}>()
+
 const store = inject(councilKey)!
 const { selectedMeeting, loading, runAction, openMeeting, isMeetingRunning } = store
 const materials = ref<CaseMaterials | null>(null)
@@ -38,107 +53,23 @@ const formKind = ref<'evidence' | 'note'>('evidence')
 const editingId = ref<string | null>(null)
 const form = reactive({ title: '', content: '', visibleRoles: [] as string[] })
 let materialsGeneration = 0
+let loadedMeetingId: string | null = null
 const participants = computed(() => selectedMeeting.value?.participants ?? [])
 const displayRole = (role: string) => roleDisplayName(activeMode.value, participants.value, role)
 
 const pendingImpactGuidance = computed(() => materialImpactGuidance(selectedMeeting.value?.mode_id ?? ''))
-// 法庭用「證物／案卷」，其他模式用中性的「附件」。
+// 法庭用「證物／案卷」，其他模式用中性的「附件／資料」。
 const vocab = computed(() => materialVocabulary(selectedMeeting.value?.mode_id ?? ''))
 // AI 已發言後變更案卷會觸發 material_change_impact（AI 暫停並需重開審議），先請使用者確認。
 const aiHasSpoken = computed(() => hasAiOutput(selectedMeeting.value?.events ?? []))
-
-const uploads = ref<UploadEntry[]>([])
-const uploadDisabled = computed(() => loading.value || Boolean(isMeetingRunning.value))
+// 附件清單：列舉 events 中 attachment-added 事件（binary 下載不受 visible_roles 控管）。
+const attachments = computed(() => (selectedMeeting.value?.events ?? []).filter(isAttachmentEvent))
 
 function caughtMessage(caught: unknown): string {
   return caught instanceof ApiError && typeof caught.detail === 'string'
     ? caught.detail
     : caught instanceof Error ? caught.message : String(caught)
 }
-
-function textExtension(filename: string): boolean {
-  return /\.(txt|md)$/i.test(filename)
-}
-
-function routeTextFileToCaseForm(file: File) {
-  formKind.value = 'evidence'
-  editingId.value = null
-  form.title = file.name.replace(/\.(txt|md)$/i, '')
-  form.visibleRoles = participants.value.map((item) => item.role_id)
-  void file.text().then((content) => {
-    form.content = content
-  })
-}
-
-function replaceUpload(entry: UploadEntry, next: UploadEntry) {
-  uploads.value = uploads.value.map((item) => (item.key === entry.key ? next : item))
-}
-
-async function startUpload(entry: UploadEntry) {
-  const file = entry.retryFile
-  const meetingId = selectedMeeting.value?.meeting_id
-  if (!file || !meetingId) return
-  replaceUpload(entry, uploadStarted(entry))
-  try {
-    await uploadAttachment(meetingId, file)
-    replaceUpload(entry, uploadSucceeded(entry))
-    // The meeting payload carries attachments_summary + the new attachment event,
-    // so the ＋ count and the feed bubble both come from one refresh.
-    await openMeeting(meetingId)
-  } catch (caught) {
-    replaceUpload(entry, uploadFailed(entry, caughtMessage(caught)))
-  }
-}
-
-function onFileSelected(event: Event) {
-  const input = event.target as HTMLInputElement
-  const files = Array.from(input.files ?? [])
-  input.value = ''
-  for (const file of files) {
-    if (textExtension(file.name)) {
-      routeTextFileToCaseForm(file)
-    } else {
-      uploads.value = [...uploads.value, createUploadEntry(file)]
-      void startUpload(uploads.value.at(-1)!)
-    }
-  }
-}
-
-function retryUpload(entry: UploadEntry) {
-  void startUpload(entry)
-}
-
-function dismissUpload(entry: UploadEntry) {
-  uploads.value = uploads.value.filter((item) => item.key !== entry.key)
-}
-
-async function loadMaterials(id: string) {
-  const generation = ++materialsGeneration
-  materials.value = null
-  materialsLoadError.value = ''
-  materialsLoading.value = true
-  try {
-    const response = await getCaseMaterials(id)
-    if (generation !== materialsGeneration || selectedMeeting.value?.meeting_id !== id || !props.show) return
-    materials.value = response
-    clearForm()
-  } catch (caught) {
-    if (generation === materialsGeneration && selectedMeeting.value?.meeting_id === id && props.show) {
-      materialsLoadError.value = caughtMessage(caught)
-    }
-  } finally {
-    if (generation === materialsGeneration) materialsLoading.value = false
-  }
-}
-
-watch([() => props.show, () => selectedMeeting.value?.meeting_id], ([show, id]) => {
-  ++materialsGeneration
-  materials.value = null
-  materialsLoadError.value = ''
-  uploads.value = []
-  if (!show || !id) return
-  void loadMaterials(id)
-}, { immediate: true })
 
 function latest(item: VersionedCaseMaterial) {
   return item.versions.find((version) => version.version === item.active_version) ?? item.versions.at(-1)!
@@ -152,6 +83,63 @@ function clearForm() {
   localError.value = ''
 }
 
+function applyTextDraft(draft: NonNullable<TextDraft>) {
+  formKind.value = 'evidence'
+  editingId.value = null
+  form.title = draft.filename
+  form.content = draft.content
+  form.visibleRoles = participants.value.map((item) => item.role_id)
+  emit('text-draft-consumed')
+}
+
+// .txt/.md 草稿是 async 讀取後才到達；materials 已載入就直接預填，未載入則等載入成功後套用。
+watch(
+  () => props.textDraft,
+  (draft) => {
+    if (draft && materials.value && loadedMeetingId === props.meetingId) applyTextDraft(draft)
+  },
+)
+
+async function loadMaterials(id: string) {
+  const generation = ++materialsGeneration
+  materialsLoadError.value = ''
+  materialsLoading.value = true
+  try {
+    const response = await getCaseMaterials(id)
+    if (generation !== materialsGeneration || loadedMeetingId !== id || !props.active) return
+    materials.value = response
+    // 套用 pending textDraft（預填後清除）；無 pending draft 才 clearForm，避免
+    // 載入完成後的 clearForm() 清掉剛預填的內容（現行 :124 的競態）。
+    if (props.textDraft) applyTextDraft(props.textDraft)
+    else clearForm()
+  } catch (caught) {
+    if (generation === materialsGeneration && loadedMeetingId === id && props.active) {
+      materialsLoadError.value = caughtMessage(caught)
+    }
+  } finally {
+    if (generation === materialsGeneration) materialsLoading.value = false
+  }
+}
+
+watch(
+  [() => props.active, () => props.meetingId],
+  ([active, id]) => {
+    ++materialsGeneration
+    materialsLoadError.value = ''
+    if (!active || !id) return
+    if (id !== loadedMeetingId) {
+      // 切換會議：清掉舊資料再載入（沿用 modal 的行為），stale response 由 generation guard 丟棄。
+      loadedMeetingId = id
+      materials.value = null
+      void loadMaterials(id)
+    } else if (!materials.value) {
+      // 同一會議重新啟用但先前載入被中斷（例如 inactive 期間的 stale response 被丟棄）。
+      void loadMaterials(id)
+    }
+  },
+  { immediate: true },
+)
+
 function edit(item: VersionedCaseMaterial, kind: 'evidence' | 'note') {
   formKind.value = kind
   editingId.value = item.id
@@ -162,7 +150,7 @@ function edit(item: VersionedCaseMaterial, kind: 'evidence' | 'note') {
 }
 
 async function saveMaterial() {
-  const meetingId = selectedMeeting.value?.meeting_id
+  const meetingId = props.meetingId
   if (!meetingId || !materials.value || !form.title.trim() || !form.content.trim() || !form.visibleRoles.length) return
   if (aiHasSpoken.value && !window.confirm(materialImpactConfirmMessage(selectedMeeting.value?.mode_id ?? ''))) return
   const payload = { revision: materials.value.revision, title: form.title.trim(), content: form.content.trim(), visible_roles: [...form.visibleRoles] }
@@ -179,17 +167,17 @@ async function saveMaterial() {
         ? await addCaseNoteVersion(meetingId, editingId.value, payload)
         : await addCaseNote(meetingId, payload)
     }
-    if (generation !== materialsGeneration || selectedMeeting.value?.meeting_id !== meetingId || !props.show) return
+    if (generation !== materialsGeneration || loadedMeetingId !== meetingId || !props.active) return
     materials.value = response
     await openMeeting(meetingId)
-    if (generation !== materialsGeneration || selectedMeeting.value?.meeting_id !== meetingId || !props.show) return
+    if (generation !== materialsGeneration || loadedMeetingId !== meetingId || !props.active) return
     clearForm()
   })
-  if (!ok && generation === materialsGeneration && selectedMeeting.value?.meeting_id === meetingId) localError.value = store.error.value
+  if (!ok && generation === materialsGeneration && loadedMeetingId === meetingId) localError.value = store.error.value
 }
 
 async function toggle(item: VersionedCaseMaterial, kind: 'evidence' | 'note') {
-  const meetingId = selectedMeeting.value?.meeting_id
+  const meetingId = props.meetingId
   if (!meetingId || !materials.value) return
   if (aiHasSpoken.value && !window.confirm(materialImpactConfirmMessage(selectedMeeting.value?.mode_id ?? ''))) return
   const active = item.status !== 'active'
@@ -198,7 +186,7 @@ async function toggle(item: VersionedCaseMaterial, kind: 'evidence' | 'note') {
     const response = kind === 'evidence'
       ? await setCaseEvidenceActive(meetingId, item.id, materials.value!.revision, active)
       : await setCaseNoteActive(meetingId, item.id, materials.value!.revision, active)
-    if (generation !== materialsGeneration || selectedMeeting.value?.meeting_id !== meetingId || !props.show) return
+    if (generation !== materialsGeneration || loadedMeetingId !== meetingId || !props.active) return
     materials.value = response
     await openMeeting(meetingId)
   })
@@ -206,41 +194,43 @@ async function toggle(item: VersionedCaseMaterial, kind: 'evidence' | 'note') {
 </script>
 
 <template>
-  <Modal :show="show" :title="vocab.panelTitle" test-id="case-materials-modal" close-test-id="case-materials-close-button" @close="$emit('close')">
+  <div class="materials-panel">
+    <!-- 上傳進度列獨立於 materials 載入狀態渲染：載入失敗仍能顯示進度與重試／略過。 -->
+    <ul v-if="uploads.length" class="attachment-upload-list" data-testid="attachment-upload-list">
+      <li v-for="entry in uploads" :key="entry.key" :data-status="entry.status" :data-testid="`attachment-upload-${entry.key}`">
+        <span class="attachment-upload-name">{{ entry.filename }}</span>
+        <span class="attachment-upload-state">
+          {{ uploadStatusLabel(entry.status) }}
+        </span>
+        <button v-if="entry.status === 'error'" type="button" class="btn btn-ghost btn-sm" data-testid="attachment-upload-retry" @click="emit('retry-upload', entry)">重試</button>
+        <button v-if="entry.status === 'error'" type="button" class="btn btn-ghost btn-sm" data-testid="attachment-upload-dismiss" @click="emit('dismiss-upload', entry)">略過</button>
+        <small v-if="entry.error" class="error" data-testid="attachment-upload-error">{{ entry.error }}</small>
+      </li>
+    </ul>
+
     <div v-if="materialsLoadError" class="error" data-testid="materials-load-error">
       <p>{{ materialsLoadError }}</p>
-      <button type="button" class="btn btn-secondary btn-sm" data-testid="retry-materials-load-button" :disabled="materialsLoading" @click="selectedMeeting && loadMaterials(selectedMeeting.meeting_id)">重新載入</button>
+      <button type="button" class="btn btn-secondary btn-sm" data-testid="retry-materials-load-button" :disabled="materialsLoading" @click="loadedMeetingId && loadMaterials(loadedMeetingId)">重新載入</button>
     </div>
+
     <template v-if="selectedMeeting && materials">
       <section v-if="materials.pending_impact" class="materials-impact-warning" data-testid="materials-impact-warning">
         <strong>{{ vocab.changedTitle }}</strong>
         <p>{{ pendingImpactGuidance }}</p>
       </section>
-      <section class="materials-section">
-        <label class="attachment-upload-zone" data-testid="attachment-upload-zone">
-          <input
-            type="file"
-            class="visually-hidden"
-            data-testid="attachment-upload-input"
-            multiple
-            :disabled="uploadDisabled"
-            @change="onFileSelected"
-          />
-          <strong>{{ uploadDisabled ? '會議執行中，暫時無法上傳' : `上傳${vocab.itemPlural}` }}</strong>
-          <small>點此選擇檔案；.txt／.md 會進入{{ vocab.itemPlural }}列表，其餘立即上傳為{{ vocab.itemPlural }}</small>
-        </label>
-        <ul v-if="uploads.length" class="attachment-upload-list" data-testid="attachment-upload-list">
-          <li v-for="entry in uploads" :key="entry.key" :data-status="entry.status" :data-testid="`attachment-upload-${entry.key}`">
-            <span class="attachment-upload-name">{{ entry.filename }}</span>
-            <span class="attachment-upload-state">
-              {{ uploadStatusLabel(entry.status) }}
-            </span>
-            <button v-if="entry.status === 'error'" type="button" class="btn btn-ghost btn-sm" data-testid="attachment-upload-retry" @click="retryUpload(entry)">重試</button>
-            <button v-if="entry.status === 'error'" type="button" class="btn btn-ghost btn-sm" data-testid="attachment-upload-dismiss" @click="dismissUpload(entry)">略過</button>
-            <small v-if="entry.error" class="error" data-testid="attachment-upload-error">{{ entry.error }}</small>
+
+      <section v-if="active && attachments.length" class="materials-section" data-testid="materials-attachment-list">
+        <h3>{{ vocab.itemPlural }}檔案（{{ attachments.length }}）</h3>
+        <ul class="materials-attachment-list">
+          <li v-for="event in attachments" :key="event.event_id" class="materials-attachment-row" data-testid="materials-attachment-row">
+            <a v-if="event.file_id" :href="attachmentDownloadUrl(props.meetingId, event.file_id)" download :data-testid="`materials-attachment-download-${event.file_id}`">
+              <strong>{{ event.filename ?? event.file_id }}</strong>
+              <small>{{ formatAttachmentSize(event.size ?? 0) }}</small>
+            </a>
           </li>
         </ul>
       </section>
+
       <section class="materials-section">
         <h3>{{ vocab.itemPlural }}（{{ materials.evidence.filter(item => item.status === 'active').length }}）</h3>
         <article v-for="item in materials.evidence" :key="item.id" class="material-card" :data-status="item.status" :data-material-id="item.id" data-testid="case-evidence-card">
@@ -250,6 +240,7 @@ async function toggle(item: VersionedCaseMaterial, kind: 'evidence' | 'note') {
           <div><button type="button" class="btn btn-secondary btn-sm" @click="edit(item, 'evidence')">建立新版本</button><button type="button" class="btn btn-ghost btn-sm" :data-testid="item.status === 'active' ? 'deactivate-evidence-button' : 'reactivate-evidence-button'" @click="toggle(item, 'evidence')">{{ item.status === 'active' ? '停用' : '重新啟用' }}</button></div>
         </article>
       </section>
+
       <section class="materials-section">
         <h3>{{ vocab.notePlural }}（{{ materials.notes.filter(item => item.status === 'active').length }}）</h3>
         <article v-for="item in materials.notes" :key="item.id" class="material-card" :data-status="item.status" :data-material-id="item.id" data-testid="case-note-card">
@@ -259,6 +250,7 @@ async function toggle(item: VersionedCaseMaterial, kind: 'evidence' | 'note') {
           <div><button type="button" class="btn btn-secondary btn-sm" @click="edit(item, 'note')">建立新版本</button><button type="button" class="btn btn-ghost btn-sm" :data-testid="item.status === 'active' ? 'deactivate-note-button' : 'reactivate-note-button'" @click="toggle(item, 'note')">{{ item.status === 'active' ? '停用' : '重新啟用' }}</button></div>
         </article>
       </section>
+
       <form class="material-form" data-testid="case-material-form" @submit.prevent="saveMaterial">
         <h3>{{ editingId ? '建立新版本' : formKind === 'evidence' ? vocab.addItem : vocab.addNote }}</h3>
         <div v-if="!editingId" class="segmented"><button type="button" :class="{ active: formKind === 'evidence' }" @click="formKind = 'evidence'">{{ vocab.itemPlural }}</button><button type="button" :class="{ active: formKind === 'note' }" @click="formKind = 'note'">{{ vocab.notePlural }}</button></div>
@@ -270,33 +262,19 @@ async function toggle(item: VersionedCaseMaterial, kind: 'evidence' | 'note') {
       </form>
     </template>
     <p v-else-if="!materialsLoadError" class="empty-state">{{ selectedMeeting ? vocab.loading : '請先選擇會議。' }}</p>
-  </Modal>
+  </div>
 </template>
 
 <style scoped>
-.attachment-upload-zone {
+.materials-panel {
   display: flex;
   flex-direction: column;
-  gap: 4px;
-  padding: 14px 12px;
-  border: 1px dashed var(--border, #ccc);
-  border-radius: 8px;
-  cursor: pointer;
-  text-align: center;
-}
-
-.attachment-upload-zone:has(input:disabled) {
-  cursor: not-allowed;
-  opacity: 0.6;
-}
-
-.attachment-upload-zone small {
-  opacity: 0.7;
+  gap: 12px;
 }
 
 .attachment-upload-list {
   list-style: none;
-  margin: 8px 0 0;
+  margin: 0;
   padding: 0;
   display: flex;
   flex-direction: column;
@@ -337,12 +315,140 @@ async function toggle(item: VersionedCaseMaterial, kind: 'evidence' | 'note') {
   grid-column: 1 / -1;
 }
 
-.visually-hidden {
-  position: absolute;
-  width: 1px;
-  height: 1px;
+.materials-section {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.materials-section h3 {
+  margin: 0;
+  font-size: 0.95em;
+}
+
+.materials-attachment-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.materials-attachment-row a {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px 8px;
+  border: 1px solid var(--border, #eee);
+  border-radius: 6px;
+  text-decoration: none;
+  color: inherit;
+}
+
+.materials-attachment-row a:hover {
+  border-color: var(--accent, #888);
+}
+
+.materials-attachment-row strong {
   overflow: hidden;
-  clip: rect(0 0 0 0);
+  text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.materials-attachment-row small {
+  flex: none;
+  opacity: 0.65;
+}
+
+.materials-impact-warning {
+  padding: 10px 12px;
+  border: 1px solid var(--warning, #d99a2b);
+  border-radius: 8px;
+  background: var(--bg-muted, #fdf8ef);
+}
+
+.materials-impact-warning p {
+  margin: 4px 0 0;
+}
+
+.material-card {
+  padding: 8px 10px;
+  border: 1px solid var(--border, #eee);
+  border-radius: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.material-card header {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.material-card p {
+  margin: 0;
+  white-space: pre-wrap;
+}
+
+.material-card small {
+  opacity: 0.7;
+}
+
+.material-form {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.material-form h3 {
+  margin: 0;
+}
+
+.material-form label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 0.9em;
+}
+
+.material-form fieldset {
+  border: none;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.material-form legend {
+  font-size: 0.9em;
+}
+
+.segmented {
+  display: flex;
+  gap: 4px;
+}
+
+.segmented button {
+  padding: 4px 10px;
+  border: 1px solid var(--border, #ccc);
+  border-radius: 6px;
+  background: none;
+  cursor: pointer;
+}
+
+.segmented button.active {
+  background: var(--accent-muted, #e8e8f0);
+}
+
+.error {
+  color: var(--danger, #c00);
+  font-size: 0.9em;
+}
+
+.empty-state {
+  opacity: 0.7;
 }
 </style>

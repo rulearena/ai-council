@@ -30,6 +30,8 @@ import {
 import {
   isAttachmentEvent,
   latestWorkspaceMessageTarget,
+  materialCountFor,
+  materialVocabulary,
   messageClampPolicy,
   nextWorkspaceRoleFilter,
   projectMeetingWorkspace,
@@ -39,11 +41,14 @@ import {
   type WorkspaceProjectionMeeting,
   type WorkspaceRoleFilter,
 } from '../meetingWorkspace'
+import { uploadAttachment } from '../api'
+import { useMaterialUploads } from '../materialUploads'
 import { modelDisplayLabel } from '../providers'
 import type { SceneConfig } from '../scenes'
 import ActionBar from './ActionBar.vue'
 import AttachmentBubble from './AttachmentBubble.vue'
 import CouncilStage from './CouncilStage.vue'
+import MaterialsPanel from './MaterialsPanel.vue'
 import Modal from './Modal.vue'
 import RecordsDrawer from './RecordsDrawer.vue'
 import RoleSilhouette from './RoleSilhouette.vue'
@@ -51,7 +56,6 @@ import RoleSilhouette from './RoleSilhouette.vue'
 defineProps<{ scene: SceneConfig }>()
 const emit = defineEmits<{
   'open-meeting-settings': []
-  'open-materials': []
   'role-click': [role: CouncilRole | 'Chairman']
 }>()
 
@@ -83,8 +87,29 @@ const roleFilter = ref<WorkspaceRoleFilter | null>(null)
 const expandedMessageIds = ref(new Set<string>())
 const contextCollapsed = ref(false)
 const sceneLightboxOpen = ref(false)
-type CourtContextTab = 'context' | 'records'
+type CourtContextTab = 'context' | 'records' | 'materials'
 const activeCourtContextTab = ref<CourtContextTab>('context')
+
+const materialCount = computed(() => materialCountFor(selectedMeeting.value))
+const vocab = computed(() => materialVocabulary(selectedMeeting.value?.mode_id ?? ''))
+const {
+  uploads: uploadList,
+  textDraft: textDraftRef,
+  onPickedFiles,
+  retryUpload,
+  dismissUpload,
+} = useMaterialUploads({
+  meetingId: () => selectedMeeting.value?.meeting_id,
+  uploadAttachment,
+  openMeeting: (meetingId) => openMeeting(meetingId),
+  openMaterialsTab: () => openMaterialsTab(),
+})
+
+// 法庭版側欄無 mobileContextOpen（不會在窄視窗變成 overlay），只切頁籤＋展開。
+function openMaterialsTab() {
+  activeCourtContextTab.value = 'materials'
+  contextCollapsed.value = false
+}
 
 const courtroom = computed(() => selectedMeeting.value?.courtroom ?? null)
 const meetingId = computed(() => selectedMeeting.value?.meeting_id ?? '')
@@ -646,7 +671,11 @@ function ruling(issue: CourtroomIssueProjection) {
         </section>
       </div>
 
-      <ActionBar embedded @open-materials="emit('open-materials')" />
+      <ActionBar
+        embedded
+        @pick-files="onPickedFiles"
+        @manage-materials="openMaterialsTab"
+      />
     </section>
 
     <aside class="workspace-context-panel court-formal-context" :class="{ collapsed: contextCollapsed }" data-testid="court-formal-context">
@@ -654,6 +683,7 @@ function ruling(issue: CourtroomIssueProjection) {
         <div class="workspace-context-tabs">
           <button type="button" class="workspace-context-tab" :class="{ active: activeCourtContextTab === 'context' }" data-testid="court-context-tab-context" @click="activeCourtContextTab = 'context'">正式流程</button>
           <button type="button" class="workspace-context-tab" :class="{ active: activeCourtContextTab === 'records' }" data-testid="court-context-tab-records" @click="activeCourtContextTab = 'records'">紀錄</button>
+          <button type="button" class="workspace-context-tab" :class="{ active: activeCourtContextTab === 'materials' }" data-testid="court-context-tab-materials" @click="activeCourtContextTab = 'materials'">{{ vocab.tabLabel }}（{{ materialCount }}）</button>
         </div>
         <button type="button" class="btn btn-ghost btn-icon" :aria-label="contextCollapsed ? '展開正式流程' : '收合正式流程'" :aria-expanded="!contextCollapsed" @click="contextCollapsed = !contextCollapsed">{{ contextCollapsed ? '‹' : '›' }}</button>
       </header>
@@ -672,6 +702,16 @@ function ruling(issue: CourtroomIssueProjection) {
         <div v-else data-testid="court-context-records-section">
           <RecordsDrawer :show="true" inline />
         </div>
+        <MaterialsPanel
+          v-show="activeCourtContextTab === 'materials'"
+          :active="activeCourtContextTab === 'materials'"
+          :meeting-id="selectedMeeting.meeting_id"
+          :uploads="uploadList"
+          :text-draft="textDraftRef"
+          @retry-upload="retryUpload"
+          @dismiss-upload="dismissUpload"
+          @text-draft-consumed="textDraftRef = null"
+        />
       </div>
     </aside>
   </section>

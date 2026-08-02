@@ -13,6 +13,7 @@ import {
   isAttachmentEvent,
   latestWorkspaceMessageTarget,
   materialCountFor,
+  materialVocabulary,
   messageClampPolicy,
   nextWorkspaceRoleFilter,
   projectMeetingWorkspace,
@@ -23,19 +24,21 @@ import {
   type WorkspaceProjectionMeeting,
   type WorkspaceRoleFilter,
 } from '../meetingWorkspace'
+import { uploadAttachment } from '../api'
+import { useMaterialUploads } from '../materialUploads'
 import type { SceneConfig } from '../scenes'
 import { modelDisplayLabel } from '../providers'
 import ActionBar from './ActionBar.vue'
 import AttachmentBubble from './AttachmentBubble.vue'
 import ChatroomComposer from './ChatroomComposer.vue'
 import CouncilStage from './CouncilStage.vue'
+import MaterialsPanel from './MaterialsPanel.vue'
 import Modal from './Modal.vue'
 import RecordsDrawer from './RecordsDrawer.vue'
 import RoleSilhouette from './RoleSilhouette.vue'
 
 const props = defineProps<{ scene: SceneConfig }>()
 const emit = defineEmits<{
-  'open-materials': []
   'role-click': [role: CouncilRole | 'Chairman']
 }>()
 
@@ -53,6 +56,7 @@ const {
   retrySelectedStep,
   updateSelectedModel,
   assignmentUpdateError,
+  loading,
 } = store
 
 const roleFilter = ref<WorkspaceRoleFilter | null>(null)
@@ -62,6 +66,20 @@ const mobileContextOpen = ref(false)
 const quotedMessage = ref<{ eventId: string; preview: string } | null>(null)
 const isChatroom = computed(() => shouldShowChatroomComposer(activeMode.value.category))
 const materialCount = computed(() => materialCountFor(selectedMeeting.value))
+const vocab = computed(() => materialVocabulary(selectedMeeting.value?.mode_id ?? ''))
+const {
+  uploads: uploadList,
+  textDraft: textDraftRef,
+  onPickedFiles,
+  retryUpload,
+  dismissUpload,
+} = useMaterialUploads({
+  meetingId: () => selectedMeeting.value?.meeting_id,
+  uploadAttachment,
+  openMeeting: (meetingId) => store.openMeeting(meetingId),
+  openMaterialsTab: () => openMaterialsTab(),
+})
+const uploadDisabled = computed(() => loading.value || Boolean(isMeetingRunning.value))
 const latestChairMessage = computed(() => chairmanEvents.value.at(-1)?.content ?? '')
 const assignmentWarnings = computed(() => {
   const participants = selectedMeeting.value?.participants ?? []
@@ -90,9 +108,17 @@ const assignmentWarnings = computed(() => {
 })
 const sceneLightboxOpen = ref(false)
 const openModelSeatId = ref<string | null>(null)
-type ContextTab = 'context' | 'records'
+type ContextTab = 'context' | 'records' | 'materials'
 const activeContextTab = ref<ContextTab>('context')
 const feedRef = ref<HTMLDivElement | null>(null)
+
+// 快速選單「資料管理」與 .txt/.md 分流共用：切到資料頁，並依容器展開側欄
+// （mobile 的 conversation 版另有 overlay，courtroom 沒有 mobileContextOpen）。
+function openMaterialsTab() {
+  activeContextTab.value = 'materials'
+  contextCollapsed.value = false
+  mobileContextOpen.value = true
+}
 
 const workspace = computed<ConversationWorkspaceProjection | null>(() => {
   const meeting = selectedMeeting.value
@@ -477,12 +503,18 @@ async function retryRole(roleId: string) {
         v-if="isChatroom"
         :meeting-id="selectedMeeting.meeting_id"
         :participants="selectedMeeting.participants"
-        :material-count="materialCount"
+        :disabled="uploadDisabled"
         v-model:quoted-message="quotedMessage"
-        @open-materials="emit('open-materials')"
+        @pick-files="onPickedFiles"
+        @manage-materials="openMaterialsTab"
         @message-sent="onOwnMessageSent"
       />
-      <ActionBar v-else embedded @open-materials="emit('open-materials')" />
+      <ActionBar
+        v-else
+        embedded
+        @pick-files="onPickedFiles"
+        @manage-materials="openMaterialsTab"
+      />
     </section>
 
     <aside
@@ -494,6 +526,7 @@ async function retryRole(roleId: string) {
         <div class="workspace-context-tabs">
           <button type="button" class="workspace-context-tab" :class="{ active: activeContextTab === 'context' }" data-testid="context-tab-context" @click="activeContextTab = 'context'">脈絡</button>
           <button type="button" class="workspace-context-tab" :class="{ active: activeContextTab === 'records' }" data-testid="context-tab-records" @click="activeContextTab = 'records'">紀錄</button>
+          <button type="button" class="workspace-context-tab" :class="{ active: activeContextTab === 'materials' }" data-testid="context-tab-materials" @click="activeContextTab = 'materials'">{{ vocab.tabLabel }}（{{ materialCount }}）</button>
         </div>
         <button
           type="button"
@@ -549,6 +582,16 @@ async function retryRole(roleId: string) {
         <div v-else data-testid="context-records-section">
           <RecordsDrawer :show="true" inline />
         </div>
+        <MaterialsPanel
+          v-show="activeContextTab === 'materials'"
+          :active="activeContextTab === 'materials'"
+          :meeting-id="selectedMeeting.meeting_id"
+          :uploads="uploadList"
+          :text-draft="textDraftRef"
+          @retry-upload="retryUpload"
+          @dismiss-upload="dismissUpload"
+          @text-draft-consumed="textDraftRef = null"
+        />
       </div>
     </aside>
   </section>

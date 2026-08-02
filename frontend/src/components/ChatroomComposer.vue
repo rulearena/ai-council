@@ -3,6 +3,7 @@ import { computed, inject, ref } from 'vue'
 import type { ChairmanParticipant } from '../chairmanActions'
 import { parseAndSendChatMessage } from '../composables/useChatroomComposer'
 import { councilKey } from '../composables/useCouncil'
+import MaterialsQuickMenu from './MaterialsQuickMenu.vue'
 import MentionAutocomplete from './MentionAutocomplete.vue'
 
 const props = defineProps<{
@@ -10,11 +11,11 @@ const props = defineProps<{
   participants: ChairmanParticipant[]
   quotedMessage: { eventId: string; preview: string } | null
   disabled?: boolean
-  materialCount?: number
 }>()
 
 const emit = defineEmits<{
-  'open-materials': []
+  'pick-files': [files: File[]]
+  'manage-materials': []
   'update:quotedMessage': [value: null]
   'message-sent': []
 }>()
@@ -94,14 +95,12 @@ async function handleSend() {
       >×</button>
     </div>
     <div class="chatroom-composer-row">
-      <button
-        type="button"
-        class="btn btn-secondary workspace-materials-button"
-        data-testid="workspace-open-materials"
-        aria-label="開啟案卷與證據"
+      <MaterialsQuickMenu
+        :meeting-id="meetingId"
         :disabled="disabled"
-        @click="emit('open-materials')"
-      >＋{{ props.materialCount ? `（${props.materialCount}）` : '' }}</button>
+        @pick-files="emit('pick-files', $event)"
+        @manage-materials="emit('manage-materials')"
+      />
       <div class="chatroom-composer-input-wrap">
         <MentionAutocomplete
           ref="mentionMenu"

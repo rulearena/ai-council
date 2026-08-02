@@ -10,7 +10,6 @@ import RoleDrawer from './components/RoleDrawer.vue'
 import ModeHelpDrawer from './components/ModeHelpDrawer.vue'
 import CourtroomDocketPanel from './components/CourtroomDocketPanel.vue'
 import MeetingSettingsDrawer from './components/MeetingSettingsDrawer.vue'
-import CaseMaterialsModal from './components/CaseMaterialsModal.vue'
 import ConversationWorkspace from './components/ConversationWorkspace.vue'
 import { canLeaveMeetingSettings } from './meetingSettingsNavigation'
 
@@ -24,7 +23,6 @@ const openModal = ref<ModalName | null>(null)
 const openRole = ref<CouncilRole | 'Chairman' | null>(null)
 const modeHelpOpen = ref(false)
 const meetingSettingsOpen = ref(false)
-const materialsOpen = ref(false)
 
 function closeModal() {
   openModal.value = null
@@ -47,7 +45,6 @@ function onSeatClick(role: CouncilRole | 'Chairman') {
     <TopBar
       @open-settings="navigateFromMeetingSettings(() => openModal = 'settings')"
       @open-meeting-settings="meetingSettingsOpen = true"
-      @open-materials="navigateFromMeetingSettings(() => materialsOpen = true)"
       @open-past-topics="navigateFromMeetingSettings(() => openModal = 'past-topics')"
       @open-new-case="navigateFromMeetingSettings(() => openModal = 'new-case')"
       @open-mode-help="navigateFromMeetingSettings(() => modeHelpOpen = true)"
@@ -61,7 +58,6 @@ function onSeatClick(role: CouncilRole | 'Chairman') {
       <CourtroomDocketPanel
         :scene="currentScene"
         @open-meeting-settings="meetingSettingsOpen = true"
-        @open-materials="materialsOpen = true"
         @role-click="onSeatClick"
       />
     </template>
@@ -69,7 +65,6 @@ function onSeatClick(role: CouncilRole | 'Chairman') {
       v-else
       :scene="currentScene"
       @role-click="onSeatClick"
-      @open-materials="materialsOpen = true"
     />
 
     <SettingsModal :show="openModal === 'settings'" @close="closeModal" />
@@ -77,7 +72,6 @@ function onSeatClick(role: CouncilRole | 'Chairman') {
     <NewCaseModal :show="openModal === 'new-case'" @close="closeModal" />
     <RoleDrawer :role="openRole" @close="openRole = null" />
     <MeetingSettingsDrawer :show="meetingSettingsOpen" @close="meetingSettingsOpen = false" />
-    <CaseMaterialsModal :show="materialsOpen" @close="materialsOpen = false" />
     <ModeHelpDrawer :show="modeHelpOpen" @close="modeHelpOpen = false" />
   </main>
 </template>

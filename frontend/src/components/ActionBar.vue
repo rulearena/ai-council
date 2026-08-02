@@ -1,12 +1,12 @@
 <script setup lang="ts">
 import { computed, inject, ref, watch } from 'vue'
 import { activeMode, councilKey, formatDateTime, sequencePresets } from '../composables/useCouncil'
-import { materialCountFor } from '../meetingWorkspace'
 import { nextMeetingMigrationDraft } from '../meetingMigration'
 import { roleDisplayName, stepDisplayLabel } from '../presentation'
+import MaterialsQuickMenu from './MaterialsQuickMenu.vue'
 
 const props = withDefaults(defineProps<{ embedded?: boolean }>(), { embedded: false })
-defineEmits<{ 'open-materials': [] }>()
+const emit = defineEmits<{ 'pick-files': [files: File[]]; 'manage-materials': [] }>()
 
 const store = inject(councilKey)!
 const {
@@ -38,7 +38,7 @@ const {
 } = store
 
 const advancedOpen = ref(false)
-const materialCount = computed(() => materialCountFor(selectedMeeting.value))
+const materialsLocked = computed(() => !selectedMeeting.value || loading.value || Boolean(isMeetingRunning.value))
 const migrationTitle = ref('')
 const migrationGoal = ref('')
 const restartReason = ref('')
@@ -193,15 +193,13 @@ const showPrimaryCta = computed(() => (
     </p>
 
     <div class="action-bar-row">
-      <button
+      <MaterialsQuickMenu
         v-if="embedded"
-        type="button"
-        class="btn btn-secondary workspace-materials-button"
-        data-testid="workspace-open-materials"
-        aria-label="開啟案卷與證據"
-        :disabled="!selectedMeeting"
-        @click="$emit('open-materials')"
-      >＋{{ materialCount ? `（${materialCount}）` : '' }}</button>
+        :meeting-id="selectedMeeting?.meeting_id ?? ''"
+        :disabled="materialsLocked"
+        @pick-files="emit('pick-files', $event)"
+        @manage-materials="emit('manage-materials')"
+      />
       <label class="chairman-action-select">
         主席動作
         <select

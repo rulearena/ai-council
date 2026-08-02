@@ -75,14 +75,13 @@ export function useMaterialUploads(boundary: MaterialUploadsBoundary) {
   function onPickedFiles(files: File[]) {
     for (const file of files) {
       if (textExtension(file.name)) {
+        // Set the draft only once the file text is read, so the materials panel never
+        // sees — and consumes — a draft whose content is still empty.
         const filename = file.name.replace(/\.(txt|md)$/i, '')
-        textDraft.value = { filename, content: '' }
-        void file.text().then((content) => {
-          if (textDraft.value?.filename === filename) {
-            textDraft.value = { filename, content }
-          }
-        })
         boundary.openMaterialsTab?.()
+        void file.text().then((content) => {
+          textDraft.value = { filename, content }
+        })
       } else {
         const entry = createUploadEntry(file)
         uploads.value = [...uploads.value, entry]

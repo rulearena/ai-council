@@ -7,7 +7,6 @@ const { selectedMeeting, meetingInfoCopied, copyMeetingInfo } = inject(councilKe
 defineEmits<{
   'open-settings': []
   'open-meeting-settings': []
-  'open-materials': []
   'open-past-topics': []
   'open-new-case': []
   'open-mode-help': []
