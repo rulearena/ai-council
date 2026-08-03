@@ -11,6 +11,7 @@ const props = defineProps<{
     filename?: string
     size?: number
     mime_type?: string
+    removed?: boolean
   }
   attachmentLabel?: string
 }>()
@@ -57,7 +58,19 @@ async function openReader() {
 
 <template>
   <div class="attachment-bubble">
-    <template v-if="isText && downloadUrl">
+    <div
+      v-if="props.event.removed"
+      class="attachment-card attachment-card-removed"
+      data-testid="attachment-removed"
+      :aria-label="`已刪除附件 ${filename}`"
+    >
+      <span class="attachment-card-icon" aria-hidden="true">刪</span>
+      <span class="attachment-card-meta">
+        <strong data-testid="attachment-filename">{{ filename }}</strong>
+        <small data-testid="attachment-size">已刪除</small>
+      </span>
+    </div>
+    <template v-else-if="isText && downloadUrl">
       <button
         type="button"
         class="attachment-card attachment-card-text"
@@ -223,6 +236,15 @@ button.attachment-card {
 
 .attachment-card-missing {
   color: var(--danger, #c00);
+}
+
+.attachment-card-removed {
+  cursor: default;
+  opacity: 0.7;
+}
+
+.attachment-card-removed:hover {
+  border-color: var(--border, #ddd);
 }
 
 .attachment-lightbox-img {

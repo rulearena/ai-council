@@ -6,11 +6,13 @@ import {
   addCaseNote,
   addCaseNoteVersion,
   attachmentDownloadUrl,
+  deleteAttachment,
   getCaseMaterials,
   setCaseEvidenceActive,
   setCaseNoteActive,
   ApiError,
   type CaseMaterials,
+  type MeetingEvent,
   type VersionedCaseMaterial,
 } from '../api'
 import { activeMode, councilKey } from '../composables/useCouncil'
@@ -65,7 +67,12 @@ const vocab = computed(() => materialVocabulary(selectedMeeting.value?.mode_id ?
 // AI 已發言後變更案卷會觸發 material_change_impact（AI 暫停並需重開審議），先請使用者確認。
 const aiHasSpoken = computed(() => hasAiOutput(selectedMeeting.value?.events ?? []))
 // 附件清單：列舉 events 中 attachment-added 事件（binary 下載不受 visible_roles 控管）。
-const attachments = computed(() => (selectedMeeting.value?.events ?? []).filter(isAttachmentEvent))
+// 已刪除（removed: true）的行不顯示，避免與 feed 的「已刪除」氣泡重複。
+const attachments = computed(() =>
+  (selectedMeeting.value?.events ?? []).filter(
+    (event) => isAttachmentEvent(event) && !event.removed,
+  ),
+)
 
 function caughtMessage(caught: unknown): string {
   return caught instanceof ApiError && typeof caught.detail === 'string'
@@ -195,6 +202,23 @@ async function toggle(item: VersionedCaseMaterial, kind: 'evidence' | 'note') {
     await openMeeting(meetingId)
   })
 }
+
+async function confirmDeleteAttachment(event: MeetingEvent) {
+  const meetingId = props.meetingId
+  const fileId = event.file_id
+  if (!meetingId || !fileId) return
+  if (!window.confirm('刪除後無法復原。確定刪除？')) return
+  localError.value = ''
+  const generation = ++materialsGeneration
+  const ok = await runAction(async () => {
+    await deleteAttachment(meetingId, fileId)
+    if (generation !== materialsGeneration || loadedMeetingId !== meetingId || !props.active) return
+    await openMeeting(meetingId)
+  })
+  if (!ok && generation === materialsGeneration && loadedMeetingId === meetingId) {
+    localError.value = caughtMessage(store.error.value)
+  }
+}
 </script>
 
 <template>
@@ -232,6 +256,7 @@ async function toggle(item: VersionedCaseMaterial, kind: 'evidence' | 'note') {
                 <strong>{{ event.filename ?? event.file_id }}</strong>
                 <small>{{ formatAttachmentSize(event.size ?? 0) }}</small>
               </a>
+              <button type="button" class="btn btn-ghost btn-sm" :data-testid="`attachment-delete-${event.file_id}`" :disabled="loading" @click="confirmDeleteAttachment(event)">刪除</button>
             </li>
           </template>
         </ul>
@@ -240,7 +265,7 @@ async function toggle(item: VersionedCaseMaterial, kind: 'evidence' | 'note') {
       <section class="materials-section">
         <h3>{{ vocab.itemPlural }}（{{ materials.evidence.filter(item => item.status === 'active').length }}）</h3>
         <article v-for="item in materials.evidence" :key="item.id" class="material-card" :data-status="item.status" :data-material-id="item.id" data-testid="case-evidence-card">
-          <header><strong>{{ item.citation_anchor }} · {{ latest(item).title }}</strong><span>v{{ item.active_version }} · {{ item.status === 'active' ? '使用中' : '已停用' }}</span></header>
+          <header><strong>{{ item.citation_anchor }} · {{ latest(item).title }}</strong><span v-if="!simple">v{{ item.active_version }} · {{ item.status === 'active' ? '使用中' : '已停用' }}</span></header>
           <p>{{ latest(item).content }}</p>
           <small>可見：{{ latest(item).visible_roles.map(displayRole).join('、') }}</small>
           <div v-if="!simple"><button type="button" class="btn btn-secondary btn-sm" @click="edit(item, 'evidence')">建立新版本</button><button type="button" class="btn btn-ghost btn-sm" :data-testid="item.status === 'active' ? 'deactivate-evidence-button' : 'reactivate-evidence-button'" @click="toggle(item, 'evidence')">{{ item.status === 'active' ? '停用' : '重新啟用' }}</button></div>
