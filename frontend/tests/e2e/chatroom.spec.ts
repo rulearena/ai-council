@@ -1150,3 +1150,162 @@ test('chatroom materials page is read-only: no notes, no add form, no version bu
   await expect(page.getByTestId('deactivate-evidence-button')).toHaveCount(0)
   await expect(page.getByRole('button', { name: '建立新版本' })).toHaveCount(0)
 })
+
+// ── chatroom attachment delete (backlog #96 round-7) ───────────────────────────
+// 附件刪除所有模式都有；聊天串氣泡保留並標「已刪除」且不可點開（LINE 回收概念）。
+
+test('binary attachment delete removes the sidebar row, drops the count, and turns the feed bubble into a non-clickable 已刪除 card', async ({ page }) => {
+  await page.goto('/')
+  const title = `E2E chatroom binary delete ${Date.now()}`
+  await createChatroomMeeting(page, title, { modelAssignments: defaultModels })
+
+  const zipBytes = Buffer.from('PK\x03\x04 fake zip for the delete flow')
+  await page.getByTestId('attachment-upload-input').setInputFiles({
+    name: '刪除測試.zip',
+    mimeType: 'application/zip',
+    buffer: zipBytes,
+  })
+  await expect(page.getByTestId('attachment-filename')).toHaveText('刪除測試.zip', { timeout: 15_000 })
+  await expect(page.getByTestId('context-tab-materials')).toContainText('（1）')
+
+  // The sidebar lists the attachment with a delete button and a live download link.
+  await page.getByTestId('context-tab-materials').click()
+  await expect(page.getByTestId('context-tab-materials')).toHaveClass(/active/)
+  const row = page.getByTestId('materials-attachment-row')
+  await expect(row).toHaveCount(1)
+  const download = row.locator('[data-testid^="materials-attachment-download-"]')
+  await expect(download).toBeVisible()
+  const href = await download.getAttribute('href')
+  expect(href).toMatch(/\/meetings\/[^/]+\/attachments\/attachment-[a-f0-9]+$/)
+
+  // Confirming the delete removes the row and frees the quota-counted attachment.
+  await page.once('dialog', (dialog) => dialog.accept())
+  await row.locator('[data-testid^="attachment-delete-"]').click()
+  await expect(page.getByTestId('materials-attachment-row')).toHaveCount(0)
+  await expect(page.getByTestId('context-tab-materials')).toContainText('（0）')
+
+  // The blob is gone: the download endpoint now 404s.
+  const after = await page.request.get(href!)
+  expect(after.status()).toBe(404)
+
+  // The feed bubble stays but becomes the non-clickable 已刪除 card (no reader/lightbox).
+  await expect(page.getByTestId('attachment-removed')).toBeVisible({ timeout: 15_000 })
+  await expect(page.getByTestId('attachment-removed')).toContainText('刪除測試.zip')
+  await expect(page.getByTestId('attachment-removed')).toContainText('已刪除')
+  await expect(page.getByTestId('attachment-removed').locator('a, button')).toHaveCount(0)
+  await page.getByTestId('attachment-removed').click()
+  await expect(page.getByTestId('attachment-lightbox')).toHaveCount(0)
+  await expect(page.getByTestId('attachment-reader')).toHaveCount(0)
+})
+
+test('cancelling the delete confirm keeps the attachment and its sidebar row', async ({ page }) => {
+  await page.goto('/')
+  const title = `E2E chatroom cancel delete ${Date.now()}`
+  await createChatroomMeeting(page, title, { modelAssignments: defaultModels })
+
+  const zipBytes = Buffer.from('PK\x03\x04 fake zip for the cancel flow')
+  await page.getByTestId('attachment-upload-input').setInputFiles({
+    name: '保留.zip',
+    mimeType: 'application/zip',
+    buffer: zipBytes,
+  })
+  await expect(page.getByTestId('attachment-filename')).toHaveText('保留.zip', { timeout: 15_000 })
+
+  await page.getByTestId('context-tab-materials').click()
+  await expect(page.getByTestId('materials-attachment-row')).toHaveCount(1)
+
+  // Dismissing the confirm leaves everything in place.
+  await page.once('dialog', (dialog) => dialog.dismiss())
+  await page.getByTestId('materials-attachment-row').locator('[data-testid^="attachment-delete-"]').click()
+  await expect(page.getByTestId('materials-attachment-row')).toHaveCount(1)
+  await expect(page.getByTestId('context-tab-materials')).toContainText('（1）')
+  await expect(page.getByTestId('attachment-removed')).toHaveCount(0)
+})
+
+test('.txt delete removes the mirrored evidence card and the sidebar row, and marks the feed bubble 已刪除', async ({ page }) => {
+  await page.goto('/')
+  const title = `E2E chatroom txt delete ${Date.now()}`
+  await createChatroomMeeting(page, title, { modelAssignments: defaultModels })
+
+  const textContent = '這是會被刪除的文字摘要'
+  await page.getByTestId('attachment-upload-input').setInputFiles({
+    name: '案情摘要.txt',
+    mimeType: 'text/plain',
+    buffer: Buffer.from(textContent, 'utf-8'),
+  })
+  await expect(page.getByTestId('attachment-text')).toBeVisible({ timeout: 15_000 })
+  await expect(page.getByTestId('context-tab-materials')).toContainText('（1）')
+
+  await page.getByTestId('context-tab-materials').click()
+  await expect(page.getByTestId('case-evidence-card')).toBeVisible()
+  await expect(page.getByTestId('case-evidence-card')).toContainText('案情摘要')
+  await expect(page.getByTestId('materials-attachment-row')).toHaveCount(1)
+
+  // Deleting the text attachment also removes its AI-visible evidence mirror.
+  await page.once('dialog', (dialog) => dialog.accept())
+  await page.getByTestId('materials-attachment-row').locator('[data-testid^="attachment-delete-"]').click()
+  await expect(page.getByTestId('case-evidence-card')).toHaveCount(0)
+  await expect(page.getByTestId('materials-attachment-row')).toHaveCount(0)
+  await expect(page.getByTestId('context-tab-materials')).toContainText('（0）')
+
+  // The feed keeps the bubble but marks it deleted.
+  await expect(page.getByTestId('attachment-removed')).toBeVisible({ timeout: 15_000 })
+  await expect(page.getByTestId('attachment-removed')).toContainText('案情摘要.txt')
+  await expect(page.getByTestId('attachment-removed')).toContainText('已刪除')
+})
+
+test('deleting an attachment after the AI has spoken shows no impact banner and the AI keeps answering', async ({ page }) => {
+  await page.goto('/')
+  const title = `E2E chatroom post-ai delete ${Date.now()}`
+  await createChatroomMeeting(page, title, { modelAssignments: defaultModels })
+
+  // The AI has already spoken before any upload or delete.
+  await sendChatMessage(page, '@Advisor 你怎麼看？')
+  await waitForRoleMessage(page, '顧問')
+
+  await page.getByTestId('attachment-upload-input').setInputFiles({
+    name: '補充.txt',
+    mimeType: 'text/plain',
+    buffer: Buffer.from('AI 發言後上傳又刪除', 'utf-8'),
+  })
+  await expect(page.getByTestId('attachment-text')).toBeVisible({ timeout: 15_000 })
+
+  await page.getByTestId('context-tab-materials').click()
+  await expect(page.getByTestId('case-evidence-card')).toBeVisible()
+  await expect(page.getByTestId('materials-impact-warning')).toHaveCount(0)
+
+  // Deleting in chatroom must not set a pending impact either.
+  await page.once('dialog', (dialog) => dialog.accept())
+  await page.getByTestId('materials-attachment-row').locator('[data-testid^="attachment-delete-"]').click()
+  await expect(page.getByTestId('materials-attachment-row')).toHaveCount(0)
+  await expect(page.getByTestId('materials-impact-warning')).toHaveCount(0)
+
+  // A follow-up @mention is accepted and answered, so the AI is not gated.
+  const followUp = page.waitForResponse(
+    (response) => response.request().method() === 'POST' && response.url().endsWith('/chat/mention'),
+  )
+  await sendChatMessage(page, '@Advisor 再看一次？')
+  expect((await followUp).status()).toBe(202)
+  const advisorMessages = page.getByTestId('workspace-message').filter({ hasText: '顧問' })
+  await expect(advisorMessages).toHaveCount(2, { timeout: 15_000 })
+})
+
+test('chatroom evidence card header shows no 使用中/已停用 status text (simple mode)', async ({ page }) => {
+  await page.goto('/')
+  const title = `E2E chatroom status text ${Date.now()}`
+  await createChatroomMeeting(page, title, { modelAssignments: defaultModels })
+
+  await page.getByTestId('attachment-upload-input').setInputFiles({
+    name: '狀態文字.md',
+    mimeType: 'text/markdown',
+    buffer: Buffer.from('# 無狀態文字', 'utf-8'),
+  })
+  await expect(page.getByTestId('attachment-text')).toBeVisible({ timeout: 15_000 })
+
+  await page.getByTestId('context-tab-materials').click()
+  await expect(page.getByTestId('case-evidence-card')).toBeVisible()
+  await expect(page.getByTestId('case-evidence-card')).toContainText('狀態文字')
+  // Chatroom has no status toggle buttons, so the inert status text must not render.
+  await expect(page.getByTestId('case-evidence-card')).not.toContainText('使用中')
+  await expect(page.getByTestId('case-evidence-card')).not.toContainText('已停用')
+})

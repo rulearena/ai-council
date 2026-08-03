@@ -4508,3 +4508,36 @@ test('courtroom attachment upload renders an evidence bubble in the docket recor
   expect(response.status()).toBe(200)
   expect(await response.body()).toEqual(png)
 })
+
+test('relay binary attachment can be deleted from the materials list', async ({ page }) => {
+  await page.goto('/')
+  const topic = `E2E relay attachment delete ${Date.now()}`
+  await createMeetingViaNewCase(page, topic)
+
+  const zipBytes = Buffer.from('PK\x03\x04 fake zip for the relay delete flow')
+  await page.getByTestId('attachment-upload-input').setInputFiles({
+    name: '素材.zip',
+    mimeType: 'application/zip',
+    buffer: zipBytes,
+  })
+  await expect(page.getByTestId('attachment-filename')).toHaveText('素材.zip', { timeout: 15_000 })
+  await expect(page.getByTestId('context-tab-materials')).toContainText('（1）')
+
+  // Non-chatroom workspaces expose the same delete button (Human Owner ruling: all modes).
+  await page.getByTestId('context-tab-materials').click()
+  await expect(page.getByTestId('context-tab-materials')).toHaveClass(/active/)
+  const row = page.getByTestId('materials-attachment-row')
+  await expect(row).toHaveCount(1)
+  const download = row.locator('[data-testid^="materials-attachment-download-"]')
+  await expect(download).toBeVisible()
+  const href = await download.getAttribute('href')
+  expect(href).toMatch(/\/meetings\/[^/]+\/attachments\/attachment-[a-f0-9]+$/)
+
+  // Confirming the delete removes the row, drops the count, and deletes the blob.
+  await page.once('dialog', (dialog) => dialog.accept())
+  await row.locator('[data-testid^="attachment-delete-"]').click()
+  await expect(page.getByTestId('materials-attachment-row')).toHaveCount(0)
+  await expect(page.getByTestId('context-tab-materials')).toContainText('（0）')
+  const after = await page.request.get(href!)
+  expect(after.status()).toBe(404)
+})
