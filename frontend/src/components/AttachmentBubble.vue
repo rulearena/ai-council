@@ -160,10 +160,6 @@ button.attachment-card {
   text-align: left;
 }
 
-button.attachment-card:hover {
-  border-color: var(--color-border-strong);
-}
-
 .attachment-card:hover {
   border-color: var(--color-border-strong);
 }
