@@ -161,11 +161,11 @@ button.attachment-card {
 }
 
 button.attachment-card:hover {
-  border-color: var(--accent, #888);
+  border-color: var(--color-border-strong);
 }
 
 .attachment-card:hover {
-  border-color: var(--accent, #888);
+  border-color: var(--color-border-strong);
 }
 
 .attachment-reader-content {
@@ -173,7 +173,7 @@ button.attachment-card:hover {
   overflow: auto;
   white-space: pre-wrap;
   word-break: break-word;
-  background: var(--bg-muted, #f5f5f5);
+  background: var(--color-surface-muted);
   padding: 12px;
   border-radius: 6px;
   font-size: 0.92em;
@@ -184,7 +184,7 @@ button.attachment-card:hover {
 }
 
 .attachment-reader-error {
-  color: var(--danger, #c00);
+  color: var(--color-danger);
 }
 
 .attachment-card-icon {
