@@ -325,6 +325,41 @@ class CaseMaterials:
             transition="reactivate-note" if active else "deactivate-note",
         )
 
+    def remove_evidence(
+        self,
+        meeting_id: str,
+        evidence_id: str,
+        *,
+        expected_revision: int,
+        limits: CaseMaterialLimits,
+        impact: dict[str, Any] | None = None,
+    ) -> CaseMaterialsView:
+        def mutate(document: dict[str, Any]) -> None:
+            removed = next(
+                (
+                    item
+                    for item in document["evidence"]
+                    if item.get("id") == evidence_id
+                ),
+                None,
+            )
+            if removed is None:
+                raise CaseMaterialValidationError(f"Unknown evidence: {evidence_id}")
+            document["evidence"] = [
+                item
+                for item in document["evidence"]
+                if item.get("id") != evidence_id
+            ]
+
+        return self._mutate(
+            meeting_id,
+            expected_revision=expected_revision,
+            mutate=mutate,
+            limits=limits,
+            impact=impact,
+            transition="remove-evidence",
+        )
+
     def _mutate(
         self,
         meeting_id: str,

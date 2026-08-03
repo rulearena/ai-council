@@ -329,3 +329,146 @@ def test_total_limit_counts_only_the_active_prompt_view_and_failure_is_atomic(
         limits=limits,
     )
     assert added.revision == 3
+
+
+def test_remove_evidence_removes_item_keeps_notes_and_bumps_revision(
+    tmp_path: Path,
+) -> None:
+    materials = CaseMaterials(MeetingRepository(tmp_path))
+    limits = CaseMaterialLimits(per_item_chars=100, total_chars=1000)
+    materials.add_evidence(
+        "meeting-1",
+        expected_revision=0,
+        title="第一份",
+        content="first",
+        visible_roles=["Judge"],
+        limits=limits,
+    )
+    materials.add_evidence(
+        "meeting-1",
+        expected_revision=1,
+        title="第二份",
+        content="second",
+        visible_roles=["Judge"],
+        limits=limits,
+    )
+    materials.add_note(
+        "meeting-1",
+        expected_revision=2,
+        title="筆記",
+        content="note",
+        visible_roles=["Judge"],
+        limits=limits,
+    )
+
+    updated = materials.remove_evidence(
+        "meeting-1",
+        "case-file-1",
+        expected_revision=3,
+        limits=limits,
+    )
+
+    assert updated.revision == 4
+    assert [evidence.id for evidence in updated.evidence] == ["case-file-2"]
+    assert [note.id for note in updated.notes] == ["case-note-1"]
+    assert updated.revision_history[-1].transition == "remove-evidence"
+    assert updated.revision_history[-1].parent_revision == 3
+    stored = json.loads(
+        (tmp_path / "meetings" / "meeting-1" / "case_files.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert stored["revision"] == 4
+    assert [evidence["id"] for evidence in stored["evidence"]] == ["case-file-2"]
+
+
+def test_remove_evidence_unknown_id_raises_and_is_atomic(tmp_path: Path) -> None:
+    materials = CaseMaterials(MeetingRepository(tmp_path))
+    limits = CaseMaterialLimits(per_item_chars=100, total_chars=1000)
+    created = materials.add_evidence(
+        "meeting-1",
+        expected_revision=0,
+        title="第一份",
+        content="first",
+        visible_roles=["Judge"],
+        limits=limits,
+    )
+    before = materials.repository.read_case_materials_raw("meeting-1")
+
+    with pytest.raises(CaseMaterialValidationError, match="Unknown evidence: nope"):
+        materials.remove_evidence(
+            "meeting-1",
+            "nope",
+            expected_revision=1,
+            limits=limits,
+        )
+
+    assert materials.repository.read_case_materials_raw("meeting-1") == before
+    assert created.revision == 1
+
+
+def test_remove_evidence_stale_revision_raises_conflict(tmp_path: Path) -> None:
+    materials = CaseMaterials(MeetingRepository(tmp_path))
+    limits = CaseMaterialLimits(per_item_chars=100, total_chars=1000)
+    materials.add_evidence(
+        "meeting-1",
+        expected_revision=0,
+        title="第一份",
+        content="first",
+        visible_roles=["Judge"],
+        limits=limits,
+    )
+    materials.add_evidence(
+        "meeting-1",
+        expected_revision=1,
+        title="第二份",
+        content="second",
+        visible_roles=["Judge"],
+        limits=limits,
+    )
+
+    with pytest.raises(CaseMaterialConflict, match="expected 2, got 1"):
+        materials.remove_evidence(
+            "meeting-1",
+            "case-file-1",
+            expected_revision=1,
+            limits=limits,
+        )
+
+
+def test_remove_evidence_records_impact_on_active_ref_change(tmp_path: Path) -> None:
+    materials = CaseMaterials(MeetingRepository(tmp_path))
+    limits = CaseMaterialLimits(per_item_chars=100, total_chars=1000)
+    materials.add_evidence(
+        "meeting-1",
+        expected_revision=0,
+        title="第一份",
+        content="first",
+        visible_roles=["Judge"],
+        limits=limits,
+    )
+    materials.add_evidence(
+        "meeting-1",
+        expected_revision=1,
+        title="第二份",
+        content="second",
+        visible_roles=["Judge"],
+        limits=limits,
+    )
+
+    with_impact = materials.remove_evidence(
+        "meeting-1",
+        "case-file-1",
+        expected_revision=2,
+        limits=limits,
+        impact={"deliberation_epoch_id": "epoch-9"},
+    )
+    assert with_impact.pending_impact == {"deliberation_epoch_id": "epoch-9"}
+
+    without_impact = materials.remove_evidence(
+        "meeting-1",
+        "case-file-2",
+        expected_revision=3,
+        limits=limits,
+    )
+    assert without_impact.pending_impact == {"deliberation_epoch_id": "epoch-9"}
