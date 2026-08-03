@@ -13,6 +13,7 @@ from typing import Any, BinaryIO
 from ai_council.meetings.repository import MeetingRepository
 
 ATTACHMENT_EVENT_KIND = "attachment-added"
+ATTACHMENT_REMOVED_KIND = "attachment-removed"
 
 # file_id must be a plain name: no path separators, no "." / "..", no traversal.
 SAFE_FILE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
@@ -128,12 +129,14 @@ class AttachmentSummary:
 
 
 class AttachmentStore:
-    """Immutable blob storage for binary attachments.
+    """Immutable blob storage for attachments.
 
     Blobs live at ``<data_dir>/meetings/<meeting_id>/attachments/<file_id>``.
     Metadata is a single ``attachment-added`` event appended to the meeting
     event log; quotas are projected from those events, never from a counter
-    file, and there is no delete/deactivate in v1.
+    file. Deletion is append-only: an ``attachment-removed`` tombstone makes
+    the attachment resolve to ``None`` (download 404, quota released) and the
+    blob is deleted, without rewriting the original event.
     """
 
     def __init__(self, repository: MeetingRepository) -> None:
@@ -176,6 +179,7 @@ class AttachmentStore:
         size: int,
         mime_type: str,
         extension: str,
+        evidence_id: str | None = None,
     ) -> dict[str, Any]:
         """Record attachment metadata as an immutable event and return it."""
         event = {
@@ -191,21 +195,42 @@ class AttachmentStore:
             "mime_type": mime_type,
             "extension": extension,
         }
+        if evidence_id is not None:
+            event["evidence_id"] = evidence_id
         self._repository.append_event(meeting_id, event)
         return event
 
+    def removed_file_ids(self, meeting_id: str) -> set[str]:
+        """Collect file_ids that carry an ``attachment-removed`` tombstone."""
+        return {
+            str(event.get("file_id"))
+            for event in self._repository.read_events(meeting_id)
+            if event.get("step_id") == ATTACHMENT_REMOVED_KIND and event.get("file_id")
+        }
+
     def attachment_event(self, meeting_id: str, file_id: str) -> dict[str, Any] | None:
-        """Resolve an attachment by ``file_id`` from the event log."""
+        """Resolve an attachment by ``file_id`` from the event log.
+
+        Removed attachments (a later tombstone exists) resolve to ``None`` so
+        download and quota projection see them as gone without rewriting history.
+        """
+        removed = self.removed_file_ids(meeting_id)
         for event in self._repository.read_events(meeting_id):
-            if event.get("step_id") == ATTACHMENT_EVENT_KIND and event.get("file_id") == file_id:
+            if (
+                event.get("step_id") == ATTACHMENT_EVENT_KIND
+                and event.get("file_id") == file_id
+                and file_id not in removed
+            ):
                 return event
         return None
 
     def attachment_events(self, meeting_id: str) -> list[dict[str, Any]]:
+        removed = self.removed_file_ids(meeting_id)
         return [
             event
             for event in self._repository.read_events(meeting_id)
             if event.get("step_id") == ATTACHMENT_EVENT_KIND
+            and event.get("file_id") not in removed
         ]
 
     def summary(self, meeting_id: str) -> AttachmentSummary:
@@ -214,6 +239,32 @@ class AttachmentStore:
             count=len(events),
             total_bytes=sum(int(event.get("size", 0) or 0) for event in events),
         )
+
+    def remove_attachment(self, meeting_id: str, file_id: str) -> dict[str, Any] | None:
+        """Mark an attachment removed and delete its blob.
+
+        Appends an ``attachment-removed`` tombstone first (so the download and
+        quota views exclude it even if blob deletion crashes mid-way), then
+        deletes the blob. Returns the tombstone event, or ``None`` when the
+        attachment is unknown or already removed.
+        """
+        _validate_file_id(file_id)
+        event = self.attachment_event(meeting_id, file_id)
+        if event is None:
+            return None
+        tombstone = {
+            "event_id": f"{meeting_id}:attachment-removed:{uuid.uuid4().hex}",
+            "meeting_id": meeting_id,
+            "step_id": ATTACHMENT_REMOVED_KIND,
+            "role": "Human",
+            "attempt": 1,
+            "status": "completed",
+            "file_id": file_id,
+            "filename": str(event.get("filename") or file_id),
+        }
+        self._repository.append_event(meeting_id, tombstone)
+        self._blob_path_unchecked(meeting_id, file_id).unlink(missing_ok=True)
+        return tombstone
 
 
 def _validate_file_id(file_id: str) -> None:
