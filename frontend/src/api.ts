@@ -311,6 +311,7 @@ export type MeetingEvent = {
   size?: number
   mime_type?: string
   extension?: string
+  removed?: boolean
 }
 
 export type MeetingStreamEvent = {
@@ -694,6 +695,20 @@ export async function uploadAttachment(meetingId: string, file: File): Promise<M
 
 export function attachmentDownloadUrl(meetingId: string, fileId: string): string {
   return `${API_BASE}/meetings/${meetingId}/attachments/${encodeURIComponent(fileId)}`
+}
+
+export async function deleteAttachment(meetingId: string, fileId: string): Promise<MeetingEvent> {
+  const response = await fetch(`${API_BASE}/meetings/${meetingId}/attachments/${encodeURIComponent(fileId)}`, {
+    method: 'DELETE',
+  })
+  if (!response.ok) {
+    throw new ApiError(
+      `DELETE /meetings/${meetingId}/attachments/${fileId} failed: ${response.status}`,
+      response.status,
+      await readErrorDetail(response),
+    )
+  }
+  return response.json()
 }
 
 export async function requestRoleResponse(

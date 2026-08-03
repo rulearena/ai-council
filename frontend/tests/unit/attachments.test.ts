@@ -52,6 +52,13 @@ test('isAttachmentEvent is true only for attachment-added step ids', () => {
   assert.equal(isAttachmentEvent({ step_id: 'chat-fanout-critic' }), false)
 })
 
+test('isAttachmentEvent stays true for removed attachment events', () => {
+  assert.equal(
+    isAttachmentEvent({ step_id: 'attachment-added', removed: true }),
+    true,
+  )
+})
+
 test('formatAttachmentSize renders human-readable byte sizes', () => {
   assert.equal(formatAttachmentSize(0), '0 B')
   assert.equal(formatAttachmentSize(512), '512 B')
@@ -80,6 +87,25 @@ test('materialCountFor is zero when a meeting has neither kind', () => {
 
 test('materialCountFor falls back to legacy case_files length', () => {
   const meeting = { case_files: [{ id: 'a' }, { id: 'b' }] }
+  assert.equal(materialCountFor(meeting), 2)
+})
+
+test('materialCountFor skips removed attachment events', () => {
+  const meeting = {
+    case_materials: { evidence: [{ status: 'active' }] },
+    events: [
+      {
+        step_id: 'attachment-added',
+        mime_type: 'image/png',
+        removed: true,
+      },
+      {
+        step_id: 'attachment-added',
+        mime_type: 'image/png',
+      },
+      { step_id: 'human-message' },
+    ],
+  }
   assert.equal(materialCountFor(meeting), 2)
 })
 

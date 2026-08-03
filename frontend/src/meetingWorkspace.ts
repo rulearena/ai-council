@@ -219,6 +219,7 @@ type WorkspaceEvent = {
   size?: number
   mime_type?: string
   extension?: string
+  removed?: boolean
   parsed_output?: {
     summary?: string
     decision?: string
@@ -687,7 +688,7 @@ export function materialCountFor(meeting: {
   case_materials?: { evidence?: Array<{ status: string }> } | null
   case_files?: Array<unknown> | null
   attachments_summary?: { count: number } | null
-  events?: Array<{ step_id?: string; mime_type?: string }> | null
+  events?: Array<{ step_id?: string; mime_type?: string; removed?: boolean }> | null
 } | null | undefined): number {
   if (!meeting) return 0
   const evidence = meeting.case_materials?.evidence?.filter((item) => item.status === 'active').length
@@ -697,6 +698,7 @@ export function materialCountFor(meeting: {
     ? meeting.events.filter(
         (event) =>
           event.step_id === 'attachment-added' &&
+          !event.removed &&
           !TEXT_ATTACHMENT_MIMES.has(event.mime_type ?? ''),
       ).length
     : (meeting.attachments_summary?.count ?? 0)
