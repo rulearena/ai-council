@@ -820,7 +820,11 @@ def create_app(
                         "revision": material_summary.revision,
                         "active_evidence_count": material_summary.active_evidence_count,
                         "active_note_count": material_summary.active_note_count,
-                        "pending_impact": material_summary.pending_impact,
+                        "pending_impact": (
+                            None
+                            if mode.category == "chatroom"
+                            else material_summary.pending_impact
+                        ),
                     },
                     "attachments_summary": {
                         "count": attachment_summary.count,
@@ -868,6 +872,7 @@ def create_app(
                 material_view,
                 active_epoch_id=deliberation.active_epoch.id,
                 mode_id=metadata.get("mode_id"),
+                category=mode.category,
             ),
             "attachments_summary": {
                 "count": attachment_summary.count,
@@ -937,7 +942,10 @@ def create_app(
             repository.read_events(meeting_id)
         ).active_epoch.id
         return project_case_materials(
-            view, active_epoch_id=active_epoch_id, mode_id=metadata.get("mode_id")
+            view,
+            active_epoch_id=active_epoch_id,
+            mode_id=metadata.get("mode_id"),
+            category=meeting_mode(mode_catalog, metadata).category,
         )
 
     @app.get("/meetings/{meeting_id}/materials")
@@ -957,7 +965,10 @@ def create_app(
         except CaseMaterialValidationError as error:
             raise HTTPException(status_code=404, detail=str(error)) from error
         return project_case_materials(
-            view, active_epoch_id=active_epoch_id, mode_id=metadata.get("mode_id")
+            view,
+            active_epoch_id=active_epoch_id,
+            mode_id=metadata.get("mode_id"),
+            category=meeting_mode(mode_catalog, metadata).category,
         )
 
     @app.post("/meetings/{meeting_id}/materials/evidence")
@@ -3332,7 +3343,11 @@ def project_case_files(
 
 
 def project_case_materials(
-    view: CaseMaterialsView, *, active_epoch_id: str, mode_id: str | None
+    view: CaseMaterialsView,
+    *,
+    active_epoch_id: str,
+    mode_id: str | None,
+    category: str | None = None,
 ) -> dict[str, Any]:
     def project_version(version: Any) -> dict[str, Any]:
         return {
@@ -3347,9 +3362,13 @@ def project_case_materials(
 
     impact = view.pending_impact
     effective_impact = (
-        impact
-        if impact is not None and impact.get("deliberation_epoch_id") == active_epoch_id
-        else None
+        None
+        if category == "chatroom"
+        else (
+            impact
+            if impact is not None and impact.get("deliberation_epoch_id") == active_epoch_id
+            else None
+        )
     )
     return {
         "schema_version": view.schema_version,

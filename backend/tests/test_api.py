@@ -7371,7 +7371,7 @@ def test_chatroom_mention_recovers_when_legacy_pending_impact_present(
     meeting_id = _create_chatroom_meeting(client)
 
     # A round 1-5 meeting could already carry a pending_impact flag. The chatroom
-    # read side must ignore it (no data migration), so an old meeting unlocks.
+    # read side must suppress it (no data migration), so an old meeting unlocks.
     assert client.post(
         f"/meetings/{meeting_id}/materials/evidence",
         json={
@@ -7392,7 +7392,7 @@ def test_chatroom_mention_recovers_when_legacy_pending_impact_present(
     document_path.write_text(json.dumps(document), encoding="utf-8")
     assert (
         client.get(f"/meetings/{meeting_id}").json()["case_materials"]["pending_impact"]
-        is not None
+        is None
     )
 
     response = client.post(
@@ -7400,6 +7400,78 @@ def test_chatroom_mention_recovers_when_legacy_pending_impact_present(
         json={"content": "Advisor 你怎麼看？", "mentions": ["Advisor"]},
     )
     assert response.status_code == 202
+
+
+def test_chatroom_legacy_pending_impact_is_suppressed_in_projection(
+    tmp_path: Path,
+) -> None:
+    app = create_test_app(tmp_path)
+    client = TestClient(app)
+    meeting_id = _create_chatroom_meeting(client)
+    assert client.post(
+        f"/meetings/{meeting_id}/materials/evidence",
+        json={
+            "revision": 0,
+            "title": "既有附件",
+            "content": "舊內容",
+            "visible_roles": ["Advisor", "Critic", "Strategist", "Analyst"],
+        },
+    ).status_code == 200
+    document_path = tmp_path / "data" / "meetings" / meeting_id / "case_files.json"
+    document = json.loads(document_path.read_text(encoding="utf-8"))
+    document["pending_impact"] = {
+        "deliberation_epoch_id": "epoch-1",
+        "reason": "prompt_material_changed_after_ai_output",
+    }
+    document_path.write_text(json.dumps(document), encoding="utf-8")
+
+    meeting = client.get(f"/meetings/{meeting_id}").json()
+    assert meeting["case_materials"]["pending_impact"] is None
+
+    listing = client.get("/meetings").json()
+    entry = next(item for item in listing if item["meeting_id"] == meeting_id)
+    assert entry["case_materials_summary"]["pending_impact"] is None
+
+    materials = client.get(f"/meetings/{meeting_id}/materials").json()
+    assert materials["pending_impact"] is None
+
+
+def test_non_chatroom_pending_impact_still_projected(tmp_path: Path) -> None:
+    app = create_test_app(tmp_path)
+    client = TestClient(app)
+    meeting_id = client.post(
+        "/meetings",
+        json={"title": "接力", "goal": "討論方案", "mode_id": "red-blue"},
+    ).json()["meeting_id"]
+    assert client.post(
+        f"/meetings/{meeting_id}/materials/evidence",
+        json={
+            "revision": 0,
+            "title": "第一份",
+            "content": "內容",
+            "visible_roles": ["Blue", "Red", "Judge"],
+        },
+    ).status_code == 200
+    document_path = tmp_path / "data" / "meetings" / meeting_id / "case_files.json"
+    document = json.loads(document_path.read_text(encoding="utf-8"))
+    document["pending_impact"] = {
+        "deliberation_epoch_id": "epoch-1",
+        "reason": "prompt_material_changed_after_ai_output",
+    }
+    document_path.write_text(json.dumps(document), encoding="utf-8")
+
+    meeting = client.get(f"/meetings/{meeting_id}").json()
+    assert meeting["case_materials"]["pending_impact"] == {
+        "deliberation_epoch_id": "epoch-1",
+        "reason": "prompt_material_changed_after_ai_output",
+    }
+
+    listing = client.get("/meetings").json()
+    entry = next(item for item in listing if item["meeting_id"] == meeting_id)
+    assert entry["case_materials_summary"]["pending_impact"] == {
+        "deliberation_epoch_id": "epoch-1",
+        "reason": "prompt_material_changed_after_ai_output",
+    }
 
 
 def test_upload_rejects_oversized_file(
