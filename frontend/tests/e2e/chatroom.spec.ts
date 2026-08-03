@@ -1095,6 +1095,39 @@ test('.txt upload becomes a reader card in the feed and is ingested into case-fi
   await expect(page.getByTestId('context-tab-materials')).toContainText('（1）')
 })
 
+test('uploading .txt after the AI has spoken does not gate it: no impact banner, AI keeps answering', async ({ page }) => {
+  await page.goto('/')
+  const title = `E2E chatroom post-ai txt ${Date.now()}`
+  await createChatroomMeeting(page, title, { modelAssignments: defaultModels })
+
+  // The AI has already spoken before any upload.
+  await sendChatMessage(page, '@Advisor 你怎麼看？')
+  await waitForRoleMessage(page, '顧問')
+
+  // Upload a text file after that output — chatroom must not flag a pending impact.
+  await page.getByTestId('attachment-upload-input').setInputFiles({
+    name: '補充.txt',
+    mimeType: 'text/plain',
+    buffer: Buffer.from('AI 發言後補充', 'utf-8'),
+  })
+  await expect(page.getByTestId('attachment-text')).toBeVisible({ timeout: 15_000 })
+
+  // The materials tab reloads server state: the evidence is mirrored in, but no
+  // materials-impact-warning banner appears.
+  await page.getByTestId('context-tab-materials').click()
+  await expect(page.getByTestId('case-evidence-card')).toBeVisible()
+  await expect(page.getByTestId('materials-impact-warning')).toHaveCount(0)
+
+  // A follow-up @mention is accepted (202) and answered, so the AI is not gated.
+  const followUp = page.waitForResponse(
+    (response) => response.request().method() === 'POST' && response.url().endsWith('/chat/mention'),
+  )
+  await sendChatMessage(page, '@Advisor 再看一次？')
+  expect((await followUp).status()).toBe(202)
+  const advisorMessages = page.getByTestId('workspace-message').filter({ hasText: '顧問' })
+  await expect(advisorMessages).toHaveCount(2, { timeout: 15_000 })
+})
+
 test('chatroom materials page is read-only: no notes, no add form, no version buttons', async ({ page }) => {
   await page.goto('/')
   const title = `E2E chatroom simple materials ${Date.now()}`
