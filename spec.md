@@ -587,6 +587,8 @@ config/models.yaml.example
 
 97. **VibeCoding Workflow 首次採用（AIDLC bootstrap）**：中央工作流 repo（`/Users/chrischiu/SynologyDrive/Project/VibeCoding_Workflow`，固定 revision `de1aca49181af3ce8583f6d59b034ea8136d42c6`）正式成為本專案流程來源。新增 `docs/agents/workflow-bindings.md`（§0 來源 bootstrap、§1 專案資訊、§2 三角色執行者與模型、§3 六個正式流程入口、§4 canonical 紀錄、§5 安全邊界、§6 交接）；`AGENTS.md`／`CLAUDE.md` 政策入口改為 bootstrap 單一語意並修正過時 `.scratch` tracker 說明；三份角色 prompt 必讀清單加入 bootstrap 並修正與中央規範的 3 處衝突（orchestrator「可直接動手的範圍」違反中央「不實作」、reviewer Verdict 缺 `Reviewed identity`、必讀順序缺綁定檔）。review(doc) 由獨立 Reviewer subagent 對 fixed range `83cea96...96e083c` 通過（1 Minor＋1 Nit：本地 `multi-agent-development.md` 與中央同相對路徑的優先順序、Idea 入口路徑，均已套用修正並複審 `pass`），Orchestrator fast-forward merge 至 main（`96e083c`），worktree/branch 已清理、既有 untracked 保留。三角色模型經 Human Owner 確認皆為 session runtime `opencode/big-pickle`（綁定檔 §2）。**2026-07-31 Human Owner 驗收通過，`accepted / done`。**
 
+98. **聊天室 @all 平行回應的批次群組顯示**：Human Owner 於 #96 第七輪驗收後測試 @all，質疑「沒有平行一起執行」。Orchestrator 以 backend events 實證後端**確實平行**（`fanout_chatroom_all` 用 `ThreadPoolExecutor(max_workers=len)`，runner.py:595；測試 meeting「創業」178c58e1 四角色 `started_at` 全同秒、耗時 17.7–20.1s 重疊，若序列執行總耗時 ~75s）。使用者觀察到的「一個一個出現（隔幾秒）」是**完成順序**的正常呈現：runner 用 `as_completed` 依完成先後逐一 append（runner.py:600），前端 feed 因此逐條浮現。Human Owner 裁決採「批次群組顯示」：feed 中把同一輪 @all（共享 `chat-fanout-{timestamp_ms}-*` 前綴）的回覆群組在一起，顯示「N 位角色回應中」＋完成後逐條填入，讓使用者看出是同一輪平行 fanout。純前端投影變更（`meetingWorkspace.ts`／`ConversationWorkspace.vue`），不動後端 API、事件結構或聊天室執行語意（@all fanout 本身已平行）。非核准實作批次，須先登錄本 backlog 再開 OpenSpec proposal。
+
 ## 16. 會議模式系統（Mode System）設計
 
 > 狀態：設計定稿（2026-07-12），分四個切片實作。切片 A 為前端先行，切片 B/C/D 為後端（Codex 依本節實作）。
