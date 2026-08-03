@@ -331,7 +331,7 @@ class CaseMaterials:
         evidence_id: str,
         *,
         expected_revision: int,
-        limits: CaseMaterialLimits,
+        limits: CaseMaterialLimits | None = None,
         impact: dict[str, Any] | None = None,
     ) -> CaseMaterialsView:
         def mutate(document: dict[str, Any]) -> None:

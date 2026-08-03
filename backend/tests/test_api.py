@@ -7672,3 +7672,367 @@ def test_binary_attachment_download_not_restricted_by_visible_roles(
     download = client.get(f"/meetings/{meeting_id}/attachments/{file_id}")
     assert download.status_code == 200
     assert download.content == b"zip-bytes"
+
+
+def _delete_attachment(
+    client: TestClient,
+    meeting_id: str,
+    file_id: str,
+) -> tuple[int, dict[str, object]]:
+    response = client.delete(f"/meetings/{meeting_id}/attachments/{file_id}")
+    return response.status_code, response.json()
+
+
+def test_delete_binary_attachment_tombstones_and_releases_quota(
+    tmp_path: Path,
+) -> None:
+    app = create_test_app(tmp_path)
+    client = TestClient(app)
+    meeting_id = _create_chatroom_meeting(client)
+    pdf_bytes = b"%PDF-1.4 fake pdf content"
+    status, uploaded = _upload_attachment(
+        client,
+        meeting_id,
+        filename="report.pdf",
+        content=pdf_bytes,
+        content_type="application/pdf",
+    )
+    assert status == 200
+
+    delete_status, tombstone = _delete_attachment(
+        client, meeting_id, uploaded["file_id"]
+    )
+
+    assert delete_status == 200
+    assert tombstone["step_id"] == "attachment-removed"
+    assert tombstone["role"] == "Human"
+    assert tombstone["status"] == "completed"
+    assert tombstone["meeting_id"] == meeting_id
+    assert tombstone["file_id"] == uploaded["file_id"]
+    assert tombstone["filename"] == "report.pdf"
+
+    download = client.get(f"/meetings/{meeting_id}/attachments/{uploaded['file_id']}")
+    assert download.status_code == 404
+
+    meeting = client.get(f"/meetings/{meeting_id}").json()
+    assert meeting["attachments_summary"] == {"count": 0, "total_bytes": 0}
+    attachment_events = [
+        event
+        for event in meeting["events"]
+        if event.get("step_id") == "attachment-added"
+    ]
+    assert len(attachment_events) == 1
+    assert attachment_events[0]["file_id"] == uploaded["file_id"]
+    assert attachment_events[0]["removed"] is True
+    assert not any(
+        event.get("step_id") == "attachment-removed" for event in meeting["events"]
+    )
+    assert not (
+        tmp_path
+        / "data"
+        / "meetings"
+        / meeting_id
+        / "attachments"
+        / uploaded["file_id"]
+    ).exists()
+
+    quota_status, _ = _upload_attachment(
+        client,
+        meeting_id,
+        filename="again.pdf",
+        content=pdf_bytes,
+        content_type="application/pdf",
+    )
+    assert quota_status == 200
+
+
+def test_delete_text_attachment_removes_mirrored_evidence_in_chatroom(
+    tmp_path: Path,
+) -> None:
+    app = create_test_app(tmp_path)
+    client = TestClient(app)
+    meeting_id = _create_chatroom_meeting(client)
+    status, uploaded = _upload_attachment(
+        client,
+        meeting_id,
+        filename="note.txt",
+        content="第一份內容".encode("utf-8"),
+        content_type="text/plain",
+    )
+    assert status == 200
+    before = client.get(f"/meetings/{meeting_id}").json()
+    assert [item["id"] for item in before["case_materials"]["evidence"]] == [
+        "case-file-1"
+    ]
+
+    delete_status, tombstone = _delete_attachment(
+        client, meeting_id, uploaded["file_id"]
+    )
+
+    assert delete_status == 200
+    assert tombstone["step_id"] == "attachment-removed"
+    meeting = client.get(f"/meetings/{meeting_id}").json()
+    assert meeting["case_materials"]["evidence"] == []
+    assert meeting["case_materials"]["revision"] == 2
+    assert meeting["case_materials"]["pending_impact"] is None
+    assert meeting["attachments_summary"] == {"count": 0, "total_bytes": 0}
+    assert client.get(
+        f"/meetings/{meeting_id}/attachments/{uploaded['file_id']}"
+    ).status_code == 404
+
+
+def test_delete_attachment_unknown_or_already_removed_returns_404(
+    tmp_path: Path,
+) -> None:
+    app = create_test_app(tmp_path)
+    client = TestClient(app)
+    meeting_id = _create_chatroom_meeting(client)
+    file_id = _upload_attachment(
+        client,
+        meeting_id,
+        filename="a.pdf",
+        content=b"a",
+        content_type="application/pdf",
+    )[1]["file_id"]
+
+    assert _delete_attachment(client, meeting_id, "attachment-unknown")[0] == 404
+    assert _delete_attachment(client, meeting_id, file_id)[0] == 200
+    assert _delete_attachment(client, meeting_id, file_id)[0] == 404
+
+
+def test_delete_text_upload_records_evidence_id_for_mirror(tmp_path: Path) -> None:
+    app = create_test_app(tmp_path)
+    client = TestClient(app)
+    meeting_id = _create_chatroom_meeting(client)
+    _upload_attachment(
+        client,
+        meeting_id,
+        filename="note.txt",
+        content="第一份內容".encode("utf-8"),
+        content_type="text/plain",
+    )
+
+    meeting = client.get(f"/meetings/{meeting_id}").json()
+    attachment_event = next(
+        event
+        for event in meeting["events"]
+        if event.get("step_id") == "attachment-added"
+    )
+    assert attachment_event["evidence_id"] == "case-file-1"
+    assert meeting["case_materials"]["evidence"][0]["id"] == "case-file-1"
+
+
+def test_delete_legacy_text_attachment_without_evidence_id_matches_single_title(
+    tmp_path: Path,
+) -> None:
+    app = create_test_app(tmp_path)
+    client = TestClient(app)
+    meeting_id = _create_chatroom_meeting(client)
+    assert client.post(
+        f"/meetings/{meeting_id}/materials/evidence",
+        json={
+            "revision": 0,
+            "title": "note",
+            "content": "legacy body",
+            "visible_roles": ["Advisor", "Critic", "Strategist", "Analyst"],
+        },
+    ).status_code == 200
+    repository = MeetingRepository(tmp_path / "data")
+    repository.append_event(
+        meeting_id,
+        {
+            "event_id": "meeting-1:attachment-added:legacy",
+            "meeting_id": meeting_id,
+            "step_id": "attachment-added",
+            "role": "Human",
+            "attempt": 1,
+            "status": "completed",
+            "file_id": "attachment-legacy",
+            "filename": "note.txt",
+            "size": 11,
+            "mime_type": "text/plain",
+            "extension": ".txt",
+        },
+    )
+
+    delete_status, _ = _delete_attachment(client, meeting_id, "attachment-legacy")
+
+    assert delete_status == 200
+    meeting = client.get(f"/meetings/{meeting_id}").json()
+    assert meeting["case_materials"]["evidence"] == []
+    assert meeting["case_materials"]["revision"] == 2
+
+
+def test_delete_legacy_text_attachment_ambiguous_title_returns_400_and_moves_nothing(
+    tmp_path: Path,
+) -> None:
+    app = create_test_app(tmp_path)
+    client = TestClient(app)
+    meeting_id = _create_chatroom_meeting(client)
+    for revision in (0, 1):
+        assert client.post(
+            f"/meetings/{meeting_id}/materials/evidence",
+            json={
+                "revision": revision,
+                "title": "note",
+                "content": f"body-{revision}",
+                "visible_roles": ["Advisor", "Critic", "Strategist", "Analyst"],
+            },
+        ).status_code == 200
+    repository = MeetingRepository(tmp_path / "data")
+    repository.append_event(
+        meeting_id,
+        {
+            "event_id": "meeting-1:attachment-added:legacy",
+            "meeting_id": meeting_id,
+            "step_id": "attachment-added",
+            "role": "Human",
+            "attempt": 1,
+            "status": "completed",
+            "file_id": "attachment-legacy",
+            "filename": "note.txt",
+            "size": 11,
+            "mime_type": "text/plain",
+            "extension": ".txt",
+        },
+    )
+    before = client.get(f"/meetings/{meeting_id}").json()
+
+    response = client.delete(f"/meetings/{meeting_id}/attachments/attachment-legacy")
+
+    assert response.status_code == 400
+    meeting = client.get(f"/meetings/{meeting_id}").json()
+    assert [item["id"] for item in meeting["case_materials"]["evidence"]] == [
+        item["id"] for item in before["case_materials"]["evidence"]
+    ]
+    assert meeting["case_materials"]["revision"] == before["case_materials"]["revision"]
+    assert meeting["attachments_summary"] == {"count": 1, "total_bytes": 11}
+
+
+def test_delete_text_attachment_with_stale_evidence_id_still_succeeds(
+    tmp_path: Path,
+) -> None:
+    app = create_test_app(tmp_path)
+    client = TestClient(app)
+    meeting_id = _create_chatroom_meeting(client)
+    repository = MeetingRepository(tmp_path / "data")
+    repository.append_event(
+        meeting_id,
+        {
+            "event_id": "meeting-1:attachment-added:stale",
+            "meeting_id": meeting_id,
+            "step_id": "attachment-added",
+            "role": "Human",
+            "attempt": 1,
+            "status": "completed",
+            "file_id": "attachment-stale",
+            "filename": "gone.txt",
+            "size": 11,
+            "mime_type": "text/plain",
+            "extension": ".txt",
+            "evidence_id": "case-file-999",
+        },
+    )
+
+    delete_status, tombstone = _delete_attachment(
+        client, meeting_id, "attachment-stale"
+    )
+
+    assert delete_status == 200
+    assert tombstone["step_id"] == "attachment-removed"
+    meeting = client.get(f"/meetings/{meeting_id}").json()
+    assert meeting["case_materials"]["evidence"] == []
+    assert meeting["case_materials"]["revision"] == 0
+
+
+def test_delete_legacy_text_attachment_without_evidence_id_and_no_match_succeeds(
+    tmp_path: Path,
+) -> None:
+    app = create_test_app(tmp_path)
+    client = TestClient(app)
+    meeting_id = _create_chatroom_meeting(client)
+    repository = MeetingRepository(tmp_path / "data")
+    repository.append_event(
+        meeting_id,
+        {
+            "event_id": "meeting-1:attachment-added:orphan",
+            "meeting_id": meeting_id,
+            "step_id": "attachment-added",
+            "role": "Human",
+            "attempt": 1,
+            "status": "completed",
+            "file_id": "attachment-orphan",
+            "filename": "orphan.txt",
+            "size": 11,
+            "mime_type": "text/plain",
+            "extension": ".txt",
+        },
+    )
+
+    delete_status, tombstone = _delete_attachment(
+        client, meeting_id, "attachment-orphan"
+    )
+
+    assert delete_status == 200
+    assert tombstone["step_id"] == "attachment-removed"
+    meeting = client.get(f"/meetings/{meeting_id}").json()
+    assert meeting["case_materials"]["evidence"] == []
+    assert meeting["case_materials"]["revision"] == 0
+
+
+def test_delete_attachment_rejected_on_terminal_meeting(tmp_path: Path) -> None:
+    app = create_test_app(tmp_path)
+    client = TestClient(app)
+    meeting_id = _create_chatroom_meeting(client)
+    file_id = _upload_attachment(
+        client,
+        meeting_id,
+        filename="a.pdf",
+        content=b"a",
+        content_type="application/pdf",
+    )[1]["file_id"]
+    client.post(f"/meetings/{meeting_id}/close")
+
+    status, body = _delete_attachment(client, meeting_id, file_id)
+
+    assert status == 409
+    assert body["detail"] == "Meeting is terminal: closed"
+
+
+def test_delete_attachment_rejected_on_running_meeting(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    model_entered = threading.Event()
+    release_model = threading.Event()
+    original_complete = MockModelAdapter.complete
+
+    def slow_complete(self, request):
+        model_entered.set()
+        release_model.wait(timeout=2)
+        return original_complete(self, request)
+
+    monkeypatch.setattr(MockModelAdapter, "complete", slow_complete)
+    app = create_test_app(tmp_path)
+    client = TestClient(app)
+    meeting_id = _create_chatroom_meeting(client)
+    file_id = _upload_attachment(
+        client,
+        meeting_id,
+        filename="a.pdf",
+        content=b"a",
+        content_type="application/pdf",
+    )[1]["file_id"]
+
+    try:
+        response = client.post(
+            f"/meetings/{meeting_id}/chat/mention",
+            json={"content": "你怎麼看？", "mentions": ["Advisor"]},
+        )
+        assert response.status_code == 202
+        assert model_entered.wait(timeout=1)
+
+        status, body = _delete_attachment(client, meeting_id, file_id)
+        assert status == 409
+        assert body["detail"] == "Meeting is already running"
+    finally:
+        release_model.set()

@@ -34,6 +34,8 @@ from ai_council.meetings.case_materials import (
     CaseMaterialValidationError,
 )
 from ai_council.meetings.attachments import (
+    ATTACHMENT_EVENT_KIND,
+    ATTACHMENT_REMOVED_KIND,
     AttachmentLimits,
     AttachmentStore,
     MultipartUploadError,
@@ -855,7 +857,10 @@ def create_app(
                 live_events=events,
                 workflow_events=workflow_events,
             ),
-            "events": project_events(events),
+            "events": project_events(
+                events,
+                removed_attachment_ids=attachments.removed_file_ids(meeting_id),
+            ),
             "case_files": active_case_evidence_projection(
                 material_view, mode_id=metadata.get("mode_id")
             ),
@@ -2078,16 +2083,24 @@ def create_app(
                 for participant in project_participants(mode, metadata)
             ]
             validate_material_roles(metadata, visible_roles)
+            holder: dict[str, str] = {}
+
+            def capture_evidence_id(view: CaseMaterialsView) -> CaseMaterialsView:
+                holder["evidence_id"] = view.evidence[-1].id
+                return view
+
             perform_material_mutation(
                 meeting_id,
-                lambda metadata, impact: case_materials.add_evidence(
-                    meeting_id,
-                    expected_revision=current.revision,
-                    title=Path(filename).stem,
-                    content=text_content,
-                    visible_roles=visible_roles,
-                    limits=material_limits,
-                    impact=impact,
+                lambda metadata, impact: capture_evidence_id(
+                    case_materials.add_evidence(
+                        meeting_id,
+                        expected_revision=current.revision,
+                        title=Path(filename).stem,
+                        content=text_content,
+                        visible_roles=visible_roles,
+                        limits=material_limits,
+                        impact=impact,
+                    )
                 ),
             )
         file_id = f"attachment-{uuid.uuid4().hex}"
@@ -2099,7 +2112,64 @@ def create_app(
             size=size,
             mime_type=mime_type_for_extension(extension),
             extension=extension,
+            evidence_id=holder.get("evidence_id") if is_text else None,
         )
+
+    @app.delete("/meetings/{meeting_id}/attachments/{file_id}")
+    @meeting_transitions.synchronized
+    def delete_meeting_attachment(meeting_id: str, file_id: str) -> dict[str, Any]:
+        reject_running_meeting(jobs, meeting_id)
+        metadata = metadata_store.get(meeting_id)
+        reject_terminal_meeting(repository, meeting_id)
+        event = attachments.attachment_event(meeting_id, file_id)
+        if event is None:
+            raise HTTPException(status_code=404, detail=f"Unknown attachment: {file_id}")
+        mime_type = str(event.get("mime_type") or "")
+        if mime_type in {"text/plain", "text/markdown"}:
+            if meeting_mode(mode_catalog, metadata).category != "chatroom":
+                raise HTTPException(
+                    status_code=404, detail=f"Unknown attachment: {file_id}"
+                )
+            view = case_materials.view(meeting_id)
+            target: str | None = None
+            evidence_id = event.get("evidence_id")
+            if evidence_id is not None:
+                if any(
+                    item.status == "active" and item.id == evidence_id
+                    for item in view.evidence
+                ):
+                    target = str(evidence_id)
+            else:
+                stem = Path(str(event.get("filename") or "")).stem
+                candidates = [
+                    item
+                    for item in view.evidence
+                    if item.status == "active"
+                    and item.versions[-1].title == stem
+                ]
+                if len(candidates) > 1:
+                    raise HTTPException(
+                        status_code=400,
+                        detail=(
+                            f"Attachment title matches multiple evidence items: {stem}"
+                        ),
+                    )
+                if len(candidates) == 1:
+                    target = candidates[0].id
+            if target is not None:
+                perform_material_mutation(
+                    meeting_id,
+                    lambda metadata, impact: case_materials.remove_evidence(
+                        meeting_id,
+                        target,
+                        expected_revision=case_materials.view(meeting_id).revision,
+                        impact=impact,
+                    ),
+                )
+        removed_event = attachments.remove_attachment(meeting_id, file_id)
+        if removed_event is None:
+            raise HTTPException(status_code=404, detail=f"Unknown attachment: {file_id}")
+        return removed_event
 
     @app.get("/meetings/{meeting_id}/attachments/{file_id}")
     def download_meeting_attachment(meeting_id: str, file_id: str) -> FileResponse:
@@ -2882,7 +2952,10 @@ def create_app(
             await websocket.send_json(
                 {
                     "type": "snapshot",
-                    "events": project_events(events),
+                    "events": project_events(
+                        events,
+                        removed_attachment_ids=attachments.removed_file_ids(meeting_id),
+                    ),
                     "stream_events": [],
                     "activity_status": activity_status,
                 }
@@ -2915,7 +2988,12 @@ def create_app(
                         await websocket.send_json(
                             {
                                 "type": "snapshot",
-                                "events": project_events(events),
+                                "events": project_events(
+                                    events,
+                                    removed_attachment_ids=attachments.removed_file_ids(
+                                        meeting_id
+                                    ),
+                                ),
                                 "stream_events": [],
                                 "activity_status": next_activity_status,
                             }
@@ -2924,7 +3002,12 @@ def create_app(
                         await websocket.send_json(
                             {
                                 "type": "update",
-                                "events": project_events(events[event_count:]),
+                                "events": project_events(
+                                    events[event_count:],
+                                    removed_attachment_ids=attachments.removed_file_ids(
+                                        meeting_id
+                                    ),
+                                ),
                                 "stream_events": stream_events,
                                 "activity_status": next_activity_status,
                             }
@@ -2949,9 +3032,16 @@ def get_mode_or_400(catalog: ModeCatalogRepository, mode_id: str) -> ModeDefinit
     return mode
 
 
-def project_events(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    return [
-        {
+def project_events(
+    events: list[dict[str, Any]],
+    *,
+    removed_attachment_ids: set[str] = frozenset(),
+) -> list[dict[str, Any]]:
+    projected: list[dict[str, Any]] = []
+    for event in events:
+        if event.get("step_id") == ATTACHMENT_REMOVED_KIND:
+            continue
+        entry: dict[str, Any] = {
             **event,
             **(
                 {"output_schema_id": event.get("output_schema_id", DEFAULT_OUTPUT_SCHEMA_ID)}
@@ -2959,8 +3049,13 @@ def project_events(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 else {}
             ),
         }
-        for event in events
-    ]
+        if (
+            event.get("step_id") == ATTACHMENT_EVENT_KIND
+            and event.get("file_id") in removed_attachment_ids
+        ):
+            entry["removed"] = True
+        projected.append(entry)
+    return projected
 
 
 def meeting_mode(catalog: ModeCatalogRepository, metadata: dict[str, Any]) -> ModeDefinition:

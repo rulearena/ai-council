@@ -3,6 +3,40 @@ from __future__ import annotations
 from ai_council.meetings.transcript import TranscriptProjector
 
 
+def test_projector_skips_attachment_tombstone_events() -> None:
+    events = [
+        {
+            "event_id": "meeting-1:attachment-added:aaa",
+            "step_id": "attachment-added",
+            "role": "Human",
+            "status": "completed",
+            "file_id": "attachment-abc",
+            "filename": "note.txt",
+        },
+        {
+            "event_id": "meeting-1:attachment-removed:aaa",
+            "step_id": "attachment-removed",
+            "role": "Human",
+            "status": "completed",
+            "file_id": "attachment-abc",
+            "filename": "note.txt",
+        },
+        {
+            "event_id": "e1",
+            "step_id": "human-message",
+            "role": "Human",
+            "status": "completed",
+            "content": "會後決議",
+        },
+    ]
+
+    markdown = TranscriptProjector().project(events, title="議事紀錄")
+
+    assert "attachment-removed" not in markdown
+    assert "note.txt" not in markdown
+    assert "會後決議" in markdown
+
+
 def test_projector_uses_presentation_labels_and_chinese_fixed_fields() -> None:
     events = [
         {

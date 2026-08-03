@@ -229,3 +229,33 @@ class TestContextExcludesBinaryAttachments:
         assert "secret-report.pdf" not in result
         assert "attachment-added" not in result
         assert "file_id" not in result
+
+
+class TestContextExcludesAttachmentTombstones:
+    def test_removed_attachment_events_never_enter_context(self):
+        projector = TranscriptProjector()
+        builder = ChatroomContextBuilder(
+            transcript_projector=projector, token_budget=5000
+        )
+        events = [
+            _make_event("e1", "Normal message"),
+            {
+                "event_id": "meeting-1:attachment-removed:aaa",
+                "meeting_id": "meeting-1",
+                "step_id": "attachment-removed",
+                "role": "Human",
+                "attempt": 1,
+                "status": "completed",
+                "file_id": "attachment-abc",
+                "filename": "secret-report.pdf",
+            },
+            _make_event("e2", "Follow-up message"),
+        ]
+
+        result = builder.build(events=events, goal="Test")
+
+        assert "Normal message" in result
+        assert "Follow-up message" in result
+        assert "secret-report.pdf" not in result
+        assert "attachment-removed" not in result
+        assert "file_id" not in result

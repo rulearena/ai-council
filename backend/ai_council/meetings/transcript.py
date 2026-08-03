@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from ai_council.meetings.attachments import ATTACHMENT_REMOVED_KIND
 from ai_council.meetings.case_profiles import CourtroomCaseProfile, CourtroomCaseProfileError
 
 
@@ -18,6 +19,8 @@ class TranscriptProjector:
 
         for index, event in enumerate(events):
             if event.get("result_discarded"):
+                continue
+            if event.get("step_id") == ATTACHMENT_REMOVED_KIND:
                 continue
             if index:
                 lines.append("")
