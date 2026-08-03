@@ -214,6 +214,10 @@ async function confirmDeleteAttachment(event: MeetingEvent) {
     await deleteAttachment(meetingId, fileId)
     if (generation !== materialsGeneration || loadedMeetingId !== meetingId || !props.active) return
     await openMeeting(meetingId)
+    // openMeeting 只刷新 events／selectedMeeting；證據清單是 materials 自己的載入，
+    // 刪除文字附件會連動移除 evidence，必須重載才不會殘留舊證據卡。
+    if (generation !== materialsGeneration || loadedMeetingId !== meetingId || !props.active) return
+    await loadMaterials(meetingId)
   })
   if (!ok && generation === materialsGeneration && loadedMeetingId === meetingId) {
     localError.value = caughtMessage(store.error.value)
