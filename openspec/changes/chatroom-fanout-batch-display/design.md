@@ -34,28 +34,44 @@ Extend `WorkspaceMessage` with optional round fields (e.g. `fanoutRoundId?: stri
 
 The component (ConversationWorkspace) renders a group wrapper when a message's `fanoutRoundId` changes: opens a round group with header on first member, closes on last member, but each bubble keeps its own `article.workspace-message` markup and testids.
 
-### D3. Simultaneous thinking for fanout members
-In `projectRoles`, when the active meeting is chatroom (`mode.category === 'chatroom'`) and the latest fanout round is still pending (some members have not completed/failed), mark every pending round member as `thinking` simultaneously — not just `queueIndex === 0`.
+### D3. Expected member set = send-time queuedRoles ∪ arrived members (the round's N)
 
-Implementation approach: compute the pending round from events (rounds where member count > completed/failed count and `activity_status === 'running'`), and in the non-parallel branch treat round members as thinking. `pendingRoles` still drives the transient pre-event window (before the first completion lands); once events exist, round-derived state is authoritative. The failed-member rule from `parallelRoundState` (failure marks that member failed without blocking others) applies by analogy.
+Backend fanout events are appended only on member completion/failure (`as_completed`, runner.py:600), so **arrived events alone cannot reveal the expected member count**: before the first completion lands there are zero member events, and during the stream the count grows 1→2→3→4, never reaching a stable N. The `human-message` event does not persist the mention set. Therefore the round's expected member set must come from the client at send time:
 
-- Why: the one-at-a-time `queueIndex === 0` rule was correct for relay sequences (which genuinely serialize) but wrong for fanout (which genuinely parallelizes). Chatroom is the only mode that fans out without `mode.category === 'parallel'` (parallel category modes already mark all members thinking via the `parallelRoundState` branch).
+- **Source**: `sendChatroomMention` (useCouncil.ts:1114-1127) already expands `@all`/multi-mention into the full queued role list it pushes into `pendingRoles`. Capture that same list as the round's expected member set when the mention is sent.
+- **Merge**: expected set = captured queuedRoles ∪ roles seen arriving via `chat-fanout-*` events for the same round (union covers reconnect/reload where the capture was lost). Round N = `|expected set|`, and it is fixed once known — it never grows with arrivals.
+- **Lifecycle**: the captured expected set lives as long as the round is pending (keyed by the round's `in_response_to_event_id` once known, transiently keyed by send order before that). On WS disconnect/reconnect `pendingRoles` is cleared (useCouncil.ts:776), so the captured set is also cleared and the round degrades to "arrived members only" for the remainder — progress then shows `x/x` until the round completes, never over-counting.
+- **Why not server-persisted mentions**: would require a backend/event-schema change, which is out of scope (backlog #98: pure frontend projection change; historical events are never rewritten).
+
+### D4. Three-phase round behavior (simultaneous thinking + progress)
+
+The round presents in three deterministic phases; the projection derives state from the union of the send-time expected set and arrived events:
+
+1. **Pre-event** (after send, before the first member completes): every role in the expected set shows a thinking indicator simultaneously; header shows `0/N 已回應`. This is exactly the window where the old code lit only `queueIndex === 0`.
+2. **In-stream** (some members arrived): each arrived member that completed renders its bubble and stops thinking; roles still in the expected set without an arrived event keep thinking; header shows `x/N 已回應` where x = completed members (failed slots are excluded from x and marked failed on their bubble). N is the fixed expected count from D3, not the arrival count.
+3. **Terminal** (every expected member completed or failed): header shows a completion label (`全部 N 位已回應`) or a partial label if any slot failed; no slot remains thinking.
+
+In `projectRoles`, when the active meeting is chatroom (`mode.category === 'chatroom'`) and a fanout round is pending per D3/D4, mark every pending expected member as `thinking` simultaneously — not just `queueIndex === 0`. The one-at-a-time `queueIndex === 0` rule was correct for relay sequences (which genuinely serialize) but wrong for fanout (which genuinely parallelizes). Chatroom is the only mode that fans out without `mode.category === 'parallel'` (parallel category modes already mark all members thinking via the `parallelRoundState` branch).
+
 - Alternatives considered: reusing `parallelRoundState` for chatroom — rejected because chatroom rounds are keyed differently (`chat-fanout-*` vs `fanout-{round}-member-{k}`) and have no synthesis step, so a dedicated chatroom round derivation is clearer.
 
-### D4. Round header + progress
-The round group header renders:
-- While pending: `N 位角色回應中` with a live `x/N 已回應` progress derived from the round's member events.
-- When all members completed: completion label (e.g. `全部 N 位已回應`).
-- When a member failed: that member's bubble shows the failed state; progress counts only completed members; the header shows a mixed/partial label and does not stall waiting for the failed member.
+### D5. Chatroom fanout failure semantics (must not collapse the round)
 
-Header is a presentational element only; it carries no backend meaning and is not a message.
+`applyPendingRoleUpdates` currently clears the entire `pendingRoles` on any member failure (useCouncil.ts:787-790). That rule is correct for serial relay/parallel batches (backend halts remaining steps after the first failure) but **wrong for fanout**: a failed fanout member does not stall the others — they run independently and must keep thinking. For chatroom fanout rounds, failure handling must change so a failed member:
+- clears only that member's pending slot (not the whole array),
+- shows `failed` on its bubble (e2e 13.7 relies on `role-seat-advisor data-status=failed`),
+- does not block the remaining expected members from thinking,
+- is excluded from the header's completed count but still counts toward the round reaching terminal.
 
-### D5. Grouping applies to fanout only; single-mention stays flat
+Guard this on "the event belongs to a chatroom fanout round" so relay/parallel/courtroom failure behavior is untouched.
+
+### D6. Grouping applies to fanout only; single-mention stays flat
 Single-role mentions (`@Advisor`) go through `chat_respond_as_role` producing `chat-directed-N-{role}-response` step_ids (not `chat-fanout-*`), so they never group. Ordinary human messages, relay/parallel/courtroom feeds, and attachment events are untouched. Grouping is gated on `step_id.startsWith('chat-fanout-')`.
 
 ## Risks / Trade-offs
 
-- **Existing e2e rely on flat per-message selectors** → Grouping adds a wrapper but keeps each `article.workspace-message` with its existing testids/attributes; tests 13.4 (count = 1 human + 4 AI) and 13.22 (thinking indicator visible/clears) must remain green and will be extended, not rewritten.
-- **Thinking state source of truth split** (`pendingRoles` for pre-event window vs event-derived for round) → Keep the chatroom fanout thinking derived from events when round events exist; `pendingRoles` only covers the brief window before the first completion. Add a unit test for the transition.
+- **Existing e2e rely on flat per-message selectors** → Grouping adds a wrapper but keeps each `article.workspace-message` with its existing testids/attributes; tests 13.4 (count = 1 human + 4 AI), 13.7 (per-role `data-status=failed`), and 13.22 (thinking indicator visible/clears) must remain green and will be extended, not rewritten.
+- **Expected member set is client-send-time state, not persisted** → Within a session the round N is exact (D3). Across a WS disconnect/reload the captured set is lost and the round degrades to arrived-members-only (`x/x`), never over-counting. This is an accepted trade-off because persisting the mention set would require a backend/event-schema change (out of scope, backlog #98 = pure frontend).
+- **Thinking state source of truth split** (`pendingRoles` pre-event vs round-derived in-stream) → Both derive from the same expected member set (D3), so the pre-event `0/N` window and the in-stream `x/N` window compose without a discontinuity. Add a unit test for the transition.
 - **Legacy/unknown `in_response_to_event_id`** → Flat fallback; no mis-grouping.
-- **Failed member could stall the round header** → Progress counts completed members only; a failed member terminates that slot and the header reaches a terminal label once all slots are completed or failed.
+- **Failed member collapsing the round** → D5 guards chatroom-fanout failure to clear only that member's slot; relay/parallel/courtroom failure behavior is untouched. Add a failure-first ordering unit test so a failed member arriving before its peers does not extinguish their thinking.
