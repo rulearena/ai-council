@@ -226,6 +226,47 @@ test('13.5 quote an existing message — verify quoted context in AI response', 
   await expect(page.getByTestId('workspace-message')).toHaveCount(5, { timeout: 15_000 })
 })
 
+test('13.5a quote preview keeps the dark theme at desktop and responsive widths', async ({ page }) => {
+  await page.goto('/')
+  const title = `E2E chatroom quote theme ${Date.now()}`
+  await createChatroomMeeting(page, title, { modelAssignments: defaultModels })
+
+  await sendChatMessage(page, '@Advisor 請回答')
+  await waitForMessage(page, '@Advisor 請回答')
+  await waitForRoleMessage(page, '顧問')
+
+  const advisorMessage = page.getByTestId('workspace-message').filter({ hasText: '顧問' }).first()
+  await advisorMessage.getByTestId('quote-message-button').click()
+  const quote = page.getByTestId('quote-indicator')
+  const preview = page.getByTestId('quote-indicator').locator('.chatroom-composer-quote-preview')
+  const dismiss = page.getByTestId('dismiss-quote-button')
+
+  await expect(quote).toBeVisible()
+  await expect(quote).toHaveCSS('background-color', 'rgb(23, 28, 39)')
+  await expect(quote).toHaveCSS('border-color', 'rgb(46, 56, 72)')
+  await expect(preview).toHaveCSS('color', 'rgb(230, 234, 242)')
+  await expect(dismiss).toHaveCSS('color', 'rgb(230, 234, 242)')
+
+  await page.setViewportSize({ width: 375, height: 667 })
+  await expect(quote).toBeVisible()
+  const responsiveLayout = await quote.evaluate((element) => {
+    const composer = element.parentElement
+    const previewElement = element.querySelector('.chatroom-composer-quote-preview')
+    if (!composer || !previewElement) throw new Error('quote preview seam is missing')
+    return {
+      quoteWidth: element.getBoundingClientRect().width,
+      composerWidth: composer.getBoundingClientRect().width,
+      previewWidth: previewElement.getBoundingClientRect().width,
+    }
+  })
+  expect(responsiveLayout.quoteWidth).toBeLessThanOrEqual(responsiveLayout.composerWidth)
+  expect(responsiveLayout.previewWidth).toBeGreaterThan(0)
+  await expect(quote).toHaveCSS('background-color', 'rgb(23, 28, 39)')
+  await expect(quote).toHaveCSS('border-color', 'rgb(46, 56, 72)')
+  await expect(dismiss).toBeVisible()
+  await expect(dismiss).toHaveCSS('color', 'rgb(230, 234, 242)')
+})
+
 // ── 13.6 ─────────────────────────────────────────────────────────────────────
 
 test('13.6 reload chatroom — messages persist', async ({ page }) => {
