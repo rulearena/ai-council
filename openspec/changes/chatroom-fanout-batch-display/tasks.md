@@ -1,35 +1,33 @@
-## 1. Projection: fanout round derivation
+## 1. Projection contract and round derivation
 
-- [ ] 1.1 Add `in_response_to_event_id?: string` to `WorkspaceEvent` type in `frontend/src/meetingWorkspace.ts` (mirror the existing field already present in `frontend/src/api.ts` `MeetingEvent`)
-- [ ] 1.2 Add round metadata fields to `WorkspaceMessage`: `fanoutRoundId?: string`, `fanoutMemberCount?: number`, `fanoutRoundStart?: boolean`, `fanoutRoundEnd?: boolean`, `fanoutMemberCompleted?: boolean`, `fanoutMemberFailed?: boolean`
-- [ ] 1.3 Implement a pure helper in `meetingWorkspace.ts` (e.g. `fanoutRoundsFor(events)`) that: collects human-message event_ids, groups `chat-fanout-*` events by resolvable `in_response_to_event_id`, keeps arrival order, and returns per-round membership (members, completed count, failed count, member status per role)
-- [ ] 1.4 Wire the helper into `projectMessages` so each projected message carries its round metadata; messages with `chat-fanout-*` step_id but unresolvable key get no round metadata (flat fallback)
-- [ ] 1.5 Add `fanoutRounds` summary (round id → live progress) to `ConversationWorkspaceProjection` for the round header
+- [ ] 1.1 Add `in_response_to_event_id?: string` and explicit round/feed-item types to the workspace projection, including stable/provisional IDs, expected roles, member state, progress, and terminal status.
+- [ ] 1.2 Implement a pure helper that groups only resolvable `chat-fanout-*` events for the same human event, preserves append order, and leaves unknown-key events flat.
+- [ ] 1.3 Add a projection path for a pending `@all` round with zero response messages, all expected roles, `0/N` progress, and bottom-of-feed placement; keep arrived bubbles as distinct `workspace-message` items.
+- [ ] 1.4 Implement fixed expected-set progress, failure/unknown/terminal states, reconnect degradation, and the capture-to-human-event reconciliation seam in unit-testable helpers.
 
-## 2. Projection: expected member set + simultaneous thinking
+## 2. @all capture and pending-state lifecycle
 
-- [ ] 2.1 Capture the send-time expected member set: in `sendChatroomMention` (useCouncil.ts:1114-1127), record the full queued role list (the `@all`/multi-mention expansion) as the round's expected members, keyed to the round before/after its `in_response_to_event_id` is known
-- [ ] 2.2 Merge with arrived members: round expected set = captured queuedRoles ∪ roles seen via `chat-fanout-*` events for that round, aligned to participant roles (backend drops mentioned roles without a model assignment); round N = `|expected set|`, fixed once known, never growing with arrivals (reconnect/reload degradation → arrived-members-only, never over-counting; an expected slot that never emits an event does not block terminal)
-- [ ] 2.3 In `projectRoles`, when `mode.category === 'chatroom'` and a fanout round is pending (per D3/D4), mark every pending expected member as `thinking` simultaneously, overriding `queueIndex === 0` for those members; relay/parallel/courtroom behavior unchanged
-- [ ] 2.4 Three-phase transition: pre-event (`0/N`, all expected members thinking) → in-stream (`x/N`, arrived members stop thinking, remaining keep thinking) → terminal (completion/partial label, no member thinking); verify the pre-event window uses the captured expected set and composes with the event-derived window without discontinuity
-- [ ] 2.5 Ensure a failed member is marked `failed` and does not block other members' thinking indicators
+- [ ] 2.1 Add a session-local `@all` capture before `sendChatMention` runs, storing meeting ID, exact instruction, pre-send event IDs, capture time, and the participant-role expected set; expose it to `projectMeetingWorkspace` immediately.
+- [ ] 2.2 In the WebSocket event handler, bind the oldest unresolved capture to the first unseen matching `human-message` event and then use that event ID as the only durable grouping key; discard the capture and restore the queue when the request fails.
+- [ ] 2.3 On WebSocket disconnect/reconnect, clear provisional capture state and rebuild from durable events with arrived-members-only degradation; ensure no client-only placeholder remains pending forever.
+- [ ] 2.4 When activity status settles away from `running`, mark expected roles without completed/failed events as `unknown`, remove their thinking indicators, and show a partial/unknown terminal label.
 
-## 3. Projection: chatroom fanout failure semantics
+## 3. Simultaneous thinking and failure semantics
 
-- [ ] 3.1 In `applyPendingRoleUpdates` (useCouncil.ts:781-798), guard failure handling on "the event belongs to a chatroom fanout round"; for those events a failed member clears only its own pending slot (not `pendingRoles.value = []`) and does not collapse the round
-- [ ] 3.2 Verify relay/parallel/courtroom failure behavior is untouched (full clear on first failure remains for those modes)
-- [ ] 3.3 Verify a failed member keeps `data-status=failed` on its bubble (e2e 13.7) and is excluded from the header's completed count while still advancing the round toward terminal
+- [ ] 3.1 Update chatroom role projection so every unresolved expected `@all` member is `thinking` simultaneously in the pre-event and in-stream phases; relay/parallel/courtroom queue behavior remains unchanged.
+- [ ] 3.2 Update `applyPendingRoleUpdates` so a failed event belonging to a chatroom `chat-fanout-*` round removes only that role's pending slot; retain the current full-clear behavior for other modes/actions.
+- [ ] 3.3 Verify completed, failed, and unknown roles settle independently and that failure-first arrival cannot extinguish other members' thinking state.
 
-## 4. Render: fanout round group in ConversationWorkspace
+## 4. Conversation rendering
 
-- [ ] 4.1 In `ConversationWorkspace.vue`, render a round group wrapper when a message's `fanoutRoundId` is set: open group on `fanoutRoundStart`, close on `fanoutRoundEnd`; keep each `article.workspace-message` markup, testids, quote button, avatar/name/time, and role-filter behavior unchanged
-- [ ] 4.2 Render the round header with live progress: `N 位角色回應中` while pending (with `x/N 已回應`), completion label when all members done, partial label when a member failed
-- [ ] 4.3 Ensure per-message grouping (avatar/name shown once per run) still works inside a round group; group header is presentational only and is not a message
-- [ ] 4.4 Add testids for the round group and header (e.g. `fanout-round`, `fanout-round-header`) for e2e
+- [ ] 4.1 Render a public `fanout-round` container even when it has no arrived messages, with a `fanout-round-header` and one placeholder per expected role.
+- [ ] 4.2 Fill arrived member bubbles in append order before unresolved placeholders; preserve each bubble's existing avatar/name/time, role filter, quote control, `workspace-message` test ID, and event identity.
+- [ ] 4.3 Render live `0/N` and `x/N` progress plus completion/partial/unknown terminal labels; add stable test IDs for the round and header.
+- [ ] 4.4 Keep single-role, multi-role, ordinary chat, relay, parallel, courtroom, and attachment rendering unchanged.
 
-## 5. Tests
+## 5. Tests and verification
 
-- [ ] 5.1 Frontend unit tests: round grouping from events (order preserved), unresolvable key falls back flat, expected member set from send-time capture (N fixed, not arrival count), member completion/failed counts, simultaneous thinking projection, single-mention not grouped
-- [ ] 5.2 Frontend unit tests (deterministic event fixtures): three-phase behavior as events arrive one-by-one (pre-event 0/N → in-stream x/N → terminal), failure-first ordering (a failed member arriving before its peers must not extinguish their thinking), reconnect/reload degradation (arrived-members-only, no over-count)
-- [ ] 5.3 Playwright e2e: existing `chatroom.spec.ts` 13.4 / 13.7 / 13.22 stay green unchanged; extend with assertions that @all responses appear inside a fanout round group with header, and that multiple roles show thinking indicators simultaneously during the pending window
-- [ ] 5.4 Run full frontend suite (`npm run test:unit`, `npm run build`, `npm run test:e2e`) green; backend unchanged
+- [ ] 5.1 Add frontend unit tests for zero-event pre-render, capture correlation, fixed denominator, arrival order, unresolved key fallback, single/multi mention flat behavior, and per-member identity.
+- [ ] 5.2 Add deterministic transition tests for pre-event `0/N` → in-stream `x/N` → terminal, including failure-first, missing-member unknown settlement, request failure rollback, and reconnect degradation.
+- [ ] 5.3 Extend Playwright chatroom coverage to assert the fanout round/header and simultaneous pending placeholders are visible before the first response, then verify arrival-order fill and existing 13.4/13.7/13.22 selectors.
+- [ ] 5.4 Run `npm run test:unit`, `npm run build`, and the relevant chatroom Playwright suite; confirm no backend or event-log files changed.
