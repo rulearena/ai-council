@@ -138,7 +138,7 @@ async function openReader() {
 .attachment-thumb {
   display: block;
   padding: 0;
-  border: 1px solid var(--border, #ddd);
+  border: 1px solid var(--color-border);
   border-radius: 8px;
   overflow: hidden;
   background: none;
@@ -158,9 +158,9 @@ async function openReader() {
   align-items: center;
   gap: 10px;
   padding: 8px 10px;
-  border: 1px solid var(--border, #ddd);
+  border: 1px solid var(--color-border);
   border-radius: 8px;
-  background: var(--bg-muted, #f5f5f5);
+  background: var(--color-surface-muted);
   color: inherit;
   text-decoration: none;
   min-width: 0;
@@ -204,10 +204,10 @@ button.attachment-card {
   width: 40px;
   height: 40px;
   border-radius: 6px;
-  background: var(--accent-muted, #e8e8f0);
+  background: var(--color-bg-elevated);
   font-size: 0.7em;
   font-weight: 700;
-  color: var(--accent, #555);
+  color: var(--color-text-secondary);
 }
 
 .attachment-card-meta {
@@ -235,7 +235,7 @@ button.attachment-card {
 }
 
 .attachment-card-missing {
-  color: var(--danger, #c00);
+  color: var(--color-danger);
 }
 
 .attachment-card-removed {
@@ -244,7 +244,7 @@ button.attachment-card {
 }
 
 .attachment-card-removed:hover {
-  border-color: var(--border, #ddd);
+  border-color: var(--color-border);
 }
 
 .attachment-lightbox-img {
