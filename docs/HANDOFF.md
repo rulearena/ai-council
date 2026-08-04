@@ -79,6 +79,12 @@ Backlog 90「會議工作區與時間序對話介面」已實作、完成法院�
 
 **Human Owner follow-up**：新角色立繪由使用者自行產圖，不屬於 agent 開發佇列或產品執行批次。
 
+### #96 closeout（2026-08-04）
+
+Human Owner 已明確確認 #96 驗收通過，狀態為 `accepted / done`。Exact implementation merge 是 `cee96c1`。Final contract 包含原始 binary/text attachment 能力、round-6 的 LINE 式 `+` 直接開原生 file picker、chatroom `.txt/.md` mirror 成 AI 可讀 evidence、text attachment reader、chatroom `pending_impact` 寫入與讀取投影抑制，以及 round-7 的全模式刪除、append-only `attachment-removed` tombstone、blob 刪除／download 404／quota 釋放、mirror evidence removal、已刪除不可互動氣泡與刪除後 materials reload。
+
+驗收證據：focused `frontend/tests/e2e/chatroom.spec.ts` **12/12**、`frontend npm run test:unit` **162/162**、`npm run build` 綠。既有 post-merge evidence：backend **743 passed**（一個 pre-existing timing flake）、frontend unit **149**、chatroom E2E **40**、relay binary-delete control-flow **1**。本次未重跑 full backend suite 與 full Chromium E2E。已知非阻塞 Nit：`AttachmentBubble.vue:247` 的 `--border` hover fallback 未定義，深色主題 hover 可能短暫呈現淺色。
+
 ## 3. 架構關鍵事實（改動前必讀）
 
 - **模式是設定不是程式碼**：`config/modes.yaml`（六模式）→ `backend/ai_council/meetings/modes.py`（`ModeCatalogRepository` + `relay_plan()`/`parallel_plan()`）。relay step_id 慣例 = template 名把 `_` 換 `-`；parallel fanout step_id = `fanout-{round}-member-{k}`，base_step_id = `member-{k}`，synthesis step_id = `synthesis-{round}`。role sequence 仍使用角色原 phase template；單一 directed response 改用共用 `directed_role_response` prompt，step_id 保持 `directed-N-{role}-response`。
