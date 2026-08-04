@@ -3153,6 +3153,44 @@ test('meeting drawers remain usable at 375px and dirty close requires confirmati
   }).toBeLessThanOrEqual(812)
 })
 
+test('context sidebar keeps its expand control usable after repeated desktop collapse cycles', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 800 })
+  await page.goto('/')
+  await createMeetingViaNewCase(page, `E2E context sidebar toggle ${Date.now()}`)
+
+  const panel = page.getByTestId('workspace-context-panel')
+  const toggle = page.getByTestId('workspace-context-toggle')
+  const tabs = page.locator('.workspace-context-tabs')
+
+  for (let cycle = 0; cycle < 2; cycle += 1) {
+    await expect(toggle).toHaveAccessibleName('收合會議脈絡')
+    await toggle.click()
+    await expect(toggle).toHaveAccessibleName('展開會議脈絡')
+    await expect(tabs).not.toBeVisible()
+    await expect.poll(async () => {
+      const panelBox = await panel.boundingBox()
+      const toggleBox = await toggle.boundingBox()
+      if (!panelBox || !toggleBox) return false
+      return toggleBox.width >= 32
+        && toggleBox.x >= panelBox.x
+        && toggleBox.y >= panelBox.y
+        && toggleBox.x + toggleBox.width <= panelBox.x + panelBox.width
+        && toggleBox.y + toggleBox.height <= panelBox.y + panelBox.height
+    }).toBe(true)
+
+    await toggle.click()
+    await expect(toggle).toHaveAccessibleName('收合會議脈絡')
+    await expect(tabs).toBeVisible()
+  }
+
+  await page.setViewportSize({ width: 375, height: 760 })
+  await page.getByRole('button', { name: '開啟會議脈絡' }).click()
+  await expect(panel).toBeVisible()
+  await expect(toggle).toHaveAccessibleName('收合會議脈絡')
+  await toggle.click()
+  await expect(panel).not.toBeVisible()
+})
+
 test('running meeting settings are read-only with an explicit explanation', async ({ page }) => {
   await page.goto('/')
   await createMeetingViaNewCase(page, `E2E running settings lock ${Date.now()}`, {

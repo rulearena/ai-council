@@ -1240,6 +1240,19 @@ h2 {
 .workspace-context-panel.collapsed > header { justify-content: center; }
 .workspace-context-panel.collapsed > header strong { display: none; }
 
+/* The desktop chat context track is only 52px wide. Keep its expand affordance
+   isolated from the full tab strip so the hit target remains fully clickable. */
+.conversation-workspace:not(.court-hearing-workspace) .workspace-context-panel.collapsed > header {
+  padding: 9px;
+}
+.conversation-workspace:not(.court-hearing-workspace) .workspace-context-panel.collapsed .workspace-context-tabs {
+  display: none;
+}
+.conversation-workspace:not(.court-hearing-workspace) .workspace-context-panel.collapsed [data-testid="workspace-context-toggle"] {
+  flex: 0 0 32px;
+  width: 32px;
+}
+
 .workspace-context-body { display: grid; gap: 12px; padding: 12px; }
 .workspace-context-body > section,
 .workspace-scene-details {
