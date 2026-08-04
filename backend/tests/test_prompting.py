@@ -7,7 +7,10 @@ import pytest
 
 from ai_council.prompting.parser import OutputParseError, RoleOutputParser
 from ai_council.prompting.renderer import PromptRenderer
-from ai_council.prompting.schemas import DEFAULT_OUTPUT_SCHEMA_REGISTRY
+from ai_council.prompting.schemas import (
+    CHAT_MESSAGE_V1_SCHEMA,
+    DEFAULT_OUTPUT_SCHEMA_REGISTRY,
+)
 
 
 ROLE_OUTPUT_V1_LITERAL = (
@@ -40,6 +43,26 @@ def test_courtroom_output_schemas_parse_drafts_and_issue_rulings() -> None:
         "reasoning": "檢方舉證不足",
         "evidence_refs": ["[證物一]"],
         "unresolved_questions": [],
+    }
+
+
+@pytest.mark.parametrize("raw_output", [
+    '{}',
+    '{"message":"   "}',
+    '[]',
+])
+def test_chat_message_v1_requires_a_nonblank_message(raw_output: str) -> None:
+    codec = DEFAULT_OUTPUT_SCHEMA_REGISTRY.get("chat-message/v1")
+
+    with pytest.raises(OutputParseError):
+        codec.parse(raw_output)
+
+
+def test_chat_message_v1_preserves_natural_text_and_evidence_anchor() -> None:
+    codec = DEFAULT_OUTPUT_SCHEMA_REGISTRY.get("chat-message/v1")
+
+    assert codec.parse('{"message":"先做小規模驗證，詳見 [附件一]。"}') == {
+        "message": "先做小規模驗證，詳見 [附件一]。",
     }
 
 
@@ -536,7 +559,7 @@ def test_chatroom_response_template_renders() -> None:
         role="Advisor",
         goal="如何改善團隊溝通？",
         prior_transcript="Blue 建議使用 Slack，Red 認為 Email 較好。",
-        required_json_schema=ROLE_OUTPUT_V1_LITERAL,
+        required_json_schema=CHAT_MESSAGE_V1_SCHEMA,
         inputs={
             "role_display_name": "資深顧問",
             "instruction": "請分享你的看法",
@@ -549,5 +572,6 @@ def test_chatroom_response_template_renders() -> None:
     assert "如何改善團隊溝通？" in rendered
     assert "請分享你的看法" in rendered
     assert "Blue 建議使用 Slack" in rendered
-    assert ROLE_OUTPUT_V1_LITERAL in rendered
+    assert CHAT_MESSAGE_V1_SCHEMA in rendered
+    assert "摘要" in rendered and "論點" in rendered and "風險" in rendered
     assert "[證物一] 團隊調查報告" in rendered

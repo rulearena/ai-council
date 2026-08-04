@@ -208,6 +208,7 @@ type WorkspaceEvent = {
   role: string
   attempt: number
   status: string
+  output_schema_id?: string
   round?: number
   content?: string
   created_at?: string
@@ -223,6 +224,7 @@ type WorkspaceEvent = {
   extension?: string
   removed?: boolean
   parsed_output?: {
+    message?: string
     summary?: string
     decision?: string
     arguments?: Array<{ title: string; detail: string }>
@@ -420,6 +422,9 @@ function formatStructuredOutput(output: NonNullable<WorkspaceEvent['parsed_outpu
 }
 
 function messageContent(event: WorkspaceEvent): string {
+  if (event.output_schema_id === 'chat-message/v1' && event.parsed_output?.message?.trim()) {
+    return event.parsed_output.message
+  }
   if (event.content !== undefined) return event.content
   if (event.status === 'failed') return event.error ?? '本次回應失敗。'
   if (event.parsed_output) {

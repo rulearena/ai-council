@@ -21,6 +21,7 @@ from ai_council.models.config import ModelConfig
 from ai_council.prompting.parser import OutputParseError
 from ai_council.prompting.renderer import PromptRenderer
 from ai_council.prompting.schemas import (
+    CHAT_MESSAGE_V1_ID,
     DEFAULT_OUTPUT_SCHEMA_ID,
     DEFAULT_OUTPUT_SCHEMA_REGISTRY,
     ROLE_OUTPUT_V1_SCHEMA,
@@ -443,7 +444,7 @@ class MeetingRunner:
             step_id=f"chat-directed-{directed_sequence}-{role.lower()}-response",
             role=role,
             template_name="chatroom_response",
-            output_schema_id=DEFAULT_OUTPUT_SCHEMA_ID,
+            output_schema_id=CHAT_MESSAGE_V1_ID,
         )
         event_step_id = f"chat-directed-{directed_sequence}-{role.lower()}-response"
         prior_transcript = self.chatroom_context_builder.build(
@@ -512,7 +513,7 @@ class MeetingRunner:
             },
         )
         timestamp_ms = int(time.time() * 1000)
-        output_schema = self.output_schemas.get(DEFAULT_OUTPUT_SCHEMA_ID)
+        output_schema = self.output_schemas.get(CHAT_MESSAGE_V1_ID)
 
         def _invoke_role(role: str) -> dict[str, object]:
             config = model_assignments[role]
@@ -565,6 +566,8 @@ class MeetingRunner:
                     "interaction_type": "chatroom-fanout-response",
                     "in_response_to_event_id": human_event_id,
                 }
+                if isinstance(error, OutputParseError):
+                    failed_event["raw_output"] = error.raw_output
                 if response is not None and response.token_usage is not None:
                     failed_event["token_usage"] = response.token_usage
                 return failed_event

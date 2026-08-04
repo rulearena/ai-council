@@ -19,5 +19,10 @@ Language:
 Respond in the same language as the meeting goal and instruction.
 All JSON string values must use that language.
 
-Return exactly one JSON object matching this schema:
+Return exactly one JSON object matching this schema. The `message` value is the complete reply:
+
+- Keep it to a few short, natural conversational sentences.
+- Do not put report headings such as 摘要、論點、風險、建議處置 in the message.
+- Preserve visible evidence anchors such as `[附件一]` when they are relevant.
+
 {{ required_json_schema }}

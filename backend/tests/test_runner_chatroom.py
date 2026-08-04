@@ -19,14 +19,7 @@ from ai_council.models.adapters import AdapterError, ModelRequest, ModelResponse
 from ai_council.models.config import ModelConfig
 from ai_council.prompting.renderer import PromptRenderer
 
-VALID_OUTPUT = json.dumps(
-    {
-        "summary": "OK",
-        "arguments": [],
-        "risks": [],
-        "recommendation": "Continue",
-    }
-)
+VALID_OUTPUT = json.dumps({"message": "可以先做小規模驗證，詳見 [附件一]。"}, ensure_ascii=False)
 
 
 class FakeAdapter:
@@ -127,6 +120,11 @@ def test_chat_directed_single_role_response(tmp_path: Path) -> None:
     assert response_event["interaction_type"] == "directed-role-response"
     assert response_event["directed_sequence"] == 1
     assert response_event["in_response_to_event_id"] == instruction_event["event_id"]
+    assert response_event["output_schema_id"] == "chat-message/v1"
+    assert response_event["parsed_output"] == {
+        "message": "可以先做小規模驗證，詳見 [附件一]。",
+    }
+    assert response_event["raw_output"] == VALID_OUTPUT
 
     assert adapter.requests[0].model_config.id == "mock-blue"
     prompt = adapter.requests[0].prompt
@@ -228,7 +226,9 @@ def test_chat_fanout_all_roles_invoked(tmp_path: Path) -> None:
         assert event["status"] == "completed"
         parsed = event.get("parsed_output")
         assert parsed is not None, "completed fanout event must include parsed_output"
-        assert parsed["summary"] == "OK"
+        assert parsed["message"] == "可以先做小規模驗證，詳見 [附件一]。"
+        assert event["output_schema_id"] == "chat-message/v1"
+        assert event["in_response_to_event_id"] == human_events[0]["event_id"]
 
 
 def test_chat_fanout_empty_model_assignments_no_crash(tmp_path: Path) -> None:
@@ -340,6 +340,9 @@ def test_chat_fanout_failed_events_include_token_usage(tmp_path: Path) -> None:
     assert len(failed) == 1
     assert "token_usage" in completed[0]
     assert "token_usage" in failed[0]
+    assert failed[0]["output_schema_id"] == "chat-message/v1"
+    assert failed[0]["raw_output"] == "not valid json"
+    assert failed[0]["in_response_to_event_id"]
 
 
 def test_chat_fanout_frozen_context(tmp_path: Path) -> None:

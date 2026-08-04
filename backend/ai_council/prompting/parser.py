@@ -85,6 +85,21 @@ class RoleOutputParser:
             raise OutputParseError(str(error), raw_output=raw_output) from error
 
 
+class ChatMessageParser:
+    def parse(self, raw_output: str) -> dict[str, str]:
+        try:
+            payload = json.loads(extract_first_json_object(raw_output))
+            if not isinstance(payload, dict):
+                raise TypeError("chat message must be an object")
+            require_exact_keys(payload, {"message"}, "chat message")
+            message = require_string(payload, "message").strip()
+            if not message:
+                raise ValueError("message must not be blank")
+            return {"message": message}
+        except (json.JSONDecodeError, TypeError, KeyError, ValueError) as error:
+            raise OutputParseError(str(error), raw_output=raw_output) from error
+
+
 class StructuredVerdictParser:
     def parse(self, raw_output: str) -> StructuredVerdict:
         try:

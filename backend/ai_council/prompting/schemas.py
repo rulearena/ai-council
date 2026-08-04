@@ -10,12 +10,14 @@ from ai_council.prompting.parser import (
     CourtroomCivilFinalParser,
     CourtroomCriminalFinalParser,
     CourtroomRulingParser,
+    ChatMessageParser,
     OutputParseError,
     RoleOutputParser,
     StructuredVerdictParser,
 )
 
 DEFAULT_OUTPUT_SCHEMA_ID = "role-output/v1"
+CHAT_MESSAGE_V1_ID = "chat-message/v1"
 STRUCTURED_VERDICT_V1_ID = "structured-verdict/v1"
 COURTROOM_ISSUE_DRAFT_V1_ID = "courtroom-issue-draft/v1"
 COURTROOM_RULING_V1_ID = "courtroom-ruling/v1"
@@ -25,6 +27,7 @@ ROLE_OUTPUT_V1_SCHEMA = (
     '{"summary":"string","arguments":[{"title":"string","detail":"string"}],'
     '"risks":[{"title":"string","detail":"string"}],"recommendation":"string"}'
 )
+CHAT_MESSAGE_V1_SCHEMA = '{"message":"string"}'
 STRUCTURED_VERDICT_V1_SCHEMA = (
     '{"summary":"string","decision":"approve | approve-with-conditions | reject | '
     'insufficient-evidence","findings":[{"title":"string","detail":"string",'
@@ -104,6 +107,11 @@ class OutputSchemaRegistry:
 
 DEFAULT_OUTPUT_SCHEMA_REGISTRY = OutputSchemaRegistry(
     [
+        OutputSchemaCodec(
+            id=CHAT_MESSAGE_V1_ID,
+            schema=CHAT_MESSAGE_V1_SCHEMA,
+            parser=ChatMessageParser(),
+        ),
         OutputSchemaCodec(
             id=DEFAULT_OUTPUT_SCHEMA_ID,
             schema=ROLE_OUTPUT_V1_SCHEMA,
