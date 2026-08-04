@@ -18,6 +18,7 @@
 - [ ] 3.2 Update `meetingWorkspace.ts` message projection to prefer `parsed_output.message` for `chat-message/v1` while keeping the existing `content`/legacy parsed/raw fallback for historical events.
 - [ ] 3.3 Add regression tests proving structured verdict and non-chatroom role outputs still use their existing formatted projections.
 - [ ] 3.4 Add a read-time compatibility fixture/test proving historical chatroom JSONL events are not rewritten and remain renderable beside new chat-message events.
+- [ ] 3.5 Add a regression test proving a pending `@all` fanout still renders its thinking indicators while new natural-message bubbles use the direct `message` projection.
 
 ## 4. End-to-end verification
 

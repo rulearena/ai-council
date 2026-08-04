@@ -22,3 +22,9 @@ Chatroom messages SHALL be displayed in the same time-ordered feed as other conv
 
 - **WHEN** `@all` is sent and responses arrive in order B, A, C
 - **THEN** the message feed shows B's response first, then A, then C
+
+#### Scenario: Thinking indicator for pending fanout
+
+- **WHEN** `@all` is sent and only A has responded
+- **THEN** the remaining roles show a thinking/animated indicator in the feed
+- **AND** the natural-message projection does not remove or suppress those pending indicators
