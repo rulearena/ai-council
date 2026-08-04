@@ -933,6 +933,25 @@ test('pdf attachment renders as a download card with the file_id download endpoi
   await expect(page.getByTestId('attachment-filename')).toHaveText('報告.pdf', { timeout: 15_000 })
   const card = page.locator('[data-testid^="attachment-download-"]').first()
   await expect(card).toBeVisible()
+  await expect
+    .poll(() =>
+      card.evaluate((element) => {
+        const styles = getComputedStyle(element)
+        const icon = element.querySelector('.attachment-card-icon')
+        return {
+          backgroundColor: styles.backgroundColor,
+          borderColor: styles.borderColor,
+          iconBackgroundColor: icon ? getComputedStyle(icon).backgroundColor : '',
+          iconColor: icon ? getComputedStyle(icon).color : '',
+        }
+      }),
+    )
+    .toEqual({
+      backgroundColor: 'rgb(23, 28, 39)',
+      borderColor: 'rgb(35, 43, 56)',
+      iconBackgroundColor: 'rgb(26, 32, 41)',
+      iconColor: 'rgb(154, 165, 181)',
+    })
   const href = await card.getAttribute('href')
   expect(href).toMatch(/\/meetings\/[^/]+\/attachments\/attachment-[a-f0-9]+$/)
   await expect(card).toHaveAttribute('download', '')
