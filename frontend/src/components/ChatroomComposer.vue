@@ -179,30 +179,33 @@ async function handleSend() {
   gap: 6px;
   padding: 4px 8px;
   margin-bottom: 6px;
-  background: var(--bg-muted, #f5f5f5);
+  min-width: 0;
+  border: 1px solid var(--color-border-strong);
+  background: var(--color-surface-muted);
+  color: var(--color-text);
   border-radius: 4px;
   font-size: 0.85em;
 }
 
 .chatroom-composer-quote-preview {
   flex: 1;
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  opacity: 0.7;
 }
 
 .chatroom-composer-quote-dismiss {
   background: none;
   border: none;
+  color: var(--color-text);
   cursor: pointer;
   font-size: 1.1em;
   padding: 0 4px;
-  opacity: 0.5;
 }
 
 .chatroom-composer-quote-dismiss:hover {
-  opacity: 1;
+  color: var(--color-text-secondary);
 }
 
 .chatroom-composer-row {
