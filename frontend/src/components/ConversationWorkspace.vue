@@ -23,6 +23,7 @@ import {
   type WorkspaceMessage,
   type WorkspaceProjectionMeeting,
   type WorkspaceRoleFilter,
+  type ConversationFeedItem,
 } from '../meetingWorkspace'
 import { uploadAttachment } from '../api'
 import { useMaterialUploads } from '../materialUploads'
@@ -46,6 +47,7 @@ const store = inject(councilKey)!
 const {
   selectedMeeting,
   pendingRoles,
+  fanoutCaptures,
   operationStatusText,
   currentStepProgress,
   isMeetingRunning,
@@ -128,10 +130,10 @@ const workspace = computed<ConversationWorkspaceProjection | null>(() => {
     meeting: meeting as WorkspaceProjectionMeeting,
     mode: activeMode.value,
     thinkingRoleIds: pendingRoles.value,
+    fanoutCaptures: fanoutCaptures.value,
   })
   return projected.family === 'conversation' ? projected : null
 })
-
 watch(() => selectedMeeting.value?.meeting_id, () => {
   roleFilter.value = null
   expandedMessageIds.value = new Set()
@@ -141,6 +143,44 @@ const selectedRoleId = computed(() => {
   const filter = roleFilter.value
   return filter && filter.meetingId === workspace.value?.meetingId ? filter.roleId : null
 })
+const feedItems = computed<ConversationFeedItem[]>(() => {
+  const items = workspace.value?.feedItems ?? []
+  if (!selectedRoleId.value) return items
+  const roleId = seatIdToEventRoleId(selectedRoleId.value)
+  return items.flatMap<ConversationFeedItem>((item) => {
+    if (item.kind === 'message') return item.message.roleId === roleId ? [item] : []
+    if (!item.round.expectedRoleIds.includes(roleId)) return []
+    return [{
+      kind: 'fanout-round' as const,
+      round: {
+        ...item.round,
+        expectedRoleIds: [roleId],
+        members: item.round.members.filter((message) => message.roleId === roleId),
+        roleStates: item.round.roleStates.filter((state) => state.roleId === roleId),
+        respondedCount: item.round.members.filter((message) => message.roleId === roleId && message.kind !== 'failed').length,
+        failedCount: item.round.members.filter((message) => message.roleId === roleId && message.kind === 'failed').length,
+      },
+    }]
+  })
+})
+const fanoutRounds = computed(() => feedItems.value
+  .filter((item): item is Extract<ConversationFeedItem, { kind: 'fanout-round' }> => item.kind === 'fanout-round')
+  .map((item) => item.round))
+const renderFeedItems = computed(() => feedItems.value.map((item, index) => {
+  if (item.kind === 'fanout-round') return item
+  const previous = feedItems.value[index - 1]
+  const next = feedItems.value[index + 1]
+  const previousMessage = previous?.kind === 'message' ? previous.message : undefined
+  const nextMessage = next?.kind === 'message' ? next.message : undefined
+  const sameSpeaker = (left?: WorkspaceMessage, right?: WorkspaceMessage) =>
+    Boolean(left && right && left.kind === right.kind && left.roleId === right.roleId)
+  return {
+    ...item,
+    isOwn: item.message.kind === 'human',
+    startsRun: !sameSpeaker(previousMessage, item.message),
+    endsRun: !sameSpeaker(item.message, nextMessage),
+  }
+}))
 const messages = computed(() => {
   if (!workspace.value) return []
   const seen = new Set<string>()
@@ -158,20 +198,6 @@ const messages = computed(() => {
 // are — and everyone else sits on the left, identified once per run. Repeating the
 // avatar, name and timestamp on every bubble is what made speakers hard to tell
 // apart in the first place.
-const groupedMessages = computed(() =>
-  messages.value.map((message, index, all) => {
-    const previous = all[index - 1]
-    const next = all[index + 1]
-    const sameSpeaker = (a?: WorkspaceMessage, b?: WorkspaceMessage) =>
-      Boolean(a && b && a.kind === b.kind && a.roleId === b.roleId)
-    return {
-      message,
-      isOwn: message.kind === 'human',
-      startsRun: !sameSpeaker(previous, message),
-      endsRun: !sameSpeaker(message, next),
-    }
-  }),
-)
 const allMessages = computed(() => {
   if (!workspace.value) return []
   const seen = new Set<string>()
@@ -417,79 +443,145 @@ async function retryRole(roleId: string) {
       </header>
 
       <div ref="feedRef" class="workspace-message-feed" data-testid="workspace-message-feed" aria-live="polite">
-        <p v-if="!messages.length" class="workspace-empty-feed">
+        <p v-if="!feedItems.length" class="workspace-empty-feed">
           {{ selectedRoleId ? '這個角色還沒有發言。' : '尚未有會議發言；可先記錄主席補充，或啟動第一次審議。' }}
         </p>
+        <template v-for="item in renderFeedItems" :key="item.kind === 'message' ? item.message.id : item.round.id">
         <article
-          v-for="{ message, isOwn, startsRun, endsRun } in groupedMessages"
-          :id="`workspace-message-${message.id}`"
-          :key="message.id"
+          v-if="item.kind === 'message'"
+          :id="`workspace-message-${item.message.id}`"
           class="workspace-message"
           :class="[
-            `workspace-message-${message.kind}`,
+            `workspace-message-${item.message.kind}`,
             {
-              'workspace-message-human': isOwn,
-              'workspace-message-own': isOwn,
-              'workspace-message-run-start': startsRun,
-              'workspace-message-run-end': endsRun,
+              'workspace-message-human': item.isOwn,
+              'workspace-message-own': item.isOwn,
+              'workspace-message-run-start': item.startsRun,
+              'workspace-message-run-end': item.endsRun,
             },
           ]"
-          :style="message.kind === 'ai' || message.kind === 'synthesizer' ? roleColorVars(message.roleId) : undefined"
+          :style="item.message.kind === 'ai' || item.message.kind === 'synthesizer' ? roleColorVars(item.message.roleId) : undefined"
           data-testid="workspace-message"
-          :data-role="message.roleId"
+          :data-role="item.message.roleId"
         >
           <!-- Own messages need no identification; others are labelled once per run. -->
           <span
-            v-if="!isOwn"
+            v-if="!item.isOwn"
             class="workspace-message-avatar"
-            :class="{ 'is-placeholder': !startsRun }"
+            :class="{ 'is-placeholder': !item.startsRun }"
             data-testid="workspace-message-avatar"
-            :aria-hidden="!startsRun"
+            :aria-hidden="!item.startsRun"
           >
-            <template v-if="startsRun">
-              <img v-if="roleIcon(message.roleId)" :src="roleIcon(message.roleId)" :alt="message.roleName" />
-              <RoleSilhouette v-else :color="message.kind === 'ai' || message.kind === 'synthesizer' ? 'var(--role-color)' : 'currentColor'" :size="20" />
+            <template v-if="item.startsRun">
+              <img v-if="roleIcon(item.message.roleId)" :src="roleIcon(item.message.roleId)" :alt="item.message.roleName" />
+              <RoleSilhouette v-else :color="item.message.kind === 'ai' || item.message.kind === 'synthesizer' ? 'var(--role-color)' : 'currentColor'" :size="20" />
             </template>
           </span>
-          <header v-if="!isOwn && startsRun">
-            <strong>{{ message.roleName }}</strong>
-            <span v-if="message.kind === 'synthesizer'" class="workspace-message-badge">彙整</span>
+          <header v-if="!item.isOwn && item.startsRun">
+            <strong>{{ item.message.roleName }}</strong>
+            <span v-if="item.message.kind === 'synthesizer'" class="workspace-message-badge">彙整</span>
           </header>
           <time
-            v-if="message.createdAt && endsRun"
+            v-if="item.message.createdAt && item.endsRun"
             class="workspace-message-time"
-            :datetime="message.createdAt"
-          >{{ messageTime(message) }}</time>
+            :datetime="item.message.createdAt"
+          >{{ messageTime(item.message) }}</time>
           <AttachmentBubble
-            v-if="isAttachmentEvent(message.event)"
+            v-if="isAttachmentEvent(item.message.event)"
             :meeting-id="selectedMeeting.meeting_id"
-            :event="message.event"
+            :event="item.message.event"
           />
           <template v-else>
             <p
               class="workspace-message-content"
-              :class="{ collapsed: messageClampPolicy(message.content).collapsible && !isExpanded(message) }"
-            >{{ message.content || (message.kind === 'failed' ? '本次回應失敗。' : '（沒有文字內容）') }}</p>
+              :class="{ collapsed: messageClampPolicy(item.message.content).collapsible && !isExpanded(item.message) }"
+            >{{ item.message.content || (item.message.kind === 'failed' ? '本次回應失敗。' : '（沒有文字內容）') }}</p>
             <button
-              v-if="messageClampPolicy(message.content).collapsible"
+              v-if="messageClampPolicy(item.message.content).collapsible"
               type="button"
               class="workspace-message-toggle"
-              :aria-expanded="isExpanded(message)"
-              :aria-controls="`workspace-message-${message.id}`"
-              :data-testid="`workspace-message-toggle-${message.id}`"
-              @click="toggleMessage(message.id)"
-            >{{ isExpanded(message) ? '收合長文' : '展開完整發言' }}</button>
+              :aria-expanded="isExpanded(item.message)"
+              :aria-controls="`workspace-message-${item.message.id}`"
+              :data-testid="`workspace-message-toggle-${item.message.id}`"
+              @click="toggleMessage(item.message.id)"
+            >{{ isExpanded(item.message) ? '收合長文' : '展開完整發言' }}</button>
           </template>
           <button
-            v-if="isChatroom && message.kind !== 'human' && message.kind !== 'system'"
+            v-if="isChatroom && item.message.kind !== 'human' && item.message.kind !== 'system'"
             type="button"
             class="btn btn-ghost btn-sm workspace-quote-button"
             data-testid="quote-message-button"
-            @click="quotedMessage = { eventId: message.id, preview: message.content.slice(0, 60) }"
+            @click="quotedMessage = { eventId: item.message.id, preview: item.message.content.slice(0, 60) }"
           >引用</button>
         </article>
+        <section
+          v-else-if="item.kind === 'fanout-round'"
+          :id="item.round.id"
+          class="fanout-round"
+          data-testid="fanout-round"
+        >
+          <header class="fanout-round-header" data-testid="fanout-round-header">
+            <strong>@all 回應 {{ item.round.respondedCount }}/{{ item.round.expectedRoleIds.length }}</strong>
+            <span v-if="item.round.terminal === 'pending'">等待回應</span>
+            <span v-else-if="item.round.terminal === 'completed'">全部完成</span>
+            <span v-else-if="item.round.terminal === 'unknown'">部分完成（未回應角色未知）</span>
+            <span v-else>部分完成（含失敗回應）</span>
+          </header>
+          <article
+            v-for="message in item.round.members"
+            :id="`workspace-message-${message.id}`"
+            :key="message.id"
+            class="workspace-message workspace-message-fanout-member"
+            :class="`workspace-message-${message.kind}`"
+            :style="message.kind === 'ai' || message.kind === 'synthesizer' ? roleColorVars(message.roleId) : undefined"
+            data-testid="workspace-message"
+            :data-role="message.roleId"
+          >
+            <span class="workspace-message-avatar" data-testid="workspace-message-avatar">
+              <img v-if="roleIcon(message.roleId)" :src="roleIcon(message.roleId)" :alt="message.roleName" />
+              <RoleSilhouette v-else :color="message.kind === 'ai' || message.kind === 'synthesizer' ? 'var(--role-color)' : 'currentColor'" :size="20" />
+            </span>
+            <header><strong>{{ message.roleName }}</strong><span v-if="message.kind === 'synthesizer'" class="workspace-message-badge">彙整</span></header>
+            <time v-if="message.createdAt" class="workspace-message-time" :datetime="message.createdAt">{{ messageTime(message) }}</time>
+            <AttachmentBubble
+              v-if="isAttachmentEvent(message.event)"
+              :meeting-id="selectedMeeting.meeting_id"
+              :event="message.event"
+            />
+            <template v-else>
+              <p class="workspace-message-content" :class="{ collapsed: messageClampPolicy(message.content).collapsible && !isExpanded(message) }">{{ message.content || (message.kind === 'failed' ? '本次回應失敗。' : '（沒有文字內容）') }}</p>
+              <button
+                v-if="messageClampPolicy(message.content).collapsible"
+                type="button"
+                class="workspace-message-toggle"
+                :aria-expanded="isExpanded(message)"
+                :aria-controls="`workspace-message-${message.id}`"
+                :data-testid="`workspace-message-toggle-${message.id}`"
+                @click="toggleMessage(message.id)"
+              >{{ isExpanded(message) ? '收合完整發言' : '展開完整發言' }}</button>
+            </template>
+            <button
+              v-if="isChatroom && message.kind !== 'human' && message.kind !== 'system'"
+              type="button"
+              class="btn btn-ghost btn-sm workspace-quote-button"
+              data-testid="quote-message-button"
+              @click="quotedMessage = { eventId: message.id, preview: message.content.slice(0, 60) }"
+            >引用</button>
+          </article>
+          <article
+            v-for="state in item.round.roleStates.filter((candidate) => candidate.state === 'pending')"
+            :key="`fanout-thinking-${item.round.id}-${state.roleId}`"
+            class="workspace-message workspace-message-thinking"
+            :style="roleColorVars(state.roleId)"
+            data-testid="fanout-round-placeholder"
+          >
+            <header><strong>{{ state.name }}</strong><span>正在思考</span></header>
+            <div class="workspace-thinking-dots" aria-label="正在思考"><i></i><i></i><i></i></div>
+          </article>
+        </section>
+        </template>
         <article
-          v-for="role in workspace.roles.filter((candidate) => candidate.state === 'thinking')"
+          v-for="role in workspace.roles.filter((candidate) => candidate.state === 'thinking' && !fanoutRounds.some((round) => round.roleStates.some((state) => state.roleId === candidate.roleId && state.state === 'pending')))"
           :key="`thinking-${role.roleId}`"
           class="workspace-message workspace-message-thinking"
           :style="roleColorVars(role.roleId)"

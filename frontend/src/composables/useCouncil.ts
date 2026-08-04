@@ -12,6 +12,12 @@ import {
   applyOptimisticModelUpdate,
   mergeServerParticipantModels,
 } from '../meetingWorkspace'
+import {
+  bindOldestMatchingCapture,
+  createFanoutCapture,
+  removeFanoutCapture,
+  type FanoutCapture,
+} from '../chatroomFanout'
 import { waitForSettledProjection } from '../meetingSettlement'
 import {
   chatroomStartGuard,
@@ -301,6 +307,7 @@ export function useCouncil() {
   // The backend only emits completed/failed events (no "running" event), so this queue
   // is the sole source of the "thinking" state: pendingRoles[0] is thinking, the rest are queued.
   const pendingRoles = ref<CouncilRole[]>([])
+  const fanoutCaptures = ref<FanoutCapture[]>([])
 
   const meetingInfoCopied = ref(false)
   let meetingInfoCopiedTimeout: ReturnType<typeof setTimeout> | null = null
@@ -615,6 +622,7 @@ export function useCouncil() {
     if (meetingId !== selectedMeeting.value?.meeting_id) {
       if (!canLeaveMeetingSettings()) return false
       pendingRoles.value = []
+      fanoutCaptures.value = []
       meetingInfoCopied.value = false
       chairmanActionFeedback.value = ''
       seenEventIds = new Set()
@@ -747,6 +755,9 @@ export function useCouncil() {
       (message) => {
         if (selectedMeeting.value?.meeting_id !== meetingId) return
         const currentEvents = message.type === 'snapshot' ? [] : (selectedMeeting.value.events ?? [])
+        for (const event of message.events) {
+          fanoutCaptures.value = bindOldestMatchingCapture(fanoutCaptures.value, event)
+        }
         const nextEvents = [...currentEvents, ...message.events]
         const latestEvent = nextEvents.at(-1)
         selectedMeeting.value = {
@@ -774,6 +785,10 @@ export function useCouncil() {
       () => {
         error.value = '會議事件串流已中斷。'
         pendingRoles.value = []
+        // A provisional capture has no durable identity. Dropping it on disconnect
+        // forces the next snapshot to project only events that actually survived in
+        // the append-only log, so client-only placeholders cannot live forever.
+        fanoutCaptures.value = []
       },
     )
   }
@@ -785,6 +800,10 @@ export function useCouncil() {
       const queueIndex = pendingRoles.value.indexOf(event.role)
       if (queueIndex === -1) continue
       if (event.status === 'failed') {
+        if (activeModeSource.value.category === 'chatroom' && event.step_id.startsWith('chat-fanout-')) {
+          pendingRoles.value.splice(queueIndex, 1)
+          continue
+        }
         // A failed step halts every remaining step in the same batch on the backend
         // (fixed round / role sequence / retry all stop after the first failure).
         pendingRoles.value = []
@@ -1121,9 +1140,25 @@ export function useCouncil() {
     const queuedRoles = mentions.includes('all')
       ? (selectedMeeting.value?.participants ?? []).map((participant) => participant.role_id)
       : mentions
-    return runWithPendingRoles(pendingRoles.value, queuedRoles, () => runAction(async () => {
-      await sendChatMention(meetingId, content, mentions, quotedEventId)
-    }))
+    const capture = mentions.includes('all')
+      ? createFanoutCapture({
+        meetingId,
+        instruction: content,
+        preSendEventIds: (selectedMeeting.value?.events ?? []).map((event) => event.event_id),
+        expectedRoleIds: (selectedMeeting.value?.participants ?? []).map((participant) => participant.role_id),
+      })
+      : null
+    if (capture) fanoutCaptures.value = [...fanoutCaptures.value, capture]
+    try {
+      const succeeded = await runWithPendingRoles(pendingRoles.value, queuedRoles, () => runAction(async () => {
+        await sendChatMention(meetingId, content, mentions, quotedEventId)
+      }))
+      if (!succeeded && capture) fanoutCaptures.value = removeFanoutCapture(fanoutCaptures.value, capture.id)
+      return succeeded
+    } catch (error) {
+      if (capture) fanoutCaptures.value = removeFanoutCapture(fanoutCaptures.value, capture.id)
+      throw error
+    }
   }
 
   async function requestSelectedRoleSequence(): Promise<boolean> {
@@ -1252,6 +1287,7 @@ export function useCouncil() {
     assignmentUpdateError,
     devMode,
     pendingRoles,
+    fanoutCaptures,
     meetingInfoCopied,
     chairmanSpeaking,
     chairmanAction,
