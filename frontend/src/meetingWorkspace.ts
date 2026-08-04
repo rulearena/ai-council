@@ -456,15 +456,7 @@ function projectFanoutRounds(
   }
 
   const captureFor = (humanEventId: string): FanoutCapture | undefined => {
-    const human = humanEvents.get(humanEventId)
-    return captures.find((capture) =>
-      capture.humanEventId === humanEventId
-      || (
-        capture.humanEventId === null
-        && !capture.degraded
-        && human?.content === capture.instruction
-      ),
-    )
+    return captures.find((capture) => capture.humanEventId === humanEventId)
   }
 
   const roundFor = (humanEventId: string | null, members: WorkspaceMessage[], capture?: FanoutCapture): WorkspaceFanoutRound => {
@@ -512,23 +504,17 @@ function projectFanoutRounds(
     }
   }
 
-  const rounds = [...grouped.entries()].map(([humanEventId, members]) => {
+  const rounds = [...grouped.entries()].flatMap(([humanEventId, members]) => {
     const capture = captureFor(humanEventId)
-    return roundFor(humanEventId, members, capture)
+    // A durable event reference alone is insufficient: only this-session capture
+    // proves that the Human request was @all. Reloaded/history/multi-role events
+    // therefore remain ordinary flat messages.
+    return capture ? [roundFor(humanEventId, members, capture)] : []
   })
   for (const capture of captures) {
     if (capture.meetingId !== meeting.meeting_id) continue
-    if (
-      capture.humanEventId && grouped.has(capture.humanEventId)
-      || [...humanEvents.entries()].some(([humanEventId, human]) =>
-        captureFor(humanEventId) === capture && grouped.has(humanEventId),
-      )
-    ) continue
-    const inferredHuman = [...humanEvents.values()].find((human) =>
-      capture.humanEventId === human.event_id
-      || (!capture.humanEventId && !capture.degraded && human.content === capture.instruction),
-    )
-    rounds.push(roundFor(inferredHuman?.event_id ?? capture.humanEventId, [], capture))
+    if (capture.humanEventId && grouped.has(capture.humanEventId)) continue
+    rounds.push(roundFor(capture.humanEventId, [], capture))
   }
   return rounds
 }

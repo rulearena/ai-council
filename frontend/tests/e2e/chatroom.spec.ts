@@ -181,6 +181,7 @@ test('13.4b send @Advisor @Critic — both respond in parallel', async ({ page }
 
   // 1 human + 2 AI = 3 messages
   await expect(page.getByTestId('workspace-message')).toHaveCount(3, { timeout: 15_000 })
+  await expect(page.getByTestId('fanout-round')).toHaveCount(0)
 })
 
 // ── 13.5 ─────────────────────────────────────────────────────────────────────
