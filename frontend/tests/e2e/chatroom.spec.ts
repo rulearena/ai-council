@@ -249,6 +249,12 @@ test('13.5a quote preview keeps the dark theme at desktop and responsive widths'
 
   await page.setViewportSize({ width: 375, height: 667 })
   await expect(quote).toBeVisible()
+  // mock-fast returns a deliberately short deterministic response. Keep the
+  // real 引用 seam above, then lengthen the visible preview to exercise the
+  // responsive layout with the long content that caused the original bug.
+  await preview.evaluate((element) => {
+    element.textContent = `${element.textContent} ${'長引用內容 '.repeat(40)}`
+  })
   const responsiveLayout = await quote.evaluate((element) => {
     const composer = element.parentElement
     const previewElement = element.querySelector('.chatroom-composer-quote-preview')
@@ -257,9 +263,15 @@ test('13.5a quote preview keeps the dark theme at desktop and responsive widths'
       quoteWidth: element.getBoundingClientRect().width,
       composerWidth: composer.getBoundingClientRect().width,
       previewWidth: previewElement.getBoundingClientRect().width,
+      quoteScrollWidth: element.scrollWidth,
+      quoteClientWidth: element.clientWidth,
+      composerScrollWidth: composer.scrollWidth,
+      composerClientWidth: composer.clientWidth,
     }
   })
   expect(responsiveLayout.quoteWidth).toBeLessThanOrEqual(responsiveLayout.composerWidth)
+  expect(responsiveLayout.quoteScrollWidth).toBeLessThanOrEqual(responsiveLayout.quoteClientWidth)
+  expect(responsiveLayout.composerScrollWidth).toBeLessThanOrEqual(responsiveLayout.composerClientWidth)
   expect(responsiveLayout.previewWidth).toBeGreaterThan(0)
   await expect(quote).toHaveCSS('background-color', 'rgb(23, 28, 39)')
   await expect(quote).toHaveCSS('border-color', 'rgb(46, 56, 72)')
