@@ -1,4 +1,4 @@
-# 交接文件（2026-07-31 更新）
+# 交接文件（2026-08-04 更新）
 
 > 給接手開發的 agent（Codex 或任何新 session）。讀完本檔 + 引用的 spec 章節即可接續，不需要舊對話脈絡。
 
@@ -30,6 +30,8 @@
 | VibeCoding Workflow 採用（AIDLC） | `96e083c` | 新增 `docs/agents/workflow-bindings.md`（§0-§6）；AGENTS/CLAUDE 政策入口 bootstrap；三份角色 prompt 修正（中央 source：`VibeCoding_Workflow` @ `de1aca4918`） |
 
 **目前驗收基線（任何改動後不得低於此）**：後端 `pytest` **653 passed**；frontend unit **116 passed**；前端 `npm run build` 綠；Chromium e2e **125/125 passed**（基線在 main `ebc49f2`）。Backlog #90 已通過 Standards／Spec 雙軸獨立 review，並以 direct Chromium 實際完成建立會議 → 主席補充 → AI 回合 → 角色篩選 → 長文展開 → 案卷 drawer。Backlog #91（chatroom mode）已實作並包含在此基線中；Backlog #92（chatroom UX polish，#91 驗收回饋）已實作並包含在此基線中，e2e 基線數字由 105 提升至 118（新增 13 案例）、再經第二輪修正提升至 125。
+
+**2026-08-04 closeout**：Backlog #100「右側會議脈絡欄收合後可重新展開」已由 Human Owner 驗收通過，狀態 `accepted / done`。Gate B reviewed implementation `12da498`（Reviewer `PASS`）已以 exact merge commit `16002be` 合併；post-merge frontend unit `162/162`、production build、focused Playwright regression 通過。Chrome smoke 確認桌面收合後 toggle 可重新展開、重複循環穩定，375px responsive 行為保留；full E2E 本次未執行。此為既有 `.scratch` scoped fix，無 OpenSpec delta，`.scratch/context-sidebar-toggle-fix/` 保留為歷史紀錄。
 
 **2026-07-30 第二輪驗收修正（已於 2026-07-31 Gate B 通過並 merge 至 main `ebc49f2`）**：Human Owner 於 2026-07-30 驗收 #92 時判定「只有第 9 點有做到」，退回重修。該分支共 13 commits（`943faa3`…`7b62add` 12 commits + 文件 commit `ebc49f2`，base 為 main `2ee4147`），e2e 由 118 提升至 125。內容：app-shell 視窗高度上限（此前只有法院模式有，導致 composer 隨滾輪移動）、座位改為真正的 `<button>` 並統一主席與角色行為、脈絡欄收合回收中間欄空間、紀錄密度、mode 感知的案卷用語、LINE 式訊息版面、訊息串開在最新處並跟隨自己送出、聊天室換模型 500（`UpdateMeetingSettingsRequest` 對 chatroom 強制 goal）、被 @ 角色的思考氣泡（聊天室 composer 繞過 store 導致 `pendingRoles` 從未填入）、中文選字 Enter 誤送出、提及選單鍵盤操作（`onKeyDown` 為死程式碼）、案卷 `+` 改為置中彈出視窗、法院模式套用同一套座位契約並補場景放大。獨立 Reviewer 於 2026-07-31 對 fixed range `2ee4147...ebc49f2` 審查，Verdict `pass`（無 Blocking/Major，Minor 均已裁定，詳見 spec.md §15 #92／#94），Orchestrator 已 fast-forward merge exact reviewed HEAD 並重跑 post-merge checks（653／116／build 全綠）。**狀態：`accepted / done`（2026-07-31 Human Owner 驗收通過）。** Human Owner 於驗收期間另發現「+」無檔案上傳（與 round-2 無關的既有缺口），已裁定開新 backlog #96（LINE 式聊天附件）。#91 與 #92 已於同一次 closeout 一併完成 delta specs sync 至 `openspec/specs/` 並 archive。
 
