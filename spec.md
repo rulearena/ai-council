@@ -591,6 +591,8 @@ config/models.yaml.example
 
 99. **聊天室自然回覆契約**：Human Owner 於 2026-08-04 驗收「創業」meeting 時發現聊天室的 `@Advisor` 回覆仍以「摘要／論點／風險／建議處置」正式報告格式呈現，與 #91 要求的「一般聊天精簡篇幅」不符。聊天室應使用獨立的 `chat-message/v1` 輸出契約，前端聊天氣泡只呈現自然、精簡的 `message` 內容；證據引用仍可保留 `[附件N]`，raw/parsed output 與診斷資料仍須保存，relay／courtroom／正式裁決的結構化 output schema 不受影響。既有事件必須 read-time 相容，不回寫歷史 events。Human Owner 已於 2026-08-04 核准此修正範圍，須建立 OpenSpec change 後依 Gate A → Executor → Gate B 流程執行。
 
+100. **右側會議脈絡欄收合後可重新展開**：Human Owner 於 2026-08-04 驗收 #96/#98/#99 時發現桌面版右側會議脈絡欄收合後，三個分頁仍留在 52px header 內，將 32px 展開控制推到 viewport 邊界，只剩約 14px 可見，造成使用者無法可靠重新展開。修正限於 `ConversationWorkspace`／workspace context CSS 與前端 regression coverage：收合時隱藏分頁、完整保留且置中展開控制，桌面與 responsive layout 均不得裁切；不得改動 API、事件格式、聊天執行語意或法院流程。Human Owner 已於 2026-08-04 核准此 scoped fix，狀態 `implemented / awaiting acceptance` 前須經獨立 Gate B。
+
 ## 16. 會議模式系統（Mode System）設計
 
 > 狀態：設計定稿（2026-07-12），分四個切片實作。切片 A 為前端先行，切片 B/C/D 為後端（Codex 依本節實作）。
