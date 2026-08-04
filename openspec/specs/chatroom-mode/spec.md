@@ -58,12 +58,12 @@ A human message sent to a chatroom meeting without a valid mention SHALL be save
 - **AND** no AI role is invoked
 
 ### Requirement: Directed single-role response
-When a human message contains a valid `@role` mention (single role), the system SHALL invoke that specific role to respond. The invocation SHALL use the existing `respond_as_role()` backend contract with the `directed_role_response` template. The mention SHALL be resolved to a stable `role_id` from the meeting's participant list, not by free-text name matching.
+When a human message contains a valid `@role` mention (single role), the system SHALL invoke that specific role to respond through the chatroom-specific `chat_respond_as_role()` backend contract, the `chatroom_response` template, and the dedicated `chat-message/v1` output schema. This chatroom path SHALL NOT reuse the formal `respond_as_role()`／`directed_role_response`／`role-output/v1` report path. The mention SHALL be resolved to a stable `role_id` from the meeting's participant list, not by free-text name matching.
 
 #### Scenario: @role triggers single AI response
 - **WHEN** a human sends "@藍軍 你覺得這個方案怎麼樣？" to a chatroom meeting
 - **THEN** a `human-directed-message` event is appended with the instruction text
-- **AND** the Blue role responds using the `directed_role_response` template
+- **AND** the Blue role responds through `chat_respond_as_role()` using `chatroom_response` and `chat-message/v1`
 - **AND** the step_id follows the pattern `chat-directed-{seq}-blue-response`
 
 #### Scenario: Unknown @role saves as human message only

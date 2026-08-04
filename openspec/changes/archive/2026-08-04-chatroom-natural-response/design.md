@@ -28,7 +28,7 @@ The schema registry will add `chat-message/v1` with a single required string fie
 
 ### Keep the existing chatroom prompt route and replace its schema contract
 
-Both `respond_as_role()` and `fanout_chatroom_all()` will select `chat-message/v1` while continuing to use `chatroom_response`. The prompt will state that the JSON object's `message` value is the complete reply, must be concise and conversational, and may retain visible `[附件N]` anchors when referring to case materials. A new template would duplicate the same context assembly without providing a behavioral benefit.
+The chatroom-specific `chat_respond_as_role()` and `fanout_chatroom_all()` paths will select `chat-message/v1` while continuing to use `chatroom_response`; they are distinct from the formal `respond_as_role()`／`directed_role_response`／`role-output/v1` report path. The prompt will state that the JSON object's `message` value is the complete reply, must be concise and conversational, and may retain visible `[附件N]` anchors when referring to case materials. A new template would duplicate the same context assembly without providing a behavioral benefit.
 
 ### Preserve audit data and add a display-safe projection
 

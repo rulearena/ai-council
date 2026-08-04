@@ -1,7 +1,7 @@
 # chatroom-natural-response Specification
 
 ## Purpose
-TBD - created by archiving change chatroom-natural-response. Update Purpose after archive.
+Chatroom replies are ordinary live-chat contributions, not formal role reports. This capability gives directed and `@all` chatroom responses a dedicated output contract and a direct message projection while preserving audit data and historical event compatibility.
 ## Requirements
 ### Requirement: Dedicated chat message output contract
 

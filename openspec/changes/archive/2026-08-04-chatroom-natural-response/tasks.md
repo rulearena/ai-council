@@ -8,7 +8,7 @@
 
 - [x] 2.1 Update prompt-contract tests and `prompts/chatroom_response.md` so `message` is the complete concise conversational reply, formal report headings are forbidden, and visible evidence anchors may be retained.
 - [x] 2.2 Add red runner tests proving directed chatroom responses select `chat-message/v1`, persist the parsed message, and retain raw output, schema metadata, prompt metadata, and model diagnostics.
-- [x] 2.3 Update `respond_as_role()` to use `chat-message/v1` while preserving directed event correlation, context assembly, retry behavior, and evidence inputs.
+- [x] 2.3 Update the chatroom-specific `chat_respond_as_role()` path to use `chat-message/v1` while preserving directed event correlation, context assembly, retry behavior, and evidence inputs; leave the formal `respond_as_role()`／`directed_role_response`／`role-output/v1` path unchanged.
 - [x] 2.4 Add red runner tests proving every successful `@all` member selects `chat-message/v1`, preserves its own parsed message and diagnostics, and records parse/model failures without synthesizing a formal response.
 - [x] 2.5 Update `fanout_chatroom_all()` to use the same chat-message contract without changing parallel execution, frozen context, arrival-order persistence, or `in_response_to_event_id` behavior.
 
