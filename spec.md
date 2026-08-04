@@ -589,6 +589,8 @@ config/models.yaml.example
 
 98. **聊天室 @all 平行回應的批次群組顯示**：Human Owner 於 #96 第七輪驗收後測試 @all，質疑「沒有平行一起執行」。Orchestrator 以 backend events 實證後端**確實平行**（`fanout_chatroom_all` 用 `ThreadPoolExecutor(max_workers=len)`，runner.py:595；測試 meeting「創業」178c58e1 四角色 `started_at` 全同秒、耗時 17.7–20.1s 重疊，若序列執行總耗時 ~75s）。使用者觀察到的「一個一個出現（隔幾秒）」是**完成順序**的正常呈現：runner 用 `as_completed` 依完成先後逐一 append（runner.py:600），前端 feed 因此逐條浮現。Human Owner 裁決採「批次群組顯示」：feed 中把同一輪 @all（共享 `chat-fanout-{timestamp_ms}-*` 前綴）的回覆群組在一起，顯示「N 位角色回應中」＋完成後逐條填入，讓使用者看出是同一輪平行 fanout。純前端變更（`meetingWorkspace.ts`／`ConversationWorkspace.vue`／`useCouncil.ts` 的 pendingRoles 期望成員集合擷取與 failure 語意調整），不動後端 API、事件結構或聊天室執行語意（@all fanout 本身已平行）。非核准實作批次，須先登錄本 backlog 再開 OpenSpec proposal。
 
+99. **聊天室自然回覆契約**：Human Owner 於 2026-08-04 驗收「創業」meeting 時發現聊天室的 `@Advisor` 回覆仍以「摘要／論點／風險／建議處置」正式報告格式呈現，與 #91 要求的「一般聊天精簡篇幅」不符。聊天室應使用獨立的 `chat-message/v1` 輸出契約，前端聊天氣泡只呈現自然、精簡的 `message` 內容；證據引用仍可保留 `[附件N]`，raw/parsed output 與診斷資料仍須保存，relay／courtroom／正式裁決的結構化 output schema 不受影響。既有事件必須 read-time 相容，不回寫歷史 events。Human Owner 已於 2026-08-04 核准此修正範圍，須建立 OpenSpec change 後依 Gate A → Executor → Gate B 流程執行。
+
 ## 16. 會議模式系統（Mode System）設計
 
 > 狀態：設計定稿（2026-07-12），分四個切片實作。切片 A 為前端先行，切片 B/C/D 為後端（Codex 依本節實作）。
