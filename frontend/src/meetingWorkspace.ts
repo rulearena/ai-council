@@ -1,3 +1,5 @@
+import type { FanoutCapture } from './chatroomFanout'
+
 export type MeetingSettingsSource = {
   meeting_id: string
   title: string
@@ -231,6 +233,7 @@ type WorkspaceEvent = {
     unresolved_questions?: string[]
   } | null
   raw_output?: string
+  in_response_to_event_id?: string
 }
 
 type WorkspaceCourtroom = {
@@ -283,6 +286,28 @@ export type WorkspaceMessage = {
   issueId: string | null
 }
 
+export type FanoutRoleState = {
+  roleId: string
+  name: string
+  state: 'pending' | 'completed' | 'failed' | 'unknown'
+}
+
+export type WorkspaceFanoutRound = {
+  id: string
+  humanEventId: string | null
+  expectedRoleIds: string[]
+  members: WorkspaceMessage[]
+  roleStates: FanoutRoleState[]
+  respondedCount: number
+  failedCount: number
+  terminal: 'pending' | 'completed' | 'partial' | 'unknown'
+  degraded: boolean
+}
+
+export type ConversationFeedItem =
+  | { kind: 'message'; message: WorkspaceMessage }
+  | { kind: 'fanout-round'; round: WorkspaceFanoutRound }
+
 export type WorkspaceRole = {
   roleId: string
   name: string
@@ -294,6 +319,8 @@ export type ConversationWorkspaceProjection = {
   family: 'conversation'
   meetingId: string
   messages: WorkspaceMessage[]
+  feedItems: ConversationFeedItem[]
+  fanoutRounds: WorkspaceFanoutRound[]
   roles: WorkspaceRole[]
   parallel: null | {
     completed: number
@@ -402,6 +429,110 @@ function messageContent(event: WorkspaceEvent): string {
   return event.raw_output ?? event.error ?? ''
 }
 
+function projectFanoutRounds(
+  meeting: WorkspaceProjectionMeeting,
+  mode: WorkspaceProjectionMode,
+  messages: WorkspaceMessage[],
+  captures: FanoutCapture[],
+): WorkspaceFanoutRound[] {
+  if (mode.category !== 'chatroom') return []
+  const humanEvents = new Map(
+    (meeting.events ?? [])
+      .filter((event) => event.role === 'Human' && event.step_id === 'human-message')
+      .map((event) => [event.event_id, event]),
+  )
+  const grouped = new Map<string, WorkspaceMessage[]>()
+  for (const message of messages) {
+    const reference = message.event.in_response_to_event_id
+    if (
+      message.event.step_id.startsWith('chat-fanout-')
+      && reference
+      && humanEvents.has(reference)
+    ) {
+      const members = grouped.get(reference) ?? []
+      members.push(message)
+      grouped.set(reference, members)
+    }
+  }
+
+  const captureFor = (humanEventId: string): FanoutCapture | undefined => {
+    const human = humanEvents.get(humanEventId)
+    return captures.find((capture) =>
+      capture.humanEventId === humanEventId
+      || (
+        capture.humanEventId === null
+        && !capture.degraded
+        && human?.content === capture.instruction
+      ),
+    )
+  }
+
+  const roundFor = (humanEventId: string | null, members: WorkspaceMessage[], capture?: FanoutCapture): WorkspaceFanoutRound => {
+    const observed = members.map((message) => message.roleId)
+    const expectedRoleIds = capture && !capture.degraded
+      ? [...capture.expectedRoleIds]
+      : [...new Set(observed)]
+    const names = new Map(
+      meeting.participants.map((participant) => [participant.role_id, participantName(participant, mode)]),
+    )
+    const states: FanoutRoleState[] = expectedRoleIds.map((roleId) => {
+      const member = members.find((candidate) => candidate.roleId === roleId)
+      return {
+        roleId,
+        name: names.get(roleId) ?? roleId,
+        state: member ? member.kind === 'failed' ? 'failed' : 'completed' : 'pending',
+      }
+    })
+    const isSettled = meeting.activity_status !== 'running' && Boolean(humanEventId)
+    if (isSettled) {
+      for (const state of states) {
+        if (state.state === 'pending') state.state = 'unknown'
+      }
+    }
+    const failedCount = states.filter((state) => state.state === 'failed').length
+    const respondedCount = states.filter((state) => state.state === 'completed').length
+    const hasUnknown = states.some((state) => state.state === 'unknown')
+    const terminal: WorkspaceFanoutRound['terminal'] = !isSettled
+      ? 'pending'
+      : hasUnknown
+        ? 'unknown'
+        : failedCount > 0
+        ? 'partial'
+        : 'completed'
+    return {
+      id: humanEventId ? `fanout-round-${humanEventId}` : capture?.id ?? 'fanout-round-pending',
+      humanEventId,
+      expectedRoleIds,
+      members,
+      roleStates: states,
+      respondedCount,
+      failedCount,
+      terminal,
+      degraded: Boolean(capture?.degraded) || !capture,
+    }
+  }
+
+  const rounds = [...grouped.entries()].map(([humanEventId, members]) => {
+    const capture = captureFor(humanEventId)
+    return roundFor(humanEventId, members, capture)
+  })
+  for (const capture of captures) {
+    if (capture.meetingId !== meeting.meeting_id) continue
+    if (
+      capture.humanEventId && grouped.has(capture.humanEventId)
+      || [...humanEvents.entries()].some(([humanEventId, human]) =>
+        captureFor(humanEventId) === capture && grouped.has(humanEventId),
+      )
+    ) continue
+    const inferredHuman = [...humanEvents.values()].find((human) =>
+      capture.humanEventId === human.event_id
+      || (!capture.humanEventId && !capture.degraded && human.content === capture.instruction),
+    )
+    rounds.push(roundFor(inferredHuman?.event_id ?? capture.humanEventId, [], capture))
+  }
+  return rounds
+}
+
 function projectMessages(
   meeting: WorkspaceProjectionMeeting,
   mode: WorkspaceProjectionMode,
@@ -429,16 +560,26 @@ function projectRoles(
   mode: WorkspaceProjectionMode,
   messages: WorkspaceMessage[],
   thinkingRoleIds: string[],
+  fanoutRounds: WorkspaceFanoutRound[] = [],
 ): WorkspaceRole[] {
   const queued = new Map<string, number>()
   thinkingRoleIds.forEach((roleId, index) => {
     if (!queued.has(roleId)) queued.set(roleId, index)
   })
   const parallel = parallelRoundState(meeting, mode)
+  const fanoutStates = new Map<string, FanoutRoleState['state']>()
+  for (const round of fanoutRounds) {
+    for (const state of round.roleStates) fanoutStates.set(state.roleId, state.state)
+  }
   return meeting.participants.map((participant) => {
     const latest = lastMessageForRole(messages, participant.role_id)
     let state: WorkspaceRole['state']
-    if (mode.category !== 'parallel' && queued.has(participant.role_id)) {
+    if (mode.category === 'chatroom' && fanoutStates.has(participant.role_id)) {
+      const fanoutState = fanoutStates.get(participant.role_id)
+      state = fanoutState === 'pending' ? 'thinking'
+        : fanoutState === 'failed' ? 'failed'
+          : fanoutState === 'completed' ? 'completed' : 'waiting'
+    } else if (mode.category !== 'parallel' && queued.has(participant.role_id)) {
       state = queued.get(participant.role_id) === 0 ? 'thinking' : 'waiting'
     } else if (parallel?.memberRoleIds.has(participant.role_id)) {
       const current = parallel.latestMembers.get(participant.role_id)
@@ -579,13 +720,21 @@ export function projectMeetingWorkspace(input: {
   meeting: WorkspaceProjectionMeeting
   mode: WorkspaceProjectionMode
   thinkingRoleIds?: string[]
+  fanoutCaptures?: FanoutCapture[]
 }): MeetingWorkspaceProjection {
   const messages = projectMessages(input.meeting, input.mode)
+  const fanoutRounds = projectFanoutRounds(
+    input.meeting,
+    input.mode,
+    messages,
+    (input.fanoutCaptures ?? []).filter((capture) => capture.meetingId === input.meeting.meeting_id),
+  )
   const roles = projectRoles(
     input.meeting,
     input.mode,
     messages,
     input.thinkingRoleIds ?? [],
+    fanoutRounds,
   )
   if (input.meeting.mode_id === 'courtroom' && input.meeting.courtroom) {
     const courtroom = input.meeting.courtroom
@@ -632,6 +781,8 @@ export function projectMeetingWorkspace(input: {
     family: 'conversation',
     meetingId: input.meeting.meeting_id,
     messages,
+    fanoutRounds,
+    feedItems: buildConversationFeedItems(messages, fanoutRounds),
     roles,
     parallel: projectParallel(input.meeting, input.mode),
     capabilities: {
@@ -643,6 +794,33 @@ export function projectMeetingWorkspace(input: {
         : [],
     },
   }
+}
+
+function buildConversationFeedItems(
+  messages: WorkspaceMessage[],
+  rounds: WorkspaceFanoutRound[],
+): ConversationFeedItem[] {
+  const roundByMemberId = new Map<string, WorkspaceFanoutRound>()
+  for (const round of rounds) {
+    for (const member of round.members) roundByMemberId.set(member.id, round)
+  }
+  const emittedRounds = new Set<string>()
+  const items: ConversationFeedItem[] = []
+  for (const message of messages) {
+    const round = roundByMemberId.get(message.id)
+    if (!round) {
+      items.push({ kind: 'message', message })
+      continue
+    }
+    if (!emittedRounds.has(round.id)) {
+      emittedRounds.add(round.id)
+      items.push({ kind: 'fanout-round', round })
+    }
+  }
+  for (const round of rounds) {
+    if (!emittedRounds.has(round.id)) items.push({ kind: 'fanout-round', round })
+  }
+  return items
 }
 
 export type WorkspaceRoleFilter = {

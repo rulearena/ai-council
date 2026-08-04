@@ -14,6 +14,204 @@ import {
   projectMeetingWorkspace,
   validateMeetingSettingsDraft,
 } from '../../src/meetingWorkspace.ts'
+import {
+  bindOldestMatchingCapture,
+  createFanoutCapture,
+  isResolvableFanoutResponse,
+  removeFanoutCapture,
+  degradeFanoutCaptures,
+} from '../../src/chatroomFanout.ts'
+
+test('chatroom fanout capture binds the first unseen matching human event', () => {
+  const capture = createFanoutCapture({
+    id: 'capture-1',
+    meetingId: 'meeting-chat',
+    instruction: '@all 大家覺得呢？',
+    preSendEventIds: ['old-human'],
+    expectedRoleIds: ['Advisor', 'Critic'],
+    capturedAt: 10,
+  })
+  const bound = bindOldestMatchingCapture([capture], {
+    event_id: 'human-1', meeting_id: 'meeting-chat', step_id: 'human-message',
+    role: 'Human', content: '@all 大家覺得呢？',
+  })
+  assert.equal(bound[0].humanEventId, 'human-1')
+  assert.deepEqual(bound[0].expectedRoleIds, ['Advisor', 'Critic'])
+})
+
+test('only resolvable chatroom fanout events are eligible for grouping', () => {
+  const humanIds = new Set(['human-1'])
+  assert.equal(isResolvableFanoutResponse({ step_id: 'chat-fanout-Advisor', in_response_to_event_id: 'human-1' }, humanIds), true)
+  assert.equal(isResolvableFanoutResponse({ step_id: 'chat-fanout-Critic', in_response_to_event_id: 'missing' }, humanIds), false)
+  assert.equal(isResolvableFanoutResponse({ step_id: 'directed-Advisor', in_response_to_event_id: 'human-1' }, humanIds), false)
+})
+
+test('capture rollback and reconnect degradation never retain a provisional identity', () => {
+  const capture = createFanoutCapture({
+    id: 'capture-lifecycle', meetingId: 'meeting-chat', instruction: '@all 問題',
+    preSendEventIds: [], expectedRoleIds: ['Advisor'], capturedAt: 1,
+  })
+  assert.deepEqual(removeFanoutCapture([capture], 'capture-lifecycle'), [])
+  const degraded = degradeFanoutCaptures([capture], 'meeting-chat')
+  assert.equal(degraded[0].humanEventId, null)
+  assert.equal(degraded[0].degraded, true)
+})
+
+const chatroomMode = {
+  id: 'chatroom',
+  category: 'chatroom',
+  roles: [
+    { id: 'Advisor', name: '顧問' },
+    { id: 'Critic', name: '評論者' },
+    { id: 'Strategist', name: '策略師' },
+  ],
+}
+
+const chatroomMeeting = {
+  meeting_id: 'meeting-chat',
+  mode_id: 'chatroom',
+  activity_status: 'running' as const,
+  participants: chatroomMode.roles.map((role) => ({ role_id: role.id, display_name: role.name })),
+  courtroom: null,
+  events: [{
+    event_id: 'human-chat-1', meeting_id: 'meeting-chat', step_id: 'human-message',
+    role: 'Human', attempt: 1, status: 'completed', content: '@all 大家覺得呢？',
+  }],
+}
+
+test('chatroom @all exposes a pending round before its first response', () => {
+  const workspace = projectMeetingWorkspace({
+    meeting: chatroomMeeting,
+    mode: chatroomMode,
+    fanoutCaptures: [createFanoutCapture({
+      id: 'capture-pending', meetingId: 'meeting-chat', instruction: '@all 大家覺得呢？',
+      preSendEventIds: [], expectedRoleIds: ['Advisor', 'Critic', 'Strategist'], capturedAt: 1,
+    })],
+  })
+  assert.equal(workspace.family, 'conversation')
+  assert.equal(workspace.fanoutRounds.length, 1)
+  assert.equal(workspace.fanoutRounds[0].respondedCount, 0)
+  assert.equal(workspace.fanoutRounds[0].expectedRoleIds.length, 3)
+  assert.deepEqual(workspace.fanoutRounds[0].members, [])
+  assert.deepEqual(workspace.fanoutRounds[0].roleStates.map((role) => role.state), ['pending', 'pending', 'pending'])
+})
+
+test('chatroom @all keeps arrival order and a fixed denominator', () => {
+  const workspace = projectMeetingWorkspace({
+    meeting: {
+      ...chatroomMeeting,
+      events: [
+        ...chatroomMeeting.events,
+        {
+          event_id: 'critic-response', meeting_id: 'meeting-chat', step_id: 'chat-fanout-Critic',
+          role: 'Critic', attempt: 1, status: 'completed', content: '評論先回答',
+          in_response_to_event_id: 'human-chat-1',
+        },
+        {
+          event_id: 'advisor-response', meeting_id: 'meeting-chat', step_id: 'chat-fanout-Advisor',
+          role: 'Advisor', attempt: 1, status: 'completed', content: '顧問後回答',
+          in_response_to_event_id: 'human-chat-1',
+        },
+      ],
+    },
+    mode: chatroomMode,
+    fanoutCaptures: [createFanoutCapture({
+      id: 'capture-bound', meetingId: 'meeting-chat', instruction: '@all 大家覺得呢？',
+      preSendEventIds: [], expectedRoleIds: ['Advisor', 'Critic', 'Strategist'], capturedAt: 1,
+    })],
+  })
+  assert.equal(workspace.fanoutRounds[0].respondedCount, 2)
+  assert.equal(workspace.fanoutRounds[0].expectedRoleIds.length, 3)
+  assert.deepEqual(workspace.fanoutRounds[0].members.map((message) => message.id), ['critic-response', 'advisor-response'])
+  assert.equal(workspace.fanoutRounds[0].roleStates.find((role) => role.roleId === 'Strategist')?.state, 'pending')
+})
+
+test('chatroom fanout failure settles one role without clearing other placeholders', () => {
+  const workspace = projectMeetingWorkspace({
+    meeting: {
+      ...chatroomMeeting,
+      events: [
+        ...chatroomMeeting.events,
+        {
+          event_id: 'critic-failed', meeting_id: 'meeting-chat', step_id: 'chat-fanout-Critic',
+          role: 'Critic', attempt: 1, status: 'failed', error: 'timeout',
+          in_response_to_event_id: 'human-chat-1',
+        },
+      ],
+    },
+    mode: chatroomMode,
+    fanoutCaptures: [createFanoutCapture({
+      id: 'capture-failure', meetingId: 'meeting-chat', instruction: '@all 大家覺得呢？',
+      preSendEventIds: [], expectedRoleIds: ['Advisor', 'Critic', 'Strategist'], capturedAt: 1,
+    })],
+  })
+  assert.equal(workspace.fanoutRounds[0].failedCount, 1)
+  assert.deepEqual(workspace.fanoutRounds[0].roleStates.map((role) => [role.roleId, role.state]), [
+    ['Advisor', 'pending'], ['Critic', 'failed'], ['Strategist', 'pending'],
+  ])
+})
+
+test('settled chatroom fanout marks missing members unknown', () => {
+  const workspace = projectMeetingWorkspace({
+    meeting: {
+      ...chatroomMeeting,
+      activity_status: 'completed',
+      events: [
+        ...chatroomMeeting.events,
+        {
+          event_id: 'advisor-response', meeting_id: 'meeting-chat', step_id: 'chat-fanout-Advisor',
+          role: 'Advisor', attempt: 1, status: 'completed', content: '顧問回答',
+          in_response_to_event_id: 'human-chat-1',
+        },
+      ],
+    },
+    mode: chatroomMode,
+    fanoutCaptures: [createFanoutCapture({
+      id: 'capture-unknown', meetingId: 'meeting-chat', instruction: '@all 大家覺得呢？',
+      preSendEventIds: [], expectedRoleIds: ['Advisor', 'Critic', 'Strategist'], capturedAt: 1,
+    })],
+  })
+  assert.equal(workspace.fanoutRounds[0].terminal, 'unknown')
+  assert.equal(workspace.fanoutRounds[0].roleStates.find((role) => role.roleId === 'Critic')?.state, 'unknown')
+})
+
+test('directed and multi-role chatroom mentions remain flat', () => {
+  const workspace = projectMeetingWorkspace({
+    meeting: {
+      ...chatroomMeeting,
+      events: [
+        ...chatroomMeeting.events,
+        {
+          event_id: 'directed-response', meeting_id: 'meeting-chat', step_id: 'directed-Advisor-response',
+          role: 'Advisor', attempt: 1, status: 'completed', content: '定向回答',
+        },
+      ],
+    },
+    mode: chatroomMode,
+  })
+  assert.deepEqual(workspace.fanoutRounds, [])
+  assert.equal(workspace.feedItems.filter((item) => item.kind === 'fanout-round').length, 0)
+  assert.equal(workspace.messages.length, 2)
+})
+
+test('fanout-looking response without a resolvable human key stays an individual message', () => {
+  const workspace = projectMeetingWorkspace({
+    meeting: {
+      ...chatroomMeeting,
+      events: [
+        ...chatroomMeeting.events,
+        {
+          event_id: 'legacy-fanout', meeting_id: 'meeting-chat', step_id: 'chat-fanout-Advisor',
+          role: 'Advisor', attempt: 1, status: 'completed', content: '舊資料',
+          in_response_to_event_id: 'missing-human',
+        },
+      ],
+    },
+    mode: chatroomMode,
+  })
+  assert.deepEqual(workspace.fanoutRounds, [])
+  assert.equal(workspace.feedItems.some((item) => item.kind === 'message' && item.message.id === 'legacy-fanout'), true)
+})
 
 const meeting = {
   meeting_id: 'meeting-a',

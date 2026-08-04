@@ -142,6 +142,30 @@ test('13.4 send @all — all roles respond', async ({ page }) => {
   await expect(page.getByTestId('workspace-message')).toHaveCount(5, { timeout: 30_000 })
 })
 
+test('13.4a @all renders one round and all pending placeholders before the request is released', async ({ page }) => {
+  await page.goto('/')
+  const title = `E2E chatroom @all pending ${Date.now()}`
+  await createChatroomMeeting(page, title, { modelAssignments: defaultModels })
+
+  let releaseRequest!: () => void
+  const requestGate = new Promise<void>((resolve) => { releaseRequest = resolve })
+  await page.route('**/meetings/*/chat/mention', async (route) => {
+    await requestGate
+    await route.continue()
+  })
+
+  await sendChatMessage(page, '@all 先同時想想看')
+  await expect(page.getByTestId('fanout-round')).toHaveCount(1)
+  await expect(page.getByTestId('fanout-round-header')).toContainText('0/4')
+  await expect(page.getByTestId('fanout-round-placeholder')).toHaveCount(4)
+
+  releaseRequest()
+  await waitForRoleMessage(page, '顧問')
+  await waitForRoleMessage(page, '評論者')
+  await waitForRoleMessage(page, '策略師')
+  await waitForRoleMessage(page, '分析師')
+})
+
 // ── 13.4b ────────────────────────────────────────────────────────────────────
 
 test('13.4b send @Advisor @Critic — both respond in parallel', async ({ page }) => {
