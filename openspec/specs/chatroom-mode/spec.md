@@ -3,9 +3,7 @@
 ## Purpose
 
 The `chatroom` mode is a third execution category alongside `relay` and `parallel`: a free-form meeting type with no fixed rounds, no mandatory AI goal, and no process progress indicators. AI roles respond only when explicitly mentioned via `@role` or `@all`. The mode is defined in `config/modes.yaml` and rendered in the mode picker as the first option.
-
 ## Requirements
-
 ### Requirement: Chatroom mode definition
 The system SHALL define a `chatroom` mode category in `config/modes.yaml` alongside existing `relay` and `parallel` categories. The chatroom mode SHALL declare roles with `kind: member`, SHALL NOT declare `steps`, `fanout`, or `synthesis` sections. The mode definition SHALL include `id: chatroom`, display name, tagline, when_to_use guidance, and a `default_scene: meeting-room`.
 
@@ -127,15 +125,25 @@ The token budget SHALL be configurable per chatroom meeting (default from enviro
 - **THEN** the context for any AI call contains only events from that meeting
 
 ### Requirement: Concise response policy
-Chatroom mode responses SHALL default to concise, conversational length. This SHALL be controlled by a `chatroom_response` prompt template that instructs the role to respond briefly and naturally. The system SHALL NOT truncate already-generated text; length control happens at the prompt level, not post-generation.
 
-#### Scenario: Prompt instructs concise response
+Chatroom mode responses SHALL default to concise, conversational length and SHALL use the dedicated `chat-message/v1` output contract for directed and `@all` responses. The `message` field SHALL contain the complete natural reply rather than a formal report envelope. This SHALL be controlled by the `chatroom_response` prompt template, which instructs the role to respond briefly and naturally while preserving visible evidence anchors when relevant. The system SHALL NOT truncate already-generated text; length control happens at the prompt level, not post-generation.
+
+#### Scenario: Prompt instructs concise natural response
+
 - **WHEN** a role is invoked in chatroom mode
-- **THEN** the rendered prompt includes the `chatroom_response` template which instructs brief, conversational tone
+- **THEN** the rendered prompt includes the `chatroom_response` template and the `chat-message/v1` schema
+- **AND** it instructs a brief conversational reply without formal report headings
+
+#### Scenario: Chatroom response uses message field
+
+- **WHEN** a role completes a directed or `@all` chatroom response
+- **THEN** the parsed output contains the complete reply in `message`
+- **AND** the response is not required to contain `summary`, `arguments`, `risks`, or `recommendation`
 
 #### Scenario: No post-generation truncation
+
 - **WHEN** a role generates a longer-than-expected response
-- **THEN** the full response is saved to events.jsonl and displayed without truncation
+- **THEN** the full `message` text is saved to events.jsonl and displayed without truncation
 
 ### Requirement: Chatroom mode does not display process indicators
 The frontend SHALL NOT display court CTA buttons, 正式流程按鈕, "開始新回合" buttons, step progress indicators, or synthesis status for chatroom meetings. The right context panel SHALL omit goal display when goal is empty, and SHALL NOT show parallel progress or relay step progress.
