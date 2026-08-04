@@ -118,6 +118,12 @@ test('13.3 send @Advisor mention — verify AI response appears', async ({ page 
 
   // Wait for Advisor's AI response
   await waitForRoleMessage(page, '顧問')
+  const feed = page.getByTestId('workspace-message-feed')
+  await expect(feed).toContainText('Mock chat response.')
+  await expect(feed).not.toContainText('摘要')
+  await expect(feed).not.toContainText('論點')
+  await expect(feed).not.toContainText('風險')
+  await expect(feed).not.toContainText('建議處置')
   // The message feed should contain at least 2 messages (human + AI)
   await expect(page.getByTestId('workspace-message')).toHaveCount(2, { timeout: 15_000 })
 })

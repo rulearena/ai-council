@@ -14,6 +14,7 @@ from typing import Callable, TypedDict
 
 from ai_council.models.config import ModelConfig
 from ai_council.prompting.schemas import (
+    CHAT_MESSAGE_V1_ID,
     COURTROOM_ISSUE_DRAFT_V1_ID,
     COURTROOM_CIVIL_FINAL_V1_ID,
     COURTROOM_CRIMINAL_FINAL_V1_ID,
@@ -76,7 +77,11 @@ class MockModelAdapter:
         mock_error = request.model_config.extra_body.get("mock_error")
         if isinstance(mock_error, str) and mock_error:
             raise AdapterError(mock_error)
-        if request.output_schema_id == COURTROOM_ISSUE_DRAFT_V1_ID:
+        if request.output_schema_id == CHAT_MESSAGE_V1_ID:
+            payload = {
+                "message": "Mock chat response.",
+            }
+        elif request.output_schema_id == COURTROOM_ISSUE_DRAFT_V1_ID:
             payload = {"issues": [{"title": "Mock generated issue"}]}
         elif request.output_schema_id == COURTROOM_RULING_V1_ID:
             payload = {

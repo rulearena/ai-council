@@ -567,6 +567,55 @@ test('conversation messages format every structured role-output field without ex
   assert.equal(workspace.messages[0]?.content.includes('原始 JSON'), false)
 })
 
+test('chat-message/v1 renders its natural message and preserves evidence anchors', () => {
+  const workspace = projectMeetingWorkspace({
+    meeting: {
+      ...brainstormMeeting,
+      events: [{
+        event_id: 'chat-message', meeting_id: 'meeting-parallel', step_id: 'chat-directed-1-blue-response',
+        role: 'Blue', attempt: 1, status: 'completed', output_schema_id: 'chat-message/v1',
+        content: '不應覆蓋 parsed message',
+        parsed_output: { message: '先做小規模驗證，詳見 [附件一]。' },
+        raw_output: '{"message":"不應直接顯示的原始 JSON"}',
+      }],
+    },
+    mode: brainstormMode,
+  })
+
+  assert.equal(workspace.family, 'conversation')
+  assert.equal(workspace.messages[0]?.content, '先做小規模驗證，詳見 [附件一]。')
+  assert.equal(workspace.messages[0]?.content.includes('摘要'), false)
+  assert.equal(workspace.messages[0]?.content.includes('論點'), false)
+  assert.equal(workspace.messages[0]?.content.includes('風險'), false)
+  assert.equal(workspace.messages[0]?.content.includes('建議處置'), false)
+})
+
+test('legacy structured chat events keep the read-time formatted fallback', () => {
+  const workspace = projectMeetingWorkspace({
+    meeting: {
+      ...brainstormMeeting,
+      events: [
+        {
+          event_id: 'legacy-chat', meeting_id: 'meeting-parallel', step_id: 'chat-directed-1-blue-response',
+          role: 'Blue', attempt: 1, status: 'completed', output_schema_id: 'role-output/v1',
+          parsed_output: {
+            summary: '歷史摘要', arguments: [], risks: [], recommendation: '歷史建議',
+          },
+        },
+        {
+          event_id: 'new-chat', meeting_id: 'meeting-parallel', step_id: 'chat-directed-2-blue-response',
+          role: 'Blue', attempt: 1, status: 'completed', output_schema_id: 'chat-message/v1',
+          parsed_output: { message: '新訊息，詳見 [附件一]。'},
+        },
+      ],
+    },
+    mode: brainstormMode,
+  })
+
+  assert.equal(workspace.messages[0]?.content, '摘要\n歷史摘要\n\n建議處置\n歷史建議')
+  assert.equal(workspace.messages[1]?.content, '新訊息，詳見 [附件一]。')
+})
+
 test('workspace role filters find the latest saved message and reset on meeting switch', () => {
   const workspace = projectMeetingWorkspace({ meeting: brainstormMeeting, mode: brainstormMode })
   const selected = nextWorkspaceRoleFilter(null, 'meeting-parallel', 'Member-3')
