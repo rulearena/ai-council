@@ -5,7 +5,7 @@ import {
   projectMeetingWorkspace,
   isSameModelAssignment,
   applyOptimisticModelUpdate,
-  mergeServerParticipantModels,
+  replaceServerParticipantModels,
 } from '../../src/meetingWorkspace.ts'
 
 // ── Fixtures ─────────────────────────────────────────────────────────────────
@@ -131,55 +131,61 @@ test('applyOptimisticModelUpdate adds a new role key if not already present', ()
   assert.equal(next.Critic, 'claude-3')
 })
 
-// ── mergeServerParticipantModels ──────────────────────────────────────────────
-// This is the REAL merge logic used by useCouncil.updateSelectedModel after
+// ── replaceServerParticipantModels ────────────────────────────────────────────
+// This is the REAL replacement logic used by useCouncil.updateSelectedModel after
 // a successful API response. It re-syncs the client state from the server.
 
-test('mergeServerParticipantModels overwrites all roles from server response', () => {
+test('replaceServerParticipantModels overwrites all roles from server response', () => {
   const current = { Advisor: 'gpt-4o', Critic: 'claude-3' }
   const participants = [
     { role_id: 'Advisor', model_config_id: 'gemini-pro' },
     { role_id: 'Critic', model_config_id: 'llama-3' },
   ]
-  const result = mergeServerParticipantModels(current, participants)
+  const result = replaceServerParticipantModels(current, participants)
   assert.deepEqual(result, { Advisor: 'gemini-pro', Critic: 'llama-3' })
 })
 
-test('mergeServerParticipantModels handles null model_config_id as empty string', () => {
+test('replaceServerParticipantModels handles null model_config_id as empty string', () => {
   const current = { Advisor: 'gpt-4o' }
   const participants = [
     { role_id: 'Advisor', model_config_id: null },
   ]
-  const result = mergeServerParticipantModels(current, participants)
+  const result = replaceServerParticipantModels(current, participants)
   assert.equal(result.Advisor, '')
 })
 
-test('mergeServerParticipantModels can add roles from server not in current', () => {
+test('replaceServerParticipantModels can add roles from server not in current', () => {
   const current = { Advisor: 'gpt-4o' }
   const participants = [
     { role_id: 'Advisor', model_config_id: 'gpt-4o' },
     { role_id: 'Critic', model_config_id: 'claude-3' },
   ]
-  const result = mergeServerParticipantModels(current, participants)
+  const result = replaceServerParticipantModels(current, participants)
   assert.deepEqual(result, { Advisor: 'gpt-4o', Critic: 'claude-3' })
 })
 
-test('mergeServerParticipantModels drops roles from current not in server response', () => {
+test('replaceServerParticipantModels drops roles from current not in server response', () => {
   const current = { Advisor: 'gpt-4o', Critic: 'claude-3', Judge: 'gemini-pro' }
   const participants = [
     { role_id: 'Advisor', model_config_id: 'gpt-4o' },
     { role_id: 'Critic', model_config_id: 'claude-3' },
   ]
-  const result = mergeServerParticipantModels(current, participants)
+  const result = replaceServerParticipantModels(current, participants)
   assert.deepEqual(result, { Advisor: 'gpt-4o', Critic: 'claude-3' })
   assert.equal((result as any).Judge, undefined, 'Judge removed — server is authoritative')
+  assert.deepEqual(current, { Advisor: 'gpt-4o', Critic: 'claude-3', Judge: 'gemini-pro' },
+    'Current model state is not mutated')
+  assert.deepEqual(participants, [
+    { role_id: 'Advisor', model_config_id: 'gpt-4o' },
+    { role_id: 'Critic', model_config_id: 'claude-3' },
+  ], 'Server participants are not mutated')
 })
 
 // ── Integration: end-to-end model switch logic ────────────────────────────────
 // Simulates the full updateSelectedModel flow (guard → optimistic → merge)
 // using the REAL extracted functions, proving they compose correctly.
 
-test('full model switch: guard passes → optimistic applied → server merge overwrites', () => {
+test('full model switch: guard passes → optimistic applied → server replacement overwrites', () => {
   const initial = { Blue: 'mock-fast', Red: 'mock-fast', Judge: 'mock-fast' }
 
   // Step 1: guard check — should NOT skip
@@ -197,7 +203,7 @@ test('full model switch: guard passes → optimistic applied → server merge ov
     { role_id: 'Red', model_config_id: 'mock-fast' },
     { role_id: 'Judge', model_config_id: 'mock-fast' },
   ]
-  const finalState = mergeServerParticipantModels(optimistic, serverParticipants)
+  const finalState = replaceServerParticipantModels(optimistic, serverParticipants)
   assert.equal(finalState.Blue, 'mock-fast', 'Blue reverted to server value')
   assert.equal(finalState.Red, 'mock-fast', 'Red unchanged')
   assert.equal(finalState.Judge, 'mock-fast', 'Judge unchanged')
