@@ -1,9 +1,9 @@
 # Backlog #94⑩ TDD red evidence
 
-- Base: `349a7c9`
-- Test change: renamed the unit contract and import from `mergeServerParticipantModels` to `replaceServerParticipantModels`.
+- Previous green: `23088ff`
+- Test change: changed every `replaceServerParticipantModels` contract call to pass only `participants`.
 - Command: `node --test --experimental-strip-types tests/unit/inRailModelSwitching.test.ts`
-- Result: expected failure before implementation.
-- Failure: `meetingWorkspace.ts` did not provide the requested `replaceServerParticipantModels` export.
+- Result: expected failure before implementation signature correction: 11 passed, 5 failed.
+- Failure: the previous two-argument implementation treated `participants` as its unused first argument, then threw `TypeError: Cannot read properties of undefined (reading 'map')`.
 
-This demonstrates that the renamed public helper contract was introduced before the implementation rename.
+This demonstrates that the public helper contract now requires the participant-only API before the implementation and caller are corrected.

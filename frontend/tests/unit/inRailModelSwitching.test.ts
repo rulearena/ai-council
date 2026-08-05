@@ -136,45 +136,38 @@ test('applyOptimisticModelUpdate adds a new role key if not already present', ()
 // a successful API response. It re-syncs the client state from the server.
 
 test('replaceServerParticipantModels overwrites all roles from server response', () => {
-  const current = { Advisor: 'gpt-4o', Critic: 'claude-3' }
   const participants = [
     { role_id: 'Advisor', model_config_id: 'gemini-pro' },
     { role_id: 'Critic', model_config_id: 'llama-3' },
   ]
-  const result = replaceServerParticipantModels(current, participants)
+  const result = replaceServerParticipantModels(participants)
   assert.deepEqual(result, { Advisor: 'gemini-pro', Critic: 'llama-3' })
 })
 
 test('replaceServerParticipantModels handles null model_config_id as empty string', () => {
-  const current = { Advisor: 'gpt-4o' }
   const participants = [
     { role_id: 'Advisor', model_config_id: null },
   ]
-  const result = replaceServerParticipantModels(current, participants)
+  const result = replaceServerParticipantModels(participants)
   assert.equal(result.Advisor, '')
 })
 
-test('replaceServerParticipantModels can add roles from server not in current', () => {
-  const current = { Advisor: 'gpt-4o' }
+test('replaceServerParticipantModels includes roles added by server response', () => {
   const participants = [
     { role_id: 'Advisor', model_config_id: 'gpt-4o' },
     { role_id: 'Critic', model_config_id: 'claude-3' },
   ]
-  const result = replaceServerParticipantModels(current, participants)
+  const result = replaceServerParticipantModels(participants)
   assert.deepEqual(result, { Advisor: 'gpt-4o', Critic: 'claude-3' })
 })
 
-test('replaceServerParticipantModels drops roles from current not in server response', () => {
-  const current = { Advisor: 'gpt-4o', Critic: 'claude-3', Judge: 'gemini-pro' }
+test('replaceServerParticipantModels returns only roles from server response', () => {
   const participants = [
     { role_id: 'Advisor', model_config_id: 'gpt-4o' },
     { role_id: 'Critic', model_config_id: 'claude-3' },
   ]
-  const result = replaceServerParticipantModels(current, participants)
+  const result = replaceServerParticipantModels(participants)
   assert.deepEqual(result, { Advisor: 'gpt-4o', Critic: 'claude-3' })
-  assert.equal((result as any).Judge, undefined, 'Judge removed — server is authoritative')
-  assert.deepEqual(current, { Advisor: 'gpt-4o', Critic: 'claude-3', Judge: 'gemini-pro' },
-    'Current model state is not mutated')
   assert.deepEqual(participants, [
     { role_id: 'Advisor', model_config_id: 'gpt-4o' },
     { role_id: 'Critic', model_config_id: 'claude-3' },
@@ -203,7 +196,7 @@ test('full model switch: guard passes → optimistic applied → server replacem
     { role_id: 'Red', model_config_id: 'mock-fast' },
     { role_id: 'Judge', model_config_id: 'mock-fast' },
   ]
-  const finalState = replaceServerParticipantModels(optimistic, serverParticipants)
+  const finalState = replaceServerParticipantModels(serverParticipants)
   assert.equal(finalState.Blue, 'mock-fast', 'Blue reverted to server value')
   assert.equal(finalState.Red, 'mock-fast', 'Red unchanged')
   assert.equal(finalState.Judge, 'mock-fast', 'Judge unchanged')
