@@ -4519,14 +4519,14 @@ test('courtroom fallback warning keeps courtroom role names', async ({ page }) =
   const meetingId = await createMeetingViaNewCase(page, topic, {
     modeId: 'courtroom',
     caseType: 'criminal',
-    modelAssignments: { Defense: 'mock-broken' },
+    modelAssignments: { Defense: 'mock-broken', Prosecutor: 'mock-broken' },
   })
 
   await page.route(new RegExp(`/meetings/${meetingId}$`), async (route) => {
     const response = await route.fetch()
     const meeting = await response.json()
     meeting.participants = meeting.participants.map((participant: Record<string, unknown>) =>
-      participant.role_id === 'Defense'
+      participant.role_id === 'Defense' || participant.role_id === 'Prosecutor'
         ? {
             ...participant,
             model_assignment_warning:
@@ -4544,10 +4544,13 @@ test('courtroom fallback warning keeps courtroom role names', async ({ page }) =
   const warning = page.getByTestId('assignment-fallback-warning')
   await expect(warning).toBeVisible()
   await expect(warning).toContainText('辯護人：模型「Custom OpenAI-compatible · mock-broken」已失效，目前使用「Mock · mock-fast」。')
+  await expect(warning).toContainText('檢察官：模型「Custom OpenAI-compatible · mock-broken」已失效，目前使用「Mock · mock-fast」。')
   await expect(warning).not.toContainText('藍軍')
   await expect(warning).not.toContainText('紅軍')
   await expect(warning).not.toContainText('Blue')
   await expect(warning).not.toContainText('Red')
+  await expect(warning).not.toContainText('Defense')
+  await expect(warning).not.toContainText('Prosecutor')
 })
 
 test('empty model registry fallback warning is localised in the conversation workspace', async ({
