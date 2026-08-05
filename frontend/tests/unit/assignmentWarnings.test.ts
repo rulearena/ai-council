@@ -58,3 +58,11 @@ test('assignment warning projection falls back to the participant role id', () =
     models: [],
   }), ['UnlistedRole：unrecognized warning'])
 })
+
+test('assignment warning projection reports an unassigned model without a fallback', () => {
+  assert.deepEqual(projectAssignmentWarnings({
+    participants: [{ role_id: 'Advisor', model_assignment_warning: 'No saved model assignment was found.' }],
+    roles,
+    models,
+  }), ['顧問：未指派模型。'])
+})

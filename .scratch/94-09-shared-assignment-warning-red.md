@@ -12,3 +12,8 @@
 - Command: `node --experimental-strip-types --test tests/unit/assignmentWarnings.test.ts`
 - Result: **1 failed, 1 passed**; the expected Chinese warning differed from the raw English warning.
 - The mutation was restored before the final green commit.
+
+## Reviewer follow-up contract
+
+- The existing `missing-model` case intentionally remains as an unknown model-id fallback and must render `已自動使用「missing-model」`.
+- Added a separate no-fallback case: `No saved model assignment was found.` must render `顧問：未指派模型。`.
