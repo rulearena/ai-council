@@ -47,20 +47,27 @@ const composing = ref(false)
 // A pointer click can end composition before its click event is delivered. Remember
 // the state at pointerdown so that click cannot send or clear that still-visible draft.
 const sendClickStartedDuringComposition = ref(false)
+const sendPointerId = ref<number | null>(null)
+
+function resetSendPointerGuard() {
+  sendClickStartedDuringComposition.value = false
+  sendPointerId.value = null
+}
 
 function onSendPointerDown(event: PointerEvent) {
   // Every pointerdown starts a new possible click. Reassigning also clears a stale
   // guard when a previous pointer ended without click or the button was disabled.
   sendClickStartedDuringComposition.value = composing.value
+  sendPointerId.value = event.pointerId
   if (!composing.value) return
   // Keep the textarea focused where the browser can, avoiding a blur-driven IME
   // transition before the guarded click is handled.
   event.preventDefault()
 }
 
-function onSendPointerCancel() {
+function onSendPointerCancel(event: PointerEvent) {
   // A cancelled pointer has no click event that could consume this one-shot guard.
-  sendClickStartedDuringComposition.value = false
+  if (sendPointerId.value === event.pointerId) resetSendPointerGuard()
 }
 
 const mentionMenu = ref<InstanceType<typeof MentionAutocomplete> | null>(null)
@@ -113,10 +120,16 @@ async function handleSend() {
   }
 }
 
-function onSendClick() {
-  const startedDuringComposition = sendClickStartedDuringComposition.value
-  sendClickStartedDuringComposition.value = false
-  if (startedDuringComposition) return
+function onSendClick(event: MouseEvent) {
+  const pointerEvent = event as MouseEvent & { pointerId?: number; pointerType?: string }
+  const pointerClickId =
+    pointerEvent.detail > 0 && pointerEvent.pointerType && pointerEvent.pointerId !== undefined
+      ? pointerEvent.pointerId
+      : null
+  const isGuardedPointerClick =
+    sendClickStartedDuringComposition.value && pointerClickId === sendPointerId.value
+  resetSendPointerGuard()
+  if (isGuardedPointerClick) return
   void handleSend()
 }
 </script>

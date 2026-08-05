@@ -878,7 +878,12 @@ test('13.23b clicking send after compositionend caused by the click keeps the co
   // end composition before the button's click handler runs. The original click must
   // still be ignored and the complete draft must remain available for a later click.
   await sendButton.evaluate((el: HTMLButtonElement) => {
-    el.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }))
+    el.dispatchEvent(new PointerEvent('pointerdown', {
+      bubbles: true,
+      isPrimary: true,
+      pointerId: 7,
+      pointerType: 'mouse',
+    }))
     el.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }))
   })
   await input.evaluate((el: HTMLTextAreaElement) => {
@@ -888,7 +893,13 @@ test('13.23b clicking send after compositionend caused by the click keeps the co
   // The pointerdown above is the start of this same click. Dispatch only its
   // click phase here so the test does not introduce a second pointer gesture.
   await sendButton.evaluate((el: HTMLButtonElement) => {
-    el.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    el.dispatchEvent(new PointerEvent('click', {
+      bubbles: true,
+      detail: 1,
+      isPrimary: true,
+      pointerId: 7,
+      pointerType: 'mouse',
+    }))
   })
 
   await expect(page.getByTestId('workspace-message')).toHaveCount(0)
@@ -920,8 +931,18 @@ test('13.23c a cancelled composing click does not block the next independent cli
   // A cancelled pointer never delivers click. Once composition ends, a later
   // independent click must not inherit the cancelled click's composition guard.
   await sendButton.evaluate((el: HTMLButtonElement) => {
-    el.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }))
-    el.dispatchEvent(new PointerEvent('pointercancel', { bubbles: true }))
+    el.dispatchEvent(new PointerEvent('pointerdown', {
+      bubbles: true,
+      isPrimary: true,
+      pointerId: 8,
+      pointerType: 'mouse',
+    }))
+    el.dispatchEvent(new PointerEvent('pointercancel', {
+      bubbles: true,
+      isPrimary: true,
+      pointerId: 8,
+      pointerType: 'mouse',
+    }))
   })
   await input.evaluate((el: HTMLTextAreaElement) => {
     el.dispatchEvent(new CompositionEvent('compositionend', { bubbles: true }))
@@ -954,7 +975,12 @@ test('13.23d a disabled composing click does not block keyboard activation later
   // a later keyboard activation, which has no pointerdown to reset it.
   await sendButton.evaluate((el: HTMLButtonElement) => {
     el.focus()
-    el.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }))
+    el.dispatchEvent(new PointerEvent('pointerdown', {
+      bubbles: true,
+      isPrimary: true,
+      pointerId: 9,
+      pointerType: 'mouse',
+    }))
     el.disabled = true
   })
   await expect(sendButton).toBeDisabled()
