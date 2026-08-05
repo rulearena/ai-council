@@ -858,6 +858,45 @@ test('13.23a clicking send during IME composition preserves the draft until comp
   await expect(input).toHaveValue('')
 })
 
+test('13.23b clicking send after compositionend caused by the click keeps the composing draft', async ({ page }) => {
+  await page.goto('/')
+  const title = `E2E chatroom ime native click order ${Date.now()}`
+  await createChatroomMeeting(page, title, { modelAssignments: defaultModels })
+
+  const input = page.getByTestId('chat-message-input')
+  const sendButton = page.getByTestId('send-chat-message-button')
+  const feed = page.getByTestId('workspace-message-feed')
+
+  await input.fill('hello')
+  await input.evaluate((el: HTMLTextAreaElement) => {
+    el.dispatchEvent(new CompositionEvent('compositionstart', { bubbles: true }))
+    el.value = 'hello 你好'
+    el.dispatchEvent(new Event('input', { bubbles: true }))
+  })
+
+  // A real click can start while composition is active, then blur the textarea and
+  // end composition before the button's click handler runs. The original click must
+  // still be ignored and the complete draft must remain available for a later click.
+  await sendButton.evaluate((el: HTMLButtonElement) => {
+    el.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }))
+    el.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }))
+  })
+  await input.evaluate((el: HTMLTextAreaElement) => {
+    el.dispatchEvent(new CompositionEvent('compositionend', { bubbles: true }))
+    el.dispatchEvent(new FocusEvent('blur', { bubbles: true }))
+  })
+  await sendButton.click()
+
+  await expect(page.getByTestId('workspace-message')).toHaveCount(0)
+  await expect(feed).not.toContainText('hello 你好')
+  await expect(input).toHaveValue('hello 你好')
+
+  await sendButton.click()
+  await expect(feed).toContainText('hello 你好')
+  await expect(page.getByTestId('workspace-message')).toHaveCount(1)
+  await expect(input).toHaveValue('')
+})
+
 // ── 13.24 ────────────────────────────────────────────────────────────────────
 
 test('13.24 the mention menu is fully operable from the keyboard', async ({ page }) => {
