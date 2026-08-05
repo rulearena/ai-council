@@ -4673,23 +4673,39 @@ test('narrow role rail keeps fallback and assignment warnings fully visible', as
   await assertWarningFitsViewport('assignment-update-error')
 })
 
-test('keyboard Enter on info button does not change role filter', async ({ page }) => {
+test('keyboard info activation does not change role filter', async ({ page }) => {
   await page.goto('/')
   const topic = `E2E keyboard info ${Date.now()}`
   await createMeetingViaNewCase(page, topic)
   await expect(page.getByTestId('conversation-workspace')).toBeVisible()
 
   // Click a role seat to set filter
-  await page.getByTestId('role-seat-blue').click()
+  const blueSeat = page.getByTestId('role-seat-blue')
+  await blueSeat.click()
   await expect(page.getByTestId('workspace-clear-role-filter')).toBeVisible()
+  await expect(blueSeat).toHaveAttribute('aria-pressed', 'true')
 
   // Tab to the info button inside the seat and press Enter
-  const infoBtn = page.getByTestId('role-seat-blue-info')
-  await infoBtn.focus()
-  await infoBtn.press('Enter')
+  const blueInfoBtn = page.getByTestId('role-seat-blue-info')
+  await blueInfoBtn.focus()
+  await blueInfoBtn.press('Enter')
 
   // The role filter should still be active (info button opens details, not filter)
   await expect(page.getByTestId('workspace-clear-role-filter')).toBeVisible()
+  await expect(blueSeat).toHaveAttribute('aria-pressed', 'true')
+  await expect(page.getByTestId('role-drawer')).toBeVisible()
+  await page.getByTestId('role-drawer-close-button').click()
+
+  // Chairman's ℹ button must have the same non-filtering behavior when activated
+  // with Space, which is the keyboard path not covered by the original regression.
+  const chairmanSeat = page.getByTestId('role-seat-chairman')
+  const chairmanInfoBtn = page.getByTestId('role-seat-chairman-info')
+  await chairmanInfoBtn.focus()
+  await chairmanInfoBtn.press('Space')
+  await expect(page.getByTestId('workspace-clear-role-filter')).toBeVisible()
+  await expect(blueSeat).toHaveAttribute('aria-pressed', 'true')
+  await expect(chairmanSeat).toHaveAttribute('aria-pressed', 'false')
+  await expect(page.getByTestId('role-drawer')).toBeVisible()
 })
 
 test('courtroom materials wording localises to 證物 and 案卷', async ({ page }) => {
