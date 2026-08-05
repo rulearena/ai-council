@@ -2413,14 +2413,33 @@ test('court hearing seats match the conversation workspace and its scene enlarge
     await expect(clearFilter).not.toBeVisible()
   }
 
-  // The ℹ control opens the role detail and leaves the filter alone.
-  for (const seat of ['role-seat-chairman-info', 'role-seat-defense-info']) {
-    await page.getByTestId(seat).click()
-    await expect(page.getByTestId('role-drawer')).toBeVisible()
-    await page.getByTestId('role-drawer-close-button').click()
-    await expect(page.getByTestId('role-drawer')).not.toBeVisible()
-    await expect(clearFilter).not.toBeVisible()
-  }
+  // Establish a non-default filter first. The courtroom ℹ controls must preserve it
+  // through the real keyboard activation paths for both a normal role and Chairman.
+  const defenseSeat = page.getByTestId('role-seat-defense')
+  const chairmanSeat = page.getByTestId('role-seat-chairman')
+  await defenseSeat.click()
+  await expect(clearFilter).toBeVisible()
+  await expect(defenseSeat).toHaveAttribute('aria-pressed', 'true')
+  await expect(chairmanSeat).toHaveAttribute('aria-pressed', 'false')
+
+  const defenseInfo = page.getByTestId('role-seat-defense-info')
+  await defenseInfo.focus()
+  await defenseInfo.press('Enter')
+  await expect(clearFilter).toBeVisible()
+  await expect(defenseSeat).toHaveAttribute('aria-pressed', 'true')
+  await expect(chairmanSeat).toHaveAttribute('aria-pressed', 'false')
+  await expect(page.getByTestId('role-drawer')).toBeVisible()
+  await page.getByTestId('role-drawer-close-button').click()
+
+  const chairmanInfo = page.getByTestId('role-seat-chairman-info')
+  await chairmanInfo.focus()
+  await chairmanInfo.press('Space')
+  await expect(clearFilter).toBeVisible()
+  await expect(defenseSeat).toHaveAttribute('aria-pressed', 'true')
+  await expect(chairmanSeat).toHaveAttribute('aria-pressed', 'false')
+  await expect(page.getByTestId('role-drawer')).toBeVisible()
+  await page.getByTestId('role-drawer-close-button').click()
+  await expect(page.getByTestId('role-drawer')).not.toBeVisible()
 
   const sceneDetails = page.getByTestId('workspace-scene-details')
   await sceneDetails.locator('summary').click()
