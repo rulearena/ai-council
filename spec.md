@@ -600,11 +600,11 @@ config/models.yaml.example
 
 **#96 Closeout（2026-08-04）**：Human Owner 明確確認「#96 驗收通過」。狀態更新為 **`accepted / done`**；exact implementation merge 為 `cee96c1`。驗收證據：`frontend/tests/e2e/chatroom.spec.ts` 聚焦 E2E **12/12**、`frontend npm run test:unit` **162/162**、`npm run build` 通過。Final contract 包含原始附件能力、round-6 LINE 式直接檔案選取／chatroom text mirror／pending-impact projection suppression，以及 round-7 全模式刪除、append-only tombstone、blob/download/quota/evidence removal、已刪除不可互動氣泡與 stale materials reload。已知非阻塞 Nit 保留：`AttachmentBubble.vue:247` 的 undefined `--border` hover fallback。未驗證範圍：本次 acceptance 未重跑 full backend suite 與 full Chromium E2E；既有 post-merge evidence 為 backend 743 passed（含一個 pre-existing timing flake）、frontend unit 149、chatroom E2E 40、relay binary-delete control-flow 1 passed。
 
-### #94⑭ implementation／Gate B／等待 Human Owner 驗收（2026-08-05）
+### #94⑭ closeout／accepted / done（2026-08-05）
 
 本項修正 `MentionAutocomplete.vue` 的 `activeIndex` 未隨 `menuItems` 收窄而收斂的問題：候選人／參與者清單變短時，公開的 `aria-activedescendant` 必須持續指向目前存在的 option；鍵盤選取、滑鼠 hover、`aria-selected` 與 IME／非聊天室行為維持原契約。Executor red／green chain 為 `9430e8e` → `f90ecb3`，其中 red test 以同一 meeting 的參與者縮減重現 base 會留下不存在 option id 的失敗。
 
-Implementation Gate B 獨立 Reviewer reviewed exact identity `702d60f8862ef1781472f13964970f1f9477dd31..f90ecb35ae0539395a287ee5c0f0725afecccc76` 並判定 `pass`，無新 findings。變更檔案為 `frontend/src/components/MentionAutocomplete.vue` 與 `frontend/tests/e2e/chatroom.spec.ts`；main merge commit 為 `7de2eb2`。驗證：Executor focused Chromium **3/3**，post-merge main focused Chromium **4/4**（13.10／13.10a／13.24／13.25）、frontend unit **162/162**、`npm run build` 通過、`git diff --check` 通過。Reviewer 因其 runtime backend path 不可用未重跑 focused Chromium，但已審查 red evidence 與測試契約；未驗證 full frontend E2E、full backend suite、實體輔助科技與真人中文輸入法。本項為小型 `.scratch` scoped fix，無 backend／API／event schema 變更，沒有建立 OpenSpec change；目前狀態為 **`implemented / awaiting acceptance`**。
+Implementation Gate B 獨立 Reviewer reviewed exact identity `702d60f8862ef1781472f13964970f1f9477dd31..f90ecb35ae0539395a287ee5c0f0725afecccc76` 並判定 `pass`，無新 findings。變更檔案為 `frontend/src/components/MentionAutocomplete.vue` 與 `frontend/tests/e2e/chatroom.spec.ts`；main merge commit 為 `7de2eb2`。驗證：Executor focused Chromium **3/3**，post-merge main focused Chromium **4/4**（13.10／13.10a／13.24／13.25）、frontend unit **162/162**、`npm run build` 通過、`git diff --check` 通過。Reviewer 因其 runtime backend path 不可用未重跑 focused Chromium，但已審查 red evidence 與測試契約；未驗證 full frontend E2E、full backend suite、實體輔助科技與真人中文輸入法。本項為小型 `.scratch` scoped fix，無 backend／API／event schema 變更，沒有建立 OpenSpec change。Human Owner 於 2026-08-05 確認「驗收 ok」；目前狀態為 **`accepted / done`**。
 
 ### #94⑮ implementation／Gate B／等待 Human Owner 驗收（2026-08-05）
 
