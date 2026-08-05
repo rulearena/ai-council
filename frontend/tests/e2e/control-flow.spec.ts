@@ -4530,6 +4530,64 @@ test('fallback warning shows role-specific Chinese text for expired model', asyn
   await expect(warning).toContainText(deletedModelId)
 })
 
+test('empty model registry fallback warning is localised in the conversation workspace', async ({
+  page,
+}) => {
+  await page.goto('/')
+  const topic = `E2E no configured models conversation ${Date.now()}`
+  const meetingId = await createMeetingViaNewCase(page, topic)
+
+  await page.route(new RegExp(`/meetings/${meetingId}$`), async (route) => {
+    const response = await route.fetch()
+    const meeting = await response.json()
+    meeting.participants = meeting.participants.map((participant: Record<string, unknown>) =>
+      participant.role_id === 'Blue'
+        ? { ...participant, model_assignment_warning: 'no models are configured' }
+        : participant,
+    )
+    await route.fulfill({ response, json: meeting })
+  })
+
+  await page.reload()
+  await page.getByTestId('past-topics-button').click()
+  await page.getByTestId('meeting-list-item').filter({ hasText: topic }).locator('.meeting-item').click()
+
+  const warning = page.getByTestId('assignment-fallback-warning')
+  await expect(warning).toBeVisible()
+  await expect(warning).toContainText('模型登錄表目前沒有可用模型')
+  await expect(warning).not.toContainText('no models are configured')
+})
+
+test('empty model registry fallback warning is localised in the courtroom workspace', async ({
+  page,
+}) => {
+  await page.goto('/')
+  const topic = `E2E no configured models courtroom ${Date.now()}`
+  const meetingId = await createMeetingViaNewCase(page, topic, {
+    modeId: 'courtroom',
+  })
+
+  await page.route(new RegExp(`/meetings/${meetingId}$`), async (route) => {
+    const response = await route.fetch()
+    const meeting = await response.json()
+    meeting.participants = meeting.participants.map((participant: Record<string, unknown>) =>
+      participant.role_id === 'Defense'
+        ? { ...participant, model_assignment_warning: 'no models are configured' }
+        : participant,
+    )
+    await route.fulfill({ response, json: meeting })
+  })
+
+  await page.reload()
+  await page.getByTestId('past-topics-button').click()
+  await page.getByTestId('meeting-list-item').filter({ hasText: topic }).locator('.meeting-item').click()
+
+  const warning = page.getByTestId('assignment-fallback-warning')
+  await expect(warning).toBeVisible()
+  await expect(warning).toContainText('模型登錄表目前沒有可用模型')
+  await expect(warning).not.toContainText('no models are configured')
+})
+
 test('narrow role rail keeps fallback and assignment warnings fully visible', async ({
   page,
 }) => {
