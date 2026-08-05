@@ -75,12 +75,28 @@ Backlog 90「會議工作區與時間序對話介面」已實作、完成法院�
 
 **目前狀態（2026-08-05）**：
 
-1. backlog #94 尚有 Minor 項目 ②③④⑤⑥⑦⑨⑩；第 ① 項是流程規則衝突，仍待 Human Owner 決定，非程式碼工作。#94⑭ 已由 Human Owner 於 2026-08-05 驗收通過並完成 closeout；#94⑮ 的最新修正經實測仍有「候選字尚未確認時會送出」的已知殘差，但已裁定不阻塞後續，維持 deferred known residual，未標為 `accepted / done`。
+1. backlog #94 的 Minor 項目 ②③④⑤⑥⑦⑨⑩ 已完成 implementation、Gate B 與 main merge，等待 Human Owner acceptance；第 ① 項是流程規則衝突，仍待 Human Owner 決定，非程式碼工作。#94⑭ 已由 Human Owner 於 2026-08-05 驗收通過並完成 closeout；#94⑮ 的最新修正經實測仍有「候選字尚未確認時會送出」的已知殘差，但已裁定不阻塞後續，維持 deferred known residual，未標為 `accepted / done`。
 2. backlog #94⑭ merge `7de2eb2` 狀態為 `accepted / done`；其驗收確認提及選單候選清單縮減後，`aria-activedescendant` 仍指向目前存在的 option，且鍵盤選取、滑鼠 hover 與既有 IME 行為不回歸。
-3. 下一項由 Human Owner 從剩餘 backlog 選擇；#94⑮ 的已知殘差維持非阻塞 deferred 狀態。
-4. #95、#96、#98、#99、#100、#101 均已由 Human Owner 驗收並完成 closeout，狀態為 `accepted / done`，不再列為待決工作。
-5. 法院場景「點擊放大」可發現性與先前遺失的「行銷」會議仍是待決事項；兩者目前都不是本次程式碼工作範圍。
-6. 若訂閱制 CLI 額度仍不可用，UI 驗證需先切換至 `mock-fast`／`mock-slow`。
+3. 本批 #94 implementation 的最後 main merge 為 `5e3a756`；各項 exact Gate B identity、red／green chain 與驗證證據已登錄 `spec.md` §15，尚未標為 `accepted / done`。
+4. 下一步是 Human Owner 依下方驗收清單驗證本批；#94⑮ 的已知殘差維持非阻塞 deferred 狀態。
+5. #95、#96、#98、#99、#100、#101 均已由 Human Owner 驗收並完成 closeout，狀態為 `accepted / done`，不再列為待決工作。
+6. 法院場景「點擊放大」可發現性與先前遺失的「行銷」會議仍是待決事項；兩者目前都不是本次程式碼工作範圍。
+7. 若訂閱制 CLI 額度仍不可用，UI 驗證需先切換至 `mock-fast`／`mock-slow`。
+
+### #94②③④⑤⑥⑦⑨⑩ implementation batch（2026-08-05）
+
+- #94⑤／④／⑥／⑦／② 已分別 merge `e86a2fc`／`5f25b71`／`e38a06a`／`cbc21e1`／`ff11542`；各項 Gate B 均 `pass`。
+- #94③ merge `4811fc1`，一般工作區與 courtroom 的 info keyboard focused Chromium **2/2** 通過；第一次失敗是 frontend 未設定 `VITE_API_BASE_URL` 的 runtime 問題，修正啟動設定後重跑通過。
+- #94⑨ merge `349a7c9`，新增共用 `frontend/src/assignmentWarnings.ts` 與 unit，final frontend unit **165/165**、build 綠。
+- #94⑩ merge `5e3a756`，`mergeServerParticipantModels` 更名並收斂為 participant-only `replaceServerParticipantModels`，final frontend unit **165/165**、build 綠。
+- 本批未改 backend/API/event schema；所有 worktree、Executor／Reviewer branches 與本輪 runtime 已清理。保留既有 user-owned untracked `.scratch/96-chatroom-attachment-fixes-round7.md` 與 `CONTEXT.md`。
+
+**Human Owner 驗收入口（本批）**：
+
+1. 一般工作區與 courtroom：確認 warning 在窄視窗不被裁切、空模型顯示繁中、assignment 儲存失敗顯示繁中、執行中模型 select 顯示鎖定原因。
+2. Courtroom：確認模型失效 warning 顯示法院角色名稱；角色資訊 ℹ 以 Enter／Space 開啟 drawer 且不改變既有角色篩選。
+3. 開發驗證：確認 unit **165/165**、build 通過；#94⑨ warning projection 與 #94⑩ replacement helper 的 unit contract 維持綠。
+4. 已知非阻塞範圍：#94⑮ 真人中文輸入法候選字未確認時仍可能送出，維持 deferred residual，不列入本批完成宣稱。
 
 **歷史快照（2026-07-31；僅保留作為追蹤紀錄，不代表目前狀態）**：
 

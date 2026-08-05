@@ -612,6 +612,21 @@ Human Owner 已核准先處理聊天室 IME 點擊送出遺失草稿問題。初
 
 第三輪 Gate B 獨立 Reviewer reviewed exact identity `9d8fcf9eefa683a724bde590e22d171cc0b47171..f5d75fe7ee26b89dd65e2269dc37660ad6e8ec13` 並判定 `pass`，無新 findings；前兩輪發現的 pointercancel 與 disabled/no-click stale guard 已由後續 red／green commits 修正。變更檔案為 `frontend/src/components/ChatroomComposer.vue` 與 `frontend/tests/e2e/chatroom.spec.ts`；main merge commit 為 `77caeb6`。驗證：post-merge focused Chromium 13.23／13.23a／13.23b／13.23c／13.23d／13.24／13.25 **7/7**、frontend unit **162/162**、`npm run build` 通過、`git diff --check` 通過；Reviewer 另確認真實 Chromium mouse／emulated touch 的 pointer identity 與 keyboard／programmatic click 邊界。未驗證 full frontend E2E、full backend suite、實體行動裝置／輔助科技與真人中文輸入法操作；backend 未修改。本項為小型 `.scratch` scoped fix，沒有建立 OpenSpec change；目前狀態為 **`implemented / awaiting acceptance`**。
 
+### #94②③④⑤⑥⑦⑨⑩ implementation／Gate B／等待 Human Owner 驗收（2026-08-05）
+
+本批只處理 backlog 94 的前端測試防護、文案／呈現修正與純 helper 重構；不改 backend API、event schema 或會議執行語意。各項均先由 Executor 以 TDD 產生 red evidence，再由獨立 Reviewer 審查 exact implementation identity；目前統一標記為 **`implemented / awaiting acceptance`**，尚未宣稱 Human Owner 驗收。
+
+- **#94⑤ 窄視窗 warning 裁切**：red `f49600b` → green `2425059`；Reviewer Bacon 審查 `24497f1..2425059`，`pass`；main merge `e86a2fc`。post-merge focused Chromium **1/1**、frontend unit **162/162**、build／diff check 綠。
+- **#94④ 空模型 warning 中文化**：red `b1f7cb1` → green `7a27bcb`；Reviewer Galileo 審查 `e86a2fc..7a27bcb`，`pass`；main merge `5f25b71`。post-merge focused Chromium **3/3**、frontend unit **162/162**、build／diff check 綠。
+- **#94⑥ assignment update failure 中文化**：red `169babb` → green `b836c41`；Reviewer Cicero 審查 `5f25b71..b836c41`，`pass`；main merge `e38a06a`。post-merge focused Chromium **1/1**、frontend unit **162/162**、build／diff check 綠。
+- **#94⑦ disabled model select 原因提示**：最終 green `e25e0f9`；Reviewer Linnaeus 審查 `e38a06a..e25e0f9`，`pass`；main merge `cbc21e1`。post-merge focused Chromium **1/1**、courtroom 回歸 **1/1**、frontend unit **162/162**、build／diff check 綠。
+- **#94② courtroom warning 專用 role-name coverage**：red `a7c32c4` → green `9ac0f95`；Reviewer Lagrange 審查 `cbc21e1..9ac0f95`，`pass`；main merge `ff11542`。post-merge courtroom focused **2/2**、frontend unit **162/162**、build／diff check 綠。
+- **#94③ Chairman／Space info button coverage**：coverage `0036b70`，red `8219ae0` → green `6cea84f`；Reviewer Raman 審查 `ff11542..6cea84f`，`pass`；main merge `4811fc1`。一般工作區與 courtroom focused Chromium **2/2**、frontend unit **162/162**、build／diff check 綠，未改產品程式。
+- **#94⑨ 共用 assignment warning projection**：初始 red `7d043de` → green `b5bc63e`，follow-up red `5d8c86a` → final green `238b905`；Reviewer Nash 審查 `4811fc1..238b905`，`pass`；main merge `349a7c9`。focused unit **3/3**、frontend unit **165/165**、build／diff check 綠；兩元件共用單一純 helper，並覆蓋真正無 fallback 的分支。
+- **#94⑩ server participant model replacement 命名與 API**：rename green `23088ff`，follow-up red `5a43955` → final green `14af025`；Reviewer Mendel 審查 `349a7c9..14af025`，`pass`；main merge `5e3a756`。`replaceServerParticipantModels` 只接收 server participants，frontend unit **165/165**、focused helper **16/16**、build／diff check 綠，舊名稱無 live source 引用。
+
+本批主線目前 HEAD 為 `5e3a756`。未驗證範圍：除 #94③ focused Chromium 外，本批純前端 helper／unit／呈現修正未重跑完整 Chromium E2E、完整 backend suite、實體輔助科技測試；此不影響上述 Gate B verdict，但需由 Human Owner 依各項契約驗收。
+
 ## 16. 會議模式系統（Mode System）設計
 
 > 狀態：設計定稿（2026-07-12），分四個切片實作。切片 A 為前端先行，切片 B/C/D 為後端（Codex 依本節實作）。
