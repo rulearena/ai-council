@@ -825,6 +825,39 @@ test('13.23 confirming an IME candidate with Enter does not send the half-typed 
   await expect(input).toHaveValue('')
 })
 
+test('13.23a clicking send during IME composition preserves the draft until composition ends', async ({ page }) => {
+  await page.goto('/')
+  const title = `E2E chatroom ime click ${Date.now()}`
+  await createChatroomMeeting(page, title, { modelAssignments: defaultModels })
+
+  const input = page.getByTestId('chat-message-input')
+  const sendButton = page.getByTestId('send-chat-message-button')
+  const feed = page.getByTestId('workspace-message-feed')
+
+  await input.fill('hello')
+  await input.evaluate((el: HTMLTextAreaElement) => {
+    el.dispatchEvent(new CompositionEvent('compositionstart', { bubbles: true }))
+    el.value = 'hello 你好'
+    el.dispatchEvent(new Event('input', { bubbles: true }))
+  })
+
+  // Clicking while the candidate is still being composed must not send the
+  // half-typed line, even though the click may blur the textarea first.
+  await sendButton.click()
+  await expect(page.getByTestId('workspace-message')).toHaveCount(0)
+  await expect(feed).not.toContainText('hello 你好')
+  await expect(input).toHaveValue('hello 你好')
+
+  // Once composition ends, the same complete draft can be sent exactly once.
+  await input.evaluate((el: HTMLTextAreaElement) => {
+    el.dispatchEvent(new CompositionEvent('compositionend', { bubbles: true }))
+  })
+  await sendButton.click()
+  await expect(feed).toContainText('hello 你好')
+  await expect(page.getByTestId('workspace-message')).toHaveCount(1)
+  await expect(input).toHaveValue('')
+})
+
 // ── 13.24 ────────────────────────────────────────────────────────────────────
 
 test('13.24 the mention menu is fully operable from the keyboard', async ({ page }) => {

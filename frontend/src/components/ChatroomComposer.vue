@@ -40,9 +40,9 @@ function onAttachmentSelected(event: Event) {
 // While an IME is composing, Enter belongs to the input method — it confirms the
 // candidate. Sending on it fired before the composed text was committed, so the
 // Chinese was lost and only the text typed before it went out. `isComposing` alone
-// is not reliable across IMEs, so the composition events are tracked as well. Blur
-// clears the flag too: if compositionend ever failed to fire, a stuck flag would leave
-// Enter unable to send at all, which is worse than the bug being fixed here.
+// is not reliable across IMEs, so the composition events are tracked as well. Keep the
+// flag through blur: clicking Send blurs the textarea before the button click, but
+// composition is still active and must block the send.
 const composing = ref(false)
 
 const mentionMenu = ref<InstanceType<typeof MentionAutocomplete> | null>(null)
@@ -71,7 +71,7 @@ const canSend = computed(() => {
 })
 
 async function handleSend() {
-  if (!canSend.value) return
+  if (composing.value || !canSend.value) return
   sending.value = true
   try {
     const boundary = {
@@ -150,7 +150,6 @@ async function handleSend() {
           :aria-activedescendant="mentionActiveOptionId"
           @compositionstart="composing = true"
           @compositionend="composing = false"
-          @blur="composing = false"
           @keydown="onTextareaKeydown"
         />
       </div>
