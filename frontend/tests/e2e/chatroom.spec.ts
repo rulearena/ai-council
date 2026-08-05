@@ -858,6 +858,149 @@ test('13.23a clicking send during IME composition preserves the draft until comp
   await expect(input).toHaveValue('')
 })
 
+test('13.23b clicking send after compositionend caused by the click keeps the composing draft', async ({ page }) => {
+  await page.goto('/')
+  const title = `E2E chatroom ime native click order ${Date.now()}`
+  await createChatroomMeeting(page, title, { modelAssignments: defaultModels })
+
+  const input = page.getByTestId('chat-message-input')
+  const sendButton = page.getByTestId('send-chat-message-button')
+  const feed = page.getByTestId('workspace-message-feed')
+
+  await input.fill('hello')
+  await input.evaluate((el: HTMLTextAreaElement) => {
+    el.dispatchEvent(new CompositionEvent('compositionstart', { bubbles: true }))
+    el.value = 'hello 你好'
+    el.dispatchEvent(new Event('input', { bubbles: true }))
+  })
+
+  // A real click can start while composition is active, then blur the textarea and
+  // end composition before the button's click handler runs. The original click must
+  // still be ignored and the complete draft must remain available for a later click.
+  await sendButton.evaluate((el: HTMLButtonElement) => {
+    el.dispatchEvent(new PointerEvent('pointerdown', {
+      bubbles: true,
+      isPrimary: true,
+      pointerId: 7,
+      pointerType: 'mouse',
+    }))
+    el.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }))
+  })
+  await input.evaluate((el: HTMLTextAreaElement) => {
+    el.dispatchEvent(new CompositionEvent('compositionend', { bubbles: true }))
+    el.dispatchEvent(new FocusEvent('blur', { bubbles: true }))
+  })
+  // The pointerdown above is the start of this same click. Dispatch only its
+  // click phase here so the test does not introduce a second pointer gesture.
+  await sendButton.evaluate((el: HTMLButtonElement) => {
+    el.dispatchEvent(new PointerEvent('click', {
+      bubbles: true,
+      detail: 1,
+      isPrimary: true,
+      pointerId: 7,
+      pointerType: 'mouse',
+    }))
+  })
+
+  await expect(page.getByTestId('workspace-message')).toHaveCount(0)
+  await expect(feed).not.toContainText('hello 你好')
+  await expect(input).toHaveValue('hello 你好')
+
+  await sendButton.click()
+  await expect(feed).toContainText('hello 你好')
+  await expect(page.getByTestId('workspace-message')).toHaveCount(1)
+  await expect(input).toHaveValue('')
+})
+
+test('13.23c a cancelled composing click does not block the next independent click', async ({ page }) => {
+  await page.goto('/')
+  const title = `E2E chatroom ime cancelled click ${Date.now()}`
+  await createChatroomMeeting(page, title, { modelAssignments: defaultModels })
+
+  const input = page.getByTestId('chat-message-input')
+  const sendButton = page.getByTestId('send-chat-message-button')
+  const feed = page.getByTestId('workspace-message-feed')
+
+  await input.fill('hello')
+  await input.evaluate((el: HTMLTextAreaElement) => {
+    el.dispatchEvent(new CompositionEvent('compositionstart', { bubbles: true }))
+    el.value = 'hello 你好'
+    el.dispatchEvent(new Event('input', { bubbles: true }))
+  })
+
+  // A cancelled pointer never delivers click. Once composition ends, a later
+  // independent click must not inherit the cancelled click's composition guard.
+  await sendButton.evaluate((el: HTMLButtonElement) => {
+    el.dispatchEvent(new PointerEvent('pointerdown', {
+      bubbles: true,
+      isPrimary: true,
+      pointerId: 8,
+      pointerType: 'mouse',
+    }))
+    el.dispatchEvent(new PointerEvent('pointercancel', {
+      bubbles: true,
+      isPrimary: true,
+      pointerId: 8,
+      pointerType: 'mouse',
+    }))
+  })
+  await input.evaluate((el: HTMLTextAreaElement) => {
+    el.dispatchEvent(new CompositionEvent('compositionend', { bubbles: true }))
+  })
+  await sendButton.click()
+
+  await expect(feed).toContainText('hello 你好')
+  await expect(page.getByTestId('workspace-message')).toHaveCount(1)
+  await expect(input).toHaveValue('')
+})
+
+test('13.23d a disabled composing click does not block keyboard activation later', async ({ page }) => {
+  await page.goto('/')
+  const title = `E2E chatroom ime disabled click ${Date.now()}`
+  await createChatroomMeeting(page, title, { modelAssignments: defaultModels })
+
+  const input = page.getByTestId('chat-message-input')
+  const sendButton = page.getByTestId('send-chat-message-button')
+  const feed = page.getByTestId('workspace-message-feed')
+
+  await input.fill('hello')
+  await input.evaluate((el: HTMLTextAreaElement) => {
+    el.dispatchEvent(new CompositionEvent('compositionstart', { bubbles: true }))
+    el.value = 'hello 你好'
+    el.dispatchEvent(new Event('input', { bubbles: true }))
+  })
+
+  // The pointer starts during composition, but the activation is disabled before
+  // it can produce click. Re-enabling the same button must not leak that guard into
+  // a later keyboard activation, which has no pointerdown to reset it.
+  await sendButton.evaluate((el: HTMLButtonElement) => {
+    el.focus()
+    el.dispatchEvent(new PointerEvent('pointerdown', {
+      bubbles: true,
+      isPrimary: true,
+      pointerId: 9,
+      pointerType: 'mouse',
+    }))
+    el.disabled = true
+  })
+  await expect(sendButton).toBeDisabled()
+  await input.evaluate((el: HTMLTextAreaElement) => {
+    el.dispatchEvent(new CompositionEvent('compositionend', { bubbles: true }))
+  })
+  await sendButton.evaluate((el: HTMLButtonElement) => {
+    el.disabled = false
+  })
+  await expect(sendButton).toBeEnabled()
+
+  // Enter on the focused button creates a keyboard click without pointerdown.
+  await sendButton.focus()
+  await sendButton.press('Enter')
+
+  await expect(feed).toContainText('hello 你好')
+  await expect(page.getByTestId('workspace-message')).toHaveCount(1)
+  await expect(input).toHaveValue('')
+})
+
 // ── 13.24 ────────────────────────────────────────────────────────────────────
 
 test('13.24 the mention menu is fully operable from the keyboard', async ({ page }) => {
