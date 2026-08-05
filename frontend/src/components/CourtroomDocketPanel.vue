@@ -485,8 +485,8 @@ function ruling(issue: CourtroomIssueProjection) {
           :data-testid="`seat-model-select-${role.roleId.toLowerCase()}`"
           :value="selectedModels[role.roleId]"
           :disabled="isMeetingRunning"
-          title="會議執行中無法更換模型"
-          aria-label="會議執行中無法更換模型"
+          :title="isMeetingRunning ? '會議執行中無法更換模型' : undefined"
+          :aria-label="isMeetingRunning ? '會議執行中無法更換模型' : `更換${role.name}的模型，目前為 ${roleModelLabel(role.roleId)}`"
           @change="switchSeatModel(role.roleId, ($event.target as HTMLSelectElement).value)"
           @click.stop
         >

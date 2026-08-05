@@ -711,12 +711,45 @@ test('running meeting explains why the model select is disabled', async ({ page 
   await createMeetingViaNewCase(page, topic)
   await page.getByTestId('seat-model-label-blue').click()
   const select = page.getByTestId('seat-model-select-blue')
-  // The running snapshot is supplied by the meeting event stream in production.
-  // Keep this public DOM seam focused on the disabled control's accessibility contract.
-  await select.evaluate((element) => element.setAttribute('disabled', ''))
+  const mutated = await page.evaluate(() => {
+    const el = document.querySelector('[data-testid="conversation-workspace"]')
+    if (!el) return false
+    const vnode = (el as any).__vueParentComponent
+    if (!vnode) return false
+    const provides = vnode.provides
+    if (!provides) return false
+    for (const sym of Object.getOwnPropertySymbols(provides)) {
+      const candidate = provides[sym]
+      if (candidate?.selectedMeeting?.value?.activity_status !== undefined) {
+        candidate.selectedMeeting.value = {
+          ...candidate.selectedMeeting.value,
+          activity_status: 'running',
+        }
+        return true
+      }
+    }
+    return false
+  })
+  expect(mutated).toBe(true)
   await expect(select).toBeDisabled()
   await expect(select).toHaveAttribute('title', '會議執行中無法更換模型')
   await expect(select).toHaveAttribute('aria-label', '會議執行中無法更換模型')
+
+  await page.evaluate(() => {
+    const el = document.querySelector('[data-testid="conversation-workspace"]')
+    const vnode = (el as any)?.__vueParentComponent
+    const provides = vnode?.provides
+    for (const sym of Object.getOwnPropertySymbols(provides ?? {})) {
+      const candidate = provides[sym]
+      if (candidate?.selectedMeeting?.value?.activity_status !== undefined) {
+        candidate.selectedMeeting.value = {
+          ...candidate.selectedMeeting.value,
+          activity_status: 'idle',
+        }
+        return
+      }
+    }
+  })
 })
 
 test('a delayed assignment save remains scoped to its meeting', async ({
