@@ -334,6 +334,7 @@ async function retryRole(roleId: string) {
     data-testid="conversation-workspace"
   >
     <nav class="workspace-role-rail" data-testid="workspace-role-rail" aria-label="與會角色">
+      <div class="workspace-role-seats">
       <!-- The seat is a plain container; the primary action is a real <button>, so the
            ℹ control and the model control sit beside it rather than nested inside an
            interactive element. Keyboard activation comes from the button itself. -->
@@ -412,6 +413,7 @@ async function retryRole(roleId: string) {
           :aria-label="`${role.name}詳情`"
           @click.stop="$emit('role-click', role.roleId)"
         >ℹ</button>
+      </div>
       </div>
       <div v-if="assignmentWarnings.length" class="assignment-fallback-warning" data-testid="assignment-fallback-warning">
         <p v-for="(warning, idx) in assignmentWarnings" :key="idx">{{ warning }}</p>

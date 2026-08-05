@@ -415,6 +415,7 @@ function ruling(issue: CourtroomIssueProjection) {
 <template>
   <section v-if="isCourtroom && courtroom && workspace && selectedMeeting" class="conversation-workspace court-hearing-workspace" data-testid="court-hearing-workspace">
     <nav class="workspace-role-rail" data-testid="workspace-role-rail" aria-label="法庭角色">
+      <div class="workspace-role-seats">
       <!-- Same seat contract as the conversation workspace: the seat is a plain
            container, its primary action is a real <button> that filters the docket, and
            the ℹ and model controls sit beside it instead of nested inside another
@@ -493,6 +494,7 @@ function ruling(issue: CourtroomIssueProjection) {
           :aria-label="`${role.name}詳情`"
           @click.stop="emit('role-click', role.roleId)"
         >ℹ</button>
+      </div>
       </div>
       <div v-if="assignmentWarnings.length" class="assignment-fallback-warning" data-testid="assignment-fallback-warning">
         <p v-for="(warning, idx) in assignmentWarnings" :key="idx">{{ warning }}</p>
