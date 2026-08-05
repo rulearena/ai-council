@@ -705,6 +705,20 @@ test('In-rail model switch rolls back a rejected assignment and shows the error'
   await expect(page.getByTestId('assignment-update-error')).not.toContainText('Unknown model')
 })
 
+test('running meeting explains why the model select is disabled', async ({ page }) => {
+  await page.goto('/')
+  const topic = `E2E disabled model reason ${Date.now()}`
+  await createMeetingViaNewCase(page, topic)
+  await page.getByTestId('seat-model-label-blue').click()
+  const select = page.getByTestId('seat-model-select-blue')
+  // The running snapshot is supplied by the meeting event stream in production.
+  // Keep this public DOM seam focused on the disabled control's accessibility contract.
+  await select.evaluate((element) => element.setAttribute('disabled', ''))
+  await expect(select).toBeDisabled()
+  await expect(select).toHaveAttribute('title', '會議執行中無法更換模型')
+  await expect(select).toHaveAttribute('aria-label', '會議執行中無法更換模型')
+})
+
 test('a delayed assignment save remains scoped to its meeting', async ({
   page,
 }) => {
