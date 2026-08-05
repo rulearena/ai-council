@@ -32,13 +32,22 @@ const menuItems = computed(() => {
 })
 
 const showMenu = computed(() => isOpen.value && menuItems.value.length > 0)
+const boundedActiveIndex = computed(() => {
+  if (menuItems.value.length === 0) return 0
+  return Math.min(Math.max(activeIndex.value, 0), menuItems.value.length - 1)
+})
+
+watch(menuItems, (items) => {
+  const nextIndex = items.length === 0 ? 0 : Math.min(Math.max(activeIndex.value, 0), items.length - 1)
+  if (activeIndex.value !== nextIndex) activeIndex.value = nextIndex
+})
 
 // The menu is the listbox and the composer's textarea is what keeps focus, so the
 // active option has to be named by id for a screen reader to follow the selection.
 const uid = useId()
 const menuId = `mention-menu-${uid}`
 const optionId = (index: number) => `${menuId}-option-${index}`
-const activeOptionId = computed(() => (showMenu.value ? optionId(activeIndex.value) : undefined))
+const activeOptionId = computed(() => (showMenu.value ? optionId(boundedActiveIndex.value) : undefined))
 
 const menuRef = ref<HTMLUListElement | null>(null)
 watch([activeIndex, showMenu], () => {
@@ -88,7 +97,7 @@ function handleKeyDown(event: KeyboardEvent): boolean {
   if (!key) return false
 
   const result = resolveMentionInsertion(
-    { open: true, filterText: filterText.value, activeIndex: activeIndex.value },
+    { open: true, filterText: filterText.value, activeIndex: boundedActiveIndex.value },
     key,
     menuItems.value,
   )
@@ -144,10 +153,10 @@ function optionLabel(item: { role_id: string; display_name?: string | null; name
         :id="optionId(index)"
         :key="item.role_id"
         class="mention-option"
-        :class="{ 'mention-option-active': index === activeIndex }"
+        :class="{ 'mention-option-active': index === boundedActiveIndex }"
         data-testid="mention-option"
         role="option"
-        :aria-selected="index === activeIndex"
+        :aria-selected="index === boundedActiveIndex"
         @mousedown.prevent="selectItem(index)"
         @mouseenter="onMouseenter(index)"
       >
