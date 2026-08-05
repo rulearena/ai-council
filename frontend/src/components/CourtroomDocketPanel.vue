@@ -173,6 +173,9 @@ const assignmentWarnings = computed(() => {
       const role = workspace.value?.roles.find((r) => r.roleId === p.role_id)
       const roleName = role?.name ?? p.role_id
       const warning = p.model_assignment_warning!
+      if (warning.toLowerCase().includes('no models are configured')) {
+        return `${roleName}：模型登錄表目前沒有可用模型。`
+      }
       if (warning.startsWith('No saved model assignment')) {
         const defaultMatch = warning.match(/using default model '([^']+)'/)
         const fallbackName = defaultMatch ? resolveModelName(defaultMatch[1]) : ''
