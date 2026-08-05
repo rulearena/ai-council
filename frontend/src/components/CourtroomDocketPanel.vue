@@ -41,6 +41,7 @@ import {
   type WorkspaceProjectionMeeting,
   type WorkspaceRoleFilter,
 } from '../meetingWorkspace'
+import { projectAssignmentWarnings } from '../assignmentWarnings'
 import { uploadAttachment } from '../api'
 import { useMaterialUploads } from '../materialUploads'
 import { modelDisplayLabel } from '../providers'
@@ -165,34 +166,11 @@ const workspace = computed<CourtHearingWorkspaceProjection | null>(() => {
   })
   return projected.family === 'court-hearing' ? projected : null
 })
-const assignmentWarnings = computed(() => {
-  const participants = selectedMeeting.value?.participants ?? []
-  return participants
-    .filter((p) => p.model_assignment_warning)
-    .map((p) => {
-      const role = workspace.value?.roles.find((r) => r.roleId === p.role_id)
-      const roleName = role?.name ?? p.role_id
-      const warning = p.model_assignment_warning!
-      if (warning.toLowerCase().includes('no models are configured')) {
-        return `${roleName}：模型登錄表目前沒有可用模型。`
-      }
-      if (warning.startsWith('No saved model assignment')) {
-        const defaultMatch = warning.match(/using default model '([^']+)'/)
-        const fallbackName = defaultMatch ? resolveModelName(defaultMatch[1]) : ''
-        return fallbackName
-          ? `${roleName}：未指派模型，已自動使用「${fallbackName}」。`
-          : `${roleName}：未指派模型。`
-      }
-      const originalMatch = warning.match(/(?:Assigned|Recovered) model '([^']+)'/)
-      const defaultMatch = warning.match(/using default model '([^']+)'/)
-      const originalName = originalMatch ? resolveModelName(originalMatch[1]) : originalMatch?.[1] ?? ''
-      const fallbackName = defaultMatch ? resolveModelName(defaultMatch[1]) : ''
-      if (originalName && fallbackName) {
-        return `${roleName}：模型「${originalName}」已失效，目前使用「${fallbackName}」。`
-      }
-      return `${roleName}：${warning}`
-    })
-})
+const assignmentWarnings = computed(() => projectAssignmentWarnings({
+  participants: selectedMeeting.value?.participants ?? [],
+  roles: workspace.value?.roles ?? [],
+  models: models.value,
+}))
 const selectedRoleId = computed(() => {
   const filter = roleFilter.value
   return filter && filter.meetingId === workspace.value?.meetingId ? filter.roleId : null
@@ -242,11 +220,6 @@ function roleModelLabel(roleId: string): string {
   const modelId = selectedModels.value[roleId]
   const model = models.value.find((candidate) => candidate.id === modelId)
   return model ? modelDisplayLabel(model) : modelId || '未選模型'
-}
-
-function resolveModelName(modelId: string): string {
-  const model = models.value.find((m) => m.id === modelId)
-  return model ? modelDisplayLabel(model) : modelId
 }
 
 const openModelSeatId = ref<string | null>(null)
