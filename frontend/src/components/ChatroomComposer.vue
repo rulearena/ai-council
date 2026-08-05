@@ -49,11 +49,18 @@ const composing = ref(false)
 const sendClickStartedDuringComposition = ref(false)
 
 function onSendPointerDown(event: PointerEvent) {
+  // Every pointerdown starts a new possible click. Reassigning also clears a stale
+  // guard when a previous pointer ended without click or the button was disabled.
+  sendClickStartedDuringComposition.value = composing.value
   if (!composing.value) return
-  sendClickStartedDuringComposition.value = true
   // Keep the textarea focused where the browser can, avoiding a blur-driven IME
   // transition before the guarded click is handled.
   event.preventDefault()
+}
+
+function onSendPointerCancel() {
+  // A cancelled pointer has no click event that could consume this one-shot guard.
+  sendClickStartedDuringComposition.value = false
 }
 
 const mentionMenu = ref<InstanceType<typeof MentionAutocomplete> | null>(null)
@@ -177,6 +184,7 @@ function onSendClick() {
         data-testid="send-chat-message-button"
         :disabled="!canSend"
         @pointerdown="onSendPointerDown"
+        @pointercancel="onSendPointerCancel"
         @click="onSendClick"
       >
         送出

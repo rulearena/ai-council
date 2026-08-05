@@ -885,7 +885,11 @@ test('13.23b clicking send after compositionend caused by the click keeps the co
     el.dispatchEvent(new CompositionEvent('compositionend', { bubbles: true }))
     el.dispatchEvent(new FocusEvent('blur', { bubbles: true }))
   })
-  await sendButton.click()
+  // The pointerdown above is the start of this same click. Dispatch only its
+  // click phase here so the test does not introduce a second pointer gesture.
+  await sendButton.evaluate((el: HTMLButtonElement) => {
+    el.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+  })
 
   await expect(page.getByTestId('workspace-message')).toHaveCount(0)
   await expect(feed).not.toContainText('hello 你好')
