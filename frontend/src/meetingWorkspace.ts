@@ -931,7 +931,6 @@ export function applyOptimisticModelUpdate(
 }
 
 export function replaceServerParticipantModels(
-  currentModels: Record<string, string>,
   participants: Array<{ role_id: string; model_config_id: string | null }>,
 ): Record<string, string> {
   return Object.fromEntries(

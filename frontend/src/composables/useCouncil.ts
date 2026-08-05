@@ -1018,10 +1018,7 @@ export function useCouncil() {
         events: selectedMeeting.value.events,
         case_files: selectedMeeting.value.case_files,
       }
-      selectedModels.value = replaceServerParticipantModels(
-        selectedModels.value,
-        meeting.participants,
-      )
+      selectedModels.value = replaceServerParticipantModels(meeting.participants)
     } catch {
       if (
         requestGeneration !== assignmentSaveGeneration ||
