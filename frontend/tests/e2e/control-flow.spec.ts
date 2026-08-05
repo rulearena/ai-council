@@ -4530,6 +4530,68 @@ test('fallback warning shows role-specific Chinese text for expired model', asyn
   await expect(warning).toContainText(deletedModelId)
 })
 
+test('narrow role rail keeps fallback and assignment warnings fully visible', async ({
+  page,
+}) => {
+  const assertWarningFitsViewport = async (testId: string) => {
+    const warning = page.getByTestId(testId)
+    await expect(warning).toBeAttached()
+    const viewport = page.viewportSize()
+    expect(viewport).not.toBeNull()
+    const box = await warning.boundingBox()
+    expect(box).not.toBeNull()
+    expect(box!.width).toBeGreaterThan(0)
+    expect(box!.height).toBeGreaterThan(0)
+    expect(box!.x).toBeGreaterThanOrEqual(0)
+    expect(box!.x + box!.width).toBeLessThanOrEqual(viewport!.width)
+    const dimensions = await warning.evaluate((element) => ({
+      clientWidth: element.clientWidth,
+      scrollWidth: element.scrollWidth,
+    }))
+    expect(dimensions.scrollWidth).toBeLessThanOrEqual(dimensions.clientWidth)
+  }
+
+  const modelsResponsePromise = page.waitForResponse(
+    (response) => response.request().method() === 'GET' && response.url().endsWith('/models'),
+  )
+  await page.goto('/')
+  const apiOrigin = new URL((await modelsResponsePromise).url()).origin
+  const deletedModelId = `e2e-narrow-warning-${Date.now()}`
+  expect(
+    (
+      await page.request.post(`${apiOrigin}/models`, {
+        data: { id: deletedModelId, adapter: 'mock' },
+      })
+    ).ok(),
+  ).toBeTruthy()
+  await page.reload()
+
+  const fallbackTopic = `E2E narrow fallback warning ${Date.now()}`
+  await createMeetingViaNewCase(page, fallbackTopic, {
+    modelAssignments: { Blue: deletedModelId },
+  })
+  expect((await page.request.delete(`${apiOrigin}/models/${deletedModelId}`)).ok()).toBeTruthy()
+  await page.reload()
+  await page.getByTestId('past-topics-button').click()
+  await page.getByTestId('meeting-list-item').filter({ hasText: fallbackTopic }).locator('.meeting-item').click()
+  await page.setViewportSize({ width: 375, height: 812 })
+  await assertWarningFitsViewport('assignment-fallback-warning')
+
+  const assignmentTopic = `E2E narrow assignment warning ${Date.now()}`
+  await createMeetingViaNewCase(page, assignmentTopic)
+  await page.route(/\/meetings\/[^/]+\/participant-models$/, (route) =>
+    route.fulfill({
+      status: 500,
+      contentType: 'application/json',
+      body: JSON.stringify({ detail: 'Assignment save failed' }),
+    }),
+  )
+  await page.getByTestId('seat-model-label-blue').click()
+  await page.getByTestId('seat-model-select-blue').selectOption('mock-slow')
+  await page.setViewportSize({ width: 640, height: 812 })
+  await assertWarningFitsViewport('assignment-update-error')
+})
+
 test('keyboard Enter on info button does not change role filter', async ({ page }) => {
   await page.goto('/')
   const topic = `E2E keyboard info ${Date.now()}`

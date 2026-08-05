@@ -844,6 +844,13 @@ h2 {
   gap: 8px;
 }
 
+.workspace-role-seats {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+
 /* The seat box. Its children — primary button, model switcher, ℹ — are siblings, so
    no interactive element is nested inside another. */
 .workspace-role-seat {
@@ -2883,13 +2890,20 @@ pre {
   }
 
   .workspace-role-rail {
+    display: block;
+    overflow: visible;
+    padding: 7px 10px;
+    border-right: 0;
+    border-bottom: 1px solid var(--color-border);
+  }
+
+  .workspace-role-seats {
     flex-direction: row;
     align-items: stretch;
     overflow-x: auto;
     overflow-y: hidden;
+    margin: -7px -10px 0;
     padding: 7px 10px;
-    border-right: 0;
-    border-bottom: 1px solid var(--color-border);
   }
 
   .workspace-role-seat { flex: 0 0 66px; padding: 5px 3px; }
@@ -2897,6 +2911,11 @@ pre {
   .workspace-role-avatar img { width: 22px; height: 22px; }
   .workspace-role-state { display: none; }
   .workspace-role-model { max-width: 60px; font-size: 0.65rem; }
+  .workspace-role-rail > .assignment-fallback-warning,
+  .workspace-role-rail > .assignment-update-error {
+    width: 100%;
+    box-sizing: border-box;
+  }
   .workspace-conversation-column { min-height: 70dvh; }
   .workspace-conversation-header { min-height: 55px; padding: 8px 12px; }
   .workspace-message-feed { padding: 14px 10px; }
