@@ -87,6 +87,8 @@ export type ModelTestView = {
 }
 export type RoleSeatStatus = 'waiting' | 'thinking' | 'completed' | 'failed'
 
+const ASSIGNMENT_UPDATE_ERROR_MESSAGE = '模型指派儲存失敗，請稍後再試。'
+
 // The mode currently driving the open meeting, defaulting to red-blue when no meeting is
 // selected (spec.md 16.7). A module-level singleton (not per-useCouncil() state) so every
 // module-level helper below (roleIcon/roleClass/...) and every component's import of
@@ -1020,7 +1022,7 @@ export function useCouncil() {
         selectedModels.value,
         meeting.participants,
       )
-    } catch (caught) {
+    } catch {
       if (
         requestGeneration !== assignmentSaveGeneration ||
         selectedMeeting.value?.meeting_id !== meetingId
@@ -1028,12 +1030,7 @@ export function useCouncil() {
         return
       }
       selectedModels.value = previous
-      assignmentUpdateError.value =
-        caught instanceof ApiError && typeof caught.detail === 'string'
-          ? caught.detail
-          : caught instanceof Error
-            ? caught.message
-            : String(caught)
+      assignmentUpdateError.value = ASSIGNMENT_UPDATE_ERROR_MESSAGE
     } finally {
       if (requestGeneration === assignmentSaveGeneration) loading.value = false
     }

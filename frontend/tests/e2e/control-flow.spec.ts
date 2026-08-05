@@ -668,24 +668,41 @@ test('In-rail model switch rolls back a rejected assignment and shows the error'
   await page.goto('/')
   await createMeetingViaNewCase(page, `E2E assignment rollback ${Date.now()}`)
   await expect(page.getByTestId('seat-model-label-blue')).toBeVisible()
+  const backendDetails = [
+    'Assignment save failed',
+    'Participant model roster mismatch',
+    'Unknown model',
+  ]
+  let detailIndex = 0
   await page.route(/\/meetings\/[^/]+\/participant-models$/, (route) =>
     route.fulfill({
       status: 500,
       contentType: 'application/json',
-      body: JSON.stringify({ detail: 'Assignment save failed' }),
+      body: JSON.stringify({ detail: backendDetails[detailIndex++] }),
     }),
   )
 
-  // Click model label to open inline select, pick a different model
+  // Each rejected save must roll back without exposing the backend diagnostic.
   await page.getByTestId('seat-model-label-blue').click()
   const select = page.getByTestId('seat-model-select-blue')
   await expect(select).toBeVisible()
   await select.selectOption('mock-slow')
-  // After failed save, model label should revert to original
   await expect(page.getByTestId('seat-model-label-blue')).toHaveText(/mock-fast/)
-  // Error message should be visible in the role rail
   await expect(page.getByTestId('assignment-update-error')).toBeVisible()
-  await expect(page.getByTestId('assignment-update-error')).toContainText('Assignment save failed')
+  await expect(page.getByTestId('assignment-update-error')).toContainText('模型指派儲存失敗')
+  await expect(page.getByTestId('assignment-update-error')).not.toContainText('Assignment save failed')
+
+  await page.getByTestId('seat-model-label-blue').click()
+  await page.getByTestId('seat-model-select-blue').selectOption('mock-broken')
+  await expect(page.getByTestId('seat-model-label-blue')).toHaveText(/mock-fast/)
+  await expect(page.getByTestId('assignment-update-error')).toContainText('模型指派儲存失敗')
+  await expect(page.getByTestId('assignment-update-error')).not.toContainText('Participant model roster mismatch')
+
+  await page.getByTestId('seat-model-label-blue').click()
+  await page.getByTestId('seat-model-select-blue').selectOption('mock-slow')
+  await expect(page.getByTestId('seat-model-label-blue')).toHaveText(/mock-fast/)
+  await expect(page.getByTestId('assignment-update-error')).toContainText('模型指派儲存失敗')
+  await expect(page.getByTestId('assignment-update-error')).not.toContainText('Unknown model')
 })
 
 test('a delayed assignment save remains scoped to its meeting', async ({
