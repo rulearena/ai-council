@@ -1,4 +1,4 @@
-# 交接文件（2026-08-04 更新）
+# 交接文件（2026-08-05 更新）
 
 > 給接手開發的 agent（Codex 或任何新 session）。讀完本檔 + 引用的 spec 章節即可接續，不需要舊對話脈絡。
 
@@ -38,6 +38,8 @@
 **2026-08-04 #99 closeout**：Human Owner 明確確認「#99 驗收通過」，狀態 `accepted / done`。Exact implementation merge 是 `111e898`。Final contract：chatroom 新的 directed 與 `@all` 回應使用 `chat-message/v1`，以精簡的 `parsed_output.message` 作為自然聊天氣泡內容；證據 anchor 保留，raw／parsed／schema／prompt／model diagnostics 仍可稽核；舊 structured chatroom events 維持 read-time 相容且不改寫 JSONL；relay／parallel／brainstorm／courtroom／formal schemas 與 presentation 維持不變，無 migration。驗收證據：focused `Playwright tests/e2e/chatroom.spec.ts -g '13\\.3'` **1/1**、`frontend/tests/unit/meetingWorkspace.test.ts` **31/31**、`backend/tests/test_runner_chatroom.py` **13/13**、`backend/tests/test_prompting.py -k 'chat_message_v1 or chatroom_response_template'` **5/5**、`frontend npm run test:unit` **162/162**、`frontend npm run build` 通過。OpenSpec change `chatroom-natural-response` tasks 已全數完成並完成 strict sync/archive。未驗證範圍：本次 acceptance 未重跑 full backend suite、full Chromium E2E、direct browser smoke 或其他非列明模式的完整回歸。
 
 **2026-07-30 第二輪驗收修正（已於 2026-07-31 Gate B 通過並 merge 至 main `ebc49f2`）**：Human Owner 於 2026-07-30 驗收 #92 時判定「只有第 9 點有做到」，退回重修。該分支共 13 commits（`943faa3`…`7b62add` 12 commits + 文件 commit `ebc49f2`，base 為 main `2ee4147`），e2e 由 118 提升至 125。內容：app-shell 視窗高度上限（此前只有法院模式有，導致 composer 隨滾輪移動）、座位改為真正的 `<button>` 並統一主席與角色行為、脈絡欄收合回收中間欄空間、紀錄密度、mode 感知的案卷用語、LINE 式訊息版面、訊息串開在最新處並跟隨自己送出、聊天室換模型 500（`UpdateMeetingSettingsRequest` 對 chatroom 強制 goal）、被 @ 角色的思考氣泡（聊天室 composer 繞過 store 導致 `pendingRoles` 從未填入）、中文選字 Enter 誤送出、提及選單鍵盤操作（`onKeyDown` 為死程式碼）、案卷 `+` 改為置中彈出視窗、法院模式套用同一套座位契約並補場景放大。獨立 Reviewer 於 2026-07-31 對 fixed range `2ee4147...ebc49f2` 審查，Verdict `pass`（無 Blocking/Major，Minor 均已裁定，詳見 spec.md §15 #92／#94），Orchestrator 已 fast-forward merge exact reviewed HEAD 並重跑 post-merge checks（653／116／build 全綠）。**狀態：`accepted / done`（2026-07-31 Human Owner 驗收通過）。** Human Owner 於驗收期間另發現「+」無檔案上傳（與 round-2 無關的既有缺口），已裁定開新 backlog #96（LINE 式聊天附件）。#91 與 #92 已於同一次 closeout 一併完成 delta specs sync 至 `openspec/specs/` 並 archive。
+
+**2026-08-05 #101 closeout**：Human Owner 原始確認「#101 驗收通過」，狀態 `accepted / done`。Final contract：聊天室引用預覽使用既有深色 surface／border／text tokens，保留引用內容、取消引用與送出語意，桌面與 responsive layout 不回退為 light fallback；不改 backend API、事件格式、聊天執行語意或其他模式。Exact implementation merge 是 `b813a0ba10d5f6ce56c63d62119c45ca86aadf34`；Gate B final independent Reviewer 審查 `bdfd81d71cd709e2b654aef469d4f40e4ad9da68..b813a0ba10d5f6ce56c63d62119c45ca86aadf34`，Verdict `pass`。變更產品檔案為 `frontend/src/components/ChatroomComposer.vue` 與 `frontend/tests/e2e/chatroom.spec.ts`。驗收證據：focused Playwright `13.5`／`13.5a` **2/2**、frontend unit **162/162**、`npm run build` 通過、`git diff --check` 通過。未驗證範圍：本次 post-merge 未重跑 full backend suite、full Chromium E2E，且沒有 direct Chrome/browser version evidence。這是 `.scratch/quote-preview-theme-fix/` scoped fix，沒有建立、修改或封存 OpenSpec archive。
 
 ## 2. Agent 開發佇列與目前核准批次
 
