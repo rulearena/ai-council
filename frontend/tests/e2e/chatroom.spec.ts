@@ -897,6 +897,38 @@ test('13.23b clicking send after compositionend caused by the click keeps the co
   await expect(input).toHaveValue('')
 })
 
+test('13.23c a cancelled composing click does not block the next independent click', async ({ page }) => {
+  await page.goto('/')
+  const title = `E2E chatroom ime cancelled click ${Date.now()}`
+  await createChatroomMeeting(page, title, { modelAssignments: defaultModels })
+
+  const input = page.getByTestId('chat-message-input')
+  const sendButton = page.getByTestId('send-chat-message-button')
+  const feed = page.getByTestId('workspace-message-feed')
+
+  await input.fill('hello')
+  await input.evaluate((el: HTMLTextAreaElement) => {
+    el.dispatchEvent(new CompositionEvent('compositionstart', { bubbles: true }))
+    el.value = 'hello 你好'
+    el.dispatchEvent(new Event('input', { bubbles: true }))
+  })
+
+  // A cancelled pointer never delivers click. Once composition ends, a later
+  // independent click must not inherit the cancelled click's composition guard.
+  await sendButton.evaluate((el: HTMLButtonElement) => {
+    el.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }))
+    el.dispatchEvent(new PointerEvent('pointercancel', { bubbles: true }))
+  })
+  await input.evaluate((el: HTMLTextAreaElement) => {
+    el.dispatchEvent(new CompositionEvent('compositionend', { bubbles: true }))
+  })
+  await sendButton.click()
+
+  await expect(feed).toContainText('hello 你好')
+  await expect(page.getByTestId('workspace-message')).toHaveCount(1)
+  await expect(input).toHaveValue('')
+})
+
 // ── 13.24 ────────────────────────────────────────────────────────────────────
 
 test('13.24 the mention menu is fully operable from the keyboard', async ({ page }) => {
