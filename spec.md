@@ -600,6 +600,10 @@ config/models.yaml.example
 
 **#96 Closeout（2026-08-04）**：Human Owner 明確確認「#96 驗收通過」。狀態更新為 **`accepted / done`**；exact implementation merge 為 `cee96c1`。驗收證據：`frontend/tests/e2e/chatroom.spec.ts` 聚焦 E2E **12/12**、`frontend npm run test:unit` **162/162**、`npm run build` 通過。Final contract 包含原始附件能力、round-6 LINE 式直接檔案選取／chatroom text mirror／pending-impact projection suppression，以及 round-7 全模式刪除、append-only tombstone、blob/download/quota/evidence removal、已刪除不可互動氣泡與 stale materials reload。已知非阻塞 Nit 保留：`AttachmentBubble.vue:247` 的 undefined `--border` hover fallback。未驗證範圍：本次 acceptance 未重跑 full backend suite 與 full Chromium E2E；既有 post-merge evidence 為 backend 743 passed（含一個 pre-existing timing flake）、frontend unit 149、chatroom E2E 40、relay binary-delete control-flow 1 passed。
 
+### #94⑮ implementation／Gate B／等待驗收（2026-08-05）
+
+Human Owner 已核准先處理聊天室 IME 點擊送出遺失草稿問題。固定 implementation range 為 `c842b37e470e58c8581eb7deb90beb3fed118d1c...17c870c19131b97cb54eb904009aced865771548`：`492d41d564391a1dc579b0ce5ef01ddc1f84deec` 先建立 red regression test，`17c870c19131b97cb54eb904009aced865771548` 以最小修正保留 composition flag 並在 `handleSend` 阻擋組字中的送出。契約為 composition 期間點擊「送出」不得送出或清空草稿；composition 結束後點擊必須完整送出一次；既有 Enter／mention IME 行為、其他 mode、backend API 與 event format 不變。Gate B 獨立 Reviewer reviewed exact range 並判定 `pass`，Standards／Spec 均無 findings。變更檔案為 `frontend/src/components/ChatroomComposer.vue` 與 `frontend/tests/e2e/chatroom.spec.ts`；main merge commit 為 `151bacc8bf87197c533fe708ddbd6fe5187cee35`。驗證：post-merge focused Chromium 13.23／13.23a／13.24／13.25 **4/4**、frontend unit **162/162**、`npm run build` 通過、`git diff --check` 通過。未驗證 full backend suite、full Chromium E2E 與 direct browser smoke；backend 未修改。本項為小型 `.scratch` scoped fix，沒有建立 OpenSpec change；目前狀態為 **`implemented / awaiting acceptance`**。
+
 ## 16. 會議模式系統（Mode System）設計
 
 > 狀態：設計定稿（2026-07-12），分四個切片實作。切片 A 為前端先行，切片 B/C/D 為後端（Codex 依本節實作）。
