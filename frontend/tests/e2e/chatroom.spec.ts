@@ -413,6 +413,44 @@ test('13.10 mention autocomplete — @ shows participant list', async ({ page })
   await expect(page.getByTestId('mention-menu')).not.toBeVisible()
 })
 
+test('13.10a mention active descendant stays valid when participants shrink', async ({ page }) => {
+  await page.goto('/')
+  const title = `E2E chatroom autocomplete participants shrink ${Date.now()}`
+  const meetingId = await createChatroomMeeting(page, title, { modelAssignments: defaultModels })
+
+  const input = page.getByTestId('chat-message-input')
+  const options = page.getByTestId('mention-option')
+  await input.fill('@')
+  await expect(options).toHaveCount(5)
+
+  // Move the active option to the end through the real menu interaction. The next
+  // meeting refresh changes the public participants prop, rather than touching the
+  // component's private activeIndex ref.
+  await options.nth(4).hover()
+  await expect(input).toHaveAttribute('aria-activedescendant', /-option-4$/)
+
+  await page.route(`**/meetings/${meetingId}`, async (route) => {
+    const response = await route.fetch()
+    const meeting = await response.json()
+    await route.fulfill({
+      response,
+      json: { ...meeting, participants: meeting.participants.slice(0, 1) },
+    })
+  })
+  await page.getByTestId('past-topics-button').click()
+  await page.getByTestId('meeting-list-item').filter({ hasText: title }).locator('.meeting-item').click()
+  await expect(page.getByTestId('chatroom-composer')).toBeVisible()
+
+  await expect(options).toHaveCount(2)
+  const activeDescendant = await input.getAttribute('aria-activedescendant')
+  expect(activeDescendant).toBeTruthy()
+  const activeOptionExists = await options.evaluateAll(
+    (elements, activeId) => elements.some((element) => element.id === activeId),
+    activeDescendant,
+  )
+  expect(activeOptionExists).toBe(true)
+})
+
 // ── 13.11 ────────────────────────────────────────────────────────────────────
 
 test('13.11 seat click filters feed — identical for Chairman and role seats', async ({ page }) => {
