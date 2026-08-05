@@ -119,6 +119,62 @@ test('conversation workspace keeps the role rail, chronological feed, and compos
   await expect(page.getByTestId('workspace-message-feed')).toContainText('先確認本次討論的判斷標準。')
 })
 
+test('transcript search ignores IME candidate confirmation but keeps Enter and click search', async ({
+  page,
+}) => {
+  await page.goto('/')
+  const topic = `E2E transcript IME ${Date.now()}`
+  const query = `IME 搜尋內容 ${Date.now()}`
+  await createMeetingViaNewCase(page, topic, { modeId: 'chatroom' })
+  await page.getByTestId('chat-message-input').fill(query)
+  await page.getByTestId('send-chat-message-button').click()
+  await expect(page.getByTestId('workspace-message-feed')).toContainText(query)
+
+  await page.getByTestId('past-topics-button').click()
+  const searchInput = page.getByTestId('transcript-search-input')
+  const searchRequests: string[] = []
+  page.on('request', (request) => {
+    if (request.method() === 'GET' && /\/meetings\?q=/.test(request.url())) {
+      searchRequests.push(request.url())
+    }
+  })
+  await searchInput.fill(query)
+
+  await searchInput.dispatchEvent('compositionstart')
+  await searchInput.dispatchEvent('keydown', {
+    key: 'Enter',
+    code: 'Enter',
+    isComposing: true,
+    bubbles: true,
+  })
+  await searchInput.dispatchEvent('compositionend')
+  await searchInput.dispatchEvent('keyup', {
+    key: 'Enter',
+    code: 'Enter',
+    isComposing: false,
+    bubbles: true,
+  })
+  await page.waitForTimeout(100)
+  expect(searchRequests).toHaveLength(0)
+  await expect(page.getByTestId('transcript-search-results')).toHaveCount(0)
+
+  const enterSearch = page.waitForResponse(
+    (response) => response.request().method() === 'GET' && /\/meetings\?q=/.test(response.url()),
+  )
+  await searchInput.press('Enter')
+  await enterSearch
+  await expect(page.getByTestId('transcript-search-results')).toContainText(topic)
+  expect(searchRequests).toHaveLength(1)
+
+  const clickSearch = page.waitForResponse(
+    (response) => response.request().method() === 'GET' && /\/meetings\?q=/.test(response.url()),
+  )
+  await page.getByTestId('transcript-search-button').click()
+  await clickSearch
+  await expect(page.getByTestId('transcript-search-results')).toContainText(topic)
+  expect(searchRequests).toHaveLength(2)
+})
+
 test('conversation workspace collapses long messages, filters roles, and stays usable at 375px', async ({
   page,
 }) => {
