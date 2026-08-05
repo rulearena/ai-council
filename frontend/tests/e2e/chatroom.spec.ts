@@ -933,6 +933,48 @@ test('13.23c a cancelled composing click does not block the next independent cli
   await expect(input).toHaveValue('')
 })
 
+test('13.23d a disabled composing click does not block keyboard activation later', async ({ page }) => {
+  await page.goto('/')
+  const title = `E2E chatroom ime disabled click ${Date.now()}`
+  await createChatroomMeeting(page, title, { modelAssignments: defaultModels })
+
+  const input = page.getByTestId('chat-message-input')
+  const sendButton = page.getByTestId('send-chat-message-button')
+  const feed = page.getByTestId('workspace-message-feed')
+
+  await input.fill('hello')
+  await input.evaluate((el: HTMLTextAreaElement) => {
+    el.dispatchEvent(new CompositionEvent('compositionstart', { bubbles: true }))
+    el.value = 'hello 你好'
+    el.dispatchEvent(new Event('input', { bubbles: true }))
+  })
+
+  // The pointer starts during composition, but the activation is disabled before
+  // it can produce click. Re-enabling the same button must not leak that guard into
+  // a later keyboard activation, which has no pointerdown to reset it.
+  await sendButton.evaluate((el: HTMLButtonElement) => {
+    el.focus()
+    el.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }))
+    el.disabled = true
+  })
+  await expect(sendButton).toBeDisabled()
+  await input.evaluate((el: HTMLTextAreaElement) => {
+    el.dispatchEvent(new CompositionEvent('compositionend', { bubbles: true }))
+  })
+  await sendButton.evaluate((el: HTMLButtonElement) => {
+    el.disabled = false
+  })
+  await expect(sendButton).toBeEnabled()
+
+  // Enter on the focused button creates a keyboard click without pointerdown.
+  await sendButton.focus()
+  await sendButton.press('Enter')
+
+  await expect(feed).toContainText('hello 你好')
+  await expect(page.getByTestId('workspace-message')).toHaveCount(1)
+  await expect(input).toHaveValue('')
+})
+
 // ── 13.24 ────────────────────────────────────────────────────────────────────
 
 test('13.24 the mention menu is fully operable from the keyboard', async ({ page }) => {
