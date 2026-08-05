@@ -12,3 +12,8 @@
 
 - Result: **red as intended**. The public DOM assertion expected `辯護律師：...` but observed `藍軍：...`; the test failed at the role-specific warning assertion.
 - This demonstrates that a future courtroom-to-red/blue role-name regression is observable through the rendered warning, without private Vue state or direct DOM mutation in the test.
+
+## Green verification
+
+- Restored the unmutated base product code; no product source file was changed for this scoped coverage fix.
+- The same public test passed with the courtroom profile display name `辯護人` (criminal case profile), and the existing fallback-warning regression set passed **4/4** in Chromium.
