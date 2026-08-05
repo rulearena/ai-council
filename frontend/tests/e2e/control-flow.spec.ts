@@ -705,30 +705,6 @@ test('In-rail model switch rolls back a rejected assignment and shows the error'
   await expect(page.getByTestId('assignment-update-error')).not.toContainText('Unknown model')
 })
 
-test('running meeting explains why the model select is disabled', async ({ page }) => {
-  await page.goto('/')
-  const topic = `E2E disabled model reason ${Date.now()}`
-  await createMeetingViaNewCase(page, topic, { modelAssignments: { Blue: 'mock-slow' } })
-
-  const started = page.waitForResponse(
-    (response) => response.request().method() === 'POST' && /\/meetings\/[^/]+\/start$/.test(response.url()),
-  )
-  await page.getByTestId('start-meeting-button').click()
-  expect((await started).status()).toBe(202)
-  await expect(page.getByTestId('operation-status')).toContainText('執行中')
-
-  await page.getByTestId('seat-model-label-blue').click()
-  const select = page.getByTestId('seat-model-select-blue')
-  await expect(select).toBeDisabled()
-  await expect(select).toHaveAttribute('title', '會議執行中無法更換模型')
-  await expect(select).toHaveAttribute('aria-label', '會議執行中無法更換模型')
-
-  await expect(page.getByTestId('operation-status')).toContainText('已完成', { timeout: 15_000 })
-  await expect(select).toBeEnabled()
-  await expect(select).toHaveAttribute('title', '目前模型：Mock · mock-slow（點擊更換）')
-  await expect(select).toHaveAttribute('aria-label', '更換藍軍的模型，目前為 Mock · mock-slow')
-})
-
 test('a delayed assignment save remains scoped to its meeting', async ({
   page,
 }) => {
@@ -4474,64 +4450,30 @@ test('deleting a model that a role has selected falls back to the first remainin
   // Fallback model is visible in the in-rail label; no separate warning in settings drawer
 })
 
-test('model select is disabled while meeting is running', async ({ page }) => {
+test('model select explains running lock and preserves idle selection hint', async ({ page }) => {
   await page.goto('/')
   const topic = `E2E disabled select ${Date.now()}`
-  await createMeetingViaNewCase(page, topic)
+  await createMeetingViaNewCase(page, topic, { modelAssignments: { Blue: 'mock-slow' } })
   await expect(page.getByTestId('seat-model-label-blue')).toBeVisible()
 
-  // The mock backend settles too quickly for isMeetingRunning to stay true.
-  // Directly set activity_status='running' on the Vue reactive store via
-  // page.evaluate to test the :disabled="isMeetingRunning" binding.
-  // councilKey is a Symbol, so we search provides via getOwnPropertySymbols.
-  const mutated = await page.evaluate(() => {
-    const el = document.querySelector('[data-testid="conversation-workspace"]')
-    if (!el) return false
-    const vnode = (el as any).__vueParentComponent
-    if (!vnode) return false
-    const provides = vnode.provides
-    if (!provides) return false
-    const symbols = Object.getOwnPropertySymbols(provides)
-    for (const sym of symbols) {
-      const candidate = provides[sym]
-      if (candidate?.selectedMeeting?.value?.activity_status !== undefined) {
-        candidate.selectedMeeting.value = {
-          ...candidate.selectedMeeting.value,
-          activity_status: 'running',
-        }
-        return true
-      }
-    }
-    return false
-  })
-  expect(mutated).toBe(true)
+  const started = page.waitForResponse(
+    (response) => response.request().method() === 'POST' && /\/meetings\/[^/]+\/start$/.test(response.url()),
+  )
+  await page.getByTestId('start-meeting-button').click()
+  expect((await started).status()).toBe(202)
+  await expect(page.getByTestId('operation-status')).toContainText('執行中')
 
-  // Open the model select — it should be disabled while running
   await page.getByTestId('seat-model-label-blue').click()
   const select = page.getByTestId('seat-model-select-blue')
   await expect(select).toBeVisible()
   await expect(select).toBeDisabled()
+  await expect(select).toHaveAttribute('title', '會議執行中無法更換模型')
+  await expect(select).toHaveAttribute('aria-label', '會議執行中無法更換模型')
 
-  // Restore normal state
-  await page.evaluate(() => {
-    const el = document.querySelector('[data-testid="conversation-workspace"]')
-    if (!el) return
-    const vnode = (el as any).__vueParentComponent
-    if (!vnode) return
-    const provides = vnode.provides
-    if (!provides) return
-    const symbols = Object.getOwnPropertySymbols(provides)
-    for (const sym of symbols) {
-      const candidate = provides[sym]
-      if (candidate?.selectedMeeting?.value?.activity_status !== undefined) {
-        candidate.selectedMeeting.value = {
-          ...candidate.selectedMeeting.value,
-          activity_status: 'idle',
-        }
-        return
-      }
-    }
-  })
+  await expect(page.getByTestId('operation-status')).toContainText('已完成', { timeout: 15_000 })
+  await expect(select).toBeEnabled()
+  await expect(select).toHaveAttribute('title', '目前模型：Mock · mock-slow（點擊更換）')
+  await expect(select).toHaveAttribute('aria-label', '更換藍軍的模型，目前為 Mock · mock-slow')
 })
 
 test('fallback warning shows role-specific Chinese text for expired model', async ({
