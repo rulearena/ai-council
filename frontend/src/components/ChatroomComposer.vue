@@ -44,6 +44,17 @@ function onAttachmentSelected(event: Event) {
 // flag through blur: clicking Send blurs the textarea before the button click, but
 // composition is still active and must block the send.
 const composing = ref(false)
+// A pointer click can end composition before its click event is delivered. Remember
+// the state at pointerdown so that click cannot send or clear that still-visible draft.
+const sendClickStartedDuringComposition = ref(false)
+
+function onSendPointerDown(event: PointerEvent) {
+  if (!composing.value) return
+  sendClickStartedDuringComposition.value = true
+  // Keep the textarea focused where the browser can, avoiding a blur-driven IME
+  // transition before the guarded click is handled.
+  event.preventDefault()
+}
 
 const mentionMenu = ref<InstanceType<typeof MentionAutocomplete> | null>(null)
 const mentionExpanded = computed(() => Boolean(mentionMenu.value?.isExpanded))
@@ -93,6 +104,13 @@ async function handleSend() {
   } finally {
     sending.value = false
   }
+}
+
+function onSendClick() {
+  const startedDuringComposition = sendClickStartedDuringComposition.value
+  sendClickStartedDuringComposition.value = false
+  if (startedDuringComposition) return
+  void handleSend()
 }
 </script>
 
@@ -158,7 +176,8 @@ async function handleSend() {
         class="btn btn-primary"
         data-testid="send-chat-message-button"
         :disabled="!canSend"
-        @click="handleSend"
+        @pointerdown="onSendPointerDown"
+        @click="onSendClick"
       >
         送出
       </button>
