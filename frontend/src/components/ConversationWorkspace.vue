@@ -363,7 +363,7 @@ async function retryRole(roleId: string) {
           class="workspace-role-info-btn"
           data-testid="role-seat-chairman-info"
           aria-label="主席詳情"
-          @click="selectRole('Chairman'); $emit('role-click', 'Chairman')"
+          @click="$emit('role-click', 'Chairman')"
         >ℹ</button>
       </div>
       <div

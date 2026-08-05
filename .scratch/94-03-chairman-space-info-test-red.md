@@ -8,3 +8,9 @@
 - Result: **red**, 1 failed.
 - Failure: after Chairman ℹ Space activation, the filtered general-role seat had `aria-pressed="false"` instead of the expected `"true"`.
 - This mutation is only for TDD red evidence and must not remain in the final product diff.
+
+## Green evidence
+
+- Restored the original Chairman ℹ handler; no product source change remains.
+- The same command passed: **1 passed** in Chromium.
+- The regression now verifies both the existing general-role Enter path and the Chairman Space path, including the public `aria-pressed` filter state and role drawer visibility.
