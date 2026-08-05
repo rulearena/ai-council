@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { inject } from 'vue'
+import { inject, ref } from 'vue'
 import { councilKey } from '../composables/useCouncil'
 import { formatDateTime } from '../composables/useCouncil'
 import Modal from './Modal.vue'
@@ -7,6 +7,7 @@ import { statusDisplayLabel } from '../presentation'
 
 defineProps<{ show: boolean }>()
 const emit = defineEmits<{ close: [] }>()
+const transcriptSearchComposing = ref(false)
 
 const store = inject(councilKey)!
 const {
@@ -26,6 +27,19 @@ const {
 
 async function selectMeeting(meetingId: string) {
   if (await openMeeting(meetingId)) emit('close')
+}
+
+function handleTranscriptCompositionStart() {
+  transcriptSearchComposing.value = true
+}
+
+function handleTranscriptCompositionEnd() {
+  transcriptSearchComposing.value = false
+}
+
+function handleTranscriptSearchKeydown(event: KeyboardEvent) {
+  if (event.key !== 'Enter' || event.isComposing || transcriptSearchComposing.value) return
+  searchTranscripts()
 }
 </script>
 
@@ -115,7 +129,9 @@ async function selectMeeting(meetingId: string) {
         aria-label="搜尋逐字稿內容"
         placeholder="搜尋逐字稿內容...（含主席發言、角色回應、標籤）"
         data-testid="transcript-search-input"
-        @keyup.enter="searchTranscripts"
+        @compositionstart="handleTranscriptCompositionStart"
+        @compositionend="handleTranscriptCompositionEnd"
+        @keydown="handleTranscriptSearchKeydown"
       />
       <button
         type="button"
