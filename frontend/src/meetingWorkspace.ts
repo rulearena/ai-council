@@ -930,8 +930,7 @@ export function applyOptimisticModelUpdate(
   return { ...selectedModels, [role]: modelId }
 }
 
-export function mergeServerParticipantModels(
-  currentModels: Record<string, string>,
+export function replaceServerParticipantModels(
   participants: Array<{ role_id: string; model_config_id: string | null }>,
 ): Record<string, string> {
   return Object.fromEntries(

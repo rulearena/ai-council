@@ -10,7 +10,7 @@ import { projectOperationStatusText } from '../operationStatus'
 import {
   isSameModelAssignment,
   applyOptimisticModelUpdate,
-  mergeServerParticipantModels,
+  replaceServerParticipantModels,
 } from '../meetingWorkspace'
 import {
   bindOldestMatchingCapture,
@@ -1018,10 +1018,7 @@ export function useCouncil() {
         events: selectedMeeting.value.events,
         case_files: selectedMeeting.value.case_files,
       }
-      selectedModels.value = mergeServerParticipantModels(
-        selectedModels.value,
-        meeting.participants,
-      )
+      selectedModels.value = replaceServerParticipantModels(meeting.participants)
     } catch {
       if (
         requestGeneration !== assignmentSaveGeneration ||
