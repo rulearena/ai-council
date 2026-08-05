@@ -17,3 +17,12 @@
 
 - The existing `missing-model` case intentionally remains as an unknown model-id fallback and must render `已自動使用「missing-model」`.
 - Added a separate no-fallback case: `No saved model assignment was found.` must render `顧問：未指派模型。`.
+
+## Reviewer follow-up red/green identities
+
+- Previous green: `b5bc63e`.
+- New red test commit: `5d8c86a`.
+- Temporary mutation: changed the no-fallback branch to emit `未指派模型，已自動使用「」。`.
+- Focused command: `node --experimental-strip-types --test tests/unit/assignmentWarnings.test.ts`.
+- Mutation result: **2 passed, 1 failed**; the new no-fallback assertion failed as expected.
+- Mutation restored before the follow-up green commit; no product source change is retained.
