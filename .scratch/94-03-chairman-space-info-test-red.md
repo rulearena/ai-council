@@ -24,6 +24,7 @@
 - Result: **red**, 1 failed.
 - Failure: after Chairman ℹ Space activation, the pre-existing Defense filter had `aria-pressed="false"` instead of the expected `"true"`.
 - The mutation was reverted before the green run and is not part of the final product diff.
+- The temporary mutation is fixed as red identity `8219ae0`; it is reverted by the green commit below.
 
 ## Final green verification
 
