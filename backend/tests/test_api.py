@@ -7233,6 +7233,7 @@ def test_upload_text_file_in_chatroom_ingests_evidence_and_attachment(
         assert active_version["title"] == Path(filename).stem
         assert active_version["content"] == text_content
         assert set(active_version["visible_roles"]) == {
+            "host",
             "Advisor",
             "Critic",
             "Strategist",
