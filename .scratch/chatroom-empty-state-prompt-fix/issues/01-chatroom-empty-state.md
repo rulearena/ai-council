@@ -1,6 +1,6 @@
 # 01 — Chatroom empty state uses deliberation wording
 
-Status: approved / implementation in progress (2026-08-07)
+Status: approved / awaiting Gate A review (2026-08-07)
 
 ## Scope
 
