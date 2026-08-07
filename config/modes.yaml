@@ -11,6 +11,7 @@ modes:
     default_scene: meeting-room
     inputs: []
     roles:
+      - { id: host, name: 主持 AI, color: "#e8b44c", kind: member }
       - { id: Advisor, name: 顧問, color: "#4d8dff", kind: member }
       - { id: Critic, name: 評論者, color: "#ff6b5e", kind: member }
       - { id: Strategist, name: 策略師, color: "#8b6dd9", kind: member }

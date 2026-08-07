@@ -19,7 +19,7 @@ from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconn
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, Response
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, StrictInt, StrictStr, field_validator, model_validator
 
 from ai_council.meetings.execution_state import (
     ActiveExecutionState,
@@ -70,6 +70,12 @@ from ai_council.meetings.modes import (
     relay_plan,
 )
 from ai_council.meetings.repository import MeetingRepository
+from ai_council.meetings.chatroom_routing import (
+    ChatroomMentionToken,
+    ChatroomSourceToken,
+    rejected,
+    validate_chatroom_routing,
+)
 from ai_council.meetings.input_envelope import CASE_EVIDENCE_BY_ROLE_INPUT
 from ai_council.meetings.runner import (
     CASE_FILES_BY_ROLE_INPUT,
@@ -366,18 +372,34 @@ class AddMeetingMessageRequest(BaseModel):
     quoted_event_id: str | None = None
 
 
-class AddChatMentionRequest(BaseModel):
-    content: str
-    mentions: list[str]
-    quoted_event_id: str | None = None
+class ChatroomMentionTokenRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
 
-    @field_validator("content")
-    @classmethod
-    def require_non_blank_content(cls, value: str) -> str:
-        stripped = value.strip()
-        if not stripped:
-            raise ValueError("must not be blank")
-        return stripped
+    token_id: StrictStr
+    role_id: StrictStr
+    display_text: StrictStr
+    start: StrictInt
+    end: StrictInt
+
+
+class ChatroomSourceTokenRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    token_id: StrictStr
+    source_ref: StrictStr
+    display_text: StrictStr
+    start: StrictInt
+    end: StrictInt
+
+
+class AddChatMentionRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    content: StrictStr
+    mentions: list[ChatroomMentionTokenRequest]
+    source_tokens: list[ChatroomSourceTokenRequest]
+    source_refs: list[StrictStr]
+    quoted_event_id: StrictStr | None
 
 
 class UpsertModelConfigRequest(BaseModel):
@@ -439,6 +461,13 @@ def create_app(
         request: Request,
         exc: RequestValidationError,
     ) -> JSONResponse:
+        if request.method == "POST" and request.url.path.endswith("/chat/mention"):
+            locations = [str(part) for part in exc.errors()[0].get("loc", []) if part != "body"]
+            field = locations[0] if locations else None
+            return JSONResponse(
+                status_code=400,
+                content=rejected("INVALID_REQUEST_SCHEMA", field),
+            )
         if (
             request.method == "POST"
             and request.url.path in {"/models", "/models/available-models"}
@@ -2451,54 +2480,65 @@ def create_app(
             metadata, mode, model_assignments, inputs, participants = (
                 chatroom_mention_context(meeting_id)
             )
-            stored_participant_role_ids = {
-                str(p["role_id"])
-                for p in (metadata.get("participants") or [])
-                if isinstance(p, dict)
-            } | {"all"}
-            mention_set: set[str] = set()
-            for m in request.mentions:
-                if m in stored_participant_role_ids:
-                    mention_set.add(m)
-                else:
-                    raise HTTPException(
-                        status_code=400,
-                        detail=f"Unknown role for chat mention: {m}",
-                    )
-            has_all = "all" in mention_set
-            mention_set.discard("all")
+            role_display_names = _build_role_display_names(mode, participants)
+            active_role_ids = [str(participant["role_id"]) for participant in participants]
+            try:
+                routing = validate_chatroom_routing(
+                    content=request.content,
+                    mentions=[
+                        ChatroomMentionToken(
+                            token_id=token.token_id,
+                            role_id=token.role_id,
+                            display_text=token.display_text,
+                            start=token.start,
+                            end=token.end,
+                        )
+                        for token in request.mentions
+                    ],
+                    source_tokens=[
+                        ChatroomSourceToken(
+                            token_id=token.token_id,
+                            source_ref=token.source_ref,
+                            display_text=token.display_text,
+                            start=token.start,
+                            end=token.end,
+                        )
+                        for token in request.source_tokens
+                    ],
+                    source_refs=list(request.source_refs),
+                    active_role_ids=active_role_ids,
+                    role_display_names=role_display_names,
+                )
+            except ValueError as error:
+                payload = error.args[0]
+                if isinstance(payload, dict) and payload.get("status") == "rejected":
+                    return JSONResponse(status_code=400, content=payload)
+                return JSONResponse(status_code=400, content=rejected("INVALID_REQUEST_SCHEMA", None))
+
+            # Source authorization is intentionally only a structural seam in this slice;
+            # the source registry and readable-body projection belong to Slice 3.
+            if request.source_tokens or request.source_refs:
+                return JSONResponse(
+                    status_code=400,
+                    content=rejected("INVALID_SOURCE_REF", "source_refs"),
+                )
+
+            target_role_ids = routing.target_role_ids
 
             def run_mention() -> None:
-                if not request.mentions:
-                    resolved_quote = _resolve_quoted_event_id(
-                        meeting_id, request.quoted_event_id
-                    )
-                    event = {
-                        "event_id": f"{meeting_id}:human-message:{uuid.uuid4().hex}",
-                        "meeting_id": meeting_id,
-                        "step_id": "human-message",
-                        "role": "Human",
-                        "attempt": 1,
-                        "status": "completed",
-                        "content": request.content,
-                    }
-                    if resolved_quote:
-                        event["quoted_event_id"] = resolved_quote
-                    repository.append_event(meeting_id, event)
-                    return
-                if has_all:
-                    role_display_names = _build_role_display_names(mode, participants)
+                if target_role_ids == active_role_ids:
                     runner.fanout_chatroom_all(
                         meeting_id=meeting_id,
                         goal=metadata.get("goal", ""),
-                        instruction=request.content,
+                        instruction=routing.instruction,
                         role_display_names=role_display_names,
                         model_assignments=model_assignments,
                         inputs=inputs,
                         quoted_event_id=request.quoted_event_id,
+                        human_content=request.content,
                     )
-                elif len(mention_set) == 1:
-                    single_role = next(iter(mention_set))
+                elif len(target_role_ids) == 1:
+                    single_role = target_role_ids[0]
                     participant = next(
                         (p for p in participants if p["role_id"] == single_role),
                         None,
@@ -2516,16 +2556,16 @@ def create_app(
                         goal=metadata.get("goal", ""),
                         role=single_role,
                         role_display_name=role_display_name,
-                        instruction=request.content,
+                        instruction=routing.instruction,
                         model_assignments=model_assignments,
                         inputs=inputs,
                         quoted_event_id=request.quoted_event_id,
+                        human_content=request.content,
                     )
                 else:
                     filtered_assignments = {
-                        r: model_assignments[r] for r in mention_set if r in model_assignments
+                        r: model_assignments[r] for r in target_role_ids if r in model_assignments
                     }
-                    role_display_names = _build_role_display_names(mode, participants)
                     filtered_display_names = {
                         r: role_display_names[r]
                         for r in filtered_assignments
@@ -2533,34 +2573,26 @@ def create_app(
                     runner.fanout_chatroom_all(
                         meeting_id=meeting_id,
                         goal=metadata.get("goal", ""),
-                        instruction=request.content,
+                        instruction=routing.instruction,
                         role_display_names=filtered_display_names,
                         model_assignments=filtered_assignments,
                         inputs=inputs,
                         quoted_event_id=request.quoted_event_id,
+                        human_content=request.content,
                     )
-
-            if not request.mentions:
-                resolved_quote = _resolve_quoted_event_id(
-                    meeting_id, request.quoted_event_id
-                )
-                event = {
-                    "event_id": f"{meeting_id}:human-message:{uuid.uuid4().hex}",
-                    "meeting_id": meeting_id,
-                    "step_id": "human-message",
-                    "role": "Human",
-                    "attempt": 1,
-                    "status": "completed",
-                    "content": request.content,
-                }
-                if resolved_quote:
-                    event["quoted_event_id"] = resolved_quote
-                repository.append_event(meeting_id, event)
-                return JSONResponse(status_code=200, content=event)
 
             if not jobs.start(meeting_id, run_mention):
                 raise HTTPException(status_code=409, detail="Meeting is already running")
-            return JSONResponse(status_code=202, content={"status": "running"})
+            return JSONResponse(
+                status_code=202,
+                content={
+                    "status": "accepted",
+                    "meeting_id": meeting_id,
+                    "target_role_ids": target_role_ids,
+                    "source_refs": list(request.source_refs),
+                    "warnings": routing.warnings,
+                },
+            )
 
     def _build_role_display_names(
         mode: ModeDefinition,

@@ -134,6 +134,10 @@ def test_hand_typed_role_like_token_is_rejected_without_side_effects(tmp_path: P
     assert response.status_code == 400
     assert response.json() == {
         "status": "rejected",
-        "error": {"code": "INVALID_MENTION_TOKEN", "field": "content", "details": []},
+        "error": {
+            "code": "INVALID_MENTION_TOKEN",
+            "field": "content",
+            "details": [{"display_text": "@Adviser", "start": 0, "end": 8}],
+        },
     }
     assert client.get(f"/meetings/{meeting_id}").json()["events"] == []

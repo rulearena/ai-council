@@ -401,12 +401,11 @@ class MeetingRunner:
         model_assignments: dict[str, ModelConfig],
         inputs: dict[str, Any] | None = None,
         quoted_event_id: str | None = None,
+        human_content: str | None = None,
     ) -> None:
         if self._is_terminal(meeting_id):
             return
         instruction = instruction.strip()
-        if not instruction:
-            raise ValueError("Directed role instruction cannot be blank")
         if role not in model_assignments:
             self.repository.append_event(
                 meeting_id,
@@ -419,7 +418,7 @@ class MeetingRunner:
                     "role": "Human",
                     "attempt": 1,
                     "status": "completed",
-                    "content": instruction,
+                    "content": human_content if human_content is not None else instruction,
                 },
             )
             return
@@ -436,7 +435,7 @@ class MeetingRunner:
                 "status": "completed",
                 "interaction_type": "directed-role-instruction",
                 "target_role_id": role,
-                "content": instruction,
+                "content": human_content if human_content is not None else instruction,
                 **self._audit_event_fields(inputs),
             },
         )
@@ -483,12 +482,11 @@ class MeetingRunner:
         model_assignments: dict[str, ModelConfig],
         inputs: dict[str, Any] | None = None,
         quoted_event_id: str | None = None,
+        human_content: str | None = None,
     ) -> None:
         if self._is_terminal(meeting_id):
             return
         instruction = instruction.strip()
-        if not instruction:
-            raise ValueError("Fanout instruction cannot be blank")
         if not model_assignments:
             return
         prior_transcript = self.chatroom_context_builder.build(
@@ -508,7 +506,7 @@ class MeetingRunner:
                 "role": "Human",
                 "attempt": 1,
                 "status": "completed",
-                "content": instruction,
+                "content": human_content if human_content is not None else instruction,
                 **self._audit_event_fields(inputs),
             },
         )
