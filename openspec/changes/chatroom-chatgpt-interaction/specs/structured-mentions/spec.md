@@ -81,7 +81,7 @@ The composer and backend SHALL preserve role chips and `source_tokens` as separa
 - **AND** no attachment body is retrieved
 
 ### Requirement: Source autocomplete uses authoritative source refs
-In chatroom mode, typing `#` followed by characters SHALL open a source autocomplete menu containing active chat-upload attachments and active text evidence available in the current meeting, excluding notes. Each option SHALL show a human-readable display label and SHALL carry its authoritative `source_ref` for submission. Selection SHALL insert a source token with a unique token ID and code-point span, not an inferred filename lookup. Deleted, unavailable, and unsupported non-readable sources SHALL be visibly marked and SHALL not be selectable as AI-readable sources.
+In chatroom mode, typing `#` followed by characters SHALL open a source autocomplete menu containing active chat-upload attachments and active evidence with non-empty string content available in the current meeting, excluding notes. Each option SHALL show a human-readable display label and SHALL carry its authoritative `source_ref` for submission. Selection SHALL insert a source token with a unique token ID and code-point span, not an inferred filename lookup. Deleted, unavailable, and unsupported non-readable sources SHALL be visibly marked and SHALL not be selectable as AI-readable sources; attachment readability remains limited to active `.txt`/`.md` blobs, while evidence has no extension requirement.
 
 #### Scenario: Attachment autocomplete shows readable material
 - **WHEN** the user types `#需` in a chatroom composer

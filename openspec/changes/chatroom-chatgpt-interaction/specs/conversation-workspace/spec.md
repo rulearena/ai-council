@@ -19,7 +19,7 @@ The chatroom composer SHALL visibly explain that `@` selects responding AI roles
 - **AND** upload progress continues to appear in the materials tab
 
 ### Requirement: Attachment citations render as clickable chips
-When a new chatroom response contains valid structured `attachment_refs`, the conversation feed SHALL render each reference as a compact citation chip associated with the AI bubble. Clicking a readable active `.txt` or `.md` citation SHALL open the existing reader selected by its `source_ref`/`reader_ref`, whether it is an attachment or evidence source. A deleted or unavailable citation SHALL render an unavailable state without breaking the message bubble. The chip SHALL not expand the full attachment body inside the bubble.
+When a new chatroom response contains valid structured `attachment_refs`, the conversation feed SHALL render each reference as a compact citation chip associated with the AI bubble. Clicking a readable active citation SHALL open the existing reader selected by its `source_ref`/`reader_ref`: attachment sources are readable only for active `.txt`/`.md` blobs, while evidence sources are readable for active versions with non-empty string content regardless of extension. A deleted or unavailable citation SHALL render an unavailable state without breaking the message bubble. The chip SHALL not expand the full source body inside the bubble.
 
 #### Scenario: Citation chip opens reader
 - **WHEN** an AI message references an active selected `需求.md`

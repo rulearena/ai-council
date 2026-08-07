@@ -6,8 +6,8 @@
 
 - 將聊天室的主持 AI 定義為固定 `host` role；未指定 `@` 時由主持回覆，`@all` 包含主持，明確角色 mention 則只呼叫指定角色。
 - 將 display-name role chips、結構化 `mentions[{role_id,display_text}]`、無效 mention、`all` 優先級與多角色平行回覆整理成可預期的 routing contract；穩定 ID 永不作使用者可見文字。
-- 在 composer 增加 `#` source autocomplete；只有使用者明確選取、仍存在且對目標角色可讀的 `.txt/.md` source，才可被檢索並注入 prompt；`notes` 排除。
-- 支援一則訊息引用多個 ordered/deduped `source_refs`、失效引用阻擋、相關段落擷取與結構化 source citation chip；沒有 source chip 時不讀取任何附件正文。
+- 在 composer 增加 `#` source autocomplete；只有使用者明確選取、仍存在且對目標角色可讀的 approved source 才可被檢索並注入 prompt：chat-upload 僅限 active `.txt/.md` blob，evidence 僅限 active 且 content 為非空 string；`notes` 排除。
+- 支援一則訊息引用多個 ordered/deduped `source_refs`、失效引用阻擋、相關段落擷取與結構化 source citation chip；沒有 source chip 時不讀取任何 attachment/evidence body。
 - 將角色 Persona、語氣與硬規則分離到 system/developer prompt；當輪訊息、共享記憶、引用與選取附件成為獨立上下文層。
 - 讓聊天室回覆長度與 Markdown 使用自適應，JSON 只作傳輸格式，不再要求固定報告欄位或固定句數。
 - 保存完整共享 transcript，並以專用摘要任務建立可重建、可查看但不產生聊天氣泡的共享會議摘要。
@@ -62,16 +62,18 @@
 - Structured attachment references are carried beside the natural message and projected as UI chips; the message body is not forced to contain report-style anchors.
 - The chat mention API has one fixed accepted/rejected envelope; rejection occurs before human-event/job creation, and live completion remains tracked by existing event/websocket identities.
 - Source authorization uses only `attachment:<file_id>` and `evidence:<evidence_id>` refs; source labels are display-only, notes are excluded, and every target in a multi-role/all request is validated.
+- Source readability is kind-specific: attachments require active readable `.txt`/`.md` blobs; evidence requires an active version with non-empty string content and no extension check. Initial/legacy no-extension evidence is approved; notes are excluded.
 - The chat request uses code-point half-open token spans: `mentions[{token_id,role_id,display_text,start,end}]`, `source_tokens[{token_id,source_ref,display_text,start,end}]`, ordered/deduped `source_refs`, and `quoted_event_id`; verified chip spans are removed only from normalized prompt instruction while the human event preserves original content and metadata.
 - All validation errors use closed 400/404/409 envelopes with no event/job side effects; `source_refs` and retrieved segment IDs are the only authorization/provenance fields.
 - Canonical content is NFC-normalized before span generation; raw uncovered `@` follows the Unicode XID_Continue/email grammar, raw uncovered `#` is always ordinary text, and the closed error mapping is table-driven with no unlisted 400 codes.
 - Summary regeneration uses `POST /meetings/{meeting_id}/chat/memory/regenerate`; completion and failure use the same `chatroom_memory_updated` projection event.
+- `ChatroomMemoryTaskManager` is isolated from `MeetingJobManager`, with one idempotent per-meeting reservation shared by automatic terminal-round triggers and manual regeneration; generation never blocks chat.
 - Existing formal response schemas, event IDs, historical JSONL, and non-chatroom presentation are out of scope for migration.
 
 ## Testing Decisions
 
 - Tests assert observable routing, prompt contents, event persistence, context boundaries, and rendered UI behavior rather than private helper implementation.
-- Backend coverage will exercise default host, display-name chip routing, code-point span validation, exact closed API envelopes/statuses, no-side-effect rejection, multi-role/all fanout, invalid/stale chip rejection, source authorization, notes exclusion, bounded full/segmented retrieval, exact citation provenance, summary regeneration/status events, and adapter message-layer contracts.
+- Backend coverage will exercise default host, display-name chip routing, code-point span validation, exact closed API envelopes/statuses, no-side-effect rejection, multi-role/all fanout, invalid/stale chip rejection, source authorization and kind-specific readability, notes exclusion, initial/legacy no-extension evidence, Host fallback, bounded full/segmented retrieval, exact citation provenance, summary regeneration/status events, concurrent chat during generation, duplicate reservation, terminal `@all` scheduling, stale-write ordering, and adapter message-layer contracts.
 - Frontend unit and Playwright coverage will exercise role/source chips, composer hints, mixed role/source input, citation chips, exact summary regeneration states, summary visibility, pending fanout behavior, and non-chatroom regressions.
 - Existing formal-mode tests and historical-event fixtures remain regression gates.
 - Slice acceptance includes targeted tests, frontend build, relevant full suites, and direct browser smoke for the composer and context panel.

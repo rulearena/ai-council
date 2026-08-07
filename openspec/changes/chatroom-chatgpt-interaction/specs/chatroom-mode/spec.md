@@ -155,7 +155,7 @@ Chatroom responses SHALL use the dedicated `chat-message/v1` output contract and
 - **AND** the system does not cut it to a fixed sentence or character count
 
 ### Requirement: Case files remain compatible
-Chatroom meetings SHALL retain the existing case-material storage, deletion, download, reader, and historical event contracts. Case-material body content SHALL NOT be injected into a chatroom prompt merely because it is attached to the meeting. Only explicitly selected, active, AI-readable attachments SHALL contribute bounded content through the `#` reference contract. Binary and unsupported material SHALL remain available for its existing UI behavior but SHALL remain absent from prompt body content.
+Chatroom meetings SHALL retain the existing case-material storage, deletion, download, reader, and historical event contracts. Case-material body content SHALL NOT be injected into a chatroom prompt merely because it is attached to the meeting. Only explicitly selected approved sources SHALL contribute bounded content through `source_tokens`: `.txt`/`.md` attachments with active readable blobs, or active evidence with non-empty string content regardless of extension. Binary/unsupported attachments and `notes` SHALL remain absent from prompt body content.
 
 #### Scenario: Existing case material remains stored
 - **WHEN** a chatroom meeting is created with case files or receives an upload
@@ -163,12 +163,21 @@ Chatroom meetings SHALL retain the existing case-material storage, deletion, dow
 - **AND** the material can still be managed and downloaded through the existing UI
 
 #### Scenario: Unselected case material is not injected
-- **WHEN** a chatroom meeting has active `.txt` and `.md` attachments but the message contains no `#` reference
-- **THEN** neither attachment body is included in the AI prompt
-- **AND** the role is not told that it read those attachments
+- **WHEN** a chatroom meeting has active attachments and no-extension evidence but the message contains no source token
+- **THEN** neither body is included in the AI prompt
+- **AND** the role is not told that it read those sources
 
-#### Scenario: Unsupported selected file is not read
-- **WHEN** a user attempts to select a PDF or image with `#`
+#### Scenario: Initial and legacy evidence is readable
+- **WHEN** a meeting has active initial/legacy evidence with non-empty `content` and no filename extension
+- **THEN** it is an approved readable evidence source
+- **AND** Host can read it through the fixed coordinator fallback even when legacy visibility omits Host
+
+#### Scenario: @all validates evidence visibility
+- **WHEN** the all chip selects evidence unavailable to one target role
+- **THEN** the whole request is rejected before any event or job with `SOURCE_NOT_VISIBLE_TO_TARGET`
+
+#### Scenario: Unsupported selected attachment is not read
+- **WHEN** a user attempts to select a PDF, image, ZIP, or other binary attachment with a source token
 - **THEN** the file remains downloadable/previewable according to the existing attachment UI
 - **AND** the AI request is blocked because the file is not prompt-readable
 

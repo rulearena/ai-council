@@ -1,7 +1,7 @@
 ## ADDED Requirements
 
 ### Requirement: Summary regeneration has an explicit API contract
-`POST /meetings/{meeting_id}/chat/memory/regenerate` SHALL be available when the meeting is idle and able to accept chat input. Success SHALL return HTTP `202` with exactly `{status: "accepted", meeting_id: string, memory_status: "generating"}`. A running or terminal meeting SHALL return HTTP `409` with exactly `{status: "rejected", error: {code: "CHATROOM_MEMORY_REGENERATION_NOT_ALLOWED"}}`. The request SHALL not create a human event, AI chat event, or feed bubble.
+`POST /meetings/{meeting_id}/chat/memory/regenerate` SHALL be available for an open chatroom with no active chat round. With no generation reservation, and while one is already generating, it SHALL return HTTP `202` with exactly `{status: "accepted", meeting_id: string, memory_status: "generating"}`; the latter path SHALL create no duplicate task. A non-chatroom, closed/terminal, or explicitly active chat round SHALL return HTTP `409` with exactly `{status: "rejected", error: {code: "CHATROOM_MEMORY_REGENERATION_NOT_ALLOWED", field: null, details: []}}`. The request SHALL not create a human event, AI chat event, or feed bubble.
 
 #### Scenario: User requests regeneration while idle
 - **WHEN** an idle chatroom receives a valid regeneration request
@@ -9,9 +9,40 @@
 - **AND** the memory task enters `generating` without creating a feed event
 
 #### Scenario: Regeneration is rejected while unavailable
-- **WHEN** a running or terminal meeting receives a regeneration request
+- **WHEN** a non-chatroom, closed/terminal, or actively responding meeting receives a regeneration request
 - **THEN** it returns the exact `409` rejected body
 - **AND** no memory task or feed event is created
+
+### Requirement: Memory generation is isolated and idempotent
+Each meeting SHALL have one `ChatroomMemoryTaskManager` (or equivalent dedicated scheduler) separate from `MeetingJobManager`. A generation reservation SHALL be unique per meeting and SHALL not set, consume, or wait on the chat job running slot. Automatic threshold scheduling after a terminal target round and manual regeneration SHALL use the same reservation; a duplicate manual request while `generating` SHALL return the accepted body without starting another task.
+
+#### Scenario: Chat continues during generation
+- **WHEN** a memory task has `status: "generating"` and a user sends normal chat
+- **THEN** the chat request returns its normal `202`, appends the human event, and launches its chat job
+- **AND** the memory task does not block or consume the chat job slot
+
+#### Scenario: Duplicate regeneration is idempotent
+- **WHEN** two manual regeneration requests race for the same meeting
+- **THEN** both receive the exact accepted generating body
+- **AND** only one generation reservation/task exists
+
+#### Scenario: Automatic scheduling waits for terminal fanout
+- **WHEN** an `@all` round has a pending target
+- **THEN** no automatic memory reservation is created
+- **AND** after every target completes, fails, or cancels, exactly one reservation is created when the threshold is reached
+
+### Requirement: Memory snapshots publish only ordered results
+When a memory reservation is created, the task SHALL snapshot the canonical transcript event boundary and current summary revision. Chat requests during generation SHALL use the previous summary when present plus newer transcript events without waiting. Completion SHALL atomically publish only when the task boundary is not older than the stored boundary; an older result SHALL be discarded and retried by the next threshold without mutating the event log.
+
+#### Scenario: Chat uses prior summary while generation runs
+- **WHEN** a new human/AI round is published during memory generation
+- **THEN** its prompt uses the prior summary plus transcript events newer than the memory snapshot
+- **AND** it does not wait for memory completion
+
+#### Scenario: Stale result cannot overwrite newer memory
+- **WHEN** a task finishes with a boundary older than the stored current boundary
+- **THEN** its result is discarded
+- **AND** the stored summary and event log remain unchanged
 
 
 ### Requirement: Shared transcript is the canonical chatroom memory

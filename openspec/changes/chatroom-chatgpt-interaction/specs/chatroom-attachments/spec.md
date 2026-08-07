@@ -1,7 +1,7 @@
 ## ADDED Requirements
 
 ### Requirement: Explicit source references authorize prompt material
-Chatroom prompt construction SHALL accept source material only through explicit composer `#` reference chips represented in the request's ordered, deduplicated `source_refs` list. Source IDs SHALL use `attachment:<file_id>` for chat uploads and `evidence:<evidence_id>` for active text evidence. `notes` SHALL be excluded from the selector and SHALL not be automatically injected by this change. A natural-language mention of a filename, an earlier upload, or "剛剛那份附件" SHALL NOT authorize retrieval. The backend SHALL preserve selection order and SHALL pass only sources belonging to the current meeting. Display labels and ordinary hashtags are presentation/text only; `source_refs` are the sole source authorization.
+Chatroom prompt construction SHALL accept source material only through explicit composer `#` reference chips represented in the request's ordered, deduplicated `source_refs` list. Source IDs SHALL use `attachment:<file_id>` for chat uploads and `evidence:<evidence_id>` for active evidence. `notes` SHALL be excluded from the selector and SHALL not be automatically injected by this change. A natural-language mention of a filename, an earlier upload, or "剛剛那份附件" SHALL NOT authorize retrieval. The backend SHALL preserve selection order and SHALL pass only sources belonging to the current meeting. Display labels and ordinary hashtags are presentation/text only; `source_refs` are the sole source authorization.
 
 #### Scenario: Explicit reference selects one source
 - **WHEN** a human message contains a selected `#需求說明` reference
@@ -19,7 +19,7 @@ Chatroom prompt construction SHALL accept source material only through explicit 
 - **AND** no cross-meeting content enters the prompt
 
 ### Requirement: Chatroom source projection includes attachments and case materials
-The chatroom source selector SHALL project active chat-upload attachments and existing or newly created active text evidence from the current meeting, excluding `notes`. Attachment sources SHALL use `attachment:<file_id>` IDs; evidence sources SHALL use `evidence:<evidence_id>` IDs. `GET /meetings/{meeting_id}/chat/sources` and the meeting read projection SHALL expose each source's authoritative `source_ref`, display label, kind, readable/active state, `reader_ref`, and `available_segment_refs`. Same-name sources SHALL show kind/size/date and retain the hidden source ref for disambiguation. Existing meetings SHALL be projected at read time without migration. A source SHALL be readable through the attachment reader/blob store or current active evidence-version reader, and deletion, tombstoning, or inactive status SHALL make it invalid for send-time validation.
+The chatroom source selector SHALL project active chat-upload attachments and existing or newly created active evidence with non-empty string content from the current meeting, excluding `notes`. Attachment sources SHALL use `attachment:<file_id>` IDs; evidence sources SHALL use `evidence:<evidence_id>` IDs. `GET /meetings/{meeting_id}/chat/sources` and the meeting read projection SHALL expose each source's authoritative `source_ref`, display label, kind, readable/active state, `reader_ref`, and `available_segment_refs`. Same-name sources SHALL show kind/size/date and retain the hidden source ref for disambiguation. Existing meetings SHALL be projected at read time without migration. A source SHALL be readable through the attachment reader/blob store or current active evidence-version reader, and deletion, tombstoning, or inactive status SHALL make it invalid for send-time validation.
 
 #### Scenario: Legacy case material is selectable
 - **WHEN** an old meeting already has a readable text case material
@@ -36,8 +36,37 @@ The chatroom source selector SHALL project active chat-upload attachments and ex
 - **THEN** validation fails before any target job or human event is created
 - **AND** the response identifies the target/source visibility failure
 
+### Requirement: Approved source kinds have separate readability rules
+The system SHALL apply this closed source-kind matrix:
+
+| Source kind | Stable namespace | Readable condition | Unreadable condition |
+|---|---|---|---|
+| Chat-upload attachment | `attachment:<file_id>` | extension is `.txt` or `.md` and the active blob is readable | PDF, image, ZIP, or any other binary/extension, or inactive/unreadable blob → `SOURCE_NOT_READABLE` |
+| Versioned case-material evidence | `evidence:<evidence_id>` | active evidence version has non-empty string `content`; no extension check | inactive evidence or empty/non-string content → `SOURCE_NOT_READABLE` |
+
+Evidence readability SHALL depend on the evidence data model's `title`, `content`, and `visible_roles`, not on a filename or extension. Initial and legacy evidence without an extension SHALL therefore be readable when active with non-empty string content. `notes` SHALL never appear in the source projection or prompt authorization. Both kinds SHALL expose `source_ref`, label, kind, `reader_ref`, and `available_segment_refs` and SHALL use the same citation validation rules.
+
+#### Scenario: Initial no-extension evidence is readable
+- **WHEN** a new or legacy meeting has active evidence with title/content but no filename extension
+- **THEN** it is projected as `evidence:<evidence_id>` with `readable: true`
+- **AND** it can be selected and retrieved as text
+
+#### Scenario: Legacy evidence is readable for Host
+- **WHEN** legacy active evidence has non-empty content and omits `host` from `visible_roles`
+- **THEN** Host can select/read it through the fixed coordinator fallback
+- **AND** other roles still require their explicit visibility
+
+#### Scenario: @all validates source visibility for every target
+- **WHEN** `@all` selects active evidence visible to some but not all targets
+- **THEN** the whole request returns `SOURCE_NOT_VISIBLE_TO_TARGET` before any event/job
+
+#### Scenario: Binary attachment is not evidence-readable
+- **WHEN** a selected `attachment:<file_id>` points to a PDF, image, ZIP, or other binary
+- **THEN** the whole request returns `SOURCE_NOT_READABLE`
+- **AND** a selected `evidence:<evidence_id>` is evaluated by active content instead of extension
+
 ### Requirement: Attachment references are validated at send time
-Every selected `source_ref` SHALL be validated immediately before the AI job starts. The source SHALL exist, be active, belong to the meeting, be visible to the target role, and use a currently AI-readable type. If any selected source ref fails validation, the entire AI request SHALL be blocked; the system SHALL not silently skip, substitute, or downgrade that source. The composer SHALL preserve the input and source tokens for correction.
+Every selected `source_ref` SHALL be validated immediately before the AI job starts using the approved source-kind matrix. The source SHALL exist, be active, belong to the meeting, be visible to the target role, and have a readable body under its kind rule. If any selected source ref fails validation, the entire AI request SHALL be blocked; the system SHALL not silently skip, substitute, or downgrade that source. The composer SHALL preserve the input and source tokens for correction.
 
 #### Scenario: Deleted reference blocks request
 - **WHEN** a selected attachment is deleted after the composer opened and before send
@@ -56,7 +85,7 @@ Every selected `source_ref` SHALL be validated immediately before the AI job sta
 - **AND** both roles receive the same authorized source snapshot
 
 ### Requirement: Readable attachment retrieval is bounded and auditable
-The current prompt-readable source types SHALL remain `.txt` and `.md`. A small selected text source SHALL be eligible for full-text inclusion when it fits the context budget, yielding `segment_refs: ["full"]`. A larger selected source SHALL be segmented and searched for relevant paragraphs using a deterministic local retrieval strategy, yielding IDs such as `paragraph:0001`; retrieved content SHALL be bounded by the remaining token budget and SHALL carry source metadata. The system SHALL not silently truncate a source while claiming to have read it, and PDF extraction, image OCR, ZIP inspection, external vector databases, and cloud retrieval SHALL remain out of scope.
+Approved readable sources SHALL be text bodies from either a readable `.txt`/`.md` attachment or active evidence with non-empty string content. A small selected source SHALL be eligible for full-text inclusion when it fits the context budget, yielding `segment_refs: ["full"]`. A larger selected source SHALL be segmented and searched for relevant paragraphs using a deterministic local retrieval strategy, yielding IDs such as `paragraph:0001`; retrieved content SHALL be bounded by the remaining token budget and SHALL carry source metadata. The system SHALL not silently truncate a source while claiming to have read it, and PDF extraction, image OCR, ZIP inspection, external vector databases, and cloud retrieval SHALL remain out of scope.
 
 #### Scenario: Small file fits in context
 - **WHEN** a selected `.md` file is small enough for the remaining budget
@@ -99,7 +128,7 @@ When a chatroom response uses a concrete fact from a selected source, the prompt
 ## MODIFIED Requirements
 
 ### Requirement: Attachment file-type routing
-Only `.txt` and `.md` SHALL use the text-material contract. In chatroom mode a text upload SHALL also record an attachment event pointing to the mirrored evidence; in other modes text SHALL retain the existing case-material behavior. Every other extension SHALL be stored as a binary attachment without a type whitelist. Storage and reader behavior SHALL remain independent from prompt authorization: a chatroom text attachment SHALL become prompt-eligible only after the user explicitly selects it with `#`.
+Only chat-upload attachments with `.txt` and `.md` SHALL use the attachment text-material contract. In chatroom mode a text upload SHALL also record an attachment event pointing to the mirrored evidence; in other modes text SHALL retain the existing case-material behavior. Every other extension SHALL be stored as a binary attachment without a type whitelist and SHALL be `SOURCE_NOT_READABLE` for prompt use. Evidence follows the separate active-content rule above. Storage and reader behavior SHALL remain independent from prompt authorization: either approved source kind SHALL become prompt-eligible only after explicit `source_tokens` selection.
 
 #### Scenario: Chatroom text attachment
 - **WHEN** a user uploads a `.txt` or `.md` in chatroom mode
@@ -112,7 +141,7 @@ Only `.txt` and `.md` SHALL use the text-material contract. In chatroom mode a t
 - **THEN** it is stored as a binary attachment and is not prompt-readable
 
 ### Requirement: AI boundary
-Binary attachment metadata and attachment tombstones SHALL NOT be injected into model prompts, chatroom context, or transcript content. Mirrored chatroom text SHALL remain available through the existing case-material and reader contracts, but its body SHALL be injected into a chatroom prompt only when the current message explicitly selects that attachment with `#`. Without `#`, no attachment body SHALL be retrieved, regardless of previous turns or natural-language references.
+Binary attachment metadata and attachment tombstones SHALL NOT be injected into model prompts, chatroom context, or transcript content. Approved attachment text and active evidence SHALL remain available through their existing readers, but a body SHALL be injected only when the current message explicitly selects its `source_ref` through a `source_token`. Without a source token, no attachment or evidence body SHALL be retrieved, regardless of previous turns or natural-language references.
 
 #### Scenario: Binary stays outside AI context
 - **WHEN** a role responds in a meeting containing a binary attachment
