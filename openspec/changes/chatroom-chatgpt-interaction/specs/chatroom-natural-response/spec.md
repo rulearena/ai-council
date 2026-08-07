@@ -9,7 +9,7 @@ The chatroom model request SHALL represent prompt layers separately: a system la
 - **AND** the user's message is not used to redefine the hard Persona rules
 
 #### Scenario: User layer carries selected material
-- **WHEN** a user sends a message with a quote and one `#` attachment reference
+- **WHEN** a user sends a message with a quote and one `#` source token
 - **THEN** the user/context layer contains the current instruction, quote, and bounded selected attachment excerpts
 - **AND** no unselected attachment body is included
 
@@ -18,15 +18,15 @@ The chatroom model request SHALL represent prompt layers separately: a system la
 - **THEN** the layers are flattened in a documented stable order
 - **AND** the same layer content and output schema remain available to the model
 
-### Requirement: Chatroom responses expose structured attachment references
+### Requirement: Chatroom responses expose structured source citations
 The registered `chat-message/v1` contract SHALL retain a non-blank string `message` and SHALL support an optional `attachment_refs` array. If the response uses a concrete fact from a selected source, the prompt and output contract SHALL require `attachment_refs`; every item SHALL be exactly `{source_ref: string, label: string, segment_refs: string[]}`, with `source_ref` in the current selected allow-list, `label` exactly equal to the server projection label, and every `segment_ref` in the request's retrieved `available_segment_refs`; at least one valid segment ref SHALL be present. Generic chat MAY omit the array. Unknown label/segment/deleted source SHALL fail existing output parse/semantic validation. The natural message SHALL not be required to contain fixed citation anchor text.
 
-#### Scenario: Response with attachment references validates
+#### Scenario: Response with source citation validates
 - **WHEN** a model returns a message and an `attachment_refs` entry for a selected `.md` file
 - **THEN** the output passes chat-message validation with `{source_ref, label, segment_refs}`
 - **AND** the event preserves the structured reference beside the message
 
-#### Scenario: Invalid attachment reference fails validation
+#### Scenario: Invalid source citation fails validation
 - **WHEN** a model returns an `attachment_refs` entry for an unselected or deleted file
 - **THEN** the output is rejected or sanitized according to the existing parse-failure path
 - **AND** no completed event claims the invalid source

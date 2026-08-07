@@ -128,7 +128,7 @@ Each AI call in chatroom mode SHALL assemble context in this order: system and d
 - **AND** older transcript events are evicted before the current message or summary
 
 #### Scenario: No attachment is read without #
-- **WHEN** a chatroom message contains no attachment reference
+- **WHEN** a chatroom message contains no source token
 - **THEN** no attachment body is retrieved or injected into the prompt
 - **AND** the prompt does not infer an attachment from natural-language wording
 

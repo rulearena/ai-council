@@ -64,6 +64,7 @@
 - Source authorization uses only `attachment:<file_id>` and `evidence:<evidence_id>` refs; source labels are display-only, notes are excluded, and every target in a multi-role/all request is validated.
 - The chat request uses code-point half-open token spans: `mentions[{token_id,role_id,display_text,start,end}]`, `source_tokens[{token_id,source_ref,display_text,start,end}]`, ordered/deduped `source_refs`, and `quoted_event_id`; verified chip spans are removed only from normalized prompt instruction while the human event preserves original content and metadata.
 - All validation errors use closed 400/404/409 envelopes with no event/job side effects; `source_refs` and retrieved segment IDs are the only authorization/provenance fields.
+- Canonical content is NFC-normalized before span generation; raw uncovered `@` follows the Unicode XID_Continue/email grammar, raw uncovered `#` is always ordinary text, and the closed error mapping is table-driven with no unlisted 400 codes.
 - Summary regeneration uses `POST /meetings/{meeting_id}/chat/memory/regenerate`; completion and failure use the same `chatroom_memory_updated` projection event.
 - Existing formal response schemas, event IDs, historical JSONL, and non-chatroom presentation are out of scope for migration.
 

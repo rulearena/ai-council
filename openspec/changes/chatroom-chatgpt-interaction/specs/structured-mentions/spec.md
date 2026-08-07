@@ -3,6 +3,24 @@
 ### Requirement: Chatroom mention API has an explicit validation contract
 `POST /meetings/{meeting_id}/chat/mention` SHALL accept exactly `content:string`, `mentions:Array<{token_id:string,role_id:string,display_text:string,start:int,end:int}>`, `source_tokens:Array<{token_id:string,source_ref:string,display_text:string,start:int,end:int}>`, `source_refs:string[]`, and `quoted_event_id:string|null`. Offsets SHALL be Python/Unicode code-point half-open offsets; token IDs SHALL be unique within the request. For every token, the backend SHALL require bounds, non-overlap, the correct `@`/`#` prefix, and `content[start:end]` exactly equal to `display_text`. `role_id`/`source_ref` SHALL authorize; display text SHALL only provide integrity/display. `source_refs` SHALL equal first-appearance, deduplicated `source_tokens[].source_ref` values or fail `STALE_SOURCE_PAYLOAD`. Role chips SHALL display `@顧問`, `@主持 AI`, and `@全部角色`; stable IDs SHALL be hidden. A hand-typed uncovered role-like token SHALL be `INVALID_MENTION_TOKEN`; email and ordinary `@` text SHALL not be tokens. A successful request SHALL return exactly HTTP `202` body `{status:"accepted",meeting_id:string,target_role_ids:string[],source_refs:string[],warnings:Array<{code:"IGNORED_INVALID_MENTION",display_text:string}>}` and SHALL not promise job IDs. All other JSON/schema/field/type/unknown-field/blank-content/span/quote/source/role validation SHALL return exactly HTTP `400` `{status:"rejected",error:{code,field:string|null,details:Array<Detail>}}`. Codes SHALL include `INVALID_REQUEST_SCHEMA`, `INVALID_MENTION_TOKEN`, `STALE_MENTION_PAYLOAD`, `MENTION_TOKEN_MISMATCH`, `INVALID_SOURCE_REF`, `STALE_SOURCE_PAYLOAD`, `SOURCE_TOKEN_MISMATCH`, `SOURCE_NOT_VISIBLE_TO_TARGET`, and `SOURCE_NOT_READABLE`; each Detail SHALL contain only optional `token_id`, `role_id`, `display_text`, `source_ref`, `start`, and `end`. Unknown/malformed `quoted_event_id` SHALL be `INVALID_REQUEST_SCHEMA`; a well-typed missing quote event SHALL preserve graceful quote-ignore. Missing meeting SHALL return exactly HTTP `404` `{status:"rejected",error:{code:"MEETING_NOT_FOUND",field:null,details:[]}}`; a non-accepting meeting SHALL return exactly HTTP `409` `{status:"rejected",error:{code:"CHATROOM_NOT_ACCEPTING_INPUT",field:null,details:[]}}`. Every rejection SHALL happen before a human event or AI job exists.
 
+Before offsets are generated, composer and backend SHALL NFC-normalize canonical content. If submitted content is not NFC (`content != NFC(content)`), the request SHALL return `400 INVALID_REQUEST_SCHEMA` with field `content`; the composer SHALL normalize first. All spans SHALL use Unicode code-point half-open `[start,end)` offsets, SHALL be in bounds and non-overlapping, and chip `display_text` SHALL exactly equal the content slice. An uncovered raw role-like candidate SHALL satisfy: `@` at start or preceded by neither Unicode `XID_Continue` nor `@`, `.`, `+`, `-`; followed by 1–64 Unicode `XID_Continue` code points (CJK letters, combining marks, decimal digits, underscore included); and followed by end or a non-`XID_Continue`/non-`-` code point. Hyphen is chip-only. Email-like local/domain patterns are ordinary text: a preceding local run of XID/`.`/`+`/`-` containing local text, or candidate followed by `.` plus an XID domain. Raw scanning SHALL skip verified chip spans, including display text with spaces such as `@主持 AI`. Uncovered `#` SHALL always remain ordinary hashtag/text and SHALL never authorize or invalidate a request.
+
+The 400 union SHALL be closed and mapped exactly as follows:
+
+| Input failure | Code | Field |
+|---|---|---|
+| missing/wrong/unknown field or type, blank/non-NFC content, malformed quote | `INVALID_REQUEST_SCHEMA` | `content`, `mentions`, `source_tokens`, `source_refs`, `quoted_event_id`, or `null` |
+| duplicate mention token ID, mention span out of range/overlap/content mismatch, missing/invalid `@` prefix | `MENTION_TOKEN_MISMATCH` | `mentions` |
+| inactive role or display text no longer matches active projection | `STALE_MENTION_PAYLOAD` | `mentions` |
+| uncovered raw role-like candidate | `INVALID_MENTION_TOKEN` | `content` |
+| duplicate source token ID, source span out of range/overlap/content mismatch, missing `#` prefix | `SOURCE_TOKEN_MISMATCH` | `source_tokens` |
+| source refs differ from first-occurrence deduped source-token projection | `STALE_SOURCE_PAYLOAD` | `source_refs` |
+| invalid source namespace/format/meeting membership/active state | `INVALID_SOURCE_REF` | `source_refs` |
+| source not visible to target | `SOURCE_NOT_VISIBLE_TO_TARGET` | `source_refs` |
+| source unsupported or unreadable | `SOURCE_NOT_READABLE` | `source_refs` |
+
+Every 400 response SHALL be exactly `{status:"rejected",error:{code:one-of-table,field:string|null,details:Detail[]}}`; `Detail` SHALL contain only optional `token_id?:string`, `role_id?:string`, `display_text?:string`, `source_ref?:string`, `start?:integer`, and `end?:integer`, omitting non-applicable keys. No new 400 code is permitted without updating this table and its direct full-body tests.
+
 #### Scenario: Direct API accepts a valid request
 - **WHEN** the API receives valid content, non-overlapping chip spans, ordered source tokens, matching deduplicated source refs, and a well-typed quote ID
 - **THEN** it returns exactly the accepted status, meeting ID, target roles, deduplicated source refs, and warnings
@@ -55,7 +73,7 @@ The composer and backend SHALL preserve role chips and `source_tokens` as separa
 #### Scenario: Attachment reference does not target a role
 - **WHEN** a user sends `#需求說明 請摘要` without an @mention
 - **THEN** Host is selected by the default routing rule
-- **AND** the attachment reference is passed as source scope, not as a responder
+- **AND** the source token is passed as source scope, not as a responder
 
 #### Scenario: Role mention does not read attachments
 - **WHEN** a user sends a Critic chip without a # reference
@@ -80,7 +98,7 @@ In chatroom mode, typing `#` followed by characters SHALL open a source autocomp
 - **THEN** the item indicates that it is not AI-readable
 - **AND** selecting it as an AI source is disabled
 
-### Requirement: Multiple attachment references preserve selection order and deduplicate
+### Requirement: Multiple source tokens preserve selection order and deduplicate
 A single chatroom message SHALL support multiple `#` source chips. The frontend SHALL preserve first-selection order, and the backend SHALL deduplicate repeated `source_ref` values before retrieval. The same source SHALL contribute at most one source block to a request.
 
 #### Scenario: Compare two selected attachments

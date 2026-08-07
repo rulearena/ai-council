@@ -52,6 +52,8 @@ The alternative was to require a data migration for every existing chatroom. Tha
 
 `content` is the exact composer text. The request fields are fixed: `content:string`, `mentions:Array<{token_id:string,role_id:string,display_text:string,start:int,end:int}>`, `source_tokens:Array<{token_id:string,source_ref:string,display_text:string,start:int,end:int}>`, `source_refs:string[]`, and `quoted_event_id:string|null`. Offsets use Python/Unicode code-point half-open indexing (`content[start:end]`); token IDs are unique within one request. Every mention/source span must be in bounds, non-overlapping, have the correct `@`/`#` prefix, and exactly equal its `display_text`. `role_id` and `source_ref` are authorization fields; display text is integrity/display only. `source_refs` must equal first-appearance, deduplicated `source_tokens[].source_ref` values or the request fails `STALE_SOURCE_PAYLOAD`. The composer renders display-name chips such as `@顧問`, `@主持 AI`, `@全部角色`, and source chips such as `#需求說明`; stable IDs are hidden and never become user-visible text. The human event preserves original content and token metadata; normalized prompt instruction removes only verified chip spans.
 
+Before span calculation, both composer and backend SHALL NFC-normalize the canonical content. If submitted `content` differs from its NFC form, the backend SHALL return `400 INVALID_REQUEST_SCHEMA` with field `content`; the composer SHALL normalize first and then generate spans. All spans are Unicode code-point half-open `[start,end)` offsets.
+
 The backend will validate the token model before routing:
 
 - `content[start:end] == display_text`, correct prefix, bounds, non-overlap, and unique `token_id`;
@@ -59,6 +61,8 @@ The backend will validate the token model before routing:
 - ordinary `@` characters such as email addresses, which are not tokens.
 
 Same-label chips remain distinct by token ID and hidden stable ID. A hand-typed token with the same display text as a chip is still ordinary content unless its span is covered by that chip; in the normal path an uncovered role-like token produces `INVALID_MENTION_TOKEN`, while the `all`-chip precedence path ignores it with an `IGNORED_INVALID_MENTION` warning. A hashtag without a source chip is ordinary text and never authorizes a source.
+
+The raw role-like candidate grammar is closed and Unicode-aware. An uncovered `@` is a candidate only when it is at content start or its preceding code point is neither Unicode `XID_Continue` nor `@`, `.`, `+`, or `-`; it is followed by 1–64 Unicode `XID_Continue` code points (including CJK letters, combining marks, decimal digits, and underscore), and the following code point is absent or neither `XID_Continue` nor `-`. Hyphen is available only inside a verified chip, never in a raw candidate. If the `@` is inside an email-like local/domain pattern (a preceding local run of XID/`.`/`+`/`-`, or candidate followed by `.` plus an XID domain), the whole sequence is ordinary text. Raw scanning never enters a verified chip span, including display text with spaces such as `@主持 AI`. Uncovered `#` is always ordinary hashtag/text and never produces validation or authorization.
 
 The human event will preserve the exact user-visible message and quote reference. A normalized instruction used in the model prompt will remove routing tokens while retaining the natural-language request; selected attachments will be represented in their own context layer. A message containing only valid routing tokens therefore produces an empty instruction, which the chat Persona can answer with a clarification question.
 
@@ -70,7 +74,21 @@ Routing rules are applied in this order:
 4. With no valid role chip, select Host.
 5. Validate every selected `source_ref` immediately before execution for every target role; one invalid reference blocks the complete target set.
 
-Successful requests return exactly HTTP `202` body `{status:"accepted",meeting_id:string,target_role_ids:string[],source_refs:string[],warnings:Array<{code:"IGNORED_INVALID_MENTION",display_text:string}>}`. Live completion is tracked by existing event/websocket identity; no `job_ids` is promised. Every other JSON validation rejection returns exactly HTTP `400` body `{status:"rejected",error:{code,field:string|null,details:Array<Detail>}}`, where codes include `INVALID_REQUEST_SCHEMA`, `INVALID_MENTION_TOKEN`, `STALE_MENTION_PAYLOAD`, `MENTION_TOKEN_MISMATCH`, `INVALID_SOURCE_REF`, `STALE_SOURCE_PAYLOAD`, `SOURCE_TOKEN_MISMATCH`, `SOURCE_NOT_VISIBLE_TO_TARGET`, and `SOURCE_NOT_READABLE`. Each `Detail` has only optional `token_id`, `role_id`, `display_text`, `source_ref`, `start`, and `end`. Unknown fields, wrong types, blank content, malformed `quoted_event_id`, malformed spans, and unknown source/role fields use this envelope. A well-typed but missing quoted event keeps existing graceful quote-ignore behavior. Missing meeting returns exactly HTTP `404` `{status:"rejected",error:{code:"MEETING_NOT_FOUND",field:null,details:[]}}`; a non-accepting meeting returns exactly HTTP `409` `{status:"rejected",error:{code:"CHATROOM_NOT_ACCEPTING_INPUT",field:null,details:[]}}`. All rejection paths run before human-event/job creation.
+Successful requests return exactly HTTP `202` body `{status:"accepted",meeting_id:string,target_role_ids:string[],source_refs:string[],warnings:Array<{code:"IGNORED_INVALID_MENTION",display_text:string}>}`. Live completion is tracked by existing event/websocket identity; no `job_ids` is promised. Every other JSON validation rejection uses this closed mapping:
+
+| Input failure | Code | Field | Detail keys |
+|---|---|---|---|
+| missing/wrong/unknown field or type, blank/non-NFC content, malformed `quoted_event_id` | `INVALID_REQUEST_SCHEMA` | `content`, `mentions`, `source_tokens`, `source_refs`, `quoted_event_id`, or `null` | only applicable optional keys |
+| duplicate token ID, span out of range/overlap, content slice mismatch, missing/invalid `@` prefix | `MENTION_TOKEN_MISMATCH` | `mentions` | `token_id`, `role_id`, `display_text`, `start`, `end` |
+| inactive role or display text no longer matches active projection | `STALE_MENTION_PAYLOAD` | `mentions` | `token_id`, `role_id`, `display_text` |
+| uncovered raw role-like candidate | `INVALID_MENTION_TOKEN` | `content` | `display_text`, `start`, `end` |
+| duplicate source token ID, span out of range/overlap, content slice mismatch, missing `#` prefix | `SOURCE_TOKEN_MISMATCH` | `source_tokens` | `token_id`, `source_ref`, `display_text`, `start`, `end` |
+| `source_refs` differs from first-occurrence deduped source-token projection | `STALE_SOURCE_PAYLOAD` | `source_refs` | `source_ref`, `token_id` |
+| invalid namespace/format, wrong meeting, deleted/tombstoned/inactive source | `INVALID_SOURCE_REF` | `source_refs` | `source_ref` |
+| valid source not visible to one or more targets | `SOURCE_NOT_VISIBLE_TO_TARGET` | `source_refs` | `source_ref`, `role_id` |
+| valid/visible source unsupported or has no readable body | `SOURCE_NOT_READABLE` | `source_refs` | `source_ref` |
+
+Every 400 body is exactly `{status:"rejected",error:{code:one-of-table,field:string|null,details:Detail[]}}`; `Detail` has only optional `token_id?:string`, `role_id?:string`, `display_text?:string`, `source_ref?:string`, `start?:integer`, and `end?:integer`, omitting non-applicable keys. 404 is exactly `{status:"rejected",error:{code:"MEETING_NOT_FOUND",field:null,details:[]}}`; 409 is exactly `{status:"rejected",error:{code:"CHATROOM_NOT_ACCEPTING_INPUT",field:null,details:[]}}`. No other 400 code may be introduced without updating this table and direct tests. A well-typed but missing quoted event keeps existing graceful quote-ignore behavior. All rejection paths run before human-event/job creation.
 
 The existing `/messages` endpoint remains available to preserve non-chatroom and historical callers. Chatroom composer sends will use the chatroom endpoint even when `mentions` is empty, so plain text cannot accidentally take the old human-only path.
 
