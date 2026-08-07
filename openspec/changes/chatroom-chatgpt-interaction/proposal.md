@@ -62,13 +62,15 @@
 - Structured attachment references are carried beside the natural message and projected as UI chips; the message body is not forced to contain report-style anchors.
 - The chat mention API has one fixed accepted/rejected envelope; rejection occurs before human-event/job creation, and live completion remains tracked by existing event/websocket identities.
 - Source authorization uses only `attachment:<file_id>` and `evidence:<evidence_id>` refs; source labels are display-only, notes are excluded, and every target in a multi-role/all request is validated.
+- The chat request uses code-point half-open token spans: `mentions[{token_id,role_id,display_text,start,end}]`, `source_tokens[{token_id,source_ref,display_text,start,end}]`, ordered/deduped `source_refs`, and `quoted_event_id`; verified chip spans are removed only from normalized prompt instruction while the human event preserves original content and metadata.
+- All validation errors use closed 400/404/409 envelopes with no event/job side effects; `source_refs` and retrieved segment IDs are the only authorization/provenance fields.
 - Summary regeneration uses `POST /meetings/{meeting_id}/chat/memory/regenerate`; completion and failure use the same `chatroom_memory_updated` projection event.
 - Existing formal response schemas, event IDs, historical JSONL, and non-chatroom presentation are out of scope for migration.
 
 ## Testing Decisions
 
 - Tests assert observable routing, prompt contents, event persistence, context boundaries, and rendered UI behavior rather than private helper implementation.
-- Backend coverage will exercise default host, display-name chip routing, exact API envelopes/statuses, multi-role/all fanout, invalid/stale chip rejection, source authorization, notes exclusion, bounded retrieval, summary regeneration/status events, and adapter message-layer contracts.
+- Backend coverage will exercise default host, display-name chip routing, code-point span validation, exact closed API envelopes/statuses, no-side-effect rejection, multi-role/all fanout, invalid/stale chip rejection, source authorization, notes exclusion, bounded full/segmented retrieval, exact citation provenance, summary regeneration/status events, and adapter message-layer contracts.
 - Frontend unit and Playwright coverage will exercise role/source chips, composer hints, mixed role/source input, citation chips, exact summary regeneration states, summary visibility, pending fanout behavior, and non-chatroom regressions.
 - Existing formal-mode tests and historical-event fixtures remain regression gates.
 - Slice acceptance includes targeted tests, frontend build, relevant full suites, and direct browser smoke for the composer and context panel.

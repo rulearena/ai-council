@@ -11,7 +11,7 @@ The chatroom composer SHALL visibly explain that `@` selects responding AI roles
 #### Scenario: Role and attachment menus coexist
 - **WHEN** the user selects an `@顧問` role chip and a `#需求說明` source chip in the same draft
 - **THEN** the draft retains both reference classes
-- **AND** the send payload contains the role ID and attachment ID separately
+- **AND** the send payload contains structured role chips and `source_ref` tokens separately
 
 #### Scenario: Existing upload entry point remains available
 - **WHEN** the user clicks the composer `+` button

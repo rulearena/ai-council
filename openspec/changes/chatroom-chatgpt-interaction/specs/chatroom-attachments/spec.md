@@ -14,12 +14,12 @@ Chatroom prompt construction SHALL accept source material only through explicit 
 - **AND** the role is not told that it read an attachment
 
 #### Scenario: Cross-meeting reference is rejected
-- **WHEN** a request contains an attachment ID that belongs to another meeting
+- **WHEN** a request contains a `source_ref` that belongs to another meeting
 - **THEN** the chatroom request is rejected before AI execution
 - **AND** no cross-meeting content enters the prompt
 
 ### Requirement: Chatroom source projection includes attachments and case materials
-The chatroom source selector SHALL project active chat-upload attachments and existing or newly created active text evidence from the current meeting, excluding `notes`. Attachment sources SHALL use `attachment:<file_id>` IDs; evidence sources SHALL use `evidence:<evidence_id>` IDs. `GET /meetings/{meeting_id}/chat/sources` and the meeting read projection SHALL expose each source's `source_ref`, display label, kind, readable/active state, and `reader_ref`. Same-name sources SHALL show kind/size/date and retain the hidden source ref for disambiguation. Existing meetings SHALL be projected at read time without migration. A source SHALL be readable through the attachment reader/blob store or current active evidence-version reader, and deletion, tombstoning, or inactive status SHALL make it invalid for send-time validation.
+The chatroom source selector SHALL project active chat-upload attachments and existing or newly created active text evidence from the current meeting, excluding `notes`. Attachment sources SHALL use `attachment:<file_id>` IDs; evidence sources SHALL use `evidence:<evidence_id>` IDs. `GET /meetings/{meeting_id}/chat/sources` and the meeting read projection SHALL expose each source's authoritative `source_ref`, display label, kind, readable/active state, `reader_ref`, and `available_segment_refs`. Same-name sources SHALL show kind/size/date and retain the hidden source ref for disambiguation. Existing meetings SHALL be projected at read time without migration. A source SHALL be readable through the attachment reader/blob store or current active evidence-version reader, and deletion, tombstoning, or inactive status SHALL make it invalid for send-time validation.
 
 #### Scenario: Legacy case material is selectable
 - **WHEN** an old meeting already has a readable text case material
@@ -37,7 +37,7 @@ The chatroom source selector SHALL project active chat-upload attachments and ex
 - **AND** the response identifies the target/source visibility failure
 
 ### Requirement: Attachment references are validated at send time
-Every selected attachment reference SHALL be validated immediately before the AI job starts. The attachment SHALL exist, be active, belong to the meeting, be visible to the target role, and use a currently AI-readable type. If any selected reference fails validation, the entire AI request SHALL be blocked; the system SHALL not silently skip, substitute, or downgrade that reference. The composer SHALL preserve the input and references for correction.
+Every selected `source_ref` SHALL be validated immediately before the AI job starts. The source SHALL exist, be active, belong to the meeting, be visible to the target role, and use a currently AI-readable type. If any selected source ref fails validation, the entire AI request SHALL be blocked; the system SHALL not silently skip, substitute, or downgrade that source. The composer SHALL preserve the input and source tokens for correction.
 
 #### Scenario: Deleted reference blocks request
 - **WHEN** a selected attachment is deleted after the composer opened and before send
@@ -56,17 +56,17 @@ Every selected attachment reference SHALL be validated immediately before the AI
 - **AND** both roles receive the same authorized source snapshot
 
 ### Requirement: Readable attachment retrieval is bounded and auditable
-The current prompt-readable attachment types SHALL remain `.txt` and `.md`. A small selected text attachment SHALL be eligible for full-text inclusion when it fits the context budget. A larger selected file SHALL be segmented and searched for relevant paragraphs using a deterministic local retrieval strategy; retrieved content SHALL be bounded by the remaining token budget and SHALL carry source metadata. The system SHALL not silently truncate a source while claiming to have read it, and PDF extraction, image OCR, ZIP inspection, external vector databases, and cloud retrieval SHALL remain out of scope.
+The current prompt-readable source types SHALL remain `.txt` and `.md`. A small selected text source SHALL be eligible for full-text inclusion when it fits the context budget, yielding `segment_refs: ["full"]`. A larger selected source SHALL be segmented and searched for relevant paragraphs using a deterministic local retrieval strategy, yielding IDs such as `paragraph:0001`; retrieved content SHALL be bounded by the remaining token budget and SHALL carry source metadata. The system SHALL not silently truncate a source while claiming to have read it, and PDF extraction, image OCR, ZIP inspection, external vector databases, and cloud retrieval SHALL remain out of scope.
 
 #### Scenario: Small file fits in context
 - **WHEN** a selected `.md` file is small enough for the remaining budget
 - **THEN** its full readable text can be included
-- **AND** the prompt records its stable source ID and display label
+- **AND** its full readable text is recorded with `segment_refs: ["full"]` and the source ref/display label
 
 #### Scenario: Large file uses relevant segments
 - **WHEN** a selected `.txt` file is larger than the remaining prompt budget
 - **THEN** deterministic relevant paragraphs are retrieved within the budget
-- **AND** the prompt metadata identifies the source and retrieved segments
+- **AND** the prompt metadata identifies the source and deterministic IDs such as `paragraph:0001`
 
 #### Scenario: Omitted content is not claimed as read
 - **WHEN** selected attachment content cannot fit within the budget
@@ -74,7 +74,7 @@ The current prompt-readable attachment types SHALL remain `.txt` and `.md`. A sm
 - **AND** no full-document claim is generated by the retrieval layer
 
 ### Requirement: Attachment source citations are structured
-When a chatroom response uses a concrete fact from a selected source, the prompt and output contract SHALL require a structured `attachment_refs` array. Each item SHALL be exactly `{source_ref: string, label: string, segment_refs: string[]}`; `source_ref` SHALL belong to the selected allow-list. Generic chat that does not use selected-source facts MAY omit `attachment_refs`. The natural `message` text SHALL remain free-form and SHALL not be forced to contain `[附件一]` anchors. A response SHALL not contain source references for unselected or unavailable sources.
+When a chatroom response uses a concrete fact from a selected source, the prompt and output contract SHALL require a structured `attachment_refs` array. Each item SHALL be exactly `{source_ref: string, label: string, segment_refs: string[]}`; `source_ref` SHALL belong to the selected allow-list, `label` SHALL exactly equal the server projection label, and every `segment_ref` SHALL belong to the request's retrieved `available_segment_refs`. At least one valid segment ref SHALL be present for factual selected-source use. Generic chat that does not use selected-source facts MAY omit `attachment_refs`. Unknown labels/segments or deleted sources SHALL fail existing output parse/semantic validation. The natural `message` text SHALL remain free-form and SHALL not be forced to contain `[附件一]` anchors. A response SHALL not contain source references for unselected or unavailable sources.
 
 #### Scenario: Factual answer carries a source chip
 - **WHEN** a role answers using a concrete fact from a selected source
@@ -90,6 +90,11 @@ When a chatroom response uses a concrete fact from a selected source, the prompt
 - **WHEN** the model attempts to cite an attachment that was not selected with `#`
 - **THEN** the backend removes or rejects that invalid reference during output validation
 - **AND** the completed event does not claim that source supported the answer
+
+#### Scenario: Citation provenance is exact
+- **WHEN** a response cites a selected source with a wrong label, unknown segment, or deleted source
+- **THEN** output parse/semantic validation fails
+- **AND** no completed event contains that citation
 
 ## MODIFIED Requirements
 
@@ -124,7 +129,7 @@ Binary attachment metadata and attachment tombstones SHALL NOT be injected into 
 - **AND** `競品.md` remains absent from the prompt
 
 ### Requirement: Attachment deletion
-Every mode SHALL expose attachment deletion. The endpoint SHALL reject running meetings, remove mirrored text evidence before writing the tombstone, and protect legacy title fallback against ambiguous matches. Existing events SHALL remain append-only. Any active `#` reference to the deleted attachment SHALL fail send-time validation rather than being silently removed.
+Every mode SHALL expose attachment deletion. The endpoint SHALL reject running meetings, remove mirrored text evidence before writing the tombstone, and protect legacy title fallback against ambiguous matches. Existing events SHALL remain append-only. Any active `source_ref` to the deleted source SHALL fail send-time validation rather than being silently removed.
 
 #### Scenario: Delete mirrored text attachment
 - **WHEN** a user deletes a chatroom text attachment

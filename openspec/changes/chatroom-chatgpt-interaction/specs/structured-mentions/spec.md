@@ -1,30 +1,30 @@
 ## ADDED Requirements
 
 ### Requirement: Chatroom mention API has an explicit validation contract
-`POST /meetings/{meeting_id}/chat/mention` SHALL accept exactly `content: string`, `mentions: Array<{role_id: string, display_text: string}>`, ordered/deduplicated `source_refs: string[]`, and `quoted_event_id: string|null`. Role chips SHALL display role names such as `@顧問`, `@主持 AI`, and `@全部角色`, while each chip carries a hidden stable `role_id`; `@Advisor` and `@host` SHALL NOT be user-visible chip text. The backend SHALL use only `role_id` for routing and SHALL validate `display_text` against the active projection for token integrity. A hand-typed role-like token without a corresponding chip SHALL be rejected as `INVALID_MENTION_TOKEN`; email and ordinary `@` text SHALL not be mentions. `source_refs` SHALL be the only source authorization and SHALL use stable source IDs, never display labels. A successful request SHALL return exactly HTTP `202` body `{status: "accepted", meeting_id: string, target_role_ids: string[], source_refs: string[], warnings: Warning[]}`. It SHALL not promise job IDs; live completion remains tracked by existing event/websocket identities. Warning SHALL be exactly `{code: "IGNORED_INVALID_MENTION", display_text: string}`. A normal rejection SHALL return exactly HTTP `400` body `{status: "rejected", error: {code, field, details}}`, with code `INVALID_MENTION_TOKEN`, `STALE_MENTION_PAYLOAD`, `INVALID_SOURCE_REF`, `SOURCE_NOT_VISIBLE_TO_TARGET`, or `SOURCE_NOT_READABLE`, and details containing only applicable `source_ref`, `role_id`, and/or `display_text`. Missing meeting SHALL return exactly HTTP `404` `{status: "rejected", error: {code: "MEETING_NOT_FOUND"}}`; a non-accepting meeting SHALL return exactly HTTP `409` `{status: "rejected", error: {code: "CHATROOM_NOT_ACCEPTING_INPUT"}}`. All rejection paths SHALL occur before any human event or AI job is created; `@all` with invalid extra role-like tokens SHALL return `202` with exact warning items.
+`POST /meetings/{meeting_id}/chat/mention` SHALL accept exactly `content:string`, `mentions:Array<{token_id:string,role_id:string,display_text:string,start:int,end:int}>`, `source_tokens:Array<{token_id:string,source_ref:string,display_text:string,start:int,end:int}>`, `source_refs:string[]`, and `quoted_event_id:string|null`. Offsets SHALL be Python/Unicode code-point half-open offsets; token IDs SHALL be unique within the request. For every token, the backend SHALL require bounds, non-overlap, the correct `@`/`#` prefix, and `content[start:end]` exactly equal to `display_text`. `role_id`/`source_ref` SHALL authorize; display text SHALL only provide integrity/display. `source_refs` SHALL equal first-appearance, deduplicated `source_tokens[].source_ref` values or fail `STALE_SOURCE_PAYLOAD`. Role chips SHALL display `@顧問`, `@主持 AI`, and `@全部角色`; stable IDs SHALL be hidden. A hand-typed uncovered role-like token SHALL be `INVALID_MENTION_TOKEN`; email and ordinary `@` text SHALL not be tokens. A successful request SHALL return exactly HTTP `202` body `{status:"accepted",meeting_id:string,target_role_ids:string[],source_refs:string[],warnings:Array<{code:"IGNORED_INVALID_MENTION",display_text:string}>}` and SHALL not promise job IDs. All other JSON/schema/field/type/unknown-field/blank-content/span/quote/source/role validation SHALL return exactly HTTP `400` `{status:"rejected",error:{code,field:string|null,details:Array<Detail>}}`. Codes SHALL include `INVALID_REQUEST_SCHEMA`, `INVALID_MENTION_TOKEN`, `STALE_MENTION_PAYLOAD`, `MENTION_TOKEN_MISMATCH`, `INVALID_SOURCE_REF`, `STALE_SOURCE_PAYLOAD`, `SOURCE_TOKEN_MISMATCH`, `SOURCE_NOT_VISIBLE_TO_TARGET`, and `SOURCE_NOT_READABLE`; each Detail SHALL contain only optional `token_id`, `role_id`, `display_text`, `source_ref`, `start`, and `end`. Unknown/malformed `quoted_event_id` SHALL be `INVALID_REQUEST_SCHEMA`; a well-typed missing quote event SHALL preserve graceful quote-ignore. Missing meeting SHALL return exactly HTTP `404` `{status:"rejected",error:{code:"MEETING_NOT_FOUND",field:null,details:[]}}`; a non-accepting meeting SHALL return exactly HTTP `409` `{status:"rejected",error:{code:"CHATROOM_NOT_ACCEPTING_INPUT",field:null,details:[]}}`. Every rejection SHALL happen before a human event or AI job exists.
 
 #### Scenario: Direct API accepts a valid request
-- **WHEN** the API receives valid `content`, stable `mentions`, and ordered valid `source_refs`
+- **WHEN** the API receives valid content, non-overlapping chip spans, ordered source tokens, matching deduplicated source refs, and a well-typed quote ID
 - **THEN** it returns exactly the accepted status, meeting ID, target roles, deduplicated source refs, and warnings
 - **AND** the human event and AI jobs are created exactly once
 
 #### Scenario: Invalid request has no side effects
-- **WHEN** the API receives an invalid normal role or inaccessible source reference
+- **WHEN** the API receives a missing/wrong field, blank content, unknown field, malformed quote, invalid span, stale payload, invalid role, or inaccessible source reference
 - **THEN** it returns `400` with the exact rejected error envelope and field-level details
 - **AND** it creates neither a human event nor an AI job
 
-#### Scenario: @all warning is observable
-- **WHEN** the API receives `@all @NotARealRole` with a valid source list
+#### Scenario: all-chip warning is observable
+- **WHEN** the API receives an `@全部角色` chip and an uncovered `@NotARealRole` token with valid source tokens
 - **THEN** it returns `202` for the all-role fanout
 - **AND** the response warning list contains exactly `{code: "IGNORED_INVALID_MENTION", display_text: "@NotARealRole"}`
 
-### Requirement: Composer source chips are distinct from ordinary hashtags
-The composer SHALL represent an attachment or evidence selection as a reference chip carrying its stable `source_ref` and display label. The backend SHALL use the ordered `source_refs` payload for authorization and SHALL not parse ordinary hashtags or infer a source from a filename/display label. Sources with identical display labels SHALL remain independently selectable and distinguishable by stable ID.
+### Requirement: Composer token spans are distinct from ordinary text
+The composer SHALL represent each role/source selection as a chip with a unique `token_id`, display text, code-point `start`/`end` span, and hidden stable `role_id` or `source_ref`. The backend SHALL use role IDs/source refs for authorization and SHALL not infer them from display labels. Sources with identical labels SHALL remain independently selectable by token ID and hidden source ref. A hand-typed token with identical display text is not a chip and has no authorization.
 
 #### Scenario: Same-label sources remain unambiguous
 - **WHEN** two sources are both labelled `需求說明.md`
 - **THEN** the composer shows enough metadata to distinguish their chips
-- **AND** the API receives the selected stable source ID rather than a filename
+- **AND** the API receives the selected stable `source_ref` rather than a filename
 
 #### Scenario: Ordinary hashtag is not a source
 - **WHEN** a user writes `#待確認` without selecting a source chip
@@ -44,8 +44,8 @@ In chatroom mode, a human message with no role chip SHALL route to the fixed rol
 - **THEN** the existing non-chatroom composer behavior is used
 - **AND** the chatroom Host routing rule is not applied
 
-### Requirement: Mention routing and attachment references are independent
-The composer and backend SHALL parse `@` role directives and `#` attachment references as separate token classes. `@` SHALL select responders; `#` SHALL select allowable attachment sources. A message SHALL be able to contain zero, one, or many tokens of either class without one class implicitly changing the other.
+### Requirement: Role and source chips are independent
+The composer and backend SHALL preserve role chips and `source_tokens` as separate token classes. Role chips SHALL select responders; source tokens SHALL select allowable sources. A message SHALL be able to contain zero, one, or many tokens of either class without one class implicitly changing the other.
 
 #### Scenario: Explicit role with selected attachment
 - **WHEN** a user sends a Critic chip (`{role_id: "Critic", display_text: "@評論者"}`) followed by `#需求說明`
@@ -62,8 +62,8 @@ The composer and backend SHALL parse `@` role directives and `#` attachment refe
 - **THEN** Critic is selected
 - **AND** no attachment body is retrieved
 
-### Requirement: Attachment reference autocomplete uses stable IDs
-In chatroom mode, typing `#` followed by characters SHALL open a source autocomplete menu containing active chat-upload attachments and active text evidence available in the current meeting, excluding notes. Each option SHALL show a human-readable display label and SHALL carry its stable `source_ref` for submission. Selection SHALL insert a source reference chip associated with that stable ID, not an inferred filename lookup. Deleted, unavailable, and unsupported non-readable sources SHALL be visibly marked and SHALL not be selectable as AI-readable sources.
+### Requirement: Source autocomplete uses authoritative source refs
+In chatroom mode, typing `#` followed by characters SHALL open a source autocomplete menu containing active chat-upload attachments and active text evidence available in the current meeting, excluding notes. Each option SHALL show a human-readable display label and SHALL carry its authoritative `source_ref` for submission. Selection SHALL insert a source token with a unique token ID and code-point span, not an inferred filename lookup. Deleted, unavailable, and unsupported non-readable sources SHALL be visibly marked and SHALL not be selectable as AI-readable sources.
 
 #### Scenario: Attachment autocomplete shows readable material
 - **WHEN** the user types `#需` in a chatroom composer
@@ -73,7 +73,7 @@ In chatroom mode, typing `#` followed by characters SHALL open a source autocomp
 #### Scenario: Selection keeps display label and stable ID
 - **WHEN** the user selects an attachment named `需求說明.md`
 - **THEN** the composer shows a readable `#` reference chip or token
-- **AND** the send payload contains the selected stable attachment ID
+- **AND** the send payload contains the selected stable `source_ref`
 
 #### Scenario: Unsupported attachment cannot be selected for AI
 - **WHEN** the attachment menu contains a PDF or image
@@ -81,7 +81,7 @@ In chatroom mode, typing `#` followed by characters SHALL open a source autocomp
 - **AND** selecting it as an AI source is disabled
 
 ### Requirement: Multiple attachment references preserve selection order and deduplicate
-A single chatroom message SHALL support multiple `#` attachment references. The frontend SHALL preserve first-selection order, and the backend SHALL deduplicate repeated stable IDs before retrieval. The same attachment SHALL contribute at most one source block to a request.
+A single chatroom message SHALL support multiple `#` source chips. The frontend SHALL preserve first-selection order, and the backend SHALL deduplicate repeated `source_ref` values before retrieval. The same source SHALL contribute at most one source block to a request.
 
 #### Scenario: Compare two selected attachments
 - **WHEN** the user selects `#需求說明` and then `#競品分析`
@@ -91,7 +91,7 @@ A single chatroom message SHALL support multiple `#` attachment references. The 
 #### Scenario: Repeated attachment is sent once
 - **WHEN** the user selects the same attachment twice
 - **THEN** the UI may show one consolidated chip
-- **AND** the backend sends at most one source block for that attachment ID
+- **AND** the backend sends at most one source block for that `source_ref`
 
 ### Requirement: Composer teaches both routing controls
 The chatroom composer SHALL provide visible, concise affordances that explain `@` role routing and `#` attachment selection. The empty or idle composer placeholder SHALL include the equivalent of `@指定 AI` and `#選取附件`, and the UI SHALL state that leaving out `@` sends to the Host. The affordance SHALL not appear as an instruction in the AI prompt.
