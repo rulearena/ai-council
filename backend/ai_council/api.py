@@ -2565,13 +2565,23 @@ def create_app(
                 )
 
             def run_mention() -> None:
-                if target_role_ids == active_role_ids:
+                if len(target_role_ids) > 1:
+                    filtered_assignments = {
+                        role_id: model_assignments[role_id]
+                        for role_id in target_role_ids
+                        if role_id in model_assignments
+                    }
+                    filtered_display_names = {
+                        role_id: role_display_names[role_id]
+                        for role_id in target_role_ids
+                        if role_id in filtered_assignments and role_id in role_display_names
+                    }
                     runner.fanout_chatroom_all(
                         meeting_id=meeting_id,
                         goal=metadata.get("goal", ""),
                         instruction=routing.instruction,
-                        role_display_names=role_display_names,
-                        model_assignments=model_assignments,
+                        role_display_names=filtered_display_names,
+                        model_assignments=filtered_assignments,
                         inputs=inputs,
                         quoted_event_id=request.quoted_event_id,
                         human_content=request.content,
@@ -2598,25 +2608,6 @@ def create_app(
                         role_display_name=role_display_name,
                         instruction=routing.instruction,
                         model_assignments=model_assignments,
-                        inputs=inputs,
-                        quoted_event_id=request.quoted_event_id,
-                        human_content=request.content,
-                        human_event_fields=human_event_fields,
-                    )
-                else:
-                    filtered_assignments = {
-                        r: model_assignments[r] for r in target_role_ids if r in model_assignments
-                    }
-                    filtered_display_names = {
-                        r: role_display_names[r]
-                        for r in filtered_assignments
-                    }
-                    runner.fanout_chatroom_all(
-                        meeting_id=meeting_id,
-                        goal=metadata.get("goal", ""),
-                        instruction=routing.instruction,
-                        role_display_names=filtered_display_names,
-                        model_assignments=filtered_assignments,
                         inputs=inputs,
                         quoted_event_id=request.quoted_event_id,
                         human_content=request.content,

@@ -183,6 +183,55 @@ def test_all_chip_has_precedence_and_warns_about_raw_role_token(tmp_path: Path) 
     }
 
 
+def test_subset_participant_all_chip_only_fans_out_to_routing_targets(tmp_path: Path) -> None:
+    app = create_app(
+        data_dir=tmp_path / "data",
+        model_config_path=PROJECT_ROOT / "config/models.yaml.example",
+        modes_config_path=PROJECT_ROOT / "config/modes.yaml",
+        prompt_dir=PROJECT_ROOT / "prompts",
+        start_model_health_checks=False,
+    )
+    client = TestClient(app)
+    response = client.post(
+        "/meetings",
+        json={
+            "title": "Subset chatroom routing",
+            "mode_id": "chatroom",
+            "participants": [
+                {"role_id": "host", "model_config_id": "mock-fast"},
+                {"role_id": "Advisor", "model_config_id": "mock-fast"},
+                {"role_id": "Critic", "model_config_id": "mock-fast"},
+            ],
+        },
+    )
+    assert response.status_code == 200
+    meeting_id = response.json()["meeting_id"]
+
+    response = client.post(
+        f"/meetings/{meeting_id}/chat/mention",
+        json=_valid_request(
+            "@全部角色 請一起回答",
+            [{
+                "token_id": "all-1",
+                "role_id": "all",
+                "display_text": "@全部角色",
+                "start": 0,
+                "end": 5,
+            }],
+        ),
+    )
+
+    assert response.status_code == 202
+    assert response.json()["target_role_ids"] == ["host", "Advisor", "Critic"]
+    events = _wait_for_events(client, meeting_id, 4)
+    output_roles = {
+        event["role"]
+        for event in events
+        if event.get("interaction_type") == "chatroom-fanout-response"
+    }
+    assert output_roles == {"host", "Advisor", "Critic"}
+
+
 def test_mention_only_chip_still_invokes_one_role(tmp_path: Path) -> None:
     app = create_app(
         data_dir=tmp_path / "data",

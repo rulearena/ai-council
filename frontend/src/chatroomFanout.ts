@@ -70,6 +70,17 @@ export function removeFanoutCapture(captures: FanoutCapture[], captureId: string
   return captures.filter((capture) => capture.id !== captureId)
 }
 
+export function reconcileFanoutCaptureExpectedRoleIds(
+  captures: FanoutCapture[],
+  captureId: string,
+  targetRoleIds: string[],
+): FanoutCapture[] {
+  const expectedRoleIds = [...new Set(targetRoleIds.filter(Boolean))]
+  return captures.map((capture) => capture.id === captureId
+    ? { ...capture, expectedRoleIds }
+    : capture)
+}
+
 export function degradeFanoutCaptures(captures: FanoutCapture[], meetingId: string): FanoutCapture[] {
   return captures
     .filter((capture) => capture.meetingId !== meetingId)

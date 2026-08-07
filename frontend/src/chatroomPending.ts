@@ -13,3 +13,14 @@ export function chatroomQueuedRoleIds(
   const explicit = [...new Set(roleIds)]
   return explicit.length > 0 ? explicit : ['host']
 }
+
+/** Reconcile an optimistic queue with the server-authoritative routing target set. */
+export function reconcileChatroomAcceptedTargets(
+  pendingRoleIds: string[],
+  queuedRoleIds: string[],
+  targetRoleIds: string[],
+): string[] {
+  const queued = new Set(queuedRoleIds)
+  const accepted = new Set(targetRoleIds)
+  return pendingRoleIds.filter((roleId) => !queued.has(roleId) || accepted.has(roleId))
+}

@@ -17,6 +17,7 @@ import {
 import {
   bindOldestMatchingCapture,
   createFanoutCapture,
+  reconcileFanoutCaptureExpectedRoleIds,
   isResolvableFanoutResponse,
   removeFanoutCapture,
   degradeFanoutCaptures,
@@ -37,6 +38,19 @@ test('chatroom fanout capture binds the first unseen matching human event', () =
   })
   assert.equal(bound[0].humanEventId, 'human-1')
   assert.deepEqual(bound[0].expectedRoleIds, ['Advisor', 'Critic'])
+})
+
+test('accepted subset routing reconciles fanout expected roles', () => {
+  const capture = createFanoutCapture({
+    id: 'subset-capture', meetingId: 'meeting-chat', instruction: '@all 問題',
+    preSendEventIds: [], expectedRoleIds: ['host', 'Advisor', 'Critic', 'Strategist'], capturedAt: 1,
+  })
+  const reconciled = reconcileFanoutCaptureExpectedRoleIds(
+    [capture],
+    'subset-capture',
+    ['host', 'Advisor', 'Critic'],
+  )
+  assert.deepEqual(reconciled[0].expectedRoleIds, ['host', 'Advisor', 'Critic'])
 })
 
 test('only resolvable chatroom fanout events are eligible for grouping', () => {

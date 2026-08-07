@@ -16,10 +16,11 @@ import {
   bindOldestMatchingCapture,
   createFanoutCapture,
   removeFanoutCapture,
+  reconcileFanoutCaptureExpectedRoleIds,
   type FanoutCapture,
 } from '../chatroomFanout'
 import { waitForSettledProjection } from '../meetingSettlement'
-import { chatroomQueuedRoleIds } from '../chatroomPending'
+import { chatroomQueuedRoleIds, reconcileChatroomAcceptedTargets } from '../chatroomPending'
 import {
   chatroomStartGuard,
   chairmanActionBlockReason,
@@ -1160,6 +1161,20 @@ export function useCouncil() {
       }))
       if (!succeeded && capture) fanoutCaptures.value = removeFanoutCapture(fanoutCaptures.value, capture.id)
       const response = accepted.response
+      if (succeeded && response) {
+        pendingRoles.value = reconcileChatroomAcceptedTargets(
+          pendingRoles.value,
+          queuedRoles,
+          response.target_role_ids,
+        )
+        if (capture) {
+          fanoutCaptures.value = reconcileFanoutCaptureExpectedRoleIds(
+            fanoutCaptures.value,
+            capture.id,
+            response.target_role_ids,
+          )
+        }
+      }
       if (succeeded && response?.warnings.length) {
         error.value = response.warnings
           .map((warning) => `${warning.code}: ${warning.display_text}`)

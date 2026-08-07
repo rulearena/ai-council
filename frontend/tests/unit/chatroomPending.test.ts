@@ -1,7 +1,10 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
-import { chatroomQueuedRoleIds } from '../../src/chatroomPending.ts'
+import {
+  chatroomQueuedRoleIds,
+  reconcileChatroomAcceptedTargets,
+} from '../../src/chatroomPending.ts'
 import { runWithPendingRoles } from '../../src/chairmanActions.ts'
 
 const mention = (role_id: string) => ({
@@ -38,4 +41,15 @@ test('validation rejection rolls Host pending state back without leaving a bubbl
 
   assert.equal(succeeded, false)
   assert.deepEqual(pending, ['Advisor'])
+})
+
+test('accepted subset routing reconciles an optimistic full roster to server targets', () => {
+  assert.deepEqual(
+    reconcileChatroomAcceptedTargets(
+      ['host', 'Advisor', 'Critic', 'Strategist', 'Analyst'],
+      ['host', 'Advisor', 'Critic', 'Strategist', 'Analyst'],
+      ['host', 'Advisor', 'Critic'],
+    ),
+    ['host', 'Advisor', 'Critic'],
+  )
 })
