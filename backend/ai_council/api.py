@@ -493,6 +493,24 @@ def create_app(
             },
         )
 
+    @app.exception_handler(HTTPException)
+    async def chatroom_http_exception_handler(
+        request: Request,
+        exc: HTTPException,
+    ) -> JSONResponse:
+        if request.method == "POST" and request.url.path.endswith("/chat/mention"):
+            if exc.status_code == 404:
+                return JSONResponse(
+                    status_code=404,
+                    content=rejected("MEETING_NOT_FOUND", None),
+                )
+            if exc.status_code == 409:
+                return JSONResponse(
+                    status_code=409,
+                    content=rejected("CHATROOM_NOT_ACCEPTING_INPUT", None),
+                )
+        return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})
+
     data_path = Path(data_dir)
     metadata_store = MeetingMetadataStore(data_path)
     repository = MeetingRepository(data_path)
@@ -589,6 +607,7 @@ def create_app(
                 status_code=409,
                 detail="Deliberation restart must be retried before changing the meeting",
             )
+
         try:
             metadata_store.update(
                 meeting_id,

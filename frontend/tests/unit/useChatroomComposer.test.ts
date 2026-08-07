@@ -77,6 +77,41 @@ test('structured chatroom send preserves display-name chip and stable role span'
   assert.deepEqual(calls[0].args.slice(0, 3), ['meeting-1', '@檢察官 請回答', [mention]])
 })
 
+test('structured chatroom send preserves same-label role/source chips and hashtag text', async () => {
+  const calls: Array<{ fn: string; args: unknown[] }> = []
+  const boundary = {
+    sendChatMessage: async (...args: unknown[]) => { calls.push({ fn: 'sendChatMessage', args }); return { event_id: 'evt-1' } },
+    sendChatMention: async (...args: unknown[]) => { calls.push({ fn: 'sendChatMention', args }); return { event_id: 'evt-2' } },
+  }
+  const mention = {
+    token_id: 'mention-1', role_id: 'Advisor', display_text: '@顧問', start: 0, end: 3,
+  }
+  const source = {
+    token_id: 'source-1', source_ref: 'attachment:brief', display_text: '#需求', start: 4, end: 7,
+  }
+
+  const result = await parseAndSendChatMessage({
+    content: '@顧問 #需求 #需求標籤',
+    meetingId: 'meeting-1',
+    participants,
+    quotedEventId: null,
+    mentionTokens: [mention],
+    sourceTokens: [source],
+    boundary,
+  })
+
+  assert.equal(result.ok, true)
+  assert.equal(calls[0].fn, 'sendChatMention')
+  assert.deepEqual(calls[0].args, [
+    'meeting-1',
+    '@顧問 #需求 #需求標籤',
+    [mention],
+    [source],
+    ['attachment:brief'],
+    undefined,
+  ])
+})
+
 test('test_send_without_mention passes quotedEventId when present', async () => {
   const calls: Array<{ fn: string; args: unknown[] }> = []
   const boundary = {

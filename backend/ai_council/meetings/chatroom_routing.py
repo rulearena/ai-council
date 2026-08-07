@@ -125,6 +125,11 @@ def validate_chatroom_routing(
     source_spans = _validate_token_spans(
         content, source_tokens, prefix="#", mismatch_code="SOURCE_TOKEN_MISMATCH", field="source_tokens"
     )
+    if len({token.token_id for token in [*mentions, *source_tokens]}) != len(mentions) + len(source_tokens):
+        raise ValueError(rejected("MENTION_TOKEN_MISMATCH", "mentions"))
+    all_spans = sorted([*mention_spans, *source_spans])
+    if any(previous_end > start for (_, previous_end), (start, _) in zip(all_spans, all_spans[1:])):
+        raise ValueError(rejected("MENTION_TOKEN_MISMATCH", "mentions"))
     if source_refs != list(dict.fromkeys(token.source_ref for token in source_tokens)):
         raise ValueError(rejected("STALE_SOURCE_PAYLOAD", "source_refs"))
     for token in mentions:
