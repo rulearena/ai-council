@@ -510,6 +510,27 @@ test('13.10 mention autocomplete — @ shows participant list', async ({ page })
   await expect(page.getByTestId('mention-menu')).not.toBeVisible()
 })
 
+test('13.10b emoji prefix preserves mention span at the chat API boundary', async ({ page }) => {
+  await page.goto('/')
+  const title = `E2E chatroom emoji mention ${Date.now()}`
+  await createChatroomMeeting(page, title, { modelAssignments: defaultModels })
+
+  const input = page.getByTestId('chat-message-input')
+  await input.fill('😀 @')
+  await expect(page.getByTestId('mention-menu')).toBeVisible()
+  await page.getByTestId('mention-option').filter({ hasText: '顧問' }).first().click()
+  await input.fill(`${await input.inputValue()}請回答`)
+
+  const mentionResponse = page.waitForResponse(
+    (response) =>
+      response.request().method() === 'POST' && response.url().endsWith('/chat/mention'),
+  )
+  await page.getByTestId('send-chat-message-button').click()
+
+  expect((await mentionResponse).status()).toBe(202)
+  await waitForRoleMessage(page, '顧問')
+})
+
 test('13.10a mention active descendant stays valid when participants shrink', async ({ page }) => {
   await page.goto('/')
   const title = `E2E chatroom autocomplete participants shrink ${Date.now()}`

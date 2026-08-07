@@ -5,7 +5,7 @@ from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from functools import wraps
-from inspect import signature
+from inspect import iscoroutinefunction, signature
 from typing import Any
 
 
@@ -50,10 +50,16 @@ class MeetingTransitionCoordinator:
                     self._locks.pop(meeting_id)
 
     def synchronized(self, function: Callable[..., Any]) -> Callable[..., Any]:
-        @wraps(function)
-        def guarded(meeting_id: str, *args: Any, **kwargs: Any) -> Any:
-            with self.guard(meeting_id, operation=function.__name__):
-                return function(meeting_id, *args, **kwargs)
+        if iscoroutinefunction(function):
+            @wraps(function)
+            async def guarded(meeting_id: str, *args: Any, **kwargs: Any) -> Any:
+                with self.guard(meeting_id, operation=function.__name__):
+                    return await function(meeting_id, *args, **kwargs)
+        else:
+            @wraps(function)
+            def guarded(meeting_id: str, *args: Any, **kwargs: Any) -> Any:
+                with self.guard(meeting_id, operation=function.__name__):
+                    return function(meeting_id, *args, **kwargs)
 
         # FastAPI inspects the wrapper in this module. Resolve postponed annotations
         # against the endpoint's module before exposing its signature.

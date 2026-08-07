@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import threading
 
 import pytest
@@ -41,4 +42,22 @@ def test_coordinator_keeps_entry_until_waiter_finishes() -> None:
 
     assert waiter_finished.wait(timeout=2)
     waiter.join(timeout=2)
+    assert coordinator.registry_size == 0
+
+
+def test_synchronized_async_function_holds_meeting_lock_until_await_completes() -> None:
+    coordinator = MeetingTransitionCoordinator()
+    observed_registry_sizes: list[int] = []
+
+    @coordinator.synchronized
+    async def transition(meeting_id: str) -> str:
+        observed_registry_sizes.append(coordinator.registry_size)
+        await asyncio.sleep(0)
+        observed_registry_sizes.append(coordinator.registry_size)
+        return meeting_id
+
+    result = asyncio.run(transition("meeting-async"))
+
+    assert result == "meeting-async"
+    assert observed_registry_sizes == [1, 1]
     assert coordinator.registry_size == 0
