@@ -1,4 +1,4 @@
-# 交接文件（2026-08-05 更新）
+# 交接文件（2026-08-08 更新）
 
 > 給接手開發的 agent（Codex 或任何新 session）。讀完本檔 + 引用的 spec 章節即可接續，不需要舊對話脈絡。
 
@@ -112,7 +112,9 @@ Backlog 90「會議工作區與時間序對話介面」已實作、完成法院�
 
 **2026-08-08 #103 Slice 1 implementation／Gate B**：Exact implementation／main merge 為 `b85352d`，固定 Gate B range `77d7a97..b85352d`，獨立 Reviewer `pass`。已完成固定 Host、無 `@` 路由、structured display-name chips、`@all`／多角色 fanout、嚴格 payload validation、warning、stale-chip invalidation、Host／fanout pending，以及 subset `@all` 的 server-authoritative target reconciliation。Post-merge：backend routing／contract／runner **51 passed**、frontend unit **171 passed**、build 與 diff check 綠；full backend 的既有證據為 784／base 747，最新重跑因環境 hang 未取得終局；Chromium E2E 因 review worktree 無 browser binary 未執行。狀態為 **`implemented / awaiting Human Owner acceptance`**；Slice 2–4 尚未開始。
 
-**目前下一步（2026-08-08）**：Human Owner 先驗收 #103 Slice 1（驗收清單由 Orchestrator 一併提供）；確認後依序進入 Slice 2 prompt layering／Persona、Slice 3 `#` attachment selection／citations、Slice 4 shared memory／summary。#102 仍維持 `implemented / awaiting acceptance`，不與 #103 Slice 1 混為同一驗收。
+**2026-08-08 #103／#96 acceptance regression fix**：Human Owner 回報 PDF 上傳失敗與 `😀 @顧問` mention 400。診斷確認 async attachment handler 被同步 transition decorator 包裝，修正為 async/sync 共用同一 per-meeting lock；emoji 現行 UI 實測可回 202，新增 Chromium regression，未改 mention contract。Exact reviewed range 為 `aa16a06..193f657`，獨立 Reviewer 複審 `pass`、無新 findings。Post-merge backend targeted **30 passed**、frontend unit **171 passed**、build 綠、emoji Chromium **1 passed**；PDF browser smoke 下載回 200 且 bytes 一致。既有 PDF E2E 仍有測試 selector 不唯一（聊天卡與資料側欄各有 `attachment-filename`），不代表上傳失敗，未列入通過證據；full suites 與高併發負載未執行。`#` source autocomplete/selection 未在本修補實作，仍是 #103 Slice 3。**目前狀態：`implemented / awaiting Human Owner re-acceptance`**。
+
+**目前下一步（2026-08-08）**：Human Owner 重新驗收 #103 Slice 1 的 acceptance regression fix（PDF upload、emoji 前綴 mention，以及原 Slice 1 routing 清單）；確認後依序進入 Slice 2 prompt layering／Persona、Slice 3 `#` attachment selection／citations、Slice 4 shared memory／summary。原 #96 contract 已驗收完成，但本次 upload regression follow-up 尚待重新驗收。#102 仍維持 `implemented / awaiting acceptance`，不與 #103 Slice 1 混為同一驗收。
 
 **歷史候選（2026-07-31；僅保留作為追蹤紀錄，不代表目前狀態）**：backlog #94 遺留 Minor（②③④⑤⑥⑦⑨⑩⑭⑮，其中 ⑧⑪⑫⑬ 已於 2026-07-30 修畢、⑭⑮ 為 2026-07-31 Gate B 審查新增，勿重做）、#95 遺留的 `MeetingsModal.vue` `@keyup.enter` 中文選字提早觸發，以及 backlog #96（LINE 式聊天附件，需先開 OpenSpec proposal）。尚未建立 OpenSpec change，須先登錄 `spec.md` §15 再提 proposal。#96 是否與 #94/#95 同批或獨立批次由 Human Owner 裁定。
 
