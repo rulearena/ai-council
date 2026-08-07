@@ -86,6 +86,9 @@ test('13.1 create chatroom meeting (title only, no goal)', async ({ page }) => {
   await expect(page.getByTestId('conversation-workspace')).toBeVisible()
   await expect(page.getByTestId('chatroom-composer')).toBeVisible()
   await expect(page.getByTestId('workspace-mode-badge')).toContainText('聊天室')
+  await expect(page.getByTestId('workspace-message-feed')).toContainText(
+    '還沒有訊息；可直接輸入文字，想請 AI 回應時請 @角色 或 @all。',
+  )
 })
 
 // ── 13.2 ─────────────────────────────────────────────────────────────────────
