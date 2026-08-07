@@ -109,6 +109,18 @@ test('13.1a non-chatroom empty feed keeps the deliberation prompt', async ({ pag
   )
 })
 
+test('13.1b selected role with no messages keeps the role prompt', async ({ page }) => {
+  await page.goto('/')
+  const title = `E2E selected role empty feed ${Date.now()}`
+  await createChatroomMeeting(page, title, { modelAssignments: defaultModels })
+
+  await page.getByTestId('role-seat-advisor').click()
+  await expect(page.getByTestId('workspace-clear-role-filter')).toBeVisible()
+  await expect(page.getByTestId('workspace-message-feed')).toHaveText(
+    '這個角色還沒有發言。',
+  )
+})
+
 // ── 13.2 ─────────────────────────────────────────────────────────────────────
 
 test('13.2 send plain text message in chatroom', async ({ page }) => {
