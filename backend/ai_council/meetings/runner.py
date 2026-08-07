@@ -419,6 +419,7 @@ class MeetingRunner:
                     "attempt": 1,
                     "status": "completed",
                     "content": human_content if human_content is not None else instruction,
+                    **({"quoted_event_id": quoted_event_id} if quoted_event_id else {}),
                 },
             )
             return
@@ -436,6 +437,7 @@ class MeetingRunner:
                 "interaction_type": "directed-role-instruction",
                 "target_role_id": role,
                 "content": human_content if human_content is not None else instruction,
+                **({"quoted_event_id": quoted_event_id} if quoted_event_id else {}),
                 **self._audit_event_fields(inputs),
             },
         )
@@ -507,6 +509,7 @@ class MeetingRunner:
                 "attempt": 1,
                 "status": "completed",
                 "content": human_content if human_content is not None else instruction,
+                **({"quoted_event_id": quoted_event_id} if quoted_event_id else {}),
                 **self._audit_event_fields(inputs),
             },
         )

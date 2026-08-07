@@ -30,6 +30,53 @@ test('test_send_without_mention dispatches human-message API call', async () => 
   assert.equal(result.ok, true)
 })
 
+test('structured chatroom send without role chips uses the Host routing seam', async () => {
+  const calls: Array<{ fn: string; args: unknown[] }> = []
+  const boundary = {
+    sendChatMessage: async (...args: unknown[]) => { calls.push({ fn: 'sendChatMessage', args }); return { event_id: 'evt-1' } },
+    sendChatMention: async (...args: unknown[]) => { calls.push({ fn: 'sendChatMention', args }); return { event_id: 'evt-2' } },
+  }
+
+  const result = await parseAndSendChatMessage({
+    content: '請整理目前討論',
+    meetingId: 'meeting-1',
+    participants,
+    quotedEventId: null,
+    mentionTokens: [],
+    boundary,
+  })
+
+  assert.equal(result.ok, true)
+  assert.equal(calls[0].fn, 'sendChatMention')
+  assert.deepEqual(calls[0].args, ['meeting-1', '請整理目前討論', [], [], [], undefined])
+})
+
+test('structured chatroom send preserves display-name chip and stable role span', async () => {
+  const calls: Array<{ fn: string; args: unknown[] }> = []
+  const boundary = {
+    sendChatMessage: async (...args: unknown[]) => { calls.push({ fn: 'sendChatMessage', args }); return { event_id: 'evt-1' } },
+    sendChatMention: async (...args: unknown[]) => { calls.push({ fn: 'sendChatMention', args }); return { event_id: 'evt-2' } },
+  }
+  const mention = {
+    token_id: 'mention-1',
+    role_id: 'Prosecutor',
+    display_text: '@檢察官',
+    start: 0,
+    end: 4,
+  }
+
+  await parseAndSendChatMessage({
+    content: '@檢察官 請回答',
+    meetingId: 'meeting-1',
+    participants,
+    quotedEventId: null,
+    mentionTokens: [mention],
+    boundary,
+  })
+
+  assert.deepEqual(calls[0].args.slice(0, 3), ['meeting-1', '@檢察官 請回答', [mention]])
+})
+
 test('test_send_without_mention passes quotedEventId when present', async () => {
   const calls: Array<{ fn: string; args: unknown[] }> = []
   const boundary = {

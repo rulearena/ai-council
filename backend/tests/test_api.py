@@ -6895,13 +6895,13 @@ def test_chat_mention_all(tmp_path: Path) -> None:
     )
 
     assert response.status_code == 202
-    events = wait_for_event_count(client, meeting_id, 5)
-    # human-message + one fanout response per role (Advisor, Critic, Strategist, Analyst)
-    assert events[-5]["step_id"] == "human-message"
-    assert events[-5]["content"] == "大家怎麼看？"
-    fanout_roles = {e["role"] for e in events[-4:]}
-    assert fanout_roles == {"Advisor", "Critic", "Strategist", "Analyst"}
-    for event in events[-4:]:
+    events = wait_for_event_count(client, meeting_id, 6)
+    # human-message + one fanout response per role, including the fixed Host
+    assert events[-6]["step_id"] == "human-message"
+    assert events[-6]["content"] == "大家怎麼看？"
+    fanout_roles = {e["role"] for e in events[-5:]}
+    assert fanout_roles == {"host", "Advisor", "Critic", "Strategist", "Analyst"}
+    for event in events[-5:]:
         assert event["interaction_type"] == "chatroom-fanout-response"
 
 
@@ -6918,13 +6918,12 @@ def test_chat_mention_empty_saves_human(tmp_path: Path) -> None:
         json={"content": "只是一則訊息", "mentions": []},
     )
 
-    assert response.status_code == 200
-    assert response.json()["step_id"] == "human-message"
-    assert response.json()["content"] == "只是一則訊息"
-    events = client.get(f"/meetings/{meeting_id}").json()["events"]
-    assert len(events) == 1
-    assert events[-1]["step_id"] == "human-message"
-    assert events[-1]["content"] == "只是一則訊息"
+    assert response.status_code == 202
+    assert response.json()["target_role_ids"] == ["host"]
+    events = wait_for_event_count(client, meeting_id, 2)
+    assert events[-2]["step_id"] == "human-directed-message"
+    assert events[-2]["content"] == "只是一則訊息"
+    assert events[-1]["role"] == "host"
 
 
 def test_chat_mention_invalid_role_400(tmp_path: Path) -> None:
@@ -6941,7 +6940,7 @@ def test_chat_mention_invalid_role_400(tmp_path: Path) -> None:
     )
 
     assert response.status_code == 400
-    assert "Unknown" in response.json()["detail"]
+    assert response.json()["error"]["code"] == "STALE_MENTION_PAYLOAD"
 
 
 def test_chat_mention_rejects_non_chatroom(tmp_path: Path) -> None:
@@ -6998,12 +6997,12 @@ def test_chat_mention_all_deduplicates(tmp_path: Path) -> None:
     )
 
     assert response.status_code == 202
-    events = wait_for_event_count(client, meeting_id, 5)
-    # human-message + one fanout per role (Advisor, Critic, Strategist, Analyst)
+    events = wait_for_event_count(client, meeting_id, 6)
+    # human-message + one fanout per active role, including Host
     # Advisor should NOT be double-invoked when 'all' is also present
-    assert events[-5]["step_id"] == "human-message"
-    fanout_roles = {e["role"] for e in events[-4:]}
-    assert fanout_roles == {"Advisor", "Critic", "Strategist", "Analyst"}
+    assert events[-6]["step_id"] == "human-message"
+    fanout_roles = {e["role"] for e in events[-5:]}
+    assert fanout_roles == {"host", "Advisor", "Critic", "Strategist", "Analyst"}
 
 
 def test_chat_mention_empty_response_event_id_matches_persisted_event(
@@ -7029,17 +7028,14 @@ def test_chat_mention_empty_response_event_id_matches_persisted_event(
         },
     )
 
-    assert response.status_code == 200
-    body = response.json()
+    assert response.status_code == 202
+    wait_for_event_count(client, meeting_id, 2)
     repository = MeetingRepository(tmp_path / "data")
     persisted = repository.read_events(meeting_id)
     persisted_ids = {e.get("event_id") for e in persisted}
-    assert body["event_id"] in persisted_ids, (
-        f"Response event_id {body['event_id']!r} not found in persisted events"
-    )
-    assert body["quoted_event_id"] == quote_target["event_id"]
-    persisted_event = next(e for e in persisted if e.get("event_id") == body["event_id"])
-    assert persisted_event.get("quoted_event_id") == quote_target["event_id"]
+    human_event = next(e for e in persisted if e.get("content") == "引用這則")
+    assert human_event["event_id"] in persisted_ids
+    assert human_event.get("quoted_event_id") == quote_target["event_id"]
 
 
 def test_chat_mention_non_participant_role_returns_400(
@@ -7065,7 +7061,7 @@ def test_chat_mention_non_participant_role_returns_400(
     )
 
     assert response.status_code == 400
-    assert "Strategist" in response.json()["detail"]
+    assert response.json()["error"]["code"] == "STALE_MENTION_PAYLOAD"
 
 
 def test_chat_mention_with_quoted_event_passes_content_to_runner(
