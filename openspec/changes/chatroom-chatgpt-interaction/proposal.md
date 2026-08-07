@@ -5,9 +5,9 @@
 ## What Changes
 
 - 將聊天室的主持 AI 定義為固定 `host` role；未指定 `@` 時由主持回覆，`@all` 包含主持，明確角色 mention 則只呼叫指定角色。
-- 將 `@` 解析、autocomplete、無效 mention、`@all` 優先級與多角色平行回覆整理成可預期的 routing contract。
-- 在 composer 增加 `#` 附件 autocomplete；只有使用者明確選取、仍存在且對目標角色可讀的 `.txt/.md` 附件，才可被檢索並注入 prompt。
-- 支援一則訊息引用多個附件、重複去重、失效引用阻擋、相關段落擷取與結構化附件引用 chip；沒有 `#` 時不讀取任何附件正文。
+- 將 display-name role chips、結構化 `mentions[{role_id,display_text}]`、無效 mention、`all` 優先級與多角色平行回覆整理成可預期的 routing contract；穩定 ID 永不作使用者可見文字。
+- 在 composer 增加 `#` source autocomplete；只有使用者明確選取、仍存在且對目標角色可讀的 `.txt/.md` source，才可被檢索並注入 prompt；`notes` 排除。
+- 支援一則訊息引用多個 ordered/deduped `source_refs`、失效引用阻擋、相關段落擷取與結構化 source citation chip；沒有 source chip 時不讀取任何附件正文。
 - 將角色 Persona、語氣與硬規則分離到 system/developer prompt；當輪訊息、共享記憶、引用與選取附件成為獨立上下文層。
 - 讓聊天室回覆長度與 Markdown 使用自適應，JSON 只作傳輸格式，不再要求固定報告欄位或固定句數。
 - 保存完整共享 transcript，並以專用摘要任務建立可重建、可查看但不產生聊天氣泡的共享會議摘要。
@@ -60,13 +60,16 @@
 - Full transcript remains canonical. A shared summary is derived state, not a replacement for events, and can be regenerated.
 - Attachment body content is never inferred from a natural-language reference. Only explicit `#` references can authorize retrieval; binary and unsupported files remain AI-invisible.
 - Structured attachment references are carried beside the natural message and projected as UI chips; the message body is not forced to contain report-style anchors.
+- The chat mention API has one fixed accepted/rejected envelope; rejection occurs before human-event/job creation, and live completion remains tracked by existing event/websocket identities.
+- Source authorization uses only `attachment:<file_id>` and `evidence:<evidence_id>` refs; source labels are display-only, notes are excluded, and every target in a multi-role/all request is validated.
+- Summary regeneration uses `POST /meetings/{meeting_id}/chat/memory/regenerate`; completion and failure use the same `chatroom_memory_updated` projection event.
 - Existing formal response schemas, event IDs, historical JSONL, and non-chatroom presentation are out of scope for migration.
 
 ## Testing Decisions
 
 - Tests assert observable routing, prompt contents, event persistence, context boundaries, and rendered UI behavior rather than private helper implementation.
-- Backend coverage will exercise default host, explicit role routing, multi-role and `@all` fanout, invalid mention rejection, attachment authorization, bounded retrieval, summary fallback, and adapter message-layer contracts.
-- Frontend unit and Playwright coverage will exercise autocomplete, composer hints, mixed `@`/`#` input, citation chips, summary visibility, pending fanout behavior, and non-chatroom regressions.
+- Backend coverage will exercise default host, display-name chip routing, exact API envelopes/statuses, multi-role/all fanout, invalid/stale chip rejection, source authorization, notes exclusion, bounded retrieval, summary regeneration/status events, and adapter message-layer contracts.
+- Frontend unit and Playwright coverage will exercise role/source chips, composer hints, mixed role/source input, citation chips, exact summary regeneration states, summary visibility, pending fanout behavior, and non-chatroom regressions.
 - Existing formal-mode tests and historical-event fixtures remain regression gates.
 - Slice acceptance includes targeted tests, frontend build, relevant full suites, and direct browser smoke for the composer and context panel.
 

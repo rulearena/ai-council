@@ -19,11 +19,11 @@ The chatroom model request SHALL represent prompt layers separately: a system la
 - **AND** the same layer content and output schema remain available to the model
 
 ### Requirement: Chatroom responses expose structured attachment references
-The registered `chat-message/v1` contract SHALL retain a non-blank string `message` and SHALL support an optional `attachment_refs` array. If the response uses a concrete fact from a selected source, `attachment_refs` SHALL be present and every `source_ref` SHALL resolve to the current request's allow-list; generic chat MAY omit the array. Each reference SHALL carry enough stable metadata for the frontend to render a citation chip. The natural message SHALL not be required to contain fixed citation anchor text.
+The registered `chat-message/v1` contract SHALL retain a non-blank string `message` and SHALL support an optional `attachment_refs` array. If the response uses a concrete fact from a selected source, the prompt and output contract SHALL require `attachment_refs`; every item SHALL be exactly `{source_ref: string, label: string, segment_refs: string[]}` and every `source_ref` SHALL resolve to the current request's selected allow-list. Generic chat MAY omit the array. The natural message SHALL not be required to contain fixed citation anchor text.
 
 #### Scenario: Response with attachment references validates
 - **WHEN** a model returns a message and an `attachment_refs` entry for a selected `.md` file
-- **THEN** the output passes chat-message validation
+- **THEN** the output passes chat-message validation with `{source_ref, label, segment_refs}`
 - **AND** the event preserves the structured reference beside the message
 
 #### Scenario: Invalid attachment reference fails validation

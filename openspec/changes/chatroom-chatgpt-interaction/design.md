@@ -42,31 +42,31 @@ The alternative was to require a data migration for every existing chatroom. Tha
 
 ```json
 {
-  "content": "@Advisor 請比較 #需求說明",
-  "mentions": ["Advisor"],
+  "content": "@顧問 請比較 #需求說明",
+  "mentions": [{"role_id": "Advisor", "display_text": "@顧問"}],
   "source_refs": ["attachment:att-123"],
-  "quote_event_id": null
+  "quoted_event_id": null
 }
 ```
 
-`content` is the exact composer text, `mentions` is the frontend's normalized stable-role hint, `source_refs` is the ordered source-selection list and the only source authorization, and `quote_event_id` preserves the existing quote behavior. The backend re-parses `content`, validates `mentions` against the active participant projection, and rejects a stale or inconsistent role payload rather than silently changing its meaning. Composer display tokens are UI chips; filenames, display names, and ordinary hashtags are never used as source authorization. Same-label sources are disambiguated by their stable IDs in the chip and payload.
+`content` is the exact composer text, `mentions` is an ordered structured chip list, `source_refs` is the ordered, deduplicated source-selection list and the only source authorization, and `quoted_event_id` preserves the existing quote behavior. The composer renders role display-name chips such as `@顧問`, `@主持 AI`, and `@全部角色`; each chip contains a hidden stable `role_id` and is not rendered as `@Advisor` or `@host`. The backend uses only `role_id` for routing, verifies `display_text` against the active projection for token integrity, and rejects stale metadata. A hand-typed role-like token without a corresponding chip is invalid; email and ordinary `@` text are not mentions. The human event preserves the display text. Filenames, display names, and ordinary hashtags are never used as source authorization. Same-label sources are disambiguated by metadata and hidden stable source ID.
 
 The parser will distinguish:
 
-- `@role_id` and `@all` responder directives;
-- `#` attachment tokens resolved to stable `file_id` values;
+- role chips carrying `role_id` values, including the `all` sentinel;
+- `#` source chips resolved to stable `source_ref` values;
 - ordinary `@` characters such as email addresses.
 
 The human event will preserve the exact user-visible message and quote reference. A normalized instruction used in the model prompt will remove routing tokens while retaining the natural-language request; selected attachments will be represented in their own context layer. A message containing only valid routing tokens therefore produces an empty instruction, which the chat Persona can answer with a clarification question.
 
 Routing rules are applied in this order:
 
-1. Resolve `@all` first; it wins over other role tokens and deduplicates the active role set. Invalid extra role-like tokens in this branch are ignored and returned as warnings.
-2. Otherwise validate every normal role token atomically; any invalid token blocks the request before an event or AI job is created.
+1. Resolve the `all` role chip first; it wins over other role chips. Invalid extra role-like tokens in this branch are ignored and returned as `{code: "IGNORED_INVALID_MENTION", display_text}` warnings.
+2. Otherwise validate every role chip atomically; a hand-typed role-like token or stale chip blocks the request before an event or AI job is created.
 3. With no valid `@` token, select Host.
 4. Validate every selected `source_ref` immediately before execution for every target role; one invalid reference blocks the complete target set.
 
-Successful requests return HTTP `202` with `meeting_id`, `human_event_id`, `job_ids`, `target_role_ids`, `source_refs`, `warnings`, and `status: "accepted"`. Validation failures return HTTP `400` with a stable error code, field-level details, and no human event or AI job. A missing meeting returns `404`; a meeting that cannot accept chat input returns `409`. The response warning list is the same warning projection used by the UI. This contract is covered by direct API tests, not only browser tests.
+Successful requests return HTTP `202` with exactly `{status: "accepted", meeting_id, target_role_ids, source_refs, warnings}`. Live completion is tracked by the existing event/websocket identity; the response does not promise `human_event_id` or `job_ids`. Warning items have exactly `{code: "IGNORED_INVALID_MENTION", display_text}`. Normal validation failures return HTTP `400` with exactly `{status: "rejected", error: {code, field, details}}`, where `code` is one of `INVALID_MENTION_TOKEN`, `STALE_MENTION_PAYLOAD`, `INVALID_SOURCE_REF`, `SOURCE_NOT_VISIBLE_TO_TARGET`, or `SOURCE_NOT_READABLE`; each detail may contain only the relevant `source_ref`, `role_id`, and/or `display_text`. A missing meeting returns exactly `{status: "rejected", error: {code: "MEETING_NOT_FOUND"}}` with `404`; a meeting that cannot accept chat input returns exactly `{status: "rejected", error: {code: "CHATROOM_NOT_ACCEPTING_INPUT"}}` with `409`. All rejection paths run before event/job creation. After validation, the server appends the human event and launches jobs. This contract is covered by direct API tests, not only browser tests.
 
 The existing `/messages` endpoint remains available to preserve non-chatroom and historical callers. Chatroom composer sends will use the chatroom endpoint even when `mentions` is empty, so plain text cannot accidentally take the old human-only path.
 
@@ -84,7 +84,7 @@ The frontend pending-role capture will derive expected roles from the projected 
 
 Adapter mapping will be explicit:
 
-- OpenAI-compatible adapters send the layered messages in their native role format.
+- OpenAI-compatible adapters expose `supports_developer_role`, defaulting to `false`; only `true` adapters send a native `developer` message. When false, system and developer layers are merged in fixed order into one system message, followed by the user/context message. All adapters retain the deterministic flattened `prompt`.
 - Anthropic-style adapters map developer instructions into the provider's supported system/context representation and send user/context content as user messages.
 - `GeminiHTTPAdapter` maps system/developer instructions to Gemini's system-instruction/content representation; when a deployed Gemini endpoint cannot represent a layer natively, it receives the same deterministic labeled flattening used by legacy adapters.
 - CLI adapters receive the stable flattened form with visible layer labels.
@@ -102,13 +102,13 @@ The chatroom prompt renderer will build:
 
 Persona text will be stable and configuration-driven: Host directs/clarifies/organizes; Advisor proposes practical options; Critic challenges assumptions and risks; Strategist weighs priorities and trade-offs; Analyst distinguishes evidence, data, and uncertainty. The prompt will forbid role-announcement prefixes and fixed report headings unless the user explicitly requests a format.
 
-The `chat-message/v1` schema will continue to require a non-blank `message` and will add optional `attachment_refs`. A semantic validator will ensure every returned reference belongs to the request's validated selected set. Invalid references follow the existing parse-error/retry/failure path rather than becoming unverified UI citations.
+The `chat-message/v1` schema will continue to require a non-blank `message` and will add optional `attachment_refs`. If the response uses a concrete fact from a selected source, the prompt and output validator SHALL require `attachment_refs`; each item is exactly `{source_ref, label, segment_refs}` and `source_ref` must belong to the request's validated selected set. Generic chat may omit the array. Invalid references follow the existing parse-error/retry/failure path rather than becoming unverified UI citations.
 
 ### 6. Build explicit, bounded attachment context
 
-The `#` source selector will list both chat-upload attachments and existing text case materials, including materials present when a legacy or new meeting was created. Stable source IDs use separate namespaces: `attachment:<file_id>` for chat uploads and `evidence:<evidence_id>` for case materials. The meeting read projection and `GET /meetings/{meeting_id}/chat/sources` expose source label, kind, active/readable state, and a stable reader reference; duplicate labels remain separately selectable by ID. Attachments resolve through the existing attachment reader/blob store, while evidence resolves through the existing case-material reader. Deletion, tombstoning, or inactive evidence makes the source invalid at send time.
+The `#` source selector will list both chat-upload attachments and active text evidence, including materials present when a legacy or new meeting was created, while excluding `notes`. Stable source IDs use separate namespaces: `attachment:<file_id>` for chat uploads and `evidence:<evidence_id>` for active evidence. The meeting read projection and `GET /meetings/{meeting_id}/chat/sources` expose `source_ref`, display label, kind, readable/active state, and `reader_ref`; same-label sources show kind/size/date and retain the hidden source ref. Attachments resolve through the attachment reader/blob store, while evidence resolves through the current active-version reader. Deletion, tombstoning, or inactive evidence makes the source invalid at send time.
 
-The frontend preserves first-selection order and deduplicates repeated IDs. The backend resolves each source ID within the meeting, checks active status, extension, and target-role visibility, then loads only `.txt`/`.md` content. For Host, a legacy material with no explicit `host` in `visible_roles` is visible through the fixed chatroom-role fallback. For multi-role and `@all`, every selected source is validated independently for every target; any target/source failure rejects the whole request. Existing meeting files are read-time projected into this source list; no migration or metadata rewrite is performed.
+The frontend preserves first-selection order and deduplicates repeated `source_ref` values. The backend resolves each source ref within the meeting, checks active state, extension, and target-role visibility, then loads only `.txt`/`.md` content. Host is the fixed chatroom coordinator and may read evidence at read time even when legacy `visible_roles` omits `host`; other roles follow `visible_roles`. For multi-role and `@all`, every selected source is validated independently for every target; any target/source failure returns `SOURCE_NOT_VISIBLE_TO_TARGET` and rejects the whole request. Existing meeting files are read-time projected; no migration or metadata rewrite is performed. `file_id` appears only inside the `attachment:<file_id>` namespace and is never the authorization field.
 
 An `AttachmentContextResolver` (or equivalent context-builder seam) will use the existing attachment event's `evidence_id` when text was mirrored into case materials, and the existing blob/material store as the source of readable text. For small selected files, full text is eligible if it fits. For larger files, the resolver will split deterministic paragraph/line segments, rank them by stable lexical relevance to the normalized instruction and quote, and include only segments that fit the remaining budget. Each block carries stable source ID, display label, and segment metadata.
 
@@ -120,7 +120,7 @@ Each chatroom meeting may lazily create a derived `chatroom-memory.json` under t
 
 The full transcript remains canonical and summary regeneration reads it without rewriting it. Writes will be atomic and serialized per meeting. Old meetings without this file use recent transcript context and show the summary empty state until a successful generation.
 
-The summary service will be scheduled when the transcript/context approaches the configured budget (default trigger ratio 75%, with an environment override) and the current response round is terminal. `@all` waits for all expected role outcomes, including Host. The service uses the default Host model assignment with a dedicated `chatroom-summary/v1` schema and prompt, not the Host chat Persona. A failed task retains the previous revision or falls back to bounded recent transcript context and never blocks the user response.
+The summary service will be scheduled when the transcript/context approaches the configured budget (default trigger ratio 75%, with an environment override) and the current response round is terminal. `@all` waits for all expected role outcomes, including Host. `POST /meetings/{meeting_id}/chat/memory/regenerate` is also available while the meeting is idle/able to receive chat and returns exactly `202 {status: "accepted", meeting_id, memory_status: "generating"}`. Running or terminal meetings return exactly `409 {status: "rejected", error: {code: "CHATROOM_MEMORY_REGENERATION_NOT_ALLOWED"}}`. The service uses the default Host model assignment with a dedicated `chatroom-summary/v1` schema and prompt, not the Host chat Persona. Completion or failure updates the same `chatroom_memory_updated` projection event; a failed task retains the previous revision with `status: "stale"`, `stale: true`, and `error_code: "SUMMARY_UPDATE_FAILED"`, or uses `status: "empty"` with that error code when no prior revision exists. It never blocks the user response.
 
 The context panel receives the non-feed memory projection. When the current projection changes, the backend emits a dedicated `chatroom_memory_updated` websocket/projection event containing the meeting ID and new revision; the frontend updates the panel without adding a feed event. On reconnect or missed notification, the frontend re-fetches `GET /meetings/{meeting_id}` and replaces the current projection. A failed task preserves the prior summary and sets `status: "stale"`, `stale: true`, and error metadata; the panel visibly reports stale/update-failed state while chat continues.
 

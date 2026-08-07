@@ -1,22 +1,22 @@
 ## ADDED Requirements
 
 ### Requirement: Chatroom mention API has an explicit validation contract
-`POST /meetings/{meeting_id}/chat/mention` SHALL accept `content: string`, `mentions: string[]`, ordered `source_refs: string[]`, and the existing optional `quote_event_id`. `mentions` SHALL contain normalized stable role IDs or the `all` sentinel; the backend SHALL re-parse `content` and reject stale or inconsistent normal-role metadata. `source_refs` SHALL be the only source authorization and SHALL use stable source IDs, never display labels. A successful request SHALL return HTTP `202` with `meeting_id`, `human_event_id`, `job_ids`, `target_role_ids`, `source_refs`, `warnings`, and `status: "accepted"`. Normal invalid mentions, invalid source references, or payload inconsistencies SHALL return HTTP `400` with a stable error code and field details, without creating a human event or AI job. A missing meeting SHALL return `404`, and a meeting that cannot accept chat input SHALL return `409`. `@all` with invalid extra role-like tokens SHALL still return `202` and include those ignored tokens in `warnings`.
+`POST /meetings/{meeting_id}/chat/mention` SHALL accept exactly `content: string`, `mentions: Array<{role_id: string, display_text: string}>`, ordered/deduplicated `source_refs: string[]`, and `quoted_event_id: string|null`. Role chips SHALL display role names such as `@顧問`, `@主持 AI`, and `@全部角色`, while each chip carries a hidden stable `role_id`; `@Advisor` and `@host` SHALL NOT be user-visible chip text. The backend SHALL use only `role_id` for routing and SHALL validate `display_text` against the active projection for token integrity. A hand-typed role-like token without a corresponding chip SHALL be rejected as `INVALID_MENTION_TOKEN`; email and ordinary `@` text SHALL not be mentions. `source_refs` SHALL be the only source authorization and SHALL use stable source IDs, never display labels. A successful request SHALL return exactly HTTP `202` body `{status: "accepted", meeting_id: string, target_role_ids: string[], source_refs: string[], warnings: Warning[]}`. It SHALL not promise job IDs; live completion remains tracked by existing event/websocket identities. Warning SHALL be exactly `{code: "IGNORED_INVALID_MENTION", display_text: string}`. A normal rejection SHALL return exactly HTTP `400` body `{status: "rejected", error: {code, field, details}}`, with code `INVALID_MENTION_TOKEN`, `STALE_MENTION_PAYLOAD`, `INVALID_SOURCE_REF`, `SOURCE_NOT_VISIBLE_TO_TARGET`, or `SOURCE_NOT_READABLE`, and details containing only applicable `source_ref`, `role_id`, and/or `display_text`. Missing meeting SHALL return exactly HTTP `404` `{status: "rejected", error: {code: "MEETING_NOT_FOUND"}}`; a non-accepting meeting SHALL return exactly HTTP `409` `{status: "rejected", error: {code: "CHATROOM_NOT_ACCEPTING_INPUT"}}`. All rejection paths SHALL occur before any human event or AI job is created; `@all` with invalid extra role-like tokens SHALL return `202` with exact warning items.
 
 #### Scenario: Direct API accepts a valid request
 - **WHEN** the API receives valid `content`, stable `mentions`, and ordered valid `source_refs`
-- **THEN** it returns `202` with the human event ID, target roles, jobs, sources, warnings, and accepted status
+- **THEN** it returns exactly the accepted status, meeting ID, target roles, deduplicated source refs, and warnings
 - **AND** the human event and AI jobs are created exactly once
 
 #### Scenario: Invalid request has no side effects
 - **WHEN** the API receives an invalid normal role or inaccessible source reference
-- **THEN** it returns `400` with field-level validation details
+- **THEN** it returns `400` with the exact rejected error envelope and field-level details
 - **AND** it creates neither a human event nor an AI job
 
 #### Scenario: @all warning is observable
 - **WHEN** the API receives `@all @NotARealRole` with a valid source list
 - **THEN** it returns `202` for the all-role fanout
-- **AND** the response warning list identifies `@NotARealRole` as ignored
+- **AND** the response warning list contains exactly `{code: "IGNORED_INVALID_MENTION", display_text: "@NotARealRole"}`
 
 ### Requirement: Composer source chips are distinct from ordinary hashtags
 The composer SHALL represent an attachment or evidence selection as a reference chip carrying its stable `source_ref` and display label. The backend SHALL use the ordered `source_refs` payload for authorization and SHALL not parse ordinary hashtags or infer a source from a filename/display label. Sources with identical display labels SHALL remain independently selectable and distinguishable by stable ID.
@@ -32,7 +32,7 @@ The composer SHALL represent an attachment or evidence selection as a reference 
 - **AND** no source body is retrieved
 
 ### Requirement: Plain chatroom input defaults to Host
-In chatroom mode, a human message with no valid `@role` or `@all` mention SHALL route to the fixed role ID `host`. The message SHALL still be persisted as a human event before the Host response job is started. This default SHALL apply only to chatroom mode.
+In chatroom mode, a human message with no role chip SHALL route to the fixed role ID `host`. The message SHALL still be persisted as a human event before the Host response job is started. This default SHALL apply only to chatroom mode.
 
 #### Scenario: Ordinary text invokes Host
 - **WHEN** the user sends `請幫我整理一下目前討論` without an @mention in chatroom mode
@@ -48,7 +48,7 @@ In chatroom mode, a human message with no valid `@role` or `@all` mention SHALL 
 The composer and backend SHALL parse `@` role directives and `#` attachment references as separate token classes. `@` SHALL select responders; `#` SHALL select allowable attachment sources. A message SHALL be able to contain zero, one, or many tokens of either class without one class implicitly changing the other.
 
 #### Scenario: Explicit role with selected attachment
-- **WHEN** a user sends `@Critic 請檢查 #需求說明`
+- **WHEN** a user sends a Critic chip (`{role_id: "Critic", display_text: "@評論者"}`) followed by `#需求說明`
 - **THEN** only Critic is selected as responder
 - **AND** only the selected attachment is eligible as prompt material
 
@@ -58,17 +58,17 @@ The composer and backend SHALL parse `@` role directives and `#` attachment refe
 - **AND** the attachment reference is passed as source scope, not as a responder
 
 #### Scenario: Role mention does not read attachments
-- **WHEN** a user sends `@Critic 請回答` without a # reference
+- **WHEN** a user sends a Critic chip without a # reference
 - **THEN** Critic is selected
 - **AND** no attachment body is retrieved
 
 ### Requirement: Attachment reference autocomplete uses stable IDs
-In chatroom mode, typing `#` followed by characters SHALL open an attachment autocomplete menu containing active attachments available in the current meeting. Each option SHALL show a human-readable display label and SHALL carry the stable attachment/file ID for submission. Selection SHALL insert a reference token associated with that stable ID, not an inferred filename lookup. Deleted, unavailable, and unsupported non-readable attachments SHALL be visibly marked and SHALL not be selectable as AI-readable sources.
+In chatroom mode, typing `#` followed by characters SHALL open a source autocomplete menu containing active chat-upload attachments and active text evidence available in the current meeting, excluding notes. Each option SHALL show a human-readable display label and SHALL carry its stable `source_ref` for submission. Selection SHALL insert a source reference chip associated with that stable ID, not an inferred filename lookup. Deleted, unavailable, and unsupported non-readable sources SHALL be visibly marked and SHALL not be selectable as AI-readable sources.
 
 #### Scenario: Attachment autocomplete shows readable material
 - **WHEN** the user types `#需` in a chatroom composer
 - **THEN** the menu shows matching active readable attachment labels
-- **AND** each option has a stable attachment/file ID
+- **AND** each option has a stable `source_ref`
 
 #### Scenario: Selection keeps display label and stable ID
 - **WHEN** the user selects an attachment named `需求說明.md`
@@ -107,7 +107,7 @@ The chatroom composer SHALL provide visible, concise affordances that explain `@
 - **AND** the hint text is not persisted as a human event
 
 ### Requirement: Invalid normal mentions fail before AI execution
-At send time, every normal `@role` token SHALL resolve exactly to an active stable role ID or the request SHALL be rejected before any AI job starts. The backend SHALL not silently fall back to Host, ignore an invalid normal mention, or substitute a display-name match. `@all` SHALL be resolved first and SHALL take precedence over other role tokens; unrelated invalid role-like tokens in an `@all` message SHALL be ignored with a user-visible warning rather than creating extra jobs.
+At send time, every normal role chip SHALL resolve exactly to an active stable role ID or the request SHALL be rejected before any AI job starts. A hand-typed role-like token without a chip SHALL return `INVALID_MENTION_TOKEN`. The backend SHALL not silently fall back to Host, ignore an invalid normal chip, or substitute a display-name match. The `all` chip SHALL be resolved first and SHALL take precedence over other role chips; unrelated invalid role-like tokens in an `all` message SHALL be ignored with a user-visible warning rather than creating extra jobs.
 
 #### Scenario: Typo does not fall back to Host
 - **WHEN** the user sends `@Adviser 請回答` and only `Advisor` is active
@@ -115,48 +115,46 @@ At send time, every normal `@role` token SHALL resolve exactly to an active stab
 - **AND** neither Adviser nor Host is invoked
 
 #### Scenario: Mixed valid and invalid normal roles are all rejected
-- **WHEN** the user sends `@Advisor @Adviser 請比較`
+- **WHEN** the user sends valid Advisor and invalid hand-typed `@Adviser` tokens with `請比較`
 - **THEN** the request is rejected before Advisor is invoked
 - **AND** the composer retains the text for correction
 
 #### Scenario: @all takes precedence with warning
-- **WHEN** the user sends `@all @Adviser 請大家回答`
+- **WHEN** the user sends the `all` chip plus an invalid hand-typed `@Adviser` token
 - **THEN** all active chatroom roles are invoked once
 - **AND** the UI reports that the invalid extra token was ignored
 
 ### Requirement: Mention-only messages activate a response
-A message containing only valid `@role` or `@all` tokens and no remaining instruction SHALL still activate the resolved role set. The role prompt SHALL receive an empty user instruction and may respond with a clarifying question. The system SHALL not treat a valid mention-only message as a human-only note.
+A message containing only valid role chips and no remaining instruction SHALL still activate the resolved role set. The role prompt SHALL receive an empty user instruction and may respond with a clarifying question. The system SHALL not treat a valid chip-only message as a human-only note.
 
 #### Scenario: Mention-only directed request
-- **WHEN** the user sends `@Advisor`
+- **WHEN** the user sends a chip `{role_id: "Advisor", display_text: "@顧問"}`
 - **THEN** Advisor is invoked
 - **AND** Advisor can ask what the user wants to discuss
 
 #### Scenario: Mention-only all request
-- **WHEN** the user sends `@all`
+- **WHEN** the user sends the `all` chip `{role_id: "all", display_text: "@全部角色"}`
 - **THEN** Host and all active member roles are invoked once
 - **AND** the request is displayed as one fanout round under the existing fanout projection
 
 ## MODIFIED Requirements
 
 ### Requirement: Mention syntax definition
-The system SHALL recognize two mention syntaxes in chatroom human messages:
-- `@role_id` — a single-role mention where `role_id` matches a stable active participant role identifier, including `host`
-- `@all` — a special keyword that mentions all active chatroom roles simultaneously
+The system SHALL recognize role reference chips in chatroom human messages. A chip SHALL carry a stable `role_id` for one active role, including `host`, or the `all` sentinel, and a display-only `display_text` such as `@顧問`, `@主持 AI`, or `@全部角色`. The user-visible content SHALL contain display text, never the stable IDs `@Advisor` or `@host`.
 
-Mentions SHALL be parsed from message text at send time. The `@` symbol followed by a valid role_id or `all` constitutes a mention; `@` in other contexts such as email addresses SHALL NOT be treated as a mention. A normal role-like token that is not a valid active role ID SHALL be a send-time validation error rather than a silent human-only message. `@all` SHALL be resolved before normal role validation and SHALL take precedence over other role-like tokens.
+The backend SHALL validate the structured chip payload against the active projection. A hand-typed role-like `@` token without a corresponding chip SHALL return `INVALID_MENTION_TOKEN`; `@` in email addresses and ordinary non-role text SHALL not be treated as mentions. `all` SHALL be resolved before normal chip validation and SHALL take precedence over other role chips.
 
-#### Scenario: Single role mention parsed
-- **WHEN** a message contains `@Advisor 你怎麼看？`
-- **THEN** the system identifies a mention of stable role ID `Advisor`
+#### Scenario: Single role chip parsed
+- **WHEN** a message contains an `@顧問` chip with hidden `role_id: "Advisor"` followed by `你怎麼看？`
+- **THEN** the system identifies a chip for stable role ID `Advisor`
 
-#### Scenario: Host mention parsed
-- **WHEN** a message contains `@host 請整理`
-- **THEN** the system identifies a mention of stable role ID `host`
+#### Scenario: Host chip parsed
+- **WHEN** a message contains an `@主持 AI` chip with hidden `role_id: "host"` followed by `請整理`
+- **THEN** the system identifies a chip for stable role ID `host`
 
-#### Scenario: @all keyword parsed
-- **WHEN** a message contains `@all 大家覺得呢？`
-- **THEN** the system identifies an @all mention
+#### Scenario: all chip parsed
+- **WHEN** a message contains an `@全部角色` chip with hidden `role_id: "all"` followed by `大家覺得呢？`
+- **THEN** the system identifies the all chip
 
 #### Scenario: @ at email is not treated as a mention
 - **WHEN** a message contains `contact@example.com`
@@ -167,30 +165,30 @@ Mentions SHALL be parsed from message text at send time. The `@` symbol followed
 - **THEN** the send is rejected before AI invocation
 - **AND** the composer retains the message for correction
 
-### Requirement: Mention resolution to stable role_id
-Mentions in the message text SHALL be resolved to stable role identifiers from the active meeting participant projection. Resolution SHALL NOT rely on display-name fuzzy matching or free-text role-name interpretation. If a normal mentioned string does not exactly match a stable active `role_id`, the request SHALL fail validation before any AI invocation. The fixed Host role SHALL resolve through `role_id: "host"` when explicitly mentioned.
+### Requirement: Mention chip resolution to stable role_id
+Mention chips SHALL be resolved to stable role identifiers from the active meeting participant projection. Resolution SHALL use only the hidden `role_id`; display text SHALL be checked for consistency but SHALL never authorize a different role. Display-name fuzzy matching and free-text role-name interpretation SHALL NOT be used. A stale role ID or inconsistent display text SHALL fail validation before any AI invocation. The fixed Host role SHALL resolve through `role_id: "host"` when explicitly selected.
 
 #### Scenario: Exact role_id match resolves
-- **WHEN** the message contains `@Advisor` and the meeting has a participant with `role_id: "Advisor"`
+- **WHEN** the message contains a chip with `role_id: "Advisor"` and display text `@顧問`
 - **THEN** the mention resolves to role `Advisor`
 
 #### Scenario: Host stable ID resolves
-- **WHEN** the message contains `@host` and the chatroom exposes the fixed Host role
+- **WHEN** the message contains a chip with `role_id: "host"` and display text `@主持 AI`
 - **THEN** the mention resolves to role `host`
 
 #### Scenario: Case-sensitive resolution
-- **WHEN** the message contains `@advisor` and the meeting has a participant with `role_id: "Advisor"`
+- **WHEN** the message contains a chip with stale `role_id: "advisor"` while only `Advisor` is active
 - **THEN** the request fails validation
 - **AND** no AI role is invoked
 
 #### Scenario: Display name does not resolve
-- **WHEN** the message contains `@顧問` and the meeting has `role_id: "Advisor"` with display name `顧問`
+- **WHEN** the message contains a chip with `role_id: "Advisor"` but mismatched display text `@評論者`
 - **THEN** the request fails validation
 - **AND** no AI role is invoked
 
 ### Requirement: Composer mode adaptation for chatroom
 The chatroom composer SHALL replace the current relay/parallel action dropdown (note/all/role-select) with a simpler interface:
-- A text input area with `@` role autocomplete and `#` attachment autocomplete
+- A text input area with display-name role-chip autocomplete and `#` source autocomplete
 - A send button that always sends the typed message
 - No `@` mention routes to Host; one valid `@role` routes to that role; multiple valid roles route in parallel; `@all` routes to all active roles including Host
 - Invalid normal role mentions block the request before AI execution; `@all` takes precedence and reports ignored invalid extras
@@ -207,7 +205,7 @@ The chatroom composer SHALL replace the current relay/parallel action dropdown (
 - **AND** a Host response is triggered
 
 #### Scenario: Send with one role mention triggers directed response
-- **WHEN** the user types `@Advisor 看看這個` and clicks send
+- **WHEN** the user selects an Advisor chip and types `看看這個`
 - **THEN** only the Advisor response is triggered
 
 #### Scenario: Invalid mention prevents execution
@@ -216,37 +214,39 @@ The chatroom composer SHALL replace the current relay/parallel action dropdown (
 - **AND** the input remains editable
 
 ### Requirement: Multiple mentions in single message
-A single message MAY contain multiple valid `@role` mentions. When multiple valid roles are mentioned, each mentioned role SHALL be invoked independently in parallel. The message SHALL be saved once as a human event, and each mentioned role SHALL receive a separate AI invocation with the same frozen context. `@all` SHALL take precedence over all valid role mentions and SHALL include Host exactly once.
+A single message MAY contain multiple valid role chips. When multiple roles are selected, each role SHALL be invoked independently in parallel. The message SHALL be saved once as a human event, and each role SHALL receive a separate AI invocation with the same frozen context. The `all` chip SHALL take precedence over all valid role chips and SHALL include Host exactly once.
 
 #### Scenario: Two roles mentioned
-- **WHEN** a message contains `@Advisor @Critic 你們覺得呢？`
+- **WHEN** a message contains Advisor and Critic display chips followed by `你們覺得呢？`
 - **THEN** both Advisor and Critic are invoked in parallel
 - **AND** each receives the same pre-send transcript and summary snapshot
 
 #### Scenario: Mix of @role and @all
-- **WHEN** a message contains `@all @Advisor 重點問你`
+- **WHEN** a message contains the `all` chip plus an Advisor chip
 - **THEN** Host and every active role are invoked once
 - **AND** Advisor is not invoked a second time
 
 #### Scenario: Duplicate role mentions are deduplicated
-- **WHEN** a message contains `@Advisor @Advisor 請回答`
+- **WHEN** a message contains the same Advisor chip twice followed by `請回答`
 - **THEN** Advisor is invoked once
 - **AND** the human message is persisted once
 
 ### Requirement: Mention autocomplete in composer
-The frontend composer SHALL provide an autocomplete/selection menu when the user types `@` followed by characters. The menu SHALL list all active chatroom roles, including Host, showing each role's display name and stable role_id. Selection SHALL insert the stable role_id into the message text, not the display name. The menu SHALL also include an `@all` option. The same composer SHALL provide the separate `#` attachment autocomplete defined by this change.
+The frontend composer SHALL provide an autocomplete/selection menu when the user types `@` followed by characters. The menu SHALL list all active chatroom roles, including Host, and selection SHALL insert a display-name role chip with a hidden stable `role_id`. The menu SHALL include an `@全部角色` chip whose hidden ID is `all`. The composer SHALL never insert `@Advisor` or `@host` as user-visible text. The same composer SHALL provide the separate `#` source autocomplete defined by this change.
 
 #### Scenario: Autocomplete shows Host and participants
 - **WHEN** the user types `@` in a chatroom composer
 - **THEN** the autocomplete menu shows 「主持 AI」 with role_id `host` and the active member roles
 
-#### Scenario: Host selection inserts stable ID
+#### Scenario: Host selection inserts a display chip
 - **WHEN** the user selects 「主持 AI」 from autocomplete
-- **THEN** the composer text contains `@host ` with a trailing space
+- **THEN** the composer shows an `@主持 AI` chip with hidden `role_id: "host"`
+- **AND** the request mentions array contains `{role_id: "host", display_text: "@主持 AI"}`
 
-#### Scenario: @all appears in autocomplete
+#### Scenario: @all appears as a display chip
 - **WHEN** the user types `@` in a chatroom composer
-- **THEN** the autocomplete menu includes `@all`
+- **THEN** the autocomplete menu includes `@全部角色`
+- **AND** selecting it creates a chip with hidden `role_id: "all"`
 
 #### Scenario: No autocomplete in non-chatroom modes
 - **WHEN** the current meeting mode is not `chatroom`

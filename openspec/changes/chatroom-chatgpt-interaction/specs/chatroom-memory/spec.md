@@ -1,5 +1,19 @@
 ## ADDED Requirements
 
+### Requirement: Summary regeneration has an explicit API contract
+`POST /meetings/{meeting_id}/chat/memory/regenerate` SHALL be available when the meeting is idle and able to accept chat input. Success SHALL return HTTP `202` with exactly `{status: "accepted", meeting_id: string, memory_status: "generating"}`. A running or terminal meeting SHALL return HTTP `409` with exactly `{status: "rejected", error: {code: "CHATROOM_MEMORY_REGENERATION_NOT_ALLOWED"}}`. The request SHALL not create a human event, AI chat event, or feed bubble.
+
+#### Scenario: User requests regeneration while idle
+- **WHEN** an idle chatroom receives a valid regeneration request
+- **THEN** it returns the exact `202` accepted body
+- **AND** the memory task enters `generating` without creating a feed event
+
+#### Scenario: Regeneration is rejected while unavailable
+- **WHEN** a running or terminal meeting receives a regeneration request
+- **THEN** it returns the exact `409` rejected body
+- **AND** no memory task or feed event is created
+
+
 ### Requirement: Shared transcript is the canonical chatroom memory
 The complete append-only event transcript for a chatroom meeting SHALL remain the canonical shared memory for every chatroom role. Human messages, completed AI responses, failed AI events, and durable attachment metadata SHALL be eligible for later read-time projection according to the existing event contract. No role SHALL receive a private long-term memory store as part of this change.
 
@@ -45,7 +59,7 @@ The summary task SHALL run only after the context threshold is reached and the c
 - **AND** the task is not rendered as a chat bubble
 
 ### Requirement: Summary failure does not block chat
-If summary generation fails, the system SHALL retain the last successful summary revision, set the read-model status to `stale` with `stale: true` and diagnostic error metadata, and continue chatroom requests using the recent transcript plus the retained summary when available. If no prior revision exists, the status SHALL be `unavailable` with the bounded recent transcript fallback. The context panel SHALL visibly indicate stale/update-failed state, but a summary failure SHALL NOT fail or cancel the triggering chatroom response.
+If summary generation fails, the system SHALL retain the last successful summary revision, set the read-model status to `stale` with `stale: true` and `error_code: "SUMMARY_UPDATE_FAILED"`, and continue chatroom requests using the recent transcript plus the retained summary when available. If no prior revision exists, the status SHALL be `empty` with `error_code: "SUMMARY_UPDATE_FAILED"` and the bounded recent transcript fallback. The context panel SHALL visibly indicate stale/update-failed state, but a summary failure SHALL NOT fail or cancel the triggering chatroom response.
 
 #### Scenario: Failed summary keeps prior revision
 - **WHEN** a summary task fails after a previous revision exists

@@ -1,15 +1,15 @@
 ## ADDED Requirements
 
 ### Requirement: Chatroom has a fixed Host role
-The chatroom mode SHALL expose one fixed role with stable internal ID `host` and display name 「主持 AI」. The Host SHALL be available in the active chatroom participant projection, SHALL have a model assignment through the existing meeting model mechanism, and SHALL be included when `@all` is resolved. The Host SHALL be a chatroom role only; other modes SHALL not gain this role through this change.
+The chatroom mode SHALL expose one fixed role with stable internal ID `host` and display name 「主持 AI」. The Host SHALL be available in the active chatroom participant projection, SHALL have a model assignment through the existing meeting model mechanism, and SHALL be included when the `all` role chip is resolved. The Host SHALL be a chatroom role only; other modes SHALL not gain this role through this change.
 
 #### Scenario: Chatroom participant projection includes Host
 - **WHEN** the chatroom mode catalog or an open chatroom meeting is projected
 - **THEN** one participant has `role_id: "host"` and display name 「主持 AI」
 - **AND** its model assignment is resolved like other chatroom roles
 
-#### Scenario: @all includes Host
-- **WHEN** a human sends `@all` in a chatroom
+#### Scenario: all chip includes Host
+- **WHEN** a human sends the `all` role chip in a chatroom
 - **THEN** the Host is one of the expected fanout roles
 - **AND** the Host receives the same frozen pre-send context as the other targeted roles
 
@@ -42,7 +42,7 @@ The system SHALL define a `chatroom` mode category in `config/modes.yaml` alongs
 - **AND** it has no steps, fanout, or synthesis sections
 
 ### Requirement: Human-message-only semantics
-A human message sent to a chatroom meeting without any `@role` or `@all` mention SHALL be saved as a human event and SHALL invoke the fixed Host role with the same instruction. A message containing a normal role mention that is invalid, ambiguous, or unavailable SHALL be rejected before any AI invocation; the composer input and references SHALL remain available for correction. The `@all` directive SHALL take precedence over other mentions and SHALL be resolved independently of unrelated invalid role-like tokens.
+A human message sent to a chatroom meeting without any role chip SHALL be saved as a human event and SHALL invoke the fixed Host role with the same instruction. A message containing a hand-typed role-like token or stale role chip SHALL be rejected before any AI invocation; the composer input and references SHALL remain available for correction. The `all` chip SHALL take precedence over other chips and SHALL be resolved independently of unrelated invalid role-like tokens.
 
 #### Scenario: Plain text routes to Host
 - **WHEN** a human sends "大家覺得怎麼樣？" to a chatroom meeting with no @mention
@@ -50,7 +50,7 @@ A human message sent to a chatroom meeting without any `@role` or `@all` mention
 - **AND** exactly the Host role is invoked
 
 #### Scenario: Mention-only message still activates
-- **WHEN** a human sends `@Advisor` with no additional instruction
+- **WHEN** a human sends an Advisor chip with no additional instruction
 - **THEN** a human event is saved
 - **AND** Advisor is invoked with the empty-after-mention instruction and may ask a clarifying question
 
@@ -60,21 +60,21 @@ A human message sent to a chatroom meeting without any `@role` or `@all` mention
 - **AND** no AI response event is appended
 - **AND** the composer content and invalid mention remain available for correction
 
-#### Scenario: @all has routing precedence
-- **WHEN** a human sends `@all @NonExistent 請大家回答`
+#### Scenario: all chip has routing precedence
+- **WHEN** a human sends the `all` chip plus a hand-typed `@NonExistent` token
 - **THEN** the request resolves to all active chatroom roles once each
 - **AND** the invalid token does not cause a second invocation or a Host fallback
 
 ### Requirement: Directed single-role response
-When a human message contains one or more valid explicit role mentions other than `@all`, the system SHALL invoke exactly the mentioned role set through the chatroom-specific response contract. One role SHALL use the directed path; two or more roles SHALL use parallel fanout semantics. The mention SHALL resolve to a stable `role_id` from the active meeting participant projection, including `host`, and SHALL NOT use free-text display-name matching.
+When a human message contains one or more valid role chips other than the `all` chip, the system SHALL invoke exactly the selected role set through the chatroom-specific response contract. One role SHALL use the directed path; two or more roles SHALL use parallel fanout semantics. The chip SHALL resolve to a stable `role_id` from the active meeting participant projection, including `host`, and SHALL NOT use free-text display-name matching.
 
-#### Scenario: @host triggers Host only
-- **WHEN** a human sends `@host 請整理目前共識`
+#### Scenario: Host chip triggers Host only
+- **WHEN** a human sends an `@主持 AI` chip with `請整理目前共識`
 - **THEN** only the Host responds
 - **AND** the response uses the chatroom-specific `chat-message/v1` contract
 
 #### Scenario: Two explicit roles receive one request each
-- **WHEN** a human sends `@Advisor @Critic 請比較這個方案`
+- **WHEN** a human sends Advisor and Critic display-name chips with `請比較這個方案`
 - **THEN** Advisor and Critic are invoked in parallel
 - **AND** no other role, including Host, is invoked
 
@@ -84,10 +84,10 @@ When a human message contains one or more valid explicit role mentions other tha
 - **AND** no AI role is invoked
 
 ### Requirement: @all parallel frozen-context fanout
-When a human message contains `@all`, the system SHALL invoke every active chatroom role, including Host, exactly once in parallel. Each role SHALL receive the same pre-send transcript, shared-summary, quoted-message, and selected-attachment snapshot. Roles SHALL NOT read each other's outputs from the same fanout round. Responses SHALL persist and display in arrival order, with existing pending, partial-success, failure, and terminal-settlement behavior preserved.
+When a human message contains the `all` role chip, the system SHALL invoke every active chatroom role, including Host, exactly once in parallel. Each role SHALL receive the same pre-send transcript, shared-summary, quoted-message, and selected-source snapshot. Roles SHALL NOT read each other's outputs from the same fanout round. Responses SHALL persist and display in arrival order, with existing pending, partial-success, failure, and terminal-settlement behavior preserved.
 
-#### Scenario: @all triggers Host and active roles
-- **WHEN** a human sends `@all 大家覺得呢？` to a chatroom with Host and 3 member roles
+#### Scenario: all chip triggers Host and active roles
+- **WHEN** a human sends the `all` chip with `大家覺得呢？` to a chatroom with Host and 3 member roles
 - **THEN** all 4 roles are invoked concurrently
 - **AND** each role receives the same frozen context snapshot
 
@@ -97,12 +97,12 @@ When a human message contains `@all`, the system SHALL invoke every active chatr
 - **AND** the pending placeholders remain for roles that have not completed
 
 #### Scenario: Duplicate mentions are invoked once
-- **WHEN** a human sends `@all @Advisor @Advisor 請回答`
+- **WHEN** a human sends the `all` chip plus duplicate Advisor chips with `請回答`
 - **THEN** Advisor is invoked once as part of the all-role set
 - **AND** no duplicate response event is scheduled for Advisor
 
 ### Requirement: Chatroom mode has no auto-start or step sequence
-The chatroom mode SHALL NOT have an auto-start behavior. Pressing "start meeting" in chatroom mode SHALL NOT trigger an automated AI sequence. After a meeting is idle, a plain human message SHALL invoke Host, while explicit `@role` and `@all` messages SHALL invoke only their resolved target set.
+The chatroom mode SHALL NOT have an auto-start behavior. Pressing "start meeting" in chatroom mode SHALL NOT trigger an automated AI sequence. After a meeting is idle, a plain human message SHALL invoke Host, while explicit role chips and the `all` chip SHALL invoke only their resolved target set.
 
 #### Scenario: Start chatroom meeting does not invoke AI
 - **WHEN** the user starts a chatroom meeting
