@@ -6856,6 +6856,33 @@ def run_single_courtroom_issue(
 # ── Chatroom mention tests (task group 6) ──────────────────────────────
 
 
+def _structured_chat_payload(
+    content: str,
+    *role_ids: str,
+    quoted_event_id: str | None = None,
+) -> dict[str, object]:
+    display_names = {
+        "host": "主持 AI", "Advisor": "顧問", "Critic": "評論者",
+        "Strategist": "策略師", "Analyst": "分析師", "all": "全部角色",
+        "Unknown": "未知", "Blue": "藍軍",
+    }
+    mentions = []
+    cursor = 0
+    for index, role_id in enumerate(role_ids, start=1):
+        display_text = f"@{display_names.get(role_id, role_id)}"
+        start = content.index(display_text, cursor)
+        end = start + len(display_text)
+        mentions.append({
+            "token_id": f"mention-{index}", "role_id": role_id,
+            "display_text": display_text, "start": start, "end": end,
+        })
+        cursor = end
+    return {
+        "content": content, "mentions": mentions, "source_tokens": [],
+        "source_refs": [], "quoted_event_id": quoted_event_id,
+    }
+
+
 def test_chat_mention_single_role(tmp_path: Path) -> None:
     app = create_test_app(tmp_path)
     client = TestClient(app)
@@ -6866,7 +6893,7 @@ def test_chat_mention_single_role(tmp_path: Path) -> None:
 
     response = client.post(
         f"/meetings/{meeting_id}/chat/mention",
-        json={"content": "Advisor 你怎麼看？", "mentions": ["Advisor"]},
+        json=_structured_chat_payload("@顧問 你怎麼看？", "Advisor"),
     )
 
     assert response.status_code == 202
@@ -6874,7 +6901,7 @@ def test_chat_mention_single_role(tmp_path: Path) -> None:
     assert events[-2]["step_id"] == "human-directed-message"
     assert events[-2]["interaction_type"] == "directed-role-instruction"
     assert events[-2]["target_role_id"] == "Advisor"
-    assert events[-2]["content"] == "Advisor 你怎麼看？"
+    assert events[-2]["content"] == "@顧問 你怎麼看？"
     assert events[-1]["step_id"] == "chat-directed-1-advisor-response"
     assert events[-1]["role"] == "Advisor"
     assert events[-1]["interaction_type"] == "directed-role-response"
@@ -6891,14 +6918,14 @@ def test_chat_mention_all(tmp_path: Path) -> None:
 
     response = client.post(
         f"/meetings/{meeting_id}/chat/mention",
-        json={"content": "大家怎麼看？", "mentions": ["all"]},
+        json=_structured_chat_payload("@全部角色 大家怎麼看？", "all"),
     )
 
     assert response.status_code == 202
     events = wait_for_event_count(client, meeting_id, 6)
     # human-message + one fanout response per role, including the fixed Host
     assert events[-6]["step_id"] == "human-message"
-    assert events[-6]["content"] == "大家怎麼看？"
+    assert events[-6]["content"] == "@全部角色 大家怎麼看？"
     fanout_roles = {e["role"] for e in events[-5:]}
     assert fanout_roles == {"host", "Advisor", "Critic", "Strategist", "Analyst"}
     for event in events[-5:]:
@@ -6915,7 +6942,7 @@ def test_chat_mention_empty_saves_human(tmp_path: Path) -> None:
 
     response = client.post(
         f"/meetings/{meeting_id}/chat/mention",
-        json={"content": "只是一則訊息", "mentions": []},
+        json=_structured_chat_payload("只是一則訊息"),
     )
 
     assert response.status_code == 202
@@ -6936,7 +6963,7 @@ def test_chat_mention_invalid_role_400(tmp_path: Path) -> None:
 
     response = client.post(
         f"/meetings/{meeting_id}/chat/mention",
-        json={"content": "你好嗎", "mentions": ["Unknown"]},
+        json=_structured_chat_payload("@未知 你好嗎", "Unknown"),
     )
 
     assert response.status_code == 400
@@ -6953,7 +6980,7 @@ def test_chat_mention_rejects_non_chatroom(tmp_path: Path) -> None:
 
     response = client.post(
         f"/meetings/{meeting_id}/chat/mention",
-        json={"content": "test", "mentions": ["Blue"]},
+        json=_structured_chat_payload("@藍軍 test", "Blue"),
     )
 
     assert response.status_code == 409
@@ -6969,14 +6996,14 @@ def test_chat_mention_multiple_roles(tmp_path: Path) -> None:
 
     response = client.post(
         f"/meetings/{meeting_id}/chat/mention",
-        json={"content": "你們兩個怎麼想？", "mentions": ["Advisor", "Critic"]},
+        json=_structured_chat_payload("@顧問 @評論者 你們兩個怎麼想？", "Advisor", "Critic"),
     )
 
     assert response.status_code == 202
     events = wait_for_event_count(client, meeting_id, 3)
     # human-message + Advisor fanout + Critic fanout
     assert events[-3]["step_id"] == "human-message"
-    assert events[-3]["content"] == "你們兩個怎麼想？"
+    assert events[-3]["content"] == "@顧問 @評論者 你們兩個怎麼想？"
     fanout_roles = {e["role"] for e in events[-2:]}
     assert fanout_roles == {"Advisor", "Critic"}
     for event in events[-2:]:
@@ -6993,7 +7020,7 @@ def test_chat_mention_all_deduplicates(tmp_path: Path) -> None:
 
     response = client.post(
         f"/meetings/{meeting_id}/chat/mention",
-        json={"content": "大家怎麼看？", "mentions": ["all", "Advisor"]},
+        json=_structured_chat_payload("@全部角色 @顧問 大家怎麼看？", "all", "Advisor"),
     )
 
     assert response.status_code == 202
@@ -7021,11 +7048,7 @@ def test_chat_mention_empty_response_event_id_matches_persisted_event(
 
     response = client.post(
         f"/meetings/{meeting_id}/chat/mention",
-        json={
-            "content": "引用這則",
-            "mentions": [],
-            "quoted_event_id": quote_target["event_id"],
-        },
+        json=_structured_chat_payload("引用這則", quoted_event_id=quote_target["event_id"]),
     )
 
     assert response.status_code == 202
@@ -7057,7 +7080,7 @@ def test_chat_mention_non_participant_role_returns_400(
 
     response = client.post(
         f"/meetings/{meeting_id}/chat/mention",
-        json={"content": "Strategist 說說看", "mentions": ["Strategist"]},
+        json=_structured_chat_payload("@策略師 說說看", "Strategist"),
     )
 
     assert response.status_code == 400
@@ -7080,11 +7103,7 @@ def test_chat_mention_with_quoted_event_passes_content_to_runner(
 
     response = client.post(
         f"/meetings/{meeting_id}/chat/mention",
-        json={
-            "content": "Advisor 你怎麼看？",
-            "mentions": ["Advisor"],
-            "quoted_event_id": quote_target["event_id"],
-        },
+        json=_structured_chat_payload("@顧問 你怎麼看？", "Advisor", quoted_event_id=quote_target["event_id"]),
     )
 
     assert response.status_code == 202
@@ -7310,7 +7329,7 @@ def test_chatroom_material_change_after_ai_output_does_not_gate_ai(
 
     response = client.post(
         f"/meetings/{meeting_id}/chat/mention",
-        json={"content": "Advisor 你怎麼看？", "mentions": ["Advisor"]},
+        json=_structured_chat_payload("@顧問 你怎麼看？", "Advisor"),
     )
     assert response.status_code == 202
     wait_for_event_count(client, meeting_id, 2)
@@ -7329,7 +7348,7 @@ def test_chatroom_material_change_after_ai_output_does_not_gate_ai(
 
     again = client.post(
         f"/meetings/{meeting_id}/chat/mention",
-        json={"content": "Advisor 再看一次？", "mentions": ["Advisor"]},
+        json=_structured_chat_payload("@顧問 再看一次？", "Advisor"),
     )
     assert again.status_code == 202
 
@@ -7394,7 +7413,7 @@ def test_chatroom_mention_recovers_when_legacy_pending_impact_present(
 
     response = client.post(
         f"/meetings/{meeting_id}/chat/mention",
-        json={"content": "Advisor 你怎麼看？", "mentions": ["Advisor"]},
+        json=_structured_chat_payload("@顧問 你怎麼看？", "Advisor"),
     )
     assert response.status_code == 202
 
@@ -8095,7 +8114,7 @@ def test_delete_attachment_rejected_on_running_meeting(
     try:
         response = client.post(
             f"/meetings/{meeting_id}/chat/mention",
-            json={"content": "你怎麼看？", "mentions": ["Advisor"]},
+            json=_structured_chat_payload("@顧問 你怎麼看？", "Advisor"),
         )
         assert response.status_code == 202
         assert model_entered.wait(timeout=1)

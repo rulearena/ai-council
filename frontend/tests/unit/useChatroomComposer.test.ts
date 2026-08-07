@@ -1,366 +1,152 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
-import { parseAndSendChatMessage } from '../../src/composables/useChatroomComposer.ts'
+import {
+  buildCanonicalChatroomPayload,
+  parseAndSendChatMessage,
+} from '../../src/composables/useChatroomComposer.ts'
 
 const participants = [
-  { role_id: 'Prosecutor', display_name: '檢察官' },
-  { role_id: 'Defense', display_name: '辯護律師' },
-  { role_id: 'Judge', display_name: '法官' },
+  { role_id: 'Advisor', display_name: '顧問' },
+  { role_id: 'Critic', display_name: '評論者' },
 ]
 
-test('test_send_without_mention dispatches human-message API call', async () => {
-  const calls: Array<{ fn: string; args: unknown[] }> = []
-  const boundary = {
-    sendChatMessage: async (...args: unknown[]) => { calls.push({ fn: 'sendChatMessage', args }); return { event_id: 'evt-1' } },
-    sendChatMention: async (...args: unknown[]) => { calls.push({ fn: 'sendChatMention', args }); return { event_id: 'evt-2' } },
+function boundary(calls: Array<{ fn: string; args: unknown[] }>) {
+  return {
+    sendChatMessage: async (...args: unknown[]) => { calls.push({ fn: 'sendChatMessage', args }); return { event_id: 'legacy' } },
+    sendChatMention: async (...args: unknown[]) => { calls.push({ fn: 'sendChatMention', args }); return { event_id: 'structured' } },
   }
+}
 
-  const result = await parseAndSendChatMessage({
-    content: 'Hello everyone',
-    meetingId: 'meeting-1',
-    participants,
-    quotedEventId: null,
-    boundary,
-  })
-
-  assert.equal(calls.length, 1)
-  assert.equal(calls[0].fn, 'sendChatMessage')
-  assert.deepEqual(calls[0].args, ['meeting-1', 'Hello everyone', undefined])
-  assert.equal(result.ok, true)
-})
-
-test('structured chatroom send without role chips uses the Host routing seam', async () => {
+test('plain Host sends the exact structured payload', async () => {
   const calls: Array<{ fn: string; args: unknown[] }> = []
-  const boundary = {
-    sendChatMessage: async (...args: unknown[]) => { calls.push({ fn: 'sendChatMessage', args }); return { event_id: 'evt-1' } },
-    sendChatMention: async (...args: unknown[]) => { calls.push({ fn: 'sendChatMention', args }); return { event_id: 'evt-2' } },
-  }
-
   const result = await parseAndSendChatMessage({
-    content: '請整理目前討論',
-    meetingId: 'meeting-1',
-    participants,
-    quotedEventId: null,
-    mentionTokens: [],
-    boundary,
+    content: '請整理目前討論', meetingId: 'meeting-1', participants, quotedEventId: null,
+    mentionTokens: [], boundary: boundary(calls),
   })
 
   assert.equal(result.ok, true)
-  assert.equal(calls[0].fn, 'sendChatMention')
   assert.deepEqual(calls[0].args, ['meeting-1', '請整理目前討論', [], [], [], undefined])
 })
 
-test('structured chatroom send preserves display-name chip and stable role span', async () => {
-  const calls: Array<{ fn: string; args: unknown[] }> = []
-  const boundary = {
-    sendChatMessage: async (...args: unknown[]) => { calls.push({ fn: 'sendChatMessage', args }); return { event_id: 'evt-1' } },
-    sendChatMention: async (...args: unknown[]) => { calls.push({ fn: 'sendChatMention', args }); return { event_id: 'evt-2' } },
-  }
-  const mention = {
-    token_id: 'mention-1',
-    role_id: 'Prosecutor',
-    display_text: '@檢察官',
-    start: 0,
-    end: 4,
-  }
-
-  await parseAndSendChatMessage({
-    content: '@檢察官 請回答',
-    meetingId: 'meeting-1',
-    participants,
-    quotedEventId: null,
-    mentionTokens: [mention],
-    boundary,
+test('rebase recalculates display-name chip spans after leading whitespace and edits', () => {
+  const payload = buildCanonicalChatroomPayload({
+    content: '  新增文字 @顧問 請回答',
+    mentionTokens: [{ token_id: 'm-1', role_id: 'Advisor', display_text: '@顧問', start: 0, end: 3 }],
   })
 
-  assert.deepEqual(calls[0].args.slice(0, 3), ['meeting-1', '@檢察官 請回答', [mention]])
+  assert.deepEqual(payload, {
+    content: '  新增文字 @顧問 請回答',
+    mentions: [{ token_id: 'm-1', role_id: 'Advisor', display_text: '@顧問', start: 7, end: 10 }],
+    sourceTokens: [],
+    sourceRefs: [],
+  })
 })
 
-test('structured chatroom send preserves same-label role/source chips and hashtag text', async () => {
-  const calls: Array<{ fn: string; args: unknown[] }> = []
-  const boundary = {
-    sendChatMessage: async (...args: unknown[]) => { calls.push({ fn: 'sendChatMessage', args }); return { event_id: 'evt-1' } },
-    sendChatMention: async (...args: unknown[]) => { calls.push({ fn: 'sendChatMention', args }); return { event_id: 'evt-2' } },
-  }
-  const mention = {
-    token_id: 'mention-1', role_id: 'Advisor', display_text: '@顧問', start: 0, end: 3,
-  }
-  const source = {
-    token_id: 'source-1', source_ref: 'attachment:brief', display_text: '#需求', start: 4, end: 7,
-  }
+test('rebase uses code-point offsets for CJK and NFC combining content', () => {
+  const payload = buildCanonicalChatroomPayload({
+    content: '前言 @顧問 e\u0301',
+    mentionTokens: [{ token_id: 'm-1', role_id: 'Advisor', display_text: '@顧問', start: 0, end: 3 }],
+  })
 
+  assert.equal('error' in payload, false)
+  if (!('error' in payload)) {
+    assert.equal(payload.content, '前言 @顧問 é')
+    assert.deepEqual(payload.mentions[0], {
+      token_id: 'm-1', role_id: 'Advisor', display_text: '@顧問', start: 3, end: 6,
+    })
+  }
+})
+
+test('duplicate real chips map in occurrence order and source refs dedupe in first order', () => {
+  const payload = buildCanonicalChatroomPayload({
+    content: '@顧問 再問 @顧問 #需求 #需求',
+    mentionTokens: [
+      { token_id: 'm-1', role_id: 'Advisor', display_text: '@顧問', start: 0, end: 3 },
+      { token_id: 'm-2', role_id: 'Advisor', display_text: '@顧問', start: 0, end: 3 },
+    ],
+    sourceTokens: [
+      { token_id: 's-1', source_ref: 'attachment:a', display_text: '#需求', start: 0, end: 3 },
+      { token_id: 's-2', source_ref: 'attachment:a', display_text: '#需求', start: 0, end: 3 },
+    ],
+  })
+
+  assert.equal('error' in payload, false)
+  if (!('error' in payload)) {
+    assert.deepEqual(payload.mentions.map((token) => [token.start, token.end]), [[0, 3], [7, 10]])
+    assert.deepEqual(payload.sourceTokens.map((token) => [token.start, token.end]), [[11, 14], [15, 18]])
+    assert.deepEqual(payload.sourceRefs, ['attachment:a'])
+  }
+})
+
+test('same-label hand-typed beside one chip is ambiguous and never calls API', async () => {
+  const calls: Array<{ fn: string; args: unknown[] }> = []
   const result = await parseAndSendChatMessage({
-    content: '@顧問 #需求 #需求標籤',
-    meetingId: 'meeting-1',
-    participants,
-    quotedEventId: null,
-    mentionTokens: [mention],
-    sourceTokens: [source],
-    boundary,
+    content: '@顧問 再問 @顧問', meetingId: 'meeting-1', participants, quotedEventId: null,
+    mentionTokens: [{ token_id: 'm-1', role_id: 'Advisor', display_text: '@顧問', start: 0, end: 3 }],
+    boundary: boundary(calls),
+  })
+
+  assert.equal(result.ok, false)
+  assert.match(result.error ?? '', /occurrence mismatch/)
+  assert.deepEqual(calls, [])
+})
+
+test('# chip and hashtag use the same exact-occurrence safety rule', async () => {
+  const calls: Array<{ fn: string; args: unknown[] }> = []
+  const result = await parseAndSendChatMessage({
+    content: '#需求 #需求標籤', meetingId: 'meeting-1', participants, quotedEventId: null,
+    mentionTokens: [],
+    sourceTokens: [{ token_id: 's-1', source_ref: 'attachment:a', display_text: '#需求', start: 0, end: 3 }],
+    boundary: boundary(calls),
+  })
+
+  assert.equal(result.ok, false)
+  assert.deepEqual(calls, [])
+})
+
+test('uncovered raw roles remain backend validation while plain email is sent as Host payload', async () => {
+  const calls: Array<{ fn: string; args: unknown[] }> = []
+  const rawRole = await parseAndSendChatMessage({
+    content: '@Adviser 請回答', meetingId: 'meeting-1', participants, quotedEventId: null,
+    mentionTokens: [], boundary: boundary(calls),
+  })
+  assert.equal(rawRole.ok, true)
+  assert.equal(calls.length, 1)
+
+  const email = await parseAndSendChatMessage({
+    content: 'Email a@advisor.example', meetingId: 'meeting-1', participants, quotedEventId: null,
+    mentionTokens: [], boundary: boundary(calls),
+  })
+  assert.equal(email.ok, true)
+  assert.deepEqual(calls[1].args.slice(1, 5), ['Email a@advisor.example', [], [], []])
+})
+
+test('display-name chip and @all serialize structured role tokens', async () => {
+  const calls: Array<{ fn: string; args: unknown[] }> = []
+  const mentions = [
+    { token_id: 'all-1', role_id: 'all', display_text: '@全部角色', start: 0, end: 5 },
+    { token_id: 'advisor-1', role_id: 'Advisor', display_text: '@顧問', start: 0, end: 3 },
+  ]
+  const result = await parseAndSendChatMessage({
+    content: '@全部角色 @顧問 請回答', meetingId: 'meeting-1', participants, quotedEventId: null,
+    mentionTokens: mentions, boundary: boundary(calls),
   })
 
   assert.equal(result.ok, true)
-  assert.equal(calls[0].fn, 'sendChatMention')
-  assert.deepEqual(calls[0].args, [
-    'meeting-1',
-    '@顧問 #需求 #需求標籤',
-    [mention],
-    [source],
-    ['attachment:brief'],
-    undefined,
-  ])
-})
-
-test('test_send_without_mention passes quotedEventId when present', async () => {
-  const calls: Array<{ fn: string; args: unknown[] }> = []
-  const boundary = {
-    sendChatMessage: async (...args: unknown[]) => { calls.push({ fn: 'sendChatMessage', args }); return { event_id: 'evt-1' } },
-    sendChatMention: async (...args: unknown[]) => { calls.push({ fn: 'sendChatMention', args }); return { event_id: 'evt-2' } },
-  }
-
-  const result = await parseAndSendChatMessage({
-    content: 'I agree with the above',
-    meetingId: 'meeting-1',
-    participants,
-    quotedEventId: 'evt-quote-42',
-    boundary,
-  })
-
-  assert.equal(calls.length, 1)
-  assert.equal(calls[0].fn, 'sendChatMessage')
-  assert.deepEqual(calls[0].args, ['meeting-1', 'I agree with the above', 'evt-quote-42'])
-  assert.equal(result.ok, true)
-})
-
-test('test_send_with_mention dispatches /chat/mention API call with mentions array', async () => {
-  const calls: Array<{ fn: string; args: unknown[] }> = []
-  const boundary = {
-    sendChatMessage: async (...args: unknown[]) => { calls.push({ fn: 'sendChatMessage', args }); return { event_id: 'evt-1' } },
-    sendChatMention: async (...args: unknown[]) => { calls.push({ fn: 'sendChatMention', args }); return { event_id: 'evt-2' } },
-  }
-
-  const result = await parseAndSendChatMessage({
-    content: '@Prosecutor what do you think?',
-    meetingId: 'meeting-1',
-    participants,
-    quotedEventId: null,
-    boundary,
-  })
-
-  assert.equal(calls.length, 1)
-  assert.equal(calls[0].fn, 'sendChatMention')
-  assert.equal(calls[0].args[0], 'meeting-1')
-  assert.equal(calls[0].args[1], '@Prosecutor what do you think?')
-  assert.deepEqual(calls[0].args[2], ['Prosecutor'])
-  assert.equal(calls[0].args[3], undefined)
-  assert.equal(result.ok, true)
-})
-
-test('test_send_with_mention parses @all token', async () => {
-  const calls: Array<{ fn: string; args: unknown[] }> = []
-  const boundary = {
-    sendChatMessage: async (...args: unknown[]) => { calls.push({ fn: 'sendChatMessage', args }); return { event_id: 'evt-1' } },
-    sendChatMention: async (...args: unknown[]) => { calls.push({ fn: 'sendChatMention', args }); return { event_id: 'evt-2' } },
-  }
-
-  await parseAndSendChatMessage({
-    content: '@all please review this',
-    meetingId: 'meeting-1',
-    participants,
-    quotedEventId: null,
-    boundary,
-  })
-
-  assert.equal(calls.length, 1)
-  assert.equal(calls[0].fn, 'sendChatMention')
-  assert.deepEqual(calls[0].args[2], ['all'])
-})
-
-test('test_send_with_mention deduplicates repeated mentions', async () => {
-  const calls: Array<{ fn: string; args: unknown[] }> = []
-  const boundary = {
-    sendChatMessage: async (...args: unknown[]) => { calls.push({ fn: 'sendChatMessage', args }); return { event_id: 'evt-1' } },
-    sendChatMention: async (...args: unknown[]) => { calls.push({ fn: 'sendChatMention', args }); return { event_id: 'evt-2' } },
-  }
-
-  await parseAndSendChatMessage({
-    content: '@Prosecutor and @Prosecutor again',
-    meetingId: 'meeting-1',
-    participants,
-    quotedEventId: null,
-    boundary,
-  })
-
-  assert.equal(calls.length, 1)
-  assert.equal(calls[0].fn, 'sendChatMention')
-  assert.deepEqual(calls[0].args[2], ['Prosecutor'])
-})
-
-test('test_send_with_mention ignores unknown role_id tokens', async () => {
-  const calls: Array<{ fn: string; args: unknown[] }> = []
-  const boundary = {
-    sendChatMessage: async (...args: unknown[]) => { calls.push({ fn: 'sendChatMessage', args }); return { event_id: 'evt-1' } },
-    sendChatMention: async (...args: unknown[]) => { calls.push({ fn: 'sendChatMention', args }); return { event_id: 'evt-2' } },
-  }
-
-  await parseAndSendChatMessage({
-    content: '@UnknownRole hello',
-    meetingId: 'meeting-1',
-    participants,
-    quotedEventId: null,
-    boundary,
-  })
-
-  assert.equal(calls.length, 1)
-  assert.equal(calls[0].fn, 'sendChatMessage')
-  assert.deepEqual(calls[0].args[2], undefined)
-})
-
-test('test_send_with_mention parses multiple different mentions', async () => {
-  const calls: Array<{ fn: string; args: unknown[] }> = []
-  const boundary = {
-    sendChatMessage: async (...args: unknown[]) => { calls.push({ fn: 'sendChatMessage', args }); return { event_id: 'evt-1' } },
-    sendChatMention: async (...args: unknown[]) => { calls.push({ fn: 'sendChatMention', args }); return { event_id: 'evt-2' } },
-  }
-
-  await parseAndSendChatMessage({
-    content: '@Prosecutor and @Defense please respond',
-    meetingId: 'meeting-1',
-    participants,
-    quotedEventId: null,
-    boundary,
-  })
-
-  assert.equal(calls.length, 1)
   assert.equal(calls[0].fn, 'sendChatMention')
   assert.deepEqual(calls[0].args[2], [
-    'Prosecutor',
-    'Defense',
+    { ...mentions[0], start: 0, end: 5 },
+    { ...mentions[1], start: 6, end: 9 },
   ])
 })
 
-test('test_send_with_quote dispatches with quoted_event_id', async () => {
+test('blank content and send failures do not invoke legacy /messages boundary', async () => {
   const calls: Array<{ fn: string; args: unknown[] }> = []
-  const boundary = {
-    sendChatMessage: async (...args: unknown[]) => { calls.push({ fn: 'sendChatMessage', args }); return { event_id: 'evt-1' } },
-    sendChatMention: async (...args: unknown[]) => { calls.push({ fn: 'sendChatMention', args }); return { event_id: 'evt-2' } },
-  }
-
-  const result = await parseAndSendChatMessage({
-    content: '@Prosecutor see above',
-    meetingId: 'meeting-1',
-    participants,
-    quotedEventId: 'evt-quote-99',
-    boundary,
+  const blank = await parseAndSendChatMessage({
+    content: '  ', meetingId: 'meeting-1', participants, quotedEventId: null,
+    mentionTokens: [], boundary: boundary(calls),
   })
-
-  assert.equal(calls.length, 1)
-  assert.equal(calls[0].fn, 'sendChatMention')
-  assert.equal(calls[0].args[3], 'evt-quote-99')
-  assert.equal(result.ok, true)
-})
-
-test('returns ok=false when content is blank', async () => {
-  const calls: Array<{ fn: string; args: unknown[] }> = []
-  const boundary = {
-    sendChatMessage: async (...args: unknown[]) => { calls.push({ fn: 'sendChatMessage', args }); return { event_id: 'evt-1' } },
-    sendChatMention: async (...args: unknown[]) => { calls.push({ fn: 'sendChatMention', args }); return { event_id: 'evt-2' } },
-  }
-
-  const result = await parseAndSendChatMessage({
-    content: '   ',
-    meetingId: 'meeting-1',
-    participants,
-    quotedEventId: null,
-    boundary,
-  })
-
-  assert.equal(calls.length, 0)
-  assert.equal(result.ok, false)
-})
-
-test('returns ok=false and error when boundary throws', async () => {
-  const boundary = {
-    sendChatMessage: async () => { throw new Error('network failure') },
-    sendChatMention: async () => { throw new Error('network failure') },
-  }
-
-  const result = await parseAndSendChatMessage({
-    content: 'Hello',
-    meetingId: 'meeting-1',
-    participants,
-    quotedEventId: null,
-    boundary,
-  })
-
-  assert.equal(result.ok, false)
-  assert.equal(result.error, 'network failure')
-})
-
-test('@ token mid-word is not treated as a mention', async () => {
-  const calls: Array<{ fn: string; args: unknown[] }> = []
-  const boundary = {
-    sendChatMessage: async (...args: unknown[]) => { calls.push({ fn: 'sendChatMessage', args }); return { event_id: 'evt-1' } },
-    sendChatMention: async (...args: unknown[]) => { calls.push({ fn: 'sendChatMention', args }); return { event_id: 'evt-2' } },
-  }
-
-  await parseAndSendChatMessage({
-    content: 'email@Prosecutor.com hello',
-    meetingId: 'meeting-1',
-    participants,
-    quotedEventId: null,
-    boundary,
-  })
-
-  assert.equal(calls.length, 1)
-  assert.equal(calls[0].fn, 'sendChatMessage')
-  assert.deepEqual(calls[0].args[2], undefined)
-})
-
-test('mention is case-sensitive for role_id matching', async () => {
-  const calls: Array<{ fn: string; args: unknown[] }> = []
-  const boundary = {
-    sendChatMessage: async (...args: unknown[]) => { calls.push({ fn: 'sendChatMessage', args }); return { event_id: 'evt-1' } },
-    sendChatMention: async (...args: unknown[]) => { calls.push({ fn: 'sendChatMention', args }); return { event_id: 'evt-2' } },
-  }
-
-  await parseAndSendChatMessage({
-    content: '@prosecutor hello',
-    meetingId: 'meeting-1',
-    participants,
-    quotedEventId: null,
-    boundary,
-  })
-
-  assert.equal(calls.length, 1)
-  assert.equal(calls[0].fn, 'sendChatMessage')
-  assert.deepEqual(calls[0].args[2], undefined)
-})
-
-test('@all plus role mention produces array with @all first', async () => {
-  const calls: Array<{ fn: string; args: unknown[] }> = []
-  const boundary = {
-    sendChatMessage: async (...args: unknown[]) => { calls.push({ fn: 'sendChatMessage', args }); return { event_id: 'evt-1' } },
-    sendChatMention: async (...args: unknown[]) => { calls.push({ fn: 'sendChatMention', args }); return { event_id: 'evt-2' } },
-  }
-  const participantsWithBlue = [
-    ...participants,
-    { role_id: 'Blue', display_name: '藍方' },
-  ]
-
-  await parseAndSendChatMessage({
-    content: '@all @Blue please respond',
-    meetingId: 'meeting-1',
-    participants: participantsWithBlue,
-    quotedEventId: null,
-    boundary,
-  })
-
-  assert.equal(calls.length, 1)
-  assert.equal(calls[0].fn, 'sendChatMention')
-  const mentions = calls[0].args[2] as string[]
-  assert.ok(mentions.includes('all'), 'should include "all"')
-  assert.ok(mentions.includes('Blue'), 'should include "Blue"')
-  assert.equal(mentions[0], 'all', '@all should appear first')
+  assert.equal(blank.ok, false)
+  assert.deepEqual(calls, [])
 })

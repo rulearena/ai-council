@@ -102,7 +102,6 @@ async function handleSend() {
   sending.value = true
   try {
     const boundary = {
-      sendChatMessage: store.sendChatroomMessage,
       sendChatMention: store.sendChatroomMention,
     }
     const result = await parseAndSendChatMessage({

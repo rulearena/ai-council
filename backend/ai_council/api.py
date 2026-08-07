@@ -397,9 +397,9 @@ class AddChatMentionRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     content: StrictStr
-    mentions: list[ChatroomMentionTokenRequest | StrictStr]
-    source_tokens: list[ChatroomSourceTokenRequest] | None = None
-    source_refs: list[StrictStr] | None = None
+    mentions: list[ChatroomMentionTokenRequest]
+    source_tokens: list[ChatroomSourceTokenRequest]
+    source_refs: list[StrictStr]
     quoted_event_id: StrictStr | None = None
 
 
@@ -2516,85 +2516,45 @@ def create_app(
                     status_code=400,
                     content=rejected("INVALID_REQUEST_SCHEMA", "quoted_event_id"),
                 )
-            legacy_mentions = [mention for mention in request.mentions if isinstance(mention, str)]
-            is_legacy_empty = not request.mentions and request.source_tokens is None and request.source_refs is None
             human_event_fields: dict[str, object] = {}
-            if legacy_mentions or is_legacy_empty:
-                if (
-                    len(legacy_mentions) != len(request.mentions)
-                    or request.source_tokens is not None
-                    or request.source_refs is not None
-                ):
-                    return JSONResponse(status_code=400, content=rejected("INVALID_REQUEST_SCHEMA", "mentions"))
-                unknown = [role for role in legacy_mentions if role not in set(active_role_ids) | {"all"}]
-                if unknown:
-                    return JSONResponse(status_code=400, content=rejected("STALE_MENTION_PAYLOAD", "mentions"))
-                if "@" in request.content:
-                    try:
-                        validate_chatroom_routing(
-                            content=request.content,
-                            mentions=[],
-                            source_tokens=[],
-                            source_refs=[],
-                            active_role_ids=active_role_ids,
-                            role_display_names=role_display_names,
+            try:
+                routing = validate_chatroom_routing(
+                    content=request.content,
+                    mentions=[
+                        ChatroomMentionToken(
+                            token_id=token.token_id,
+                            role_id=token.role_id,
+                            display_text=token.display_text,
+                            start=token.start,
+                            end=token.end,
                         )
-                    except ValueError as error:
-                        payload = error.args[0]
-                        if isinstance(payload, dict) and payload.get("status") == "rejected":
-                            return JSONResponse(status_code=400, content=payload)
-                if "all" in legacy_mentions:
-                    target_role_ids = list(active_role_ids)
-                else:
-                    target_role_ids = list(dict.fromkeys(legacy_mentions))
-                if not target_role_ids:
-                    target_role_ids = ["host"]
-                routing = ValidatedChatroomRouting(
-                    target_role_ids=target_role_ids,
-                    instruction=request.content.strip(),
-                    warnings=[],
+                        for token in request.mentions
+                    ],
+                    source_tokens=[
+                        ChatroomSourceToken(
+                            token_id=token.token_id,
+                            source_ref=token.source_ref,
+                            display_text=token.display_text,
+                            start=token.start,
+                            end=token.end,
+                        )
+                        for token in request.source_tokens
+                    ],
+                    source_refs=list(request.source_refs),
+                    active_role_ids=active_role_ids,
+                    role_display_names=role_display_names,
                 )
-            else:
-                if request.source_tokens is None or request.source_refs is None:
-                    return JSONResponse(status_code=400, content=rejected("INVALID_REQUEST_SCHEMA", "source_tokens"))
-                try:
-                    routing = validate_chatroom_routing(
-                        content=request.content,
-                        mentions=[
-                            ChatroomMentionToken(
-                                token_id=token.token_id,
-                                role_id=token.role_id,
-                                display_text=token.display_text,
-                                start=token.start,
-                                end=token.end,
-                            )
-                            for token in request.mentions
-                        ],
-                        source_tokens=[
-                            ChatroomSourceToken(
-                                token_id=token.token_id,
-                                source_ref=token.source_ref,
-                                display_text=token.display_text,
-                                start=token.start,
-                                end=token.end,
-                            )
-                            for token in request.source_tokens
-                        ],
-                        source_refs=list(request.source_refs),
-                        active_role_ids=active_role_ids,
-                        role_display_names=role_display_names,
-                    )
-                except ValueError as error:
-                    payload = error.args[0]
-                    if isinstance(payload, dict) and payload.get("status") == "rejected":
-                        return JSONResponse(status_code=400, content=payload)
-                    return JSONResponse(status_code=400, content=rejected("INVALID_REQUEST_SCHEMA", None))
-                target_role_ids = routing.target_role_ids
-                human_event_fields = {
-                    "mentions": [token.model_dump() for token in request.mentions],
-                    "source_tokens": [token.model_dump() for token in request.source_tokens],
-                    "source_refs": list(request.source_refs),
-                }
+            except ValueError as error:
+                payload = error.args[0]
+                if isinstance(payload, dict) and payload.get("status") == "rejected":
+                    return JSONResponse(status_code=400, content=payload)
+                return JSONResponse(status_code=400, content=rejected("INVALID_REQUEST_SCHEMA", None))
+            target_role_ids = routing.target_role_ids
+            human_event_fields = {
+                "mentions": [token.model_dump() for token in request.mentions],
+                "source_tokens": [token.model_dump() for token in request.source_tokens],
+                "source_refs": list(request.source_refs),
+            }
 
             # Source authorization is intentionally only a structural seam in this slice;
             # the source registry and readable-body projection belong to Slice 3.

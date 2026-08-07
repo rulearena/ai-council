@@ -72,6 +72,28 @@ def test_api_acceptance_body_and_field_mapping_are_exact(tmp_path: Path) -> None
 
 
 @pytest.mark.parametrize(
+    "body",
+    [
+        {"content": "@顧問 請回答", "mentions": ["Advisor"], "source_tokens": [], "source_refs": [], "quoted_event_id": None},
+        {"content": "請回答", "mentions": [], "source_tokens": [], "quoted_event_id": None},
+    ],
+)
+def test_chat_mention_never_accepts_legacy_or_partial_schema(
+    tmp_path: Path,
+    body: dict[str, object],
+) -> None:
+    client = _client(tmp_path)
+    meeting_id = _meeting(client)
+
+    response = _post(client, meeting_id, body)
+
+    assert response.status_code == 400
+    assert response.json()["status"] == "rejected"
+    assert response.json()["error"]["code"] == "INVALID_REQUEST_SCHEMA"
+    assert client.get(f"/meetings/{meeting_id}").json()["events"] == []
+
+
+@pytest.mark.parametrize(
     ("label", "mutate", "field"),
     [
         ("missing content", lambda body: body.pop("content"), "content"),

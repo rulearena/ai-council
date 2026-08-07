@@ -670,8 +670,8 @@ export async function sendChatMention(
   meetingId: string,
   content: string,
   mentions: ChatMention[],
-  sourceTokens: ChatSourceToken[] = [],
-  sourceRefs: string[] = [],
+  sourceTokens: ChatSourceToken[],
+  sourceRefs: string[],
   quotedEventId?: string,
 ): Promise<MeetingEvent> {
   return postJson(`/meetings/${meetingId}/chat/mention`, {
