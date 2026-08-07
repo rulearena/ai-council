@@ -1,6 +1,6 @@
 # #102 聊天室初始空白提示修正
 
-Status: approved / awaiting Gate A review (2026-08-07)
+Status: implemented / awaiting Human Owner acceptance (2026-08-07)
 
 ## 問題
 
