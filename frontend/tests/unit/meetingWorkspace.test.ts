@@ -106,6 +106,33 @@ test('chatroom @all exposes a pending round before its first response', () => {
   assert.deepEqual(workspace.fanoutRounds[0].roleStates.map((role) => role.state), ['pending', 'pending', 'pending'])
 })
 
+test('chatroom @all pending projection includes the fixed Host role', () => {
+  const hostMode = {
+    ...chatroomMode,
+    roles: [{ id: 'host', name: '主持 AI' }, ...chatroomMode.roles],
+  }
+  const hostMeeting = {
+    ...chatroomMeeting,
+    participants: hostMode.roles.map((role) => ({ role_id: role.id, display_name: role.name })),
+  }
+  const hostCapture = createFanoutCapture({
+    id: 'host-capture',
+    meetingId: 'meeting-chat',
+    instruction: '@全部角色 大家覺得呢？',
+    preSendEventIds: [],
+    expectedRoleIds: ['host', 'Advisor', 'Critic', 'Strategist'],
+    capturedAt: 1,
+  })
+  hostCapture.humanEventId = 'human-chat-1'
+  const workspace = projectMeetingWorkspace({
+    meeting: hostMeeting,
+    mode: hostMode,
+    fanoutCaptures: [hostCapture],
+  })
+  assert.deepEqual(workspace.fanoutRounds[0].expectedRoleIds, ['host', 'Advisor', 'Critic', 'Strategist'])
+  assert.equal(workspace.fanoutRounds[0].roleStates.find((role) => role.roleId === 'host')?.state, 'pending')
+})
+
 test('chatroom @all keeps arrival order and a fixed denominator', () => {
   const workspace = projectMeetingWorkspace({
     meeting: {
