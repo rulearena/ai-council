@@ -402,6 +402,7 @@ class MeetingRunner:
         inputs: dict[str, Any] | None = None,
         quoted_event_id: str | None = None,
         human_content: str | None = None,
+        human_event_fields: dict[str, object] | None = None,
     ) -> None:
         if self._is_terminal(meeting_id):
             return
@@ -420,6 +421,7 @@ class MeetingRunner:
                     "status": "completed",
                     "content": human_content if human_content is not None else instruction,
                     **({"quoted_event_id": quoted_event_id} if quoted_event_id else {}),
+                    **(human_event_fields or {}),
                 },
             )
             return
@@ -438,6 +440,7 @@ class MeetingRunner:
                 "target_role_id": role,
                 "content": human_content if human_content is not None else instruction,
                 **({"quoted_event_id": quoted_event_id} if quoted_event_id else {}),
+                **(human_event_fields or {}),
                 **self._audit_event_fields(inputs),
             },
         )
@@ -485,6 +488,7 @@ class MeetingRunner:
         inputs: dict[str, Any] | None = None,
         quoted_event_id: str | None = None,
         human_content: str | None = None,
+        human_event_fields: dict[str, object] | None = None,
     ) -> None:
         if self._is_terminal(meeting_id):
             return
@@ -510,6 +514,7 @@ class MeetingRunner:
                 "status": "completed",
                 "content": human_content if human_content is not None else instruction,
                 **({"quoted_event_id": quoted_event_id} if quoted_event_id else {}),
+                **(human_event_fields or {}),
                 **self._audit_event_fields(inputs),
             },
         )

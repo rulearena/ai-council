@@ -2499,6 +2499,7 @@ def create_app(
                 )
             legacy_mentions = [mention for mention in request.mentions if isinstance(mention, str)]
             is_legacy_empty = not request.mentions and request.source_tokens is None and request.source_refs is None
+            human_event_fields: dict[str, object] = {}
             if legacy_mentions or is_legacy_empty:
                 if (
                     len(legacy_mentions) != len(request.mentions)
@@ -2509,6 +2510,20 @@ def create_app(
                 unknown = [role for role in legacy_mentions if role not in set(active_role_ids) | {"all"}]
                 if unknown:
                     return JSONResponse(status_code=400, content=rejected("STALE_MENTION_PAYLOAD", "mentions"))
+                if "@" in request.content:
+                    try:
+                        validate_chatroom_routing(
+                            content=request.content,
+                            mentions=[],
+                            source_tokens=[],
+                            source_refs=[],
+                            active_role_ids=active_role_ids,
+                            role_display_names=role_display_names,
+                        )
+                    except ValueError as error:
+                        payload = error.args[0]
+                        if isinstance(payload, dict) and payload.get("status") == "rejected":
+                            return JSONResponse(status_code=400, content=payload)
                 if "all" in legacy_mentions:
                     target_role_ids = list(active_role_ids)
                 else:
@@ -2546,7 +2561,7 @@ def create_app(
                             )
                             for token in request.source_tokens
                         ],
-                    source_refs=list(request.source_refs),
+                        source_refs=list(request.source_refs),
                         active_role_ids=active_role_ids,
                         role_display_names=role_display_names,
                     )
@@ -2556,6 +2571,11 @@ def create_app(
                         return JSONResponse(status_code=400, content=payload)
                     return JSONResponse(status_code=400, content=rejected("INVALID_REQUEST_SCHEMA", None))
                 target_role_ids = routing.target_role_ids
+                human_event_fields = {
+                    "mentions": [token.model_dump() for token in request.mentions],
+                    "source_tokens": [token.model_dump() for token in request.source_tokens],
+                    "source_refs": list(request.source_refs),
+                }
 
             # Source authorization is intentionally only a structural seam in this slice;
             # the source registry and readable-body projection belong to Slice 3.
@@ -2576,6 +2596,7 @@ def create_app(
                         inputs=inputs,
                         quoted_event_id=request.quoted_event_id,
                         human_content=request.content,
+                        human_event_fields=human_event_fields,
                     )
                 elif len(target_role_ids) == 1:
                     single_role = target_role_ids[0]
@@ -2601,6 +2622,7 @@ def create_app(
                         inputs=inputs,
                         quoted_event_id=request.quoted_event_id,
                         human_content=request.content,
+                        human_event_fields=human_event_fields,
                     )
                 else:
                     filtered_assignments = {
@@ -2619,6 +2641,7 @@ def create_app(
                         inputs=inputs,
                         quoted_event_id=request.quoted_event_id,
                         human_content=request.content,
+                        human_event_fields=human_event_fields,
                     )
 
             if not jobs.start(meeting_id, run_mention):

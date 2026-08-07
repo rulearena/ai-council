@@ -113,6 +113,9 @@ def test_valid_display_name_chip_routes_by_stable_role_id(tmp_path: Path) -> Non
 
     assert response.status_code == 202
     assert response.json()["target_role_ids"] == ["Advisor"]
+    events = _wait_for_events(client, meeting_id, 2)
+    assert events[-2]["mentions"][0]["role_id"] == "Advisor"
+    assert events[-2]["mentions"][0]["display_text"] == "@顧問"
 
 
 def test_hand_typed_role_like_token_is_rejected_without_side_effects(tmp_path: Path) -> None:
