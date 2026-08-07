@@ -1,5 +1,4 @@
 import type { ChatMention, ChatSourceToken } from '../api'
-import type { ChairmanParticipant } from '../chairmanActions'
 
 export type ChatMessageBoundary = {
   sendChatMention: (
@@ -96,36 +95,9 @@ export function buildCanonicalChatroomPayload(input: {
   }
 }
 
-const MENTION_RE = /(?:^|\s)@(all|\w+)/g
-
-export function extractMentions(
-  content: string,
-  participants: ChairmanParticipant[],
-): string[] {
-  const validRoleIds = new Set(participants.map((p) => p.role_id))
-  const seen = new Set<string>()
-  const mentions: string[] = []
-  let match: RegExpExecArray | null
-
-  while ((match = MENTION_RE.exec(content)) !== null) {
-    const token = match[1]
-    if (seen.has(token)) continue
-    seen.add(token)
-
-    if (token === 'all') {
-      mentions.push('all')
-    } else if (validRoleIds.has(token)) {
-      mentions.push(token)
-    }
-  }
-
-  return mentions
-}
-
 export async function parseAndSendChatMessage(input: {
   content: string
   meetingId: string
-  participants: ChairmanParticipant[]
   quotedEventId: string | null
   mentionTokens?: ChatMention[]
   sourceTokens?: ChatSourceToken[]

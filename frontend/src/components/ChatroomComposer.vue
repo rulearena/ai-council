@@ -107,7 +107,6 @@ async function handleSend() {
     const result = await parseAndSendChatMessage({
       content: messageText.value,
       meetingId: props.meetingId,
-      participants: props.participants,
       quotedEventId: props.quotedMessage?.eventId ?? null,
       mentionTokens: mentionTokens.value,
       boundary,

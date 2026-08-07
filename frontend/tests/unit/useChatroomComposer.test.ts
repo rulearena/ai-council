@@ -6,11 +6,6 @@ import {
   parseAndSendChatMessage,
 } from '../../src/composables/useChatroomComposer.ts'
 
-const participants = [
-  { role_id: 'Advisor', display_name: '顧問' },
-  { role_id: 'Critic', display_name: '評論者' },
-]
-
 function boundary(calls: Array<{ fn: string; args: unknown[] }>) {
   return {
     sendChatMessage: async (...args: unknown[]) => { calls.push({ fn: 'sendChatMessage', args }); return { event_id: 'legacy' } },
@@ -21,7 +16,7 @@ function boundary(calls: Array<{ fn: string; args: unknown[] }>) {
 test('plain Host sends the exact structured payload', async () => {
   const calls: Array<{ fn: string; args: unknown[] }> = []
   const result = await parseAndSendChatMessage({
-    content: '請整理目前討論', meetingId: 'meeting-1', participants, quotedEventId: null,
+    content: '請整理目前討論', meetingId: 'meeting-1', quotedEventId: null,
     mentionTokens: [], boundary: boundary(calls),
   })
 
@@ -82,7 +77,7 @@ test('duplicate real chips map in occurrence order and source refs dedupe in fir
 test('same-label hand-typed beside one chip is ambiguous and never calls API', async () => {
   const calls: Array<{ fn: string; args: unknown[] }> = []
   const result = await parseAndSendChatMessage({
-    content: '@顧問 再問 @顧問', meetingId: 'meeting-1', participants, quotedEventId: null,
+    content: '@顧問 再問 @顧問', meetingId: 'meeting-1', quotedEventId: null,
     mentionTokens: [{ token_id: 'm-1', role_id: 'Advisor', display_text: '@顧問', start: 0, end: 3 }],
     boundary: boundary(calls),
   })
@@ -95,7 +90,7 @@ test('same-label hand-typed beside one chip is ambiguous and never calls API', a
 test('# chip and hashtag use the same exact-occurrence safety rule', async () => {
   const calls: Array<{ fn: string; args: unknown[] }> = []
   const result = await parseAndSendChatMessage({
-    content: '#需求 #需求標籤', meetingId: 'meeting-1', participants, quotedEventId: null,
+    content: '#需求 #需求標籤', meetingId: 'meeting-1', quotedEventId: null,
     mentionTokens: [],
     sourceTokens: [{ token_id: 's-1', source_ref: 'attachment:a', display_text: '#需求', start: 0, end: 3 }],
     boundary: boundary(calls),
@@ -108,14 +103,14 @@ test('# chip and hashtag use the same exact-occurrence safety rule', async () =>
 test('uncovered raw roles remain backend validation while plain email is sent as Host payload', async () => {
   const calls: Array<{ fn: string; args: unknown[] }> = []
   const rawRole = await parseAndSendChatMessage({
-    content: '@Adviser 請回答', meetingId: 'meeting-1', participants, quotedEventId: null,
+    content: '@Adviser 請回答', meetingId: 'meeting-1', quotedEventId: null,
     mentionTokens: [], boundary: boundary(calls),
   })
   assert.equal(rawRole.ok, true)
   assert.equal(calls.length, 1)
 
   const email = await parseAndSendChatMessage({
-    content: 'Email a@advisor.example', meetingId: 'meeting-1', participants, quotedEventId: null,
+    content: 'Email a@advisor.example', meetingId: 'meeting-1', quotedEventId: null,
     mentionTokens: [], boundary: boundary(calls),
   })
   assert.equal(email.ok, true)
@@ -129,7 +124,7 @@ test('display-name chip and @all serialize structured role tokens', async () => 
     { token_id: 'advisor-1', role_id: 'Advisor', display_text: '@顧問', start: 0, end: 3 },
   ]
   const result = await parseAndSendChatMessage({
-    content: '@全部角色 @顧問 請回答', meetingId: 'meeting-1', participants, quotedEventId: null,
+    content: '@全部角色 @顧問 請回答', meetingId: 'meeting-1', quotedEventId: null,
     mentionTokens: mentions, boundary: boundary(calls),
   })
 
@@ -144,7 +139,7 @@ test('display-name chip and @all serialize structured role tokens', async () => 
 test('blank content and send failures do not invoke legacy /messages boundary', async () => {
   const calls: Array<{ fn: string; args: unknown[] }> = []
   const blank = await parseAndSendChatMessage({
-    content: '  ', meetingId: 'meeting-1', participants, quotedEventId: null,
+    content: '  ', meetingId: 'meeting-1', quotedEventId: null,
     mentionTokens: [], boundary: boundary(calls),
   })
   assert.equal(blank.ok, false)
