@@ -91,6 +91,24 @@ test('13.1 create chatroom meeting (title only, no goal)', async ({ page }) => {
   )
 })
 
+test('13.1a non-chatroom empty feed keeps the deliberation prompt', async ({ page }) => {
+  await page.goto('/')
+  const title = `E2E non-chatroom empty feed ${Date.now()}`
+  await page.getByTestId('new-case-button').click()
+  await page
+    .getByTestId('mode-select-card-red-blue')
+    .getByRole('button', { name: '選擇此模式' })
+    .click()
+  await page.getByLabel('會議名稱', { exact: true }).fill(title)
+  await page.getByLabel('目標', { exact: true }).fill('驗證一般模式空白提示')
+  await page.getByTestId('create-meeting-button').click()
+
+  await expect(page.getByTestId('conversation-workspace')).toBeVisible()
+  await expect(page.getByTestId('workspace-message-feed')).toHaveText(
+    '尚未有會議發言；可先記錄主席補充，或啟動第一次審議。',
+  )
+})
+
 // ── 13.2 ─────────────────────────────────────────────────────────────────────
 
 test('13.2 send plain text message in chatroom', async ({ page }) => {
