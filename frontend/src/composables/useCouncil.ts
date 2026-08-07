@@ -19,6 +19,7 @@ import {
   type FanoutCapture,
 } from '../chatroomFanout'
 import { waitForSettledProjection } from '../meetingSettlement'
+import { chatroomQueuedRoleIds } from '../chatroomPending'
 import {
   chatroomStartGuard,
   chairmanActionBlockReason,
@@ -90,6 +91,8 @@ export type ModelTestView = {
 export type RoleSeatStatus = 'waiting' | 'thinking' | 'completed' | 'failed'
 
 const ASSIGNMENT_UPDATE_ERROR_MESSAGE = '模型指派儲存失敗，請稍後再試。'
+
+export { chatroomQueuedRoleIds } from '../chatroomPending'
 
 // The mode currently driving the open meeting, defaulting to red-blue when no meeting is
 // selected (spec.md 16.7). A module-level singleton (not per-useCouncil() state) so every
@@ -1136,15 +1139,16 @@ export function useCouncil() {
   ): Promise<boolean> {
     // '@all' resolves to every participant so each seat reports its own progress.
     const roleIds = mentions.map((mention) => mention.role_id)
-    const queuedRoles = roleIds.includes('all')
-      ? (selectedMeeting.value?.participants ?? []).map((participant) => participant.role_id)
-      : roleIds
+    const queuedRoles = chatroomQueuedRoleIds(
+      mentions,
+      (selectedMeeting.value?.participants ?? []).map((participant) => participant.role_id),
+    )
     const capture = roleIds.includes('all')
       ? createFanoutCapture({
         meetingId,
         instruction: content,
         preSendEventIds: (selectedMeeting.value?.events ?? []).map((event) => event.event_id),
-        expectedRoleIds: (selectedMeeting.value?.participants ?? []).map((participant) => participant.role_id),
+        expectedRoleIds: queuedRoles,
       })
       : null
     if (capture) fanoutCaptures.value = [...fanoutCaptures.value, capture]
