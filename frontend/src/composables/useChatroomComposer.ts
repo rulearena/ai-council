@@ -59,7 +59,9 @@ export function rebaseTrackedChatroomTokens<T extends TrackedChatroomToken>(
 
 function normalizedBoundaryMap(content: string): number[] {
   const codePoints = Array.from(content)
-  return codePoints.map((_, index) => codePointLength(content.slice(0, index).normalize('NFC')))
+  return codePoints.map((_, index) => codePointLength(
+    codePoints.slice(0, index).join('').normalize('NFC'),
+  ))
     .concat(codePointLength(content.normalize('NFC')))
 }
 
@@ -73,7 +75,7 @@ function normalizeTrackedToken<T extends TrackedChatroomToken>(
   const end = boundaries[token.end]
   if (start === undefined || end === undefined || end <= start) return null
   const normalizedContent = content.normalize('NFC')
-  if (normalizedContent.slice(start, end) !== displayText) return null
+  if (Array.from(normalizedContent).slice(start, end).join('') !== displayText) return null
   return { ...token, display_text: displayText, start, end } as T
 }
 

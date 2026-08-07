@@ -118,6 +118,18 @@ test('NFC combining content maps normalized spans without trimming leading white
   }
 })
 
+test('astral Unicode prefix keeps exact code-point mention spans in the structured payload', async () => {
+  const calls: Array<{ fn: string; args: unknown[] }> = []
+  const token = advisor(2, 5)
+  const result = await parseAndSendChatMessage({
+    content: '😀 @顧問 請回答', meetingId: 'meeting-1', quotedEventId: null,
+    mentionTokens: [token], boundary: boundary(calls),
+  })
+
+  assert.equal(result.ok, true)
+  assert.deepEqual(calls[0].args.slice(1, 3), ['😀 @顧問 請回答', [token]])
+})
+
 test('source chip and uncovered hashtag remain separate classes', async () => {
   const calls: Array<{ fn: string; args: unknown[] }> = []
   const result = await parseAndSendChatMessage({
