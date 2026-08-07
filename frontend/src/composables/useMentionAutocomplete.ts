@@ -35,7 +35,7 @@ function matchesFilter(option: MentionOption, filterText: string): boolean {
   if (!filterText) return true
   if (option.role_id === 'all') return true
   const needle = filterText.toLowerCase()
-  const haystack = option.role_id.toLowerCase()
+  const haystack = `${option.display_name || ''} ${option.name || ''} ${option.role_id}`.toLowerCase()
   return haystack.includes(needle)
 }
 

@@ -65,6 +65,8 @@ import {
   type MeetingEvent,
   type MeetingParticipant,
   type ModelConfig,
+  type ChatMention,
+  type ChatSourceToken,
 } from '../api'
 
 // A role id as it appears in events.jsonl's `role` field. Used to be a hardcoded
@@ -1127,14 +1129,17 @@ export function useCouncil() {
   async function sendChatroomMention(
     meetingId: string,
     content: string,
-    mentions: string[],
+    mentions: ChatMention[],
+    sourceTokens: ChatSourceToken[] = [],
+    sourceRefs: string[] = [],
     quotedEventId?: string,
   ): Promise<boolean> {
     // '@all' resolves to every participant so each seat reports its own progress.
-    const queuedRoles = mentions.includes('all')
+    const roleIds = mentions.map((mention) => mention.role_id)
+    const queuedRoles = roleIds.includes('all')
       ? (selectedMeeting.value?.participants ?? []).map((participant) => participant.role_id)
-      : mentions
-    const capture = mentions.includes('all')
+      : roleIds
+    const capture = roleIds.includes('all')
       ? createFanoutCapture({
         meetingId,
         instruction: content,
@@ -1145,7 +1150,7 @@ export function useCouncil() {
     if (capture) fanoutCaptures.value = [...fanoutCaptures.value, capture]
     try {
       const succeeded = await runWithPendingRoles(pendingRoles.value, queuedRoles, () => runAction(async () => {
-        await sendChatMention(meetingId, content, mentions, quotedEventId)
+        await sendChatMention(meetingId, content, mentions, sourceTokens, sourceRefs, quotedEventId)
       }))
       if (!succeeded && capture) fanoutCaptures.value = removeFanoutCapture(fanoutCaptures.value, capture.id)
       return succeeded

@@ -639,7 +639,21 @@ export async function addMeetingMessage(
   return postJson(`/meetings/${meetingId}/messages`, { content })
 }
 
-export type ChatMention = string
+export type ChatMention = {
+  token_id: string
+  role_id: string
+  display_text: string
+  start: number
+  end: number
+}
+
+export type ChatSourceToken = {
+  token_id: string
+  source_ref: string
+  display_text: string
+  start: number
+  end: number
+}
 
 export async function sendChatMessage(
   meetingId: string,
@@ -656,12 +670,16 @@ export async function sendChatMention(
   meetingId: string,
   content: string,
   mentions: ChatMention[],
+  sourceTokens: ChatSourceToken[] = [],
+  sourceRefs: string[] = [],
   quotedEventId?: string,
 ): Promise<MeetingEvent> {
   return postJson(`/meetings/${meetingId}/chat/mention`, {
     content,
     mentions,
-    ...(quotedEventId ? { quoted_event_id: quotedEventId } : {}),
+    source_tokens: sourceTokens,
+    source_refs: sourceRefs,
+    quoted_event_id: quotedEventId ?? null,
   })
 }
 

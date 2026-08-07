@@ -141,3 +141,100 @@ def test_hand_typed_role_like_token_is_rejected_without_side_effects(tmp_path: P
         },
     }
     assert client.get(f"/meetings/{meeting_id}").json()["events"] == []
+
+
+def test_all_chip_has_precedence_and_warns_about_raw_role_token(tmp_path: Path) -> None:
+    app = create_app(
+        data_dir=tmp_path / "data",
+        model_config_path=PROJECT_ROOT / "config/models.yaml.example",
+        modes_config_path=PROJECT_ROOT / "config/modes.yaml",
+        prompt_dir=PROJECT_ROOT / "prompts",
+        start_model_health_checks=False,
+    )
+    client = TestClient(app)
+    meeting_id = _create_chatroom(client)
+    content = "@全部角色 @Adviser"
+
+    response = client.post(
+        f"/meetings/{meeting_id}/chat/mention",
+        json=_valid_request(
+            content,
+            [{
+                "token_id": "all-1",
+                "role_id": "all",
+                "display_text": "@全部角色",
+                "start": 0,
+                "end": 5,
+            }],
+        ),
+    )
+
+    assert response.status_code == 202
+    assert response.json()["target_role_ids"] == ["host", "Advisor", "Critic", "Strategist", "Analyst"]
+    assert response.json()["warnings"] == [
+        {"code": "IGNORED_INVALID_MENTION", "display_text": "@Adviser"}
+    ]
+    events = _wait_for_events(client, meeting_id, 6)
+    assert {event["role"] for event in events[-5:]} == {
+        "host", "Advisor", "Critic", "Strategist", "Analyst"
+    }
+
+
+def test_mention_only_chip_still_invokes_one_role(tmp_path: Path) -> None:
+    app = create_app(
+        data_dir=tmp_path / "data",
+        model_config_path=PROJECT_ROOT / "config/models.yaml.example",
+        modes_config_path=PROJECT_ROOT / "config/modes.yaml",
+        prompt_dir=PROJECT_ROOT / "prompts",
+        start_model_health_checks=False,
+    )
+    client = TestClient(app)
+    meeting_id = _create_chatroom(client)
+
+    response = client.post(
+        f"/meetings/{meeting_id}/chat/mention",
+        json=_valid_request(
+            "@顧問",
+            [{
+                "token_id": "mention-1",
+                "role_id": "Advisor",
+                "display_text": "@顧問",
+                "start": 0,
+                "end": 3,
+            }],
+        ),
+    )
+
+    assert response.status_code == 202
+    events = _wait_for_events(client, meeting_id, 2)
+    assert events[-1]["role"] == "Advisor"
+
+
+def test_stale_chip_is_rejected_without_side_effects(tmp_path: Path) -> None:
+    app = create_app(
+        data_dir=tmp_path / "data",
+        model_config_path=PROJECT_ROOT / "config/models.yaml.example",
+        modes_config_path=PROJECT_ROOT / "config/modes.yaml",
+        prompt_dir=PROJECT_ROOT / "prompts",
+        start_model_health_checks=False,
+    )
+    client = TestClient(app)
+    meeting_id = _create_chatroom(client)
+
+    response = client.post(
+        f"/meetings/{meeting_id}/chat/mention",
+        json=_valid_request(
+            "@顧問",
+            [{
+                "token_id": "mention-1",
+                "role_id": "Advisor",
+                "display_text": "@評論者",
+                "start": 0,
+                "end": 3,
+            }],
+        ),
+    )
+
+    assert response.status_code == 400
+    assert response.json()["error"]["code"] == "MENTION_TOKEN_MISMATCH"
+    assert client.get(f"/meetings/{meeting_id}").json()["events"] == []

@@ -5,10 +5,10 @@ import {
   detectMentionTrigger,
   buildMentionMenuItems,
   resolveMentionInsertion,
-  selectMentionOption,
   shouldShowMentionAutocomplete,
 } from '../composables/useMentionAutocomplete'
 import type { MentionOption } from '../composables/useMentionAutocomplete'
+import type { ChatMention } from '../api'
 
 const props = defineProps<{
   modelValue: string
@@ -19,7 +19,7 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   'update:modelValue': [value: string]
-  'mention-inserted': [roleId: string]
+  'mention-inserted': [token: ChatMention]
 }>()
 
 const isOpen = ref(false)
@@ -111,9 +111,20 @@ function handleKeyDown(event: KeyboardEvent): boolean {
 }
 
 function applySelection(option: MentionOption) {
-  const result = selectMentionOption(props.modelValue, option)
-  emit('update:modelValue', result.text)
-  emit('mention-inserted', option.role_id)
+  const triggerStart = props.modelValue.lastIndexOf('@')
+  const tokenStart = Array.from(props.modelValue.slice(0, triggerStart)).length
+  const displayName = option.role_id === 'all'
+    ? '全部角色'
+    : option.display_name || option.name || option.role_id
+  const before = props.modelValue.slice(0, props.modelValue.lastIndexOf('@'))
+  emit('update:modelValue', `${before}@${displayName} `)
+  emit('mention-inserted', {
+    token_id: `${option.role_id}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    role_id: option.role_id,
+    display_text: `@${displayName}`,
+    start: tokenStart,
+    end: tokenStart + Array.from(`@${displayName}`).length,
+  })
   isOpen.value = false
 }
 
@@ -130,7 +141,7 @@ function onMouseenter(index: number) {
 }
 
 function optionLabel(item: { role_id: string; display_name?: string | null; name?: string | null }): string {
-  if (item.role_id === 'all') return item.display_name || '全體成員'
+  if (item.role_id === 'all') return '全部角色'
   return item.display_name || item.name || item.role_id
 }
 </script>

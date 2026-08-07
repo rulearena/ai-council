@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, inject, ref } from 'vue'
+import type { ChatMention } from '../api'
 import type { ChairmanParticipant } from '../chairmanActions'
 import { parseAndSendChatMessage } from '../composables/useChatroomComposer'
 import { councilKey } from '../composables/useCouncil'
@@ -21,6 +22,7 @@ const emit = defineEmits<{
 
 const store = inject(councilKey)!
 const messageText = ref('')
+const mentionTokens = ref<ChatMention[]>([])
 const sending = ref(false)
 // LINE 風格「＋」直接開原生檔案選取器；常駐隱藏 input 可被 e2e 直接
 // setInputFiles。上傳鎖（uploadDisabled）由父層計算（loading || running）。
@@ -108,16 +110,22 @@ async function handleSend() {
       meetingId: props.meetingId,
       participants: props.participants,
       quotedEventId: props.quotedMessage?.eventId ?? null,
+      mentionTokens: mentionTokens.value,
       boundary,
     })
     if (result.ok) {
       messageText.value = ''
+      mentionTokens.value = []
       if (props.quotedMessage) emit('update:quotedMessage', null)
       emit('message-sent')
     }
   } finally {
     sending.value = false
   }
+}
+
+function onMentionInserted(token: ChatMention) {
+  mentionTokens.value = [...mentionTokens.value, token]
 }
 
 function onSendClick(event: MouseEvent) {
@@ -173,13 +181,14 @@ function onSendClick(event: MouseEvent) {
           :participants="participants"
           mode-category="chatroom"
           :disabled="disabled"
+          @mention-inserted="onMentionInserted"
         />
         <textarea
           v-model="messageText"
           class="chatroom-composer-input"
           data-testid="chat-message-input"
           aria-label="聊天訊息"
-          placeholder="輸入訊息…"
+          placeholder="輸入訊息…（@指定 AI；#選取附件；不加 @ 由主持 AI 回覆）"
           :disabled="disabled"
           rows="1"
           aria-autocomplete="list"

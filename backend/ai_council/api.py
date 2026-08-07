@@ -2482,6 +2482,11 @@ def create_app(
             )
             role_display_names = _build_role_display_names(mode, participants)
             active_role_ids = [str(participant["role_id"]) for participant in participants]
+            if request.quoted_event_id and not request.quoted_event_id.startswith(f"{meeting_id}:"):
+                return JSONResponse(
+                    status_code=400,
+                    content=rejected("INVALID_REQUEST_SCHEMA", "quoted_event_id"),
+                )
             try:
                 routing = validate_chatroom_routing(
                     content=request.content,
