@@ -425,9 +425,9 @@ test('13.10 mention autocomplete — @ shows participant list', async ({ page })
   await expect(page.getByTestId('mention-autocomplete')).toBeVisible()
   await expect(page.getByTestId('mention-menu')).toBeVisible()
 
-  // Should list all 4 roles plus the "all members" option = 5 total
+  // Should list Host + 4 roles plus the "all members" option = 6 total
   const options = page.getByTestId('mention-option')
-  await expect(options).toHaveCount(5)
+  await expect(options).toHaveCount(6)
 
   // Verify role names are present
   await expect(page.getByTestId('mention-menu')).toContainText('顧問')
@@ -435,12 +435,12 @@ test('13.10 mention autocomplete — @ shows participant list', async ({ page })
   await expect(page.getByTestId('mention-menu')).toContainText('策略師')
   await expect(page.getByTestId('mention-menu')).toContainText('分析師')
 
-  // Click on the second option (first role = Advisor; first item is "all members")
-  await options.nth(1).click()
+  // Select the Advisor display-name chip; Host is also listed after the all option.
+  await options.filter({ hasText: '顧問' }).click()
 
   // The input should now contain the selected mention
   const inputValue = await page.getByTestId('chat-message-input').inputValue()
-  expect(inputValue).toContain('@Advisor')
+  expect(inputValue).toContain('@顧問')
 
   // Menu should close after selection
   await expect(page.getByTestId('mention-menu')).not.toBeVisible()
@@ -1100,7 +1100,7 @@ test('13.24 the mention menu is fully operable from the keyboard', async ({ page
   // ArrowUp wraps back past the top rather than sticking.
   await input.press('ArrowUp')
   await input.press('ArrowUp')
-  await expect(options.nth(4)).toHaveAttribute('aria-selected', 'true')
+  await expect(options.nth(5)).toHaveAttribute('aria-selected', 'true')
 
   // Escape dismisses without touching the draft and without sending.
   await input.press('Escape')
@@ -1115,12 +1115,12 @@ test('13.24 the mention menu is fully operable from the keyboard', async ({ page
   await input.press('ArrowDown')
   await input.press('Enter')
   await expect(menu).not.toBeVisible()
-  await expect(input).toHaveValue('@Advisor ')
+  await expect(input).toHaveValue('@顧問 ')
   await expect(page.getByTestId('workspace-message')).toHaveCount(0)
 
   // With the menu closed, Enter goes back to meaning send.
   await input.press('Enter')
-  await expect(page.getByTestId('workspace-message-feed')).toContainText('@Advisor')
+  await expect(page.getByTestId('workspace-message-feed')).toContainText('@顧問')
   await expect(input).toHaveValue('')
 })
 

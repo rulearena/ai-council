@@ -398,8 +398,8 @@ class AddChatMentionRequest(BaseModel):
 
     content: StrictStr
     mentions: list[ChatroomMentionTokenRequest | StrictStr]
-    source_tokens: list[ChatroomSourceTokenRequest] = Field(default_factory=list)
-    source_refs: list[StrictStr] = Field(default_factory=list)
+    source_tokens: list[ChatroomSourceTokenRequest] | None = None
+    source_refs: list[StrictStr] | None = None
     quoted_event_id: StrictStr | None = None
 
 
@@ -2498,8 +2498,13 @@ def create_app(
                     content=rejected("INVALID_REQUEST_SCHEMA", "quoted_event_id"),
                 )
             legacy_mentions = [mention for mention in request.mentions if isinstance(mention, str)]
-            if legacy_mentions:
-                if len(legacy_mentions) != len(request.mentions) or request.source_tokens or request.source_refs:
+            is_legacy_empty = not request.mentions and request.source_tokens is None and request.source_refs is None
+            if legacy_mentions or is_legacy_empty:
+                if (
+                    len(legacy_mentions) != len(request.mentions)
+                    or request.source_tokens is not None
+                    or request.source_refs is not None
+                ):
                     return JSONResponse(status_code=400, content=rejected("INVALID_REQUEST_SCHEMA", "mentions"))
                 unknown = [role for role in legacy_mentions if role not in set(active_role_ids) | {"all"}]
                 if unknown:
@@ -2516,6 +2521,8 @@ def create_app(
                     warnings=[],
                 )
             else:
+                if request.source_tokens is None or request.source_refs is None:
+                    return JSONResponse(status_code=400, content=rejected("INVALID_REQUEST_SCHEMA", "source_tokens"))
                 try:
                     routing = validate_chatroom_routing(
                         content=request.content,
@@ -2539,7 +2546,7 @@ def create_app(
                             )
                             for token in request.source_tokens
                         ],
-                        source_refs=list(request.source_refs),
+                    source_refs=list(request.source_refs),
                         active_role_ids=active_role_ids,
                         role_display_names=role_display_names,
                     )
@@ -2622,7 +2629,7 @@ def create_app(
                     "status": "accepted",
                     "meeting_id": meeting_id,
                     "target_role_ids": target_role_ids,
-                    "source_refs": list(request.source_refs),
+                    "source_refs": list(request.source_refs or []),
                     "warnings": routing.warnings,
                 },
             )
