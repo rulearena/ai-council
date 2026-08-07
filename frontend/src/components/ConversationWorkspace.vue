@@ -424,7 +424,11 @@ async function retryRole(roleId: string) {
 
       <div ref="feedRef" class="workspace-message-feed" data-testid="workspace-message-feed" aria-live="polite">
         <p v-if="!feedItems.length" class="workspace-empty-feed">
-          {{ selectedRoleId ? '這個角色還沒有發言。' : '尚未有會議發言；可先記錄主席補充，或啟動第一次審議。' }}
+          {{ selectedRoleId
+            ? '這個角色還沒有發言。'
+            : activeMode.category === 'chatroom'
+              ? '還沒有訊息；可直接輸入文字，想請 AI 回應時請 @角色 或 @all。'
+              : '尚未有會議發言；可先記錄主席補充，或啟動第一次審議。' }}
         </p>
         <template v-for="item in renderFeedItems" :key="item.kind === 'message' ? item.message.id : item.round.id">
         <article
