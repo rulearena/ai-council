@@ -54,6 +54,33 @@ async function sendChatMessage(page: Page, text: string) {
   await page.getByTestId('send-chat-message-button').click()
 }
 
+async function selectMention(page: Page, filter: string, displayName: string) {
+  const input = page.getByTestId('chat-message-input')
+  await input.fill(`@${filter}`)
+  await expect(page.getByTestId('mention-menu')).toBeVisible()
+  await page.getByTestId('mention-option').filter({ hasText: displayName }).first().click()
+}
+
+async function sendMentionedChatMessage(page: Page, mentions: Array<{ filter: string; displayName: string }>, suffix: string) {
+  const input = page.getByTestId('chat-message-input')
+  await input.fill('')
+  for (const mention of mentions) {
+    await input.fill(`${await input.inputValue()}@${mention.filter}`)
+    await expect(page.getByTestId('mention-menu')).toBeVisible()
+    await page.getByTestId('mention-option').filter({ hasText: mention.displayName }).first().click()
+  }
+  await input.fill(`${await input.inputValue()}${suffix}`)
+  await page.getByTestId('send-chat-message-button').click()
+}
+
+async function sendAdvisorMessage(page: Page, suffix: string) {
+  await sendMentionedChatMessage(page, [{ filter: '顧', displayName: '顧問' }], suffix)
+}
+
+async function sendAllMessage(page: Page, suffix: string) {
+  await sendMentionedChatMessage(page, [{ filter: 'all', displayName: '全體成員' }], suffix)
+}
+
 /** Wait for a workspace-message with matching text to appear. */
 async function waitForMessage(page: Page, text: string) {
   await expect(page.getByTestId('workspace-message-feed')).toContainText(text, { timeout: 10_000 })
@@ -131,12 +158,45 @@ test('13.2 send plain text message in chatroom', async ({ page }) => {
   await sendChatMessage(page, '大家好，這是一個測試訊息。')
   await waitForMessage(page, '大家好，這是一個測試訊息。')
 
-  // Plain text without @mention should show as a human message, no AI response
+  // Ordinary chat text is the implicit Host route.
   const messages = page.getByTestId('workspace-message')
   const humanMsg = messages.filter({ hasText: '大家好，這是一個測試訊息。' })
   await expect(humanMsg).toBeVisible()
-  // No AI role messages should appear for a plain text message
-  await expect(messages).toHaveCount(1, { timeout: 3000 })
+  await waitForRoleMessage(page, '主持 AI')
+  await expect(messages).toHaveCount(2, { timeout: 15_000 })
+})
+
+test('13.2a raw role-like mention is rejected without an event and keeps the draft', async ({ page }) => {
+  await page.goto('/')
+  const title = `E2E chatroom raw mention rejection ${Date.now()}`
+  await createChatroomMeeting(page, title, { modelAssignments: defaultModels })
+
+  const input = page.getByTestId('chat-message-input')
+  await input.fill('@Advisor 這不是已選取的角色 chip')
+  const response = page.waitForResponse(
+    (candidate) => candidate.request().method() === 'POST' && candidate.url().endsWith('/chat/mention'),
+  )
+  await page.getByTestId('send-chat-message-button').click()
+  await expect((await response).status()).toBe(400)
+  await expect(input).toHaveValue('@Advisor 這不是已選取的角色 chip')
+  await expect(page.getByTestId('workspace-message')).toHaveCount(0)
+})
+
+test('13.2b accepted @all keeps the exact invalid-mention warning while AI proceeds', async ({ page }) => {
+  await page.goto('/')
+  const title = `E2E chatroom accepted warning ${Date.now()}`
+  await createChatroomMeeting(page, title, { modelAssignments: defaultModels })
+
+  await selectMention(page, 'all', '全體成員')
+  const input = page.getByTestId('chat-message-input')
+  await input.fill(`${await input.inputValue()}@Adviser 也請看看`)
+  await page.getByTestId('send-chat-message-button').click()
+
+  await waitForMessage(page, '@全體成員 @Adviser 也請看看')
+  await expect(page.getByTestId('app-error')).toContainText('IGNORED_INVALID_MENTION')
+  await expect(page.getByTestId('app-error')).toContainText('@Adviser')
+  await waitForRoleMessage(page, '主持 AI')
+  await waitForRoleMessage(page, '顧問')
 })
 
 // ── 13.3 ─────────────────────────────────────────────────────────────────────
@@ -146,8 +206,8 @@ test('13.3 send @Advisor mention — verify AI response appears', async ({ page 
   const title = `E2E chatroom mention single ${Date.now()}`
   await createChatroomMeeting(page, title, { modelAssignments: defaultModels })
 
-  await sendChatMessage(page, '@Advisor 看看這個')
-  await waitForMessage(page, '@Advisor 看看這個')
+  await sendMentionedChatMessage(page, [{ filter: '顧', displayName: '顧問' }], '看看這個')
+  await waitForMessage(page, '@顧問 看看這個')
 
   // Wait for Advisor's AI response
   await waitForRoleMessage(page, '顧問')
@@ -168,8 +228,8 @@ test('13.4 send @all — all roles respond', async ({ page }) => {
   const title = `E2E chatroom @all ${Date.now()}`
   await createChatroomMeeting(page, title, { modelAssignments: defaultModels })
 
-  await sendChatMessage(page, '@all 大家覺得呢？')
-  await waitForMessage(page, '@all 大家覺得呢？')
+  await sendMentionedChatMessage(page, [{ filter: 'all', displayName: '全體成員' }], '大家覺得呢？')
+  await waitForMessage(page, '@全體成員 大家覺得呢？')
 
   // All 4 roles should respond — wait for each
   await waitForRoleMessage(page, '顧問')
@@ -177,8 +237,9 @@ test('13.4 send @all — all roles respond', async ({ page }) => {
   await waitForRoleMessage(page, '策略師')
   await waitForRoleMessage(page, '分析師')
 
-  // 1 human + 4 AI = 5 messages
-  await expect(page.getByTestId('workspace-message')).toHaveCount(5, { timeout: 30_000 })
+  // 1 human + Host + 4 member AI = 6 messages
+  await waitForRoleMessage(page, '主持 AI')
+  await expect(page.getByTestId('workspace-message')).toHaveCount(6, { timeout: 30_000 })
 })
 
 test('13.4a @all renders one round and all pending placeholders before the request is released', async ({ page }) => {
@@ -193,10 +254,10 @@ test('13.4a @all renders one round and all pending placeholders before the reque
     await route.continue()
   })
 
-  await sendChatMessage(page, '@all 先同時想想看')
+  await sendMentionedChatMessage(page, [{ filter: 'all', displayName: '全體成員' }], '先同時想想看')
   await expect(page.getByTestId('fanout-round')).toHaveCount(1)
-  await expect(page.getByTestId('fanout-round-header')).toContainText('0/4')
-  await expect(page.getByTestId('fanout-round-placeholder')).toHaveCount(4)
+  await expect(page.getByTestId('fanout-round-header')).toContainText('0/5')
+  await expect(page.getByTestId('fanout-round-placeholder')).toHaveCount(5)
 
   releaseRequest()
   await waitForRoleMessage(page, '顧問')
@@ -212,8 +273,11 @@ test('13.4b send @Advisor @Critic — both respond in parallel', async ({ page }
   const title = `E2E chatroom multi-mention ${Date.now()}`
   await createChatroomMeeting(page, title, { modelAssignments: defaultModels })
 
-  await sendChatMessage(page, '@Advisor @Critic 你們覺得呢？')
-  await waitForMessage(page, '@Advisor @Critic 你們覺得呢？')
+  await sendMentionedChatMessage(page, [
+    { filter: '顧', displayName: '顧問' },
+    { filter: '評', displayName: '評論者' },
+  ], '你們覺得呢？')
+  await waitForMessage(page, '@顧問 @評論者 你們覺得呢？')
 
   await waitForRoleMessage(page, '顧問')
   await waitForRoleMessage(page, '評論者')
@@ -237,8 +301,8 @@ test('13.5 quote an existing message — verify quoted context in AI response', 
   // Click the quote button on the first AI response or human message
   // Quote buttons only appear on non-human, non-system messages in chatroom mode
   // Since no AI messages yet, we need to first trigger an AI response
-  await sendChatMessage(page, '@Advisor 請回答')
-  await waitForMessage(page, '@Advisor 請回答')
+  await sendMentionedChatMessage(page, [{ filter: '顧', displayName: '顧問' }], '請回答')
+  await waitForMessage(page, '@顧問 請回答')
   await waitForRoleMessage(page, '顧問')
 
   // Now click the quote button on the Advisor's response
@@ -247,7 +311,7 @@ test('13.5 quote an existing message — verify quoted context in AI response', 
   await expect(page.getByTestId('quote-indicator')).toBeVisible()
 
   // Send a quoted message
-  await sendChatMessage(page, '@Advisor 你剛才說了什麼？')
+  await sendMentionedChatMessage(page, [{ filter: '顧', displayName: '顧問' }], '你剛才說了什麼？')
   await waitForMessage(page, '你剛才說了什麼？')
 
   // The quote indicator should be dismissed after sending
@@ -256,7 +320,7 @@ test('13.5 quote an existing message — verify quoted context in AI response', 
   // Advisor should respond (with quoted context)
   await waitForRoleMessage(page, '顧問')
   // 1 plain human + 2 directed-message+response pairs = 5 events rendered as messages
-  await expect(page.getByTestId('workspace-message')).toHaveCount(5, { timeout: 15_000 })
+  await expect(page.getByTestId('workspace-message')).toHaveCount(6, { timeout: 15_000 })
 })
 
 test('13.5a quote preview keeps the dark theme at desktop and responsive widths', async ({ page }) => {
@@ -264,8 +328,8 @@ test('13.5a quote preview keeps the dark theme at desktop and responsive widths'
   const title = `E2E chatroom quote theme ${Date.now()}`
   await createChatroomMeeting(page, title, { modelAssignments: defaultModels })
 
-  await sendChatMessage(page, '@Advisor 請回答')
-  await waitForMessage(page, '@Advisor 請回答')
+  await sendAdvisorMessage(page, '請回答')
+  await waitForMessage(page, '@顧問 請回答')
   await waitForRoleMessage(page, '顧問')
 
   const advisorMessage = page.getByTestId('workspace-message').filter({ hasText: '顧問' }).first()
@@ -322,8 +386,8 @@ test('13.6 reload chatroom — messages persist', async ({ page }) => {
   await sendChatMessage(page, '持久化測試訊息')
   await waitForMessage(page, '持久化測試訊息')
 
-  await sendChatMessage(page, '@Advisor 第二條訊息')
-  await waitForMessage(page, '@Advisor 第二條訊息')
+  await sendAdvisorMessage(page, '第二條訊息')
+  await waitForMessage(page, '@顧問 第二條訊息')
   await waitForRoleMessage(page, '顧問')
 
   // Reload the page — no URL/localStorage persistence, must re-navigate
@@ -353,8 +417,8 @@ test('13.7 @all with one role failing — partial success visible', async ({ pag
     },
   })
 
-  await sendChatMessage(page, '@all 失敗測試')
-  await waitForMessage(page, '@all 失敗測試')
+  await sendAllMessage(page, '失敗測試')
+  await waitForMessage(page, '@全體成員 失敗測試')
 
   // Wait for at least some responses to arrive — the 3 working roles should complete
   await waitForRoleMessage(page, '評論者')
@@ -496,7 +560,7 @@ test('13.11 seat click filters feed — identical for Chairman and role seats', 
   await waitForMessage(page, '主席測試訊息')
 
   // Send an Advisor message via @mention
-  await sendChatMessage(page, '@Advisor 請回覆')
+  await sendAdvisorMessage(page, '請回覆')
   await waitForRoleMessage(page, '顧問')
 
   // Click Chairman seat → feed filters to Chairman messages only
@@ -536,7 +600,7 @@ test('13.12 message cards display role avatars', async ({ page }) => {
   await createChatroomMeeting(page, title, { modelAssignments: defaultModels })
 
   // Send an Advisor message via @mention
-  await sendChatMessage(page, '@Advisor 請回覆')
+  await sendAdvisorMessage(page, '請回覆')
   await waitForRoleMessage(page, '顧問')
 
   // The message card should contain an avatar element
@@ -845,7 +909,7 @@ test('13.22 a mentioned role shows a thinking indicator until it answers', async
   })
   await expect(page.getByTestId('conversation-workspace')).toBeVisible()
 
-  await sendChatMessage(page, '@Advisor 請回覆')
+  await sendAdvisorMessage(page, '請回覆')
 
   // Without this the Chairman had no way to tell whether a mentioned role was working:
   // the chatroom composer bypassed the store, so pendingRoles was never populated and
@@ -1451,7 +1515,7 @@ test('uploading .txt after the AI has spoken does not gate it: no impact banner,
   await createChatroomMeeting(page, title, { modelAssignments: defaultModels })
 
   // The AI has already spoken before any upload.
-  await sendChatMessage(page, '@Advisor 你怎麼看？')
+  await sendAdvisorMessage(page, '你怎麼看？')
   await waitForRoleMessage(page, '顧問')
 
   // Upload a text file after that output — chatroom must not flag a pending impact.
@@ -1472,7 +1536,7 @@ test('uploading .txt after the AI has spoken does not gate it: no impact banner,
   const followUp = page.waitForResponse(
     (response) => response.request().method() === 'POST' && response.url().endsWith('/chat/mention'),
   )
-  await sendChatMessage(page, '@Advisor 再看一次？')
+  await sendAdvisorMessage(page, '再看一次？')
   expect((await followUp).status()).toBe(202)
   const advisorMessages = page.getByTestId('workspace-message').filter({ hasText: '顧問' })
   await expect(advisorMessages).toHaveCount(2, { timeout: 15_000 })
@@ -1610,7 +1674,7 @@ test('deleting an attachment after the AI has spoken shows no impact banner and 
   await createChatroomMeeting(page, title, { modelAssignments: defaultModels })
 
   // The AI has already spoken before any upload or delete.
-  await sendChatMessage(page, '@Advisor 你怎麼看？')
+  await sendAdvisorMessage(page, '你怎麼看？')
   await waitForRoleMessage(page, '顧問')
 
   await page.getByTestId('attachment-upload-input').setInputFiles({
@@ -1634,7 +1698,7 @@ test('deleting an attachment after the AI has spoken shows no impact banner and 
   const followUp = page.waitForResponse(
     (response) => response.request().method() === 'POST' && response.url().endsWith('/chat/mention'),
   )
-  await sendChatMessage(page, '@Advisor 再看一次？')
+  await sendAdvisorMessage(page, '再看一次？')
   expect((await followUp).status()).toBe(202)
   const advisorMessages = page.getByTestId('workspace-message').filter({ hasText: '顧問' })
   await expect(advisorMessages).toHaveCount(2, { timeout: 15_000 })

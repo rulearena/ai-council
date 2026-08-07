@@ -655,6 +655,19 @@ export type ChatSourceToken = {
   end: number
 }
 
+export type ChatMentionWarning = {
+  code: 'IGNORED_INVALID_MENTION'
+  display_text: string
+}
+
+export type ChatroomAcceptedResponse = {
+  status: 'accepted'
+  meeting_id: string
+  target_role_ids: string[]
+  source_refs: string[]
+  warnings: ChatMentionWarning[]
+}
+
 export async function sendChatMessage(
   meetingId: string,
   content: string,
@@ -673,7 +686,7 @@ export async function sendChatMention(
   sourceTokens: ChatSourceToken[],
   sourceRefs: string[],
   quotedEventId?: string,
-): Promise<MeetingEvent> {
+): Promise<ChatroomAcceptedResponse> {
   return postJson(`/meetings/${meetingId}/chat/mention`, {
     content,
     mentions,

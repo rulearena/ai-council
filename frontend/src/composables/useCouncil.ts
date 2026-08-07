@@ -67,6 +67,7 @@ import {
   type MeetingParticipant,
   type ModelConfig,
   type ChatMention,
+  type ChatroomAcceptedResponse,
   type ChatSourceToken,
 } from '../api'
 
@@ -1136,7 +1137,7 @@ export function useCouncil() {
     sourceTokens: ChatSourceToken[] = [],
     sourceRefs: string[] = [],
     quotedEventId?: string,
-  ): Promise<boolean> {
+  ): Promise<ChatroomAcceptedResponse | null> {
     // '@all' resolves to every participant so each seat reports its own progress.
     const roleIds = mentions.map((mention) => mention.role_id)
     const queuedRoles = chatroomQueuedRoleIds(
@@ -1152,12 +1153,19 @@ export function useCouncil() {
       })
       : null
     if (capture) fanoutCaptures.value = [...fanoutCaptures.value, capture]
+    const accepted = { response: null as ChatroomAcceptedResponse | null }
     try {
       const succeeded = await runWithPendingRoles(pendingRoles.value, queuedRoles, () => runAction(async () => {
-        await sendChatMention(meetingId, content, mentions, sourceTokens, sourceRefs, quotedEventId)
+        accepted.response = await sendChatMention(meetingId, content, mentions, sourceTokens, sourceRefs, quotedEventId)
       }))
       if (!succeeded && capture) fanoutCaptures.value = removeFanoutCapture(fanoutCaptures.value, capture.id)
-      return succeeded
+      const response = accepted.response
+      if (succeeded && response?.warnings.length) {
+        error.value = response.warnings
+          .map((warning) => `${warning.code}: ${warning.display_text}`)
+          .join('\n')
+      }
+      return succeeded ? response : null
     } catch (error) {
       if (capture) fanoutCaptures.value = removeFanoutCapture(fanoutCaptures.value, capture.id)
       throw error

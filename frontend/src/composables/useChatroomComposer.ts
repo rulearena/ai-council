@@ -1,4 +1,4 @@
-import type { ChatMention, ChatSourceToken } from '../api'
+import type { ChatMention, ChatroomAcceptedResponse, ChatSourceToken } from '../api'
 
 export type ChatMessageBoundary = {
   sendChatMention: (
@@ -8,7 +8,7 @@ export type ChatMessageBoundary = {
     sourceTokens: ChatSourceToken[],
     sourceRefs: string[],
     quotedEventId?: string,
-  ) => Promise<unknown>
+  ) => Promise<ChatroomAcceptedResponse | null>
 }
 
 type RebasedChatroomTokens = {
@@ -107,6 +107,10 @@ export function buildCanonicalChatroomPayload(input: {
   }
 }
 
+export type ChatroomSendResult =
+  | { ok: true; response: ChatroomAcceptedResponse }
+  | { ok: false; error: string }
+
 export async function parseAndSendChatMessage(input: {
   content: string
   meetingId: string
@@ -114,12 +118,12 @@ export async function parseAndSendChatMessage(input: {
   mentionTokens?: ChatMention[]
   sourceTokens?: ChatSourceToken[]
   boundary: ChatMessageBoundary
-}): Promise<{ ok: boolean; error?: string }> {
+}): Promise<ChatroomSendResult> {
   const payload = buildCanonicalChatroomPayload(input)
   if ('error' in payload) return { ok: false, error: payload.error }
 
   try {
-    await input.boundary.sendChatMention(
+    const response = await input.boundary.sendChatMention(
       input.meetingId,
       payload.content,
       payload.mentions,
@@ -127,7 +131,8 @@ export async function parseAndSendChatMessage(input: {
       payload.sourceRefs,
       input.quotedEventId ?? undefined,
     )
-    return { ok: true }
+    if (!response) return { ok: false, error: 'Chatroom request was rejected' }
+    return { ok: true, response }
   } catch (err) {
     return { ok: false, error: err instanceof Error ? err.message : String(err) }
   }

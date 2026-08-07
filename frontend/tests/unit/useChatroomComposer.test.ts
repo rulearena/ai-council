@@ -9,7 +9,16 @@ import {
 
 function boundary(calls: Array<{ fn: string; args: unknown[] }>) {
   return {
-    sendChatMention: async (...args: unknown[]) => { calls.push({ fn: 'sendChatMention', args }); return { event_id: 'structured' } },
+    sendChatMention: async (...args: unknown[]) => {
+      calls.push({ fn: 'sendChatMention', args })
+      return {
+        status: 'accepted' as const,
+        meeting_id: 'meeting-1',
+        target_role_ids: ['host'],
+        source_refs: [],
+        warnings: [{ code: 'IGNORED_INVALID_MENTION' as const, display_text: '@Adviser' }],
+      }
+    },
   }
 }
 
@@ -30,6 +39,21 @@ test('plain Host sends the exact structured payload', async () => {
 
   assert.equal(result.ok, true)
   assert.deepEqual(calls[0].args, ['meeting-1', '請整理目前討論', [], [], [], undefined])
+})
+
+test('accepted routing response and warning survive the composer boundary', async () => {
+  const calls: Array<{ fn: string; args: unknown[] }> = []
+  const result = await parseAndSendChatMessage({
+    content: '@全部角色 @Adviser 請回答', meetingId: 'meeting-1', quotedEventId: null,
+    mentionTokens: [{ token_id: 'all-1', role_id: 'all', display_text: '@全部角色', start: 0, end: 5 }],
+    boundary: boundary(calls),
+  })
+
+  assert.equal(result.ok, true)
+  if (result.ok) {
+    assert.equal(result.response.status, 'accepted')
+    assert.deepEqual(result.response.warnings, [{ code: 'IGNORED_INVALID_MENTION', display_text: '@Adviser' }])
+  }
 })
 
 test('edit before/after chips rebases exact code-point spans', () => {
