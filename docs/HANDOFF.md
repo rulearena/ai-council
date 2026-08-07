@@ -110,7 +110,9 @@ Backlog 90「會議工作區與時間序對話介面」已實作、完成法院�
 
 **2026-08-07 #102 implementation／Gate B**：聊天室初始空白提示已改為「還沒有訊息；可直接輸入文字，想請 AI 回應時請 @角色 或 @all。」；非聊天室與 selected-role 空態維持原文。Exact implementation fixed identity 為 `48b769bd051bc9405b8ba6ec3be197d3312dd583..3b9ce71408fe59accb771cfe65382ac99b9f15f3`，Gate B 獨立 Reviewer `pass`，main 已 fast-forward merge。驗收證據：focused Chromium 13.1／13.1a／13.1b 各 1/1、frontend unit 165/165、build、diff check 通過；未驗證 full Chromium E2E、backend tests、direct browser smoke。狀態 `implemented / awaiting acceptance`。
 
-**目前下一步（2026-08-07）**：Human Owner 驗收 #102；驗收通過後依 scoped-fix closeout 記錄 `accepted / done`。ChatGPT 式聊天室互動尚未定義，待本次驗收後使用 `grill-with-docs` 逐題收斂需求。
+**2026-08-08 #103 Slice 1 implementation／Gate B**：Exact implementation／main merge 為 `b85352d`，固定 Gate B range `77d7a97..b85352d`，獨立 Reviewer `pass`。已完成固定 Host、無 `@` 路由、structured display-name chips、`@all`／多角色 fanout、嚴格 payload validation、warning、stale-chip invalidation、Host／fanout pending，以及 subset `@all` 的 server-authoritative target reconciliation。Post-merge：backend routing／contract／runner **51 passed**、frontend unit **171 passed**、build 與 diff check 綠；full backend 的既有證據為 784／base 747，最新重跑因環境 hang 未取得終局；Chromium E2E 因 review worktree 無 browser binary 未執行。狀態為 **`implemented / awaiting Human Owner acceptance`**；Slice 2–4 尚未開始。
+
+**目前下一步（2026-08-08）**：Human Owner 先驗收 #103 Slice 1（驗收清單由 Orchestrator 一併提供）；確認後依序進入 Slice 2 prompt layering／Persona、Slice 3 `#` attachment selection／citations、Slice 4 shared memory／summary。#102 仍維持 `implemented / awaiting acceptance`，不與 #103 Slice 1 混為同一驗收。
 
 **歷史候選（2026-07-31；僅保留作為追蹤紀錄，不代表目前狀態）**：backlog #94 遺留 Minor（②③④⑤⑥⑦⑨⑩⑭⑮，其中 ⑧⑪⑫⑬ 已於 2026-07-30 修畢、⑭⑮ 為 2026-07-31 Gate B 審查新增，勿重做）、#95 遺留的 `MeetingsModal.vue` `@keyup.enter` 中文選字提早觸發，以及 backlog #96（LINE 式聊天附件，需先開 OpenSpec proposal）。尚未建立 OpenSpec change，須先登錄 `spec.md` §15 再提 proposal。#96 是否與 #94/#95 同批或獨立批次由 Human Owner 裁定。
 
