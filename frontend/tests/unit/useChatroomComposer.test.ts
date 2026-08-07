@@ -4,14 +4,22 @@ import test from 'node:test'
 import {
   buildCanonicalChatroomPayload,
   parseAndSendChatMessage,
+  rebaseTrackedChatroomTokens,
 } from '../../src/composables/useChatroomComposer.ts'
 
 function boundary(calls: Array<{ fn: string; args: unknown[] }>) {
   return {
-    sendChatMessage: async (...args: unknown[]) => { calls.push({ fn: 'sendChatMessage', args }); return { event_id: 'legacy' } },
     sendChatMention: async (...args: unknown[]) => { calls.push({ fn: 'sendChatMention', args }); return { event_id: 'structured' } },
   }
 }
+
+const advisor = (start = 0, end = 3, token_id = 'm-1') => ({
+  token_id, role_id: 'Advisor', display_text: '@顧問', start, end,
+})
+
+const source = (start = 0, end = 3, token_id = 's-1') => ({
+  token_id, source_ref: 'attachment:brief', display_text: '#需求', start, end,
+})
 
 test('plain Host sends the exact structured payload', async () => {
   const calls: Array<{ fn: string; args: unknown[] }> = []
@@ -24,124 +32,108 @@ test('plain Host sends the exact structured payload', async () => {
   assert.deepEqual(calls[0].args, ['meeting-1', '請整理目前討論', [], [], [], undefined])
 })
 
-test('rebase recalculates display-name chip spans after leading whitespace and edits', () => {
-  const payload = buildCanonicalChatroomPayload({
-    content: '  新增文字 @顧問 請回答',
-    mentionTokens: [{ token_id: 'm-1', role_id: 'Advisor', display_text: '@顧問', start: 0, end: 3 }],
-  })
+test('edit before/after chips rebases exact code-point spans', () => {
+  const token = advisor()
+  const before = '@顧問 請回答'
+  const afterPrefix = '前言：' + before
+  const shifted = rebaseTrackedChatroomTokens(before, afterPrefix, [token])
+  assert.deepEqual(shifted, [advisor(3, 6)])
 
-  assert.deepEqual(payload, {
-    content: '  新增文字 @顧問 請回答',
-    mentions: [{ token_id: 'm-1', role_id: 'Advisor', display_text: '@顧問', start: 7, end: 10 }],
-    sourceTokens: [],
-    sourceRefs: [],
-  })
-})
-
-test('rebase uses code-point offsets for CJK and NFC combining content', () => {
-  const payload = buildCanonicalChatroomPayload({
-    content: '前言 @顧問 e\u0301',
-    mentionTokens: [{ token_id: 'm-1', role_id: 'Advisor', display_text: '@顧問', start: 0, end: 3 }],
-  })
-
+  const afterSuffix = afterPrefix + '，謝謝'
+  assert.deepEqual(rebaseTrackedChatroomTokens(afterPrefix, afterSuffix, shifted), shifted)
+  const payload = buildCanonicalChatroomPayload({ content: afterSuffix, mentionTokens: shifted })
   assert.equal('error' in payload, false)
-  if (!('error' in payload)) {
-    assert.equal(payload.content, '前言 @顧問 é')
-    assert.deepEqual(payload.mentions[0], {
-      token_id: 'm-1', role_id: 'Advisor', display_text: '@顧問', start: 3, end: 6,
-    })
-  }
+  if (!('error' in payload)) assert.deepEqual(payload.mentions, shifted)
 })
 
-test('duplicate real chips map in occurrence order and source refs dedupe in first order', () => {
-  const payload = buildCanonicalChatroomPayload({
-    content: '@顧問 再問 @顧問 #需求 #需求',
-    mentionTokens: [
-      { token_id: 'm-1', role_id: 'Advisor', display_text: '@顧問', start: 0, end: 3 },
-      { token_id: 'm-2', role_id: 'Advisor', display_text: '@顧問', start: 0, end: 3 },
-    ],
-    sourceTokens: [
-      { token_id: 's-1', source_ref: 'attachment:a', display_text: '#需求', start: 0, end: 3 },
-      { token_id: 's-2', source_ref: 'attachment:a', display_text: '#需求', start: 0, end: 3 },
-    ],
-  })
+test('edit inside a chip invalidates it and retyping the same display text stays raw', async () => {
+  const deleted = rebaseTrackedChatroomTokens('@顧問 請回答', ' 請回答', [advisor()])
+  assert.deepEqual(deleted, [])
+  const retyped = rebaseTrackedChatroomTokens(' 請回答', ' 請回答 @顧問', deleted)
+  assert.deepEqual(retyped, [])
 
-  assert.equal('error' in payload, false)
-  if (!('error' in payload)) {
-    assert.deepEqual(payload.mentions.map((token) => [token.start, token.end]), [[0, 3], [7, 10]])
-    assert.deepEqual(payload.sourceTokens.map((token) => [token.start, token.end]), [[11, 14], [15, 18]])
-    assert.deepEqual(payload.sourceRefs, ['attachment:a'])
-  }
-})
-
-test('same-label hand-typed beside one chip is ambiguous and never calls API', async () => {
   const calls: Array<{ fn: string; args: unknown[] }> = []
   const result = await parseAndSendChatMessage({
-    content: '@顧問 再問 @顧問', meetingId: 'meeting-1', quotedEventId: null,
-    mentionTokens: [{ token_id: 'm-1', role_id: 'Advisor', display_text: '@顧問', start: 0, end: 3 }],
-    boundary: boundary(calls),
+    content: ' 請回答 @顧問', meetingId: 'meeting-1', quotedEventId: null,
+    mentionTokens: retyped, boundary: boundary(calls),
   })
-
-  assert.equal(result.ok, false)
-  assert.match(result.error ?? '', /occurrence mismatch/)
-  assert.deepEqual(calls, [])
+  assert.equal(result.ok, true)
+  assert.deepEqual(calls[0].args.slice(2, 5), [[], [], []])
 })
 
-test('# chip and hashtag use the same exact-occurrence safety rule', async () => {
+test('source token deletion and retyping also invalidates metadata', () => {
+  const deleted = rebaseTrackedChatroomTokens('#需求 內容', ' 內容', [source()])
+  assert.deepEqual(deleted, [])
+  const retyped = rebaseTrackedChatroomTokens(' 內容', ' 內容 #需求', deleted)
+  assert.deepEqual(retyped, [])
+})
+
+test('edits within a chip fail closed for both token classes', () => {
+  assert.deepEqual(rebaseTrackedChatroomTokens('@顧問', '@顧X', [advisor()]), [])
+  assert.deepEqual(rebaseTrackedChatroomTokens('#需求', '#需X', [source()]), [])
+})
+
+test('duplicate real chips preserve separate IDs and rebase independently', () => {
+  const tokens = [advisor(0, 3, 'm-1'), advisor(7, 10, 'm-2')]
+  const rebased = rebaseTrackedChatroomTokens(
+    '@顧問 再問 @顧問',
+    '前言 @顧問 再問 @顧問',
+    tokens,
+  )
+  assert.deepEqual(rebased, [advisor(3, 6, 'm-1'), advisor(10, 13, 'm-2')])
+})
+
+test('NFC combining content maps normalized spans without trimming leading whitespace', () => {
+  const content = '  @顧問 e\u0301'
+  const token = advisor(2, 5)
+  const payload = buildCanonicalChatroomPayload({ content, mentionTokens: [token] })
+  assert.equal('error' in payload, false)
+  if (!('error' in payload)) {
+    assert.equal(payload.content, '  @顧問 é')
+    assert.deepEqual(payload.mentions, [advisor(2, 5)])
+  }
+})
+
+test('source chip and uncovered hashtag remain separate classes', async () => {
   const calls: Array<{ fn: string; args: unknown[] }> = []
   const result = await parseAndSendChatMessage({
     content: '#需求 #需求標籤', meetingId: 'meeting-1', quotedEventId: null,
-    mentionTokens: [],
-    sourceTokens: [{ token_id: 's-1', source_ref: 'attachment:a', display_text: '#需求', start: 0, end: 3 }],
-    boundary: boundary(calls),
+    mentionTokens: [], sourceTokens: [source()], boundary: boundary(calls),
   })
-
-  assert.equal(result.ok, false)
-  assert.deepEqual(calls, [])
+  assert.equal(result.ok, true)
+  assert.deepEqual(calls[0].args.slice(2, 5), [[], [source()], ['attachment:brief']])
 })
 
-test('uncovered raw roles remain backend validation while plain email is sent as Host payload', async () => {
+test('same-label hand-typed role beside a surviving chip stays uncovered for backend authority', async () => {
   const calls: Array<{ fn: string; args: unknown[] }> = []
-  const rawRole = await parseAndSendChatMessage({
-    content: '@Adviser 請回答', meetingId: 'meeting-1', quotedEventId: null,
-    mentionTokens: [], boundary: boundary(calls),
+  const result = await parseAndSendChatMessage({
+    content: '@顧問 再問 @顧問', meetingId: 'meeting-1', quotedEventId: null,
+    mentionTokens: [advisor()], boundary: boundary(calls),
   })
-  assert.equal(rawRole.ok, true)
-  assert.equal(calls.length, 1)
-
-  const email = await parseAndSendChatMessage({
-    content: 'Email a@advisor.example', meetingId: 'meeting-1', quotedEventId: null,
-    mentionTokens: [], boundary: boundary(calls),
-  })
-  assert.equal(email.ok, true)
-  assert.deepEqual(calls[1].args.slice(1, 5), ['Email a@advisor.example', [], [], []])
+  assert.equal(result.ok, true)
+  assert.deepEqual(calls[0].args[2], [advisor()])
 })
 
-test('display-name chip and @all serialize structured role tokens', async () => {
+test('display-name chip and @all serialize exact structured spans', async () => {
   const calls: Array<{ fn: string; args: unknown[] }> = []
   const mentions = [
     { token_id: 'all-1', role_id: 'all', display_text: '@全部角色', start: 0, end: 5 },
-    { token_id: 'advisor-1', role_id: 'Advisor', display_text: '@顧問', start: 0, end: 3 },
+    { token_id: 'advisor-1', role_id: 'Advisor', display_text: '@顧問', start: 6, end: 9 },
   ]
   const result = await parseAndSendChatMessage({
     content: '@全部角色 @顧問 請回答', meetingId: 'meeting-1', quotedEventId: null,
     mentionTokens: mentions, boundary: boundary(calls),
   })
-
   assert.equal(result.ok, true)
-  assert.equal(calls[0].fn, 'sendChatMention')
-  assert.deepEqual(calls[0].args[2], [
-    { ...mentions[0], start: 0, end: 5 },
-    { ...mentions[1], start: 6, end: 9 },
-  ])
+  assert.deepEqual(calls[0].args[2], mentions)
 })
 
-test('blank content and send failures do not invoke legacy /messages boundary', async () => {
+test('blank content never invokes API', async () => {
   const calls: Array<{ fn: string; args: unknown[] }> = []
-  const blank = await parseAndSendChatMessage({
+  const result = await parseAndSendChatMessage({
     content: '  ', meetingId: 'meeting-1', quotedEventId: null,
     mentionTokens: [], boundary: boundary(calls),
   })
-  assert.equal(blank.ok, false)
+  assert.equal(result.ok, false)
   assert.deepEqual(calls, [])
 })

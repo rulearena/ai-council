@@ -289,6 +289,24 @@ def test_hashtag_without_source_chip_is_ordinary_text_and_source_chip_is_structu
     }
 
 
+def test_retyped_same_display_name_without_chip_is_backend_rejected(tmp_path: Path) -> None:
+    client = _client(tmp_path)
+    meeting_id = _meeting(client)
+
+    response = _post(client, meeting_id, _body("請回答 @顧問"))
+
+    assert response.status_code == 400
+    assert response.json() == {
+        "status": "rejected",
+        "error": {
+            "code": "INVALID_MENTION_TOKEN",
+            "field": "content",
+            "details": [{"display_text": "@顧問", "start": 4, "end": 7}],
+        },
+    }
+    assert client.get(f"/meetings/{meeting_id}").json()["events"] == []
+
+
 def test_missing_quote_is_gracefully_ignored_but_malformed_quote_is_schema_error(
     tmp_path: Path,
 ) -> None:

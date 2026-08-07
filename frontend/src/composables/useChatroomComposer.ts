@@ -18,61 +18,63 @@ type RebasedChatroomTokens = {
   sourceRefs: string[]
 }
 
-function codePointOffset(content: string, codeUnitOffset: number): number {
-  return Array.from(content.slice(0, codeUnitOffset)).length
+export type TrackedChatroomToken = ChatMention | ChatSourceToken
+
+function codePointLength(content: string): number {
+  return Array.from(content).length
 }
 
-function occurrences(content: string, needle: string): number[] {
-  const result: number[] = []
-  if (!needle) return result
-  let offset = 0
-  while (offset <= content.length) {
-    const found = content.indexOf(needle, offset)
-    if (found < 0) break
-    result.push(found)
-    offset = found + needle.length
-  }
-  return result
-}
-
-function rebaseTokenSpans<T extends ChatMention | ChatSourceToken>(
-  content: string,
+export function rebaseTrackedChatroomTokens<T extends TrackedChatroomToken>(
+  previousContent: string,
+  nextContent: string,
   tokens: T[],
-): { tokens?: T[]; error?: string } {
-  const byDisplay = new Map<string, T[]>()
-  for (const token of tokens) {
-    const displayText = token.display_text.normalize('NFC')
-    const group = byDisplay.get(displayText) ?? []
-    group.push({ ...token, display_text: displayText } as T)
-    byDisplay.set(displayText, group)
+): T[] {
+  const previous = Array.from(previousContent)
+  const next = Array.from(nextContent)
+  let prefix = 0
+  while (prefix < previous.length && prefix < next.length && previous[prefix] === next[prefix]) {
+    prefix += 1
+  }
+  let suffix = 0
+  while (
+    suffix < previous.length - prefix
+    && suffix < next.length - prefix
+    && previous[previous.length - 1 - suffix] === next[next.length - 1 - suffix]
+  ) {
+    suffix += 1
   }
 
-  const assigned = new Map<string, number[]>()
-  for (const [displayText, group] of byDisplay) {
-    const matches = occurrences(content, displayText)
-    if (matches.length !== group.length) {
-      return { error: `chip text occurrence mismatch: ${displayText}` }
+  const previousEditEnd = previous.length - suffix
+  const nextEditEnd = next.length - suffix
+  const delta = nextEditEnd - previousEditEnd
+  return tokens.flatMap((token) => {
+    if (previousEditEnd <= token.start) {
+      return [{ ...token, start: token.start + delta, end: token.end + delta } as T]
     }
-    assigned.set(displayText, matches)
-  }
+    if (prefix >= token.end) return [token]
+    // Any overlap, including deletion/replacement of the chip itself, fails closed.
+    return []
+  })
+}
 
-  const used = new Map<string, number>()
-  return {
-    tokens: Array.from(tokens, (token) => {
-      const displayText = token.display_text.normalize('NFC')
-      const matchOffsets = assigned.get(displayText) ?? []
-      const occurrenceIndex = used.get(displayText) ?? 0
-      used.set(displayText, occurrenceIndex + 1)
-      const startInCodeUnits = matchOffsets[occurrenceIndex]
-      const endInCodeUnits = startInCodeUnits + displayText.length
-      return {
-        ...token,
-        display_text: displayText,
-        start: codePointOffset(content, startInCodeUnits),
-        end: codePointOffset(content, endInCodeUnits),
-      } as T
-    }),
-  }
+function normalizedBoundaryMap(content: string): number[] {
+  const codePoints = Array.from(content)
+  return codePoints.map((_, index) => codePointLength(content.slice(0, index).normalize('NFC')))
+    .concat(codePointLength(content.normalize('NFC')))
+}
+
+function normalizeTrackedToken<T extends TrackedChatroomToken>(
+  content: string,
+  token: T,
+  boundaries: number[],
+): T | null {
+  const displayText = token.display_text.normalize('NFC')
+  const start = boundaries[token.start]
+  const end = boundaries[token.end]
+  if (start === undefined || end === undefined || end <= start) return null
+  const normalizedContent = content.normalize('NFC')
+  if (normalizedContent.slice(start, end) !== displayText) return null
+  return { ...token, display_text: displayText, start, end } as T
 }
 
 export function buildCanonicalChatroomPayload(input: {
@@ -82,14 +84,24 @@ export function buildCanonicalChatroomPayload(input: {
 }): RebasedChatroomTokens | { error: string } {
   const content = input.content.normalize('NFC')
   if (!input.content.trim()) return { error: 'Message cannot be blank' }
-  const mentionResult = rebaseTokenSpans(content, input.mentionTokens ?? [])
-  if (mentionResult.error) return { error: mentionResult.error }
-  const sourceResult = rebaseTokenSpans(content, input.sourceTokens ?? [])
-  if (sourceResult.error) return { error: sourceResult.error }
-  const sourceTokens = sourceResult.tokens ?? []
+  const boundaries = normalizedBoundaryMap(input.content)
+  const mentions = (input.mentionTokens ?? []).flatMap((token) => {
+    const normalized = normalizeTrackedToken(input.content, token, boundaries)
+    return normalized ? [normalized] : []
+  })
+  const sourceTokens = (input.sourceTokens ?? []).flatMap((token) => {
+    const normalized = normalizeTrackedToken(input.content, token, boundaries)
+    return normalized ? [normalized] : []
+  })
+  if (mentions.length !== (input.mentionTokens ?? []).length) {
+    return { error: 'mention token span no longer matches content' }
+  }
+  if (sourceTokens.length !== (input.sourceTokens ?? []).length) {
+    return { error: 'source token span no longer matches content' }
+  }
   return {
     content,
-    mentions: mentionResult.tokens ?? [],
+    mentions,
     sourceTokens,
     sourceRefs: [...new Set(sourceTokens.map((token) => token.source_ref))],
   }

@@ -1,8 +1,8 @@
 <script setup lang="ts">
-import { computed, inject, ref } from 'vue'
-import type { ChatMention } from '../api'
+import { computed, inject, ref, watch } from 'vue'
+import type { ChatMention, ChatSourceToken } from '../api'
 import type { ChairmanParticipant } from '../chairmanActions'
-import { parseAndSendChatMessage } from '../composables/useChatroomComposer'
+import { parseAndSendChatMessage, rebaseTrackedChatroomTokens } from '../composables/useChatroomComposer'
 import { councilKey } from '../composables/useCouncil'
 import MentionAutocomplete from './MentionAutocomplete.vue'
 
@@ -23,7 +23,26 @@ const emit = defineEmits<{
 const store = inject(councilKey)!
 const messageText = ref('')
 const mentionTokens = ref<ChatMention[]>([])
+const sourceTokens = ref<ChatSourceToken[]>([])
+const lastTrackedContent = ref('')
 const sending = ref(false)
+
+function trackContentUpdate(nextContent: string) {
+  if (nextContent === lastTrackedContent.value) return
+  mentionTokens.value = rebaseTrackedChatroomTokens(
+    lastTrackedContent.value,
+    nextContent,
+    mentionTokens.value,
+  )
+  sourceTokens.value = rebaseTrackedChatroomTokens(
+    lastTrackedContent.value,
+    nextContent,
+    sourceTokens.value,
+  )
+  lastTrackedContent.value = nextContent
+}
+
+watch(messageText, (nextContent) => trackContentUpdate(nextContent))
 // LINE 風格「＋」直接開原生檔案選取器；常駐隱藏 input 可被 e2e 直接
 // setInputFiles。上傳鎖（uploadDisabled）由父層計算（loading || running）。
 const attachmentInput = ref<HTMLInputElement | null>(null)
@@ -109,11 +128,14 @@ async function handleSend() {
       meetingId: props.meetingId,
       quotedEventId: props.quotedMessage?.eventId ?? null,
       mentionTokens: mentionTokens.value,
+      sourceTokens: sourceTokens.value,
       boundary,
     })
     if (result.ok) {
       messageText.value = ''
       mentionTokens.value = []
+      sourceTokens.value = []
+      lastTrackedContent.value = ''
       if (props.quotedMessage) emit('update:quotedMessage', null)
       emit('message-sent')
     }
@@ -123,7 +145,23 @@ async function handleSend() {
 }
 
 function onMentionInserted(token: ChatMention) {
-  mentionTokens.value = [...mentionTokens.value, token]
+  // MentionAutocomplete emits the text update first. Rebase surviving metadata against
+  // that edit, then append the new chip token; the next watcher run sees the new tracked
+  // content and cannot invalidate the freshly selected token.
+  const nextContent = messageText.value
+  const rebasedMentions = rebaseTrackedChatroomTokens(
+    lastTrackedContent.value,
+    nextContent,
+    mentionTokens.value,
+  )
+  const rebasedSources = rebaseTrackedChatroomTokens(
+    lastTrackedContent.value,
+    nextContent,
+    sourceTokens.value,
+  )
+  mentionTokens.value = [...rebasedMentions, token]
+  sourceTokens.value = rebasedSources
+  lastTrackedContent.value = nextContent
 }
 
 function onSendClick(event: MouseEvent) {
