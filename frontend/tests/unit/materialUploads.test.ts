@@ -102,6 +102,24 @@ test('startUpload marks an entry failed when the boundary rejects', async () => 
   assert.equal(uploads.value[0].retryFile?.name, 'bundle.zip')
 })
 
+test('startUpload shows a string ApiError detail instead of the generic request message', async () => {
+  const { uploads, onPickedFiles } = setup({
+    uploadAttachment: async () => {
+      // ApiError is an Error with a public string `detail`; keep this test at the
+      // upload composable seam without importing api.ts' network module graph.
+      throw Object.assign(
+        new Error('POST /meetings/meeting-a/attachments failed: 400'),
+        { detail: '檔案大小不可超過 10 MB' },
+      )
+    },
+  })
+  onPickedFiles([new File(['bytes'], 'large.pdf', { type: 'application/pdf' })])
+  await flush()
+
+  assert.equal(uploads.value[0].status, 'error')
+  assert.equal(uploads.value[0].error, '檔案大小不可超過 10 MB')
+})
+
 test('retryUpload re-runs a failed upload through the same boundary', async () => {
   let fail = true
   let calls = 0

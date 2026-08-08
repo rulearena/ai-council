@@ -26,6 +26,9 @@ function textExtension(filename: string): boolean {
 }
 
 function caughtMessage(caught: unknown): string {
+  if (caught instanceof Error && typeof (caught as Error & { detail?: unknown }).detail === 'string') {
+    return (caught as Error & { detail: string }).detail
+  }
   return caught instanceof Error ? caught.message : String(caught)
 }
 
