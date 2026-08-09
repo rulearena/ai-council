@@ -141,6 +141,7 @@ def test_chatroom_attempt_audit_contains_exact_three_layers(tmp_path) -> None:
         role_display_name="主持 AI",
         instruction="請簡短回答",
         model_assignments={"host": ModelConfig(id="m", adapter="mock")},
+        inputs={"__chatroom_persona_prompts": {"host": "固定主持 Persona"}},
     )
     event = runner.repository.read_events("meeting-1")[-1]
     assert [message["role"] for message in event["prompt_messages"]] == [
@@ -177,8 +178,43 @@ def test_chatroom_parse_retry_reuses_byte_identical_prompt_messages(tmp_path) ->
         role_display_name="主持 AI",
         instruction="請重試",
         model_assignments={"host": ModelConfig(id="m", adapter="mock")},
+        inputs={"__chatroom_persona_prompts": {"host": "固定主持 Persona"}},
     )
     events = runner.repository.read_events("meeting-1")
     attempts = [event for event in events if event.get("role") == "host"]
     assert [event["status"] for event in attempts] == ["failed", "completed"]
     assert attempts[0]["prompt_messages"] == attempts[1]["prompt_messages"]
+
+
+def test_chatroom_execution_rejects_a_missing_persona_before_transport(tmp_path) -> None:
+    prompt_dir = tmp_path / "prompts"
+    prompt_dir.mkdir()
+    (prompt_dir / "chatroom_response.md").write_text("unused", encoding="utf-8")
+
+    class Adapter:
+        def __init__(self) -> None:
+            self.called = False
+
+        def complete(self, request: ModelRequest) -> ModelResponse:
+            self.called = True
+            return ModelResponse('{"message":"must not run"}')
+
+    adapter = Adapter()
+    runner = MeetingRunner(
+        repository=MeetingRepository(tmp_path / "data"),
+        prompt_renderer=PromptRenderer(prompt_dir),
+        adapters=RunnerAdapters(by_name={"mock": adapter}),
+    )
+
+    with pytest.raises(ValueError, match="persona_prompt"):
+        runner.chat_respond_as_role(
+            meeting_id="meeting-1",
+            goal="測試",
+            role="host",
+            role_display_name="主持 AI",
+            instruction="不得使用 fallback",
+            model_assignments={"host": ModelConfig(id="m", adapter="mock")},
+            inputs={"__chatroom_persona_prompts": {"host": "   "}},
+        )
+
+    assert adapter.called is False

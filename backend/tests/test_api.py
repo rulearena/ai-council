@@ -6953,6 +6953,48 @@ def test_chat_mention_empty_saves_human(tmp_path: Path) -> None:
     assert events[-1]["role"] == "host"
 
 
+def test_chat_single_target_system_messages_use_current_fixed_personas(
+    tmp_path: Path,
+) -> None:
+    app = create_test_app(tmp_path)
+    modes_path = tmp_path / "config" / "modes.yaml"
+    modes_yaml = modes_path.read_text(encoding="utf-8")
+    modes_path.write_text(
+        modes_yaml.replace(
+            "你負責主持對話，釐清問題、整理脈絡，並在需要時提出可執行的下一步。",
+            "UNIQUE_HOST_PERSONA_FROM_CURRENT_MODE",
+        ).replace(
+            "你是務實的顧問，提出可行選項、說明取捨，並把建議連結到使用者真正要做的決定。",
+            "UNIQUE_ADVISOR_PERSONA_FROM_CURRENT_MODE",
+        ),
+        encoding="utf-8",
+    )
+    client = TestClient(app)
+    meeting_id = client.post(
+        "/meetings",
+        json={"title": "Persona 路由", "mode_id": "chatroom"},
+    ).json()["meeting_id"]
+
+    plain = client.post(
+        f"/meetings/{meeting_id}/chat/mention",
+        json=_structured_chat_payload("請主持人回答"),
+    )
+    assert plain.status_code == 202
+    host_event = wait_for_event_count(client, meeting_id, 2)[-1]
+    assert host_event["prompt_messages"][0]["role"] == "system"
+    assert "UNIQUE_HOST_PERSONA_FROM_CURRENT_MODE" in host_event["prompt_messages"][0]["content"]
+
+    advisor = client.post(
+        f"/meetings/{meeting_id}/chat/mention",
+        json=_structured_chat_payload("@顧問 請回答", "Advisor"),
+    )
+    assert advisor.status_code == 202
+    advisor_event = wait_for_event_count(client, meeting_id, 4)[-1]
+    assert advisor_event["role"] == "Advisor"
+    assert advisor_event["prompt_messages"][0]["role"] == "system"
+    assert "UNIQUE_ADVISOR_PERSONA_FROM_CURRENT_MODE" in advisor_event["prompt_messages"][0]["content"]
+
+
 def test_chat_mention_invalid_role_400(tmp_path: Path) -> None:
     app = create_test_app(tmp_path)
     client = TestClient(app)
@@ -7086,6 +7128,120 @@ def test_chat_mention_non_participant_role_returns_400(
 
     assert response.status_code == 400
     assert response.json()["error"]["code"] == "STALE_MENTION_PAYLOAD"
+
+
+def test_legacy_empty_chatroom_roster_projects_and_routes_all_five_without_migration(
+    tmp_path: Path,
+) -> None:
+    client = TestClient(create_test_app(tmp_path))
+    meeting_id = client.post(
+        "/meetings",
+        json={"title": "Legacy empty roster", "mode_id": "chatroom"},
+    ).json()["meeting_id"]
+    metadata_path = tmp_path / "data" / "meetings" / meeting_id / "metadata.json"
+    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    metadata["participants"] = []
+    metadata_path.write_text(json.dumps(metadata, ensure_ascii=False), encoding="utf-8")
+
+    projected = client.get(f"/meetings/{meeting_id}").json()
+    assert [participant["role_id"] for participant in projected["participants"]] == [
+        "host", "Advisor", "Critic", "Strategist", "Analyst",
+    ]
+
+    response = client.post(
+        f"/meetings/{meeting_id}/chat/mention",
+        json=_structured_chat_payload("@顧問 legacy 可用", "Advisor"),
+    )
+    assert response.status_code == 202
+    assert response.json()["target_role_ids"] == ["Advisor"]
+    assert wait_for_event_count(client, meeting_id, 2)[-1]["role"] == "Advisor"
+    assert json.loads(metadata_path.read_text(encoding="utf-8"))["participants"] == []
+
+
+def test_legacy_subset_projects_only_subset_plus_host_for_mentions_and_all(
+    tmp_path: Path,
+) -> None:
+    client = TestClient(create_test_app(tmp_path))
+    meeting_id = client.post(
+        "/meetings",
+        json={"title": "Legacy subset", "mode_id": "chatroom"},
+    ).json()["meeting_id"]
+    metadata_path = tmp_path / "data" / "meetings" / meeting_id / "metadata.json"
+    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    legacy_subset = [
+        {"role_id": "Advisor", "model_config_id": "mock-fast"},
+        {"role_id": "Critic", "model_config_id": "mock-fast"},
+    ]
+    metadata["participants"] = legacy_subset
+    metadata_path.write_text(json.dumps(metadata, ensure_ascii=False), encoding="utf-8")
+
+    projected = client.get(f"/meetings/{meeting_id}").json()
+    assert [participant["role_id"] for participant in projected["participants"]] == [
+        "host", "Advisor", "Critic",
+    ]
+
+    advisor = client.post(
+        f"/meetings/{meeting_id}/chat/mention",
+        json=_structured_chat_payload("@顧問 subset 可用", "Advisor"),
+    )
+    assert advisor.status_code == 202
+    wait_for_event_count(client, meeting_id, 2)
+
+    inactive = client.post(
+        f"/meetings/{meeting_id}/chat/mention",
+        json=_structured_chat_payload("@策略師 不應啟用", "Strategist"),
+    )
+    assert inactive.status_code == 400
+    assert inactive.json()["error"]["code"] == "STALE_MENTION_PAYLOAD"
+    assert len(client.get(f"/meetings/{meeting_id}").json()["events"]) == 2
+
+    all_response = client.post(
+        f"/meetings/{meeting_id}/chat/mention",
+        json=_structured_chat_payload("@全部角色 subset all", "all"),
+    )
+    assert all_response.status_code == 202
+    assert all_response.json()["target_role_ids"] == ["host", "Advisor", "Critic"]
+    events = wait_for_event_count(client, meeting_id, 6)
+    assert {event["role"] for event in events[-3:]} == {"host", "Advisor", "Critic"}
+    assert json.loads(metadata_path.read_text(encoding="utf-8"))["participants"] == legacy_subset
+
+
+def test_new_chatroom_selected_roster_is_frozen_for_mentions_and_all(
+    tmp_path: Path,
+) -> None:
+    client = TestClient(create_test_app(tmp_path))
+    selected_role_ids = ["host", "Advisor", "Critic", "Analyst"]
+    created = client.post(
+        "/meetings",
+        json={
+            "title": "Selected roster authority",
+            "mode_id": "chatroom",
+            "participants": [
+                {"role_id": role_id, "model_config_id": "mock-fast"}
+                for role_id in selected_role_ids
+            ],
+        },
+    )
+    assert created.status_code == 200
+    meeting_id = created.json()["meeting_id"]
+    assert [participant["role_id"] for participant in created.json()["participants"]] == selected_role_ids
+
+    inactive = client.post(
+        f"/meetings/{meeting_id}/chat/mention",
+        json=_structured_chat_payload("@策略師 不在 roster", "Strategist"),
+    )
+    assert inactive.status_code == 400
+    assert inactive.json()["error"]["code"] == "STALE_MENTION_PAYLOAD"
+
+    all_response = client.post(
+        f"/meetings/{meeting_id}/chat/mention",
+        json=_structured_chat_payload("@全部角色 selected all", "all"),
+    )
+    assert all_response.status_code == 202
+    assert all_response.json()["target_role_ids"] == selected_role_ids
+    events = wait_for_event_count(client, meeting_id, 5)
+    assert {event["role"] for event in events[-4:]} == set(selected_role_ids)
+    assert all(event["role"] != "Strategist" for event in events)
 
 
 def test_chat_mention_with_quoted_event_passes_content_to_runner(

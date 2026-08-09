@@ -387,7 +387,6 @@ class MeetingRunner:
             prompt_input_overrides={
                 "instruction": instruction,
                 "role_display_name": role_display_name,
-                "persona_prompt": str((inputs or {}).get("__chatroom_persona_prompts", {}).get(role, "")),
             },
         )
 
@@ -475,6 +474,9 @@ class MeetingRunner:
             prompt_input_overrides={
                 "instruction": instruction,
                 "role_display_name": role_display_name,
+                "persona_prompt": str(
+                    (inputs or {}).get("__chatroom_persona_prompts", {}).get(role, "")
+                ),
             },
         )
 
@@ -1425,10 +1427,13 @@ class MeetingRunner:
         required_json_schema: str,
         persona_prompt: str,
     ) -> tuple[str, list[dict[str, str]]]:
+        persona_prompt = persona_prompt.strip()
+        if not persona_prompt:
+            raise ValueError(f"Chatroom role {role!r} requires a non-blank persona_prompt")
         system = (
             f"你是 AI Council 聊天室中的{role_display_name}（固定角色 {role}）。\n"
             f"會議目標：{goal or '協助使用者釐清問題'}\n"
-            f"工作 Persona：{persona_prompt or '以清楚、誠實、能推進對話的方式回應。'}\n"
+            f"工作 Persona：{persona_prompt}\n"
             "遵守安全與格式要求：不得捏造事實；除非使用者要求，不要宣告自己是某種角色，"
             "也不要使用固定報告標題。"
         )

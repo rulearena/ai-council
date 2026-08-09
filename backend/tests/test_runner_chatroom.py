@@ -22,6 +22,10 @@ from ai_council.prompting.renderer import PromptRenderer
 VALID_OUTPUT = json.dumps({"message": "可以先做小規模驗證，詳見 [附件一]。"}, ensure_ascii=False)
 
 
+def persona_inputs(*roles: str) -> dict[str, dict[str, str]]:
+    return {"__chatroom_persona_prompts": {role: f"{role} fixed persona" for role in roles}}
+
+
 class FakeAdapter:
     def __init__(self, outputs: list[str]) -> None:
         self.outputs = outputs
@@ -78,6 +82,7 @@ def test_chat_directed_prompt_excludes_binary_attachment_metadata(
         role_display_name="藍軍",
         instruction="@Blue 你覺得怎麼樣？",
         model_assignments=model_assignments,
+        inputs=persona_inputs("Blue"),
     )
 
     assert len(adapter.requests) == 1
@@ -100,6 +105,7 @@ def test_chat_directed_single_role_response(tmp_path: Path) -> None:
         role_display_name="藍軍",
         instruction="@Blue 你覺得怎麼樣？",
         model_assignments=model_assignments,
+        inputs=persona_inputs("Blue"),
     )
 
     events = runner.repository.read_events("meeting-1")
@@ -145,6 +151,7 @@ def test_chat_directed_increments_sequence(tmp_path: Path) -> None:
         role_display_name="藍軍",
         instruction="第一個問題",
         model_assignments=model_assignments,
+        inputs=persona_inputs("Blue"),
     )
     runner.chat_respond_as_role(
         meeting_id="meeting-1",
@@ -153,6 +160,7 @@ def test_chat_directed_increments_sequence(tmp_path: Path) -> None:
         role_display_name="藍軍",
         instruction="第二個問題",
         model_assignments=model_assignments,
+        inputs=persona_inputs("Blue"),
     )
 
     events = runner.repository.read_events("meeting-1")
@@ -210,6 +218,7 @@ def test_chat_fanout_all_roles_invoked(tmp_path: Path) -> None:
         instruction="@all 大家覺得怎麼樣？",
         role_display_names={"Blue": "藍軍", "Red": "紅軍", "Green": "綠軍"},
         model_assignments=model_assignments,
+        inputs=persona_inputs("Blue", "Red", "Green"),
     )
 
     events = runner.repository.read_events("meeting-1")
@@ -277,6 +286,7 @@ def test_chat_fanout_completed_events_include_token_usage(tmp_path: Path) -> Non
         instruction="@all 大家覺得怎麼樣？",
         role_display_names={"Blue": "藍軍", "Red": "紅軍"},
         model_assignments=model_assignments,
+        inputs=persona_inputs("Blue", "Red"),
     )
 
     events = runner.repository.read_events("meeting-1")
@@ -327,6 +337,7 @@ def test_chat_fanout_failed_events_include_token_usage(tmp_path: Path) -> None:
         instruction="@all 大家覺得怎麼樣？",
         role_display_names={"Blue": "藍軍", "Green": "綠軍"},
         model_assignments=model_assignments,
+        inputs=persona_inputs("Blue", "Green"),
     )
 
     events = runner.repository.read_events("meeting-1")
@@ -370,6 +381,7 @@ def test_chat_fanout_frozen_context(tmp_path: Path) -> None:
         instruction="@all 大家覺得怎麼樣？",
         role_display_names={"Blue": "藍軍", "Red": "紅軍", "Green": "綠軍"},
         model_assignments=model_assignments,
+        inputs=persona_inputs("Blue", "Red", "Green"),
     )
 
     assert len(captured_requests) == 3
@@ -426,6 +438,7 @@ def test_chat_fanout_arrival_order_persistence(tmp_path: Path) -> None:
         instruction="@all 大家覺得怎麼樣？",
         role_display_names={"Blue": "藍軍", "Red": "紅軍", "Green": "綠軍"},
         model_assignments=model_assignments,
+        inputs=persona_inputs("Blue", "Red", "Green"),
     )
 
     events = runner.repository.read_events("meeting-1")
@@ -466,6 +479,7 @@ def test_chat_fanout_partial_success(tmp_path: Path) -> None:
         instruction="@all 大家覺得怎麼樣？",
         role_display_names={"Blue": "藍軍", "Red": "紅軍", "Green": "綠軍"},
         model_assignments=model_assignments,
+        inputs=persona_inputs("Blue", "Red", "Green"),
     )
 
     events = runner.repository.read_events("meeting-1")
@@ -499,6 +513,7 @@ def test_chat_fanout_step_id_format(tmp_path: Path) -> None:
             instruction="@all 大家覺得怎麼樣？",
             role_display_names={"Blue": "藍軍", "Red": "紅軍", "Green": "綠軍"},
             model_assignments=model_assignments,
+            inputs=persona_inputs("Blue", "Red", "Green"),
         )
 
     events = runner.repository.read_events("meeting-1")
@@ -541,6 +556,7 @@ def test_chat_directed_with_quoted_event_in_context(tmp_path: Path) -> None:
         instruction="@Blue what do you think?",
         model_assignments=model_assignments,
         quoted_event_id="meeting-1:quote-target",
+        inputs=persona_inputs("Blue"),
     )
 
     assert len(adapter.requests) == 1

@@ -2503,16 +2503,7 @@ def create_app(
                 chatroom_mention_context(meeting_id)
             )
             role_display_names = _build_role_display_names(mode, participants)
-            stored_role_ids = {
-                str(item.get("role_id"))
-                for item in (metadata.get("participants") or [])
-                if isinstance(item, dict) and item.get("role_id")
-            }
-            active_role_ids = [
-                role.id
-                for role in mode.roles
-                if role.id == "host" or role.id in stored_role_ids
-            ]
+            active_role_ids = [str(participant["role_id"]) for participant in participants]
             if request.quoted_event_id and not request.quoted_event_id.startswith(f"{meeting_id}:"):
                 return JSONResponse(
                     status_code=400,

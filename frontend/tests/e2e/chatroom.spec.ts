@@ -148,6 +148,43 @@ test('13.1b selected role with no messages keeps the role prompt', async ({ page
   )
 })
 
+test('13.1c chatroom creation submits exact selected roster', async ({ page }) => {
+  await page.goto('/')
+  await page.getByTestId('new-case-button').click()
+  await page
+    .getByTestId('mode-select-card-chatroom')
+    .getByRole('button', { name: '選擇此模式' })
+    .click()
+
+  const roster = page.getByRole('group', { name: '聊天室成員（主持 AI 固定加入）' })
+  const host = roster.getByRole('checkbox', { name: /^主持 AI/ })
+  await expect(host).toBeChecked()
+  await expect(host).toBeDisabled()
+
+  for (const name of ['顧問', '評論者', '策略師', '分析師']) {
+    const role = roster.getByRole('checkbox', { name: new RegExp(`^${name}`) })
+    await expect(role).toBeChecked()
+    await expect(role).toBeEnabled()
+  }
+
+  await roster.getByRole('checkbox', { name: /^策略師/ }).uncheck()
+  await expect(roster.getByRole('checkbox', { name: /^策略師/ })).not.toBeChecked()
+  await page.getByLabel('會議名稱', { exact: true }).fill(`E2E selected roster ${Date.now()}`)
+
+  const submitted = page.waitForRequest(
+    (request) => request.method() === 'POST' && request.url().endsWith('/meetings'),
+  )
+  await page.getByTestId('create-meeting-button').click()
+  const payload = (await submitted).postDataJSON() as {
+    participants: Array<{ role_id: string }>
+  }
+
+  expect(payload.participants.map((participant) => participant.role_id)).toEqual([
+    'host', 'Advisor', 'Critic', 'Analyst',
+  ])
+  await expect(page.getByTestId('conversation-workspace')).toBeVisible({ timeout: 15_000 })
+})
+
 // ── 13.2 ─────────────────────────────────────────────────────────────────────
 
 test('13.2 send plain text message in chatroom', async ({ page }) => {
