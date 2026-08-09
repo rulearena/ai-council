@@ -28,6 +28,11 @@ The chatroom mode SHALL expose one fixed role with stable internal ID `host` and
 - **THEN** read-time projection appends Host and preserves that subset
 - **AND** it does not append other omitted catalog roles or rewrite historical data
 
+#### Scenario: Legacy meeting with no roster keeps compatibility default
+- **WHEN** a legacy chatroom has no participant snapshot or an empty snapshot
+- **THEN** read-time projection supplies all five fixed roles
+- **AND** it does not persist or migrate that fallback roster
+
 ### Requirement: Fixed chatroom roles use validated Personas
 Each of the five fixed chatroom role entries in `config/modes.yaml` SHALL contain a required non-blank `persona_summary:string` and `persona_prompt:string`. `persona_summary` is the only Persona field exposed by mode/participant APIs; `persona_prompt` is backend-only and SHALL be rendered in the system layer. Missing, blank, or non-string Persona fields SHALL make mode loading fail with `ModeConfigError`; the system SHALL NOT silently substitute a generic Persona. Host SHALL direct, clarify, and organize; Advisor SHALL offer practical options; Critic SHALL challenge assumptions and surface risks; Strategist SHALL prioritize trade-offs and next steps; Analyst SHALL distinguish evidence, data, and uncertainty. Persona instructions SHALL not require role announcements or a fixed report template. Non-chatroom role definitions SHALL remain valid and unchanged without these fields.
 

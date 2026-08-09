@@ -54,7 +54,7 @@ The system SHALL apply this closed source-kind matrix:
 | Chat-upload attachment | `attachment:<file_id>` | extension is `.txt` or `.md` and the active blob is readable | PDF, image, ZIP, or any other binary/extension, or inactive/unreadable blob → `SOURCE_NOT_READABLE` |
 | Versioned case-material evidence | `evidence:<evidence_id>` | active evidence version has non-empty string `content`; no extension check | inactive evidence or empty/non-string content → `SOURCE_NOT_READABLE` |
 
-Evidence readability SHALL depend on the evidence data model's `title`, `content`, and `visible_roles`, not on a filename or extension. Initial and legacy evidence without an extension SHALL therefore be readable when active with non-empty string content. A linked text attachment SHALL use the exact linked evidence item's active state and `visible_roles`, with the existing legacy Host fallback; an unlinked legacy attachment SHALL be meeting-wide to the frozen active roster because attachment events have no role ACL. `notes` SHALL never appear in the source projection or prompt authorization. Both kinds SHALL expose `source_ref`, label, kind, `reader_ref`, and informational projection segment refs, while only the frozen invocation snapshot authorizes citations.
+Evidence readability SHALL depend on the active evidence version's `title`, `content`, `visible_roles`, and optional `host_acl_explicit`, not on a filename or extension. Every newly written evidence version—including initial creation, later versions, and a text-upload mirror—SHALL persist `host_acl_explicit: true`; `true` is the only valid present value. Existing versions SHALL NOT be backfilled. An absent marker means the active version predates explicit Host ACL semantics, so and only so Host may use the legacy coordinator fallback. When the marker is true, Host SHALL follow `visible_roles` exactly and omission SHALL return `SOURCE_NOT_VISIBLE_TO_TARGET`. A linked text attachment SHALL inherit the exact linked active evidence version's marker/state/roles; an unlinked legacy attachment SHALL be meeting-wide to the frozen active roster because attachment events have no role ACL. `notes` SHALL never appear in the source projection or prompt authorization.
 
 #### Scenario: Initial no-extension evidence is readable
 - **WHEN** a new or legacy meeting has active evidence with title/content but no filename extension
@@ -62,9 +62,19 @@ Evidence readability SHALL depend on the evidence data model's `title`, `content
 - **AND** it can be selected and retrieved as text
 
 #### Scenario: Legacy evidence is readable for Host
-- **WHEN** legacy active evidence has non-empty content and omits `host` from `visible_roles`
+- **WHEN** legacy active evidence has non-empty content, omits `host`, and has no `host_acl_explicit` marker
 - **THEN** Host can select/read it through the fixed coordinator fallback
 - **AND** other roles still require their explicit visibility
+
+#### Scenario: New evidence can explicitly deny Host
+- **WHEN** a newly written active evidence version has `host_acl_explicit: true` and omits `host` from `visible_roles`
+- **THEN** Host selection returns `SOURCE_NOT_VISIBLE_TO_TARGET`
+- **AND** the item is not treated as legacy merely because Host is absent
+
+#### Scenario: New writes persist an unambiguous marker
+- **WHEN** evidence is initially created, versioned, or mirrored from a text upload after Slice 3 is deployed
+- **THEN** the new evidence version stores `host_acl_explicit: true`
+- **AND** a present false/non-boolean marker is rejected as invalid stored material rather than enabling fallback
 
 #### Scenario: @all validates source visibility for every target
 - **WHEN** `@all` selects active evidence visible to some but not all targets
@@ -79,6 +89,11 @@ Evidence readability SHALL depend on the evidence data model's `title`, `content
 - **WHEN** a text attachment links to evidence visible to Advisor but not Critic
 - **THEN** its canonical `attachment:` source is visible to Advisor and not Critic
 - **AND** a request targeting both roles is rejected atomically
+
+#### Scenario: Linked mirror cannot bypass explicit Host denial
+- **WHEN** a linked attachment's active evidence version has `host_acl_explicit: true` and omits Host
+- **THEN** both the suppressed evidence ref and canonical attachment ref deny Host
+- **AND** the attachment link does not re-enable the legacy fallback
 
 #### Scenario: Unlinked legacy attachment is meeting-wide
 - **WHEN** a legacy readable attachment has no evidence link or role ACL
