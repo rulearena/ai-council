@@ -62,6 +62,20 @@ export type Meeting = {
   courtroom: CourtroomProjection | null
   case_materials?: CaseMaterials
   attachments_summary?: AttachmentSummary
+  chatroom_sources?: ChatroomSource[]
+}
+
+export type ChatroomSource = {
+  source_ref: string
+  label: string
+  kind: 'attachment' | 'evidence'
+  active: boolean
+  readable: boolean
+  reader_ref: string
+  available_segment_refs: string[]
+  visible_roles?: string[]
+  size?: number
+  created_at?: string | null
 }
 
 export type AttachmentSummary = {

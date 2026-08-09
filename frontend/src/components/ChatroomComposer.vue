@@ -1,14 +1,16 @@
 <script setup lang="ts">
 import { computed, inject, ref, watch } from 'vue'
-import type { ChatMention, ChatSourceToken } from '../api'
+import type { ChatMention, ChatSourceToken, ChatroomSource } from '../api'
 import type { ChairmanParticipant } from '../chairmanActions'
 import { parseAndSendChatMessage, rebaseTrackedChatroomTokens } from '../composables/useChatroomComposer'
 import { councilKey } from '../composables/useCouncil'
 import MentionAutocomplete from './MentionAutocomplete.vue'
+import SourceAutocomplete from './SourceAutocomplete.vue'
 
 const props = defineProps<{
   meetingId: string
   participants: ChairmanParticipant[]
+  sources?: ChatroomSource[]
   quotedMessage: { eventId: string; preview: string } | null
   disabled?: boolean
   uploadDisabled?: boolean
@@ -164,6 +166,19 @@ function onMentionInserted(token: ChatMention) {
   lastTrackedContent.value = nextContent
 }
 
+function onSourceInserted(token: ChatSourceToken) {
+  const nextContent = messageText.value
+  const rebasedMentions = rebaseTrackedChatroomTokens(
+    lastTrackedContent.value, nextContent, mentionTokens.value,
+  )
+  const rebasedSources = rebaseTrackedChatroomTokens(
+    lastTrackedContent.value, nextContent, sourceTokens.value,
+  )
+  sourceTokens.value = [...rebasedSources, token]
+  mentionTokens.value = rebasedMentions
+  lastTrackedContent.value = nextContent
+}
+
 function onSendClick(event: MouseEvent) {
   const pointerEvent = event as MouseEvent & { pointerId?: number; pointerType?: string }
   const pointerClickId =
@@ -218,6 +233,13 @@ function onSendClick(event: MouseEvent) {
           mode-category="chatroom"
           :disabled="disabled"
           @mention-inserted="onMentionInserted"
+        />
+        <SourceAutocomplete
+          :model-value="messageText"
+          :sources="sources ?? []"
+          :disabled="disabled"
+          @update:model-value="messageText = $event"
+          @source-inserted="onSourceInserted"
         />
         <textarea
           v-model="messageText"

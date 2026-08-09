@@ -225,6 +225,7 @@ type WorkspaceEvent = {
   removed?: boolean
   parsed_output?: {
     message?: string
+    attachment_refs?: Array<{ source_ref: string; label: string; segment_refs: string[] }>
     summary?: string
     decision?: string
     arguments?: Array<{ title: string; detail: string }>

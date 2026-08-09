@@ -536,6 +536,7 @@ class MeetingRunner:
                 prior_transcript=prior_transcript,
                 required_json_schema=output_schema.schema,
                 persona_prompt=str((inputs or {}).get("__chatroom_persona_prompts", {}).get(role, "")),
+                source_context=self._source_context(inputs),
             )
             started_at = datetime.now(UTC).isoformat()
             started_clock = time.monotonic()
@@ -856,6 +857,7 @@ class MeetingRunner:
                 prior_transcript=prior_transcript_override or "",
                 required_json_schema=output_schema.schema,
                 persona_prompt=(prompt_input_overrides or {}).get("persona_prompt", ""),
+                source_context=self._source_context(inputs),
             )
 
         def emit_token_delta(content: str) -> None:
@@ -910,6 +912,8 @@ class MeetingRunner:
                     raise OutputParseError(
                         str(error), raw_output=response.raw_output
                     ) from error
+            if step.template_name == "chatroom_response":
+                self._validate_chatroom_attachment_refs(parsed_output, inputs)
         except OutputParseError as error:
             self._clear_active_execution(meeting_id)
             failed_event: dict[str, object] = {
@@ -1426,6 +1430,7 @@ class MeetingRunner:
         prior_transcript: str,
         required_json_schema: str,
         persona_prompt: str,
+        source_context: str = "",
     ) -> tuple[str, list[dict[str, str]]]:
         persona_prompt = persona_prompt.strip()
         if not persona_prompt:
@@ -1445,11 +1450,18 @@ class MeetingRunner:
             "這是 chatroom_response 自然對話回合。只回答目前指令，依需要參考引用與近期對話；用有用的 Markdown，"
             "長度依問題調整，不要固定篇幅或事後截斷。回傳一個符合 chat-message/v1 的 JSON 物件。\n"
             f"Schema:\n{required_json_schema}"
+            + (
+                "\n若使用選取來源中的具體事實，attachment_refs 必須精確引用實際可用來源與 segment_refs；"
+                "一般聊天可省略。"
+                if source_context
+                else ""
+            )
         )
         user = (
             "近期對話與引用（僅限以下內容）：\n"
             f"{prior_transcript}\n\n"
             f"目前指令：\n{instruction}"
+            + (f"\n\n選取來源摘錄（僅限以下內容）：\n{source_context}" if source_context else "")
         )
         messages = [
             {"role": "system", "content": system},
@@ -1461,6 +1473,39 @@ class MeetingRunner:
             for label, message in zip(("system", "developer", "user"), messages)
         )
         return prompt, messages
+
+    @staticmethod
+    def _source_context(inputs: dict[str, Any] | None) -> str:
+        snapshot = (inputs or {}).get("__chatroom_source_snapshot")
+        if not isinstance(snapshot, dict):
+            return ""
+        excerpts = snapshot.get("source_excerpts")
+        return "\n\n".join(str(item) for item in excerpts) if isinstance(excerpts, list) else ""
+
+    @staticmethod
+    def _validate_chatroom_attachment_refs(
+        parsed_output: dict[str, Any], inputs: dict[str, Any] | None
+    ) -> None:
+        refs = parsed_output.get("attachment_refs")
+        if refs is None:
+            return
+        snapshot = (inputs or {}).get("__chatroom_source_snapshot")
+        if not isinstance(snapshot, dict):
+            raise ValueError("attachment_refs require a frozen source snapshot")
+        allowed = {
+            str(item.get("source_ref")): item
+            for item in snapshot.get("selected_source_snapshot", {}).get("sources", [])
+            if isinstance(item, dict)
+        }
+        for ref in refs:
+            source = allowed.get(ref.get("source_ref")) if isinstance(ref, dict) else None
+            if source is None or ref.get("label") != source.get("label"):
+                raise ValueError("attachment_refs cites an unavailable source")
+            segment_refs = ref.get("segment_refs")
+            if not isinstance(segment_refs, list) or not set(segment_refs).issubset(
+                set(source.get("available_segment_refs", []))
+            ):
+                raise ValueError("attachment_refs cites an unavailable segment")
 
     def _prompt_inputs_for_role(
         self,
@@ -1498,6 +1543,11 @@ class MeetingRunner:
         references = (inputs or {}).get(MATERIALS_REFS_INPUT)
         if isinstance(references, list):
             audit["materials_refs"] = deepcopy(references)
+        source_snapshot = (inputs or {}).get("__chatroom_source_snapshot")
+        if isinstance(source_snapshot, dict):
+            selected = source_snapshot.get("selected_source_snapshot")
+            if isinstance(selected, dict):
+                audit["selected_source_snapshot"] = deepcopy(selected)
         return audit
 
     def _active_events(self, meeting_id: str) -> list[dict[str, Any]]:

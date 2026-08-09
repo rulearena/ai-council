@@ -104,6 +104,14 @@ function openMaterialsTab() {
   mobileContextOpen.value = true
 }
 
+function citationSource(sourceRef: string) {
+  return selectedMeeting.value?.chatroom_sources?.find((source) => source.source_ref === sourceRef)
+}
+
+function openCitation(sourceRef: string) {
+  if (citationSource(sourceRef)?.active && citationSource(sourceRef)?.readable) openMaterialsTab()
+}
+
 const workspace = computed<ConversationWorkspaceProjection | null>(() => {
   const meeting = selectedMeeting.value
   if (!meeting || meeting.mode_id === 'courtroom') return null
@@ -480,6 +488,18 @@ async function retryRole(roleId: string) {
               class="workspace-message-content"
               :class="{ collapsed: messageClampPolicy(item.message.content).collapsible && !isExpanded(item.message) }"
             >{{ item.message.content || (item.message.kind === 'failed' ? '本次回應失敗。' : '（沒有文字內容）') }}</p>
+            <div v-if="item.message.event.parsed_output?.attachment_refs?.length" class="workspace-citations" data-testid="citation-chips">
+              <button
+                v-for="citation in item.message.event.parsed_output.attachment_refs"
+                :key="`${item.message.id}-${citation.source_ref}-${citation.segment_refs.join(',')}`"
+                type="button"
+                class="workspace-citation-chip"
+                :class="{ unavailable: !citationSource(citation.source_ref)?.active || !citationSource(citation.source_ref)?.readable }"
+                :disabled="!citationSource(citation.source_ref)?.active || !citationSource(citation.source_ref)?.readable"
+                :data-testid="`citation-chip-${citation.source_ref}`"
+                @click="openCitation(citation.source_ref)"
+              >{{ citation.label }}<span v-if="!citationSource(citation.source_ref)?.active || !citationSource(citation.source_ref)?.readable">（不可用）</span></button>
+            </div>
             <button
               v-if="messageClampPolicy(item.message.content).collapsible"
               type="button"
@@ -534,6 +554,18 @@ async function retryRole(roleId: string) {
             />
             <template v-else>
               <p class="workspace-message-content" :class="{ collapsed: messageClampPolicy(message.content).collapsible && !isExpanded(message) }">{{ message.content || (message.kind === 'failed' ? '本次回應失敗。' : '（沒有文字內容）') }}</p>
+              <div v-if="message.event.parsed_output?.attachment_refs?.length" class="workspace-citations" data-testid="citation-chips">
+                <button
+                  v-for="citation in message.event.parsed_output.attachment_refs"
+                  :key="`${message.id}-${citation.source_ref}-${citation.segment_refs.join(',')}`"
+                  type="button"
+                  class="workspace-citation-chip"
+                  :class="{ unavailable: !citationSource(citation.source_ref)?.active || !citationSource(citation.source_ref)?.readable }"
+                  :disabled="!citationSource(citation.source_ref)?.active || !citationSource(citation.source_ref)?.readable"
+                  :data-testid="`citation-chip-${citation.source_ref}`"
+                  @click="openCitation(citation.source_ref)"
+                >{{ citation.label }}<span v-if="!citationSource(citation.source_ref)?.active || !citationSource(citation.source_ref)?.readable">（不可用）</span></button>
+              </div>
               <button
                 v-if="messageClampPolicy(message.content).collapsible"
                 type="button"
@@ -580,6 +612,7 @@ async function retryRole(roleId: string) {
         v-if="isChatroom"
         :meeting-id="selectedMeeting.meeting_id"
         :participants="selectedMeeting.participants"
+        :sources="selectedMeeting.chatroom_sources ?? []"
         :upload-disabled="uploadDisabled"
         v-model:quoted-message="quotedMessage"
         @pick-files="onPickedFiles"

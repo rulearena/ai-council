@@ -792,3 +792,5 @@ Settings 彈窗新增「模型管理」分頁（與既有「角色模型選擇/�
 
 - 後端：CRUD 往返（寫檔後重讀）、驗證錯誤 422、原子替換（寫入失敗不留半成品檔）、刪除被引用模型的 warning
 - 前端 e2e：新增模型 → 出現在角色下拉 → Test → 編輯 → 刪除（含 confirm 與 fallback）
+
+**#103 Slice 3 Executor implementation（2026-08-10）**：以固定 base `521d6c1398da449ed1fa2920aae62cb49e5785d7` 在 `.worktrees/chatroom-explicit-sources-slice3` 實作 source projection、chat sources API、canonical attachment/evidence refs、mirror suppression、same-label retention、kind-specific readability、Host ACL marker persistence/fallback、send-time source validation、bounded `chatroom-source-context/v1` metadata and prompt excerpts、optional `chat-message/v1.attachment_refs` validation，以及 composer `#` autocomplete／citation chip presentation。Tasks 3.1–3.6 已在本分支標記完成；3.7 reader activation／historical unavailable UI 的完整瀏覽器驗證與 3.8 end-to-end regression 尚未完成，未宣告 Gate B 或 acceptance。Focused backend source/routing/runner tests **41 passed**；frontend unit **172 passed**；production build、OpenSpec strict validation、`git diff --check` 通過。Full backend suite、focused Chromium E2E、direct browser smoke 與獨立 Gate B review 尚未執行。

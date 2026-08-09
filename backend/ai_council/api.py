@@ -77,6 +77,13 @@ from ai_council.meetings.chatroom_routing import (
     validate_chatroom_routing,
     ValidatedChatroomRouting,
 )
+from ai_council.meetings.chatroom_sources import (
+    SOURCE_CONTEXT_VERSION,
+    make_attachment_identity,
+    make_evidence_identity,
+    project_chatroom_sources,
+    validate_chatroom_sources,
+)
 from ai_council.meetings.input_envelope import CASE_EVIDENCE_BY_ROLE_INPUT
 from ai_council.meetings.runner import (
     CASE_FILES_BY_ROLE_INPUT,
@@ -932,6 +939,11 @@ def create_app(
                 "count": attachment_summary.count,
                 "total_bytes": attachment_summary.total_bytes,
             },
+            "chatroom_sources": (
+                chatroom_source_projection(meeting_id, metadata, mode)
+                if mode.category == "chatroom"
+                else []
+            ),
         }
 
     def validate_material_roles(
@@ -2497,6 +2509,118 @@ def create_app(
         }
         return metadata, mode, model_assignments, inputs, participants
 
+    def chatroom_source_projection(
+        meeting_id: str,
+        metadata: dict[str, Any],
+        mode: ModeDefinition,
+    ) -> list[dict[str, Any]]:
+        participants = project_participants(mode, metadata)
+        active_role_ids = [str(item["role_id"]) for item in participants]
+        readable_attachment_ids = {
+            str(event.get("file_id"))
+            for event in attachments.attachment_events(meeting_id)
+            if event.get("file_id")
+            and attachments.blob_path(meeting_id, str(event["file_id"]))
+            and attachments.blob_path(meeting_id, str(event["file_id"])).is_file()
+        }
+        material_view = project_case_materials(
+            case_materials.view(meeting_id),
+            active_epoch_id=DeliberationEpochs.view(repository.read_events(meeting_id)).active_epoch.id,
+            mode_id=metadata.get("mode_id"),
+            category=mode.category,
+        )
+        return project_chatroom_sources(
+            meeting_id=meeting_id,
+            materials=material_view,
+            attachment_events=attachments.attachment_events(meeting_id),
+            active_role_ids=active_role_ids,
+            readable_attachment_ids=readable_attachment_ids,
+        )
+
+    def _build_chatroom_source_snapshot(
+        *,
+        meeting_id: str,
+        source_refs: list[str],
+        source_projection: list[dict[str, Any]],
+        materials: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Read only selected bodies and freeze their provenance for this request."""
+        snapshot: list[dict[str, Any]] = []
+        excerpts: list[str] = []
+        evidence_by_id = {
+            str(item.get("id")): item for item in materials.get("evidence", [])
+            if isinstance(item, dict)
+        }
+        for source_ref in source_refs:
+            projection = next(item for item in source_projection if item["source_ref"] == source_ref)
+            content: str
+            identity: dict[str, Any]
+            if source_ref.startswith("attachment:"):
+                file_id = source_ref.split(":", 1)[1]
+                event = attachments.attachment_event(meeting_id, file_id)
+                blob = attachments.blob_path(meeting_id, file_id)
+                if event is None or blob is None or not blob.is_file():
+                    continue
+                raw = blob.read_bytes()
+                content = raw.decode("utf-8")
+                identity = make_attachment_identity(event, raw)
+            else:
+                evidence_id = source_ref.split(":", 1)[1]
+                evidence = evidence_by_id[evidence_id]
+                version = next(
+                    version for version in evidence.get("versions", [])
+                    if version.get("version") == evidence.get("active_version")
+                )
+                content = str(version.get("content"))
+                identity = make_evidence_identity(evidence_id, version)
+            # Keep retrieval deterministic and bounded. A full source is one
+            # citation segment; larger sources use numbered line paragraphs.
+            if len(content) <= 6000:
+                segment_refs = ["full"]
+                segment_text = content
+            else:
+                paragraphs = [line for line in content.splitlines() if line.strip()]
+                selected: list[str] = []
+                used = 0
+                for paragraph in paragraphs:
+                    if used + len(paragraph) + 1 > 6000:
+                        break
+                    selected.append(paragraph)
+                    used += len(paragraph) + 1
+                segment_refs = [f"paragraph:{index:04d}" for index in range(1, len(selected) + 1)]
+                segment_text = "\n".join(selected)
+            snapshot.append({
+                "source_ref": source_ref,
+                "label": projection["label"],
+                "kind": projection["kind"],
+                "reader_ref": projection["reader_ref"],
+                "content_identity": identity,
+                "available_segment_refs": segment_refs,
+                "omission": {
+                    "omitted": len(segment_text) < len(content),
+                    "reason": "context_budget" if len(segment_text) < len(content) else None,
+                },
+            })
+            excerpts.append(
+                f"來源 {projection['label']}（{source_ref}）\n{segment_text}"
+            )
+        return {
+            "selected_source_snapshot": {
+                "schema_version": SOURCE_CONTEXT_VERSION,
+                "source_refs": list(source_refs),
+                "sources": snapshot,
+            },
+            "source_excerpts": excerpts,
+        }
+
+    @app.get("/meetings/{meeting_id}/chat/sources")
+    def list_chatroom_sources(meeting_id: str) -> list[dict[str, Any]]:
+        metadata = metadata_store.get(meeting_id)
+        mode = meeting_mode(mode_catalog, metadata)
+        if mode.category != "chatroom":
+            raise HTTPException(status_code=404, detail="Chatroom sources are unavailable")
+        return chatroom_source_projection(meeting_id, metadata, mode)
+
     @app.post("/meetings/{meeting_id}/chat/mention")
     def chat_mention(
         meeting_id: str,
@@ -2554,13 +2678,42 @@ def create_app(
                 "source_refs": list(request.source_refs),
             }
 
-            # Source authorization is intentionally only a structural seam in this slice;
-            # the source registry and readable-body projection belong to Slice 3.
-            if request.source_tokens or request.source_refs:
-                return JSONResponse(
-                    status_code=400,
-                    content=rejected("INVALID_SOURCE_REF", "source_refs"),
+            if request.source_refs:
+                source_projection = chatroom_source_projection(meeting_id, metadata, mode)
+                valid, source_error, bad_source_ref, bad_role_id = validate_chatroom_sources(
+                    source_projection, list(request.source_refs), target_role_ids
                 )
+                if not valid:
+                    details = []
+                    if source_error != "INVALID_SOURCE_REF":
+                        detail_values: dict[str, Any] = {"source_ref": bad_source_ref}
+                        if bad_role_id is not None:
+                            detail_values["role_id"] = bad_role_id
+                        details = [detail_values]
+                    return JSONResponse(
+                        status_code=400,
+                        content=rejected(source_error or "INVALID_SOURCE_REF", "source_refs", details),
+                    )
+                inputs["__chatroom_source_snapshot"] = _build_chatroom_source_snapshot(
+                    meeting_id=meeting_id,
+                    source_refs=list(request.source_refs),
+                    source_projection=source_projection,
+                    materials=project_case_materials(
+                        case_materials.view(meeting_id),
+                        active_epoch_id=DeliberationEpochs.view(repository.read_events(meeting_id)).active_epoch.id,
+                        mode_id=metadata.get("mode_id"),
+                        category=mode.category,
+                    ),
+                )
+            else:
+                inputs["__chatroom_source_snapshot"] = {
+                    "selected_source_snapshot": {
+                        "schema_version": SOURCE_CONTEXT_VERSION,
+                        "source_refs": [],
+                        "sources": [],
+                    },
+                    "source_excerpts": [],
+                }
 
             def run_mention() -> None:
                 if len(target_role_ids) > 1:
@@ -3430,6 +3583,7 @@ def project_case_materials(
             "size": version.size,
             "created_at": version.created_at,
             "source_event_id": version.source_event_id,
+            **({"host_acl_explicit": True} if getattr(version, "host_acl_explicit", None) is True else {}),
         }
 
     impact = view.pending_impact

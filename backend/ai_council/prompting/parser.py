@@ -86,16 +86,42 @@ class RoleOutputParser:
 
 
 class ChatMessageParser:
-    def parse(self, raw_output: str) -> dict[str, str]:
+    def parse(self, raw_output: str) -> dict[str, Any]:
         try:
             payload = json.loads(extract_first_json_object(raw_output))
             if not isinstance(payload, dict):
                 raise TypeError("chat message must be an object")
-            require_exact_keys(payload, {"message"}, "chat message")
+            keys = set(payload)
+            if keys - {"message", "attachment_refs"} or "message" not in keys:
+                raise ValueError("chat message has invalid fields")
             message = require_string(payload, "message").strip()
             if not message:
                 raise ValueError("message must not be blank")
-            return {"message": message}
+            result: dict[str, Any] = {"message": message}
+            if "attachment_refs" in payload:
+                refs = payload["attachment_refs"]
+                if not isinstance(refs, list):
+                    raise ValueError("attachment_refs must be an array")
+                normalized: list[dict[str, Any]] = []
+                for item in refs:
+                    if not isinstance(item, dict) or set(item) != {"source_ref", "label", "segment_refs"}:
+                        raise ValueError("attachment_refs item has invalid fields")
+                    source_ref = require_string(item, "source_ref")
+                    label = require_string(item, "label")
+                    segment_refs = item["segment_refs"]
+                    if (
+                        not isinstance(segment_refs, list)
+                        or not segment_refs
+                        or any(not isinstance(segment, str) or not segment for segment in segment_refs)
+                    ):
+                        raise ValueError("attachment_refs segment_refs must be non-empty strings")
+                    normalized.append({
+                        "source_ref": source_ref,
+                        "label": label,
+                        "segment_refs": list(segment_refs),
+                    })
+                result["attachment_refs"] = normalized
+            return result
         except (json.JSONDecodeError, TypeError, KeyError, ValueError) as error:
             raise OutputParseError(str(error), raw_output=raw_output) from error
 

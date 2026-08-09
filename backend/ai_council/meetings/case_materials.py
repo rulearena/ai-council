@@ -34,6 +34,7 @@ class MaterialVersion:
     size: int
     created_at: str | None
     source_event_id: str | None
+    host_acl_explicit: bool | None = None
 
 
 @dataclass(frozen=True)
@@ -503,6 +504,7 @@ class CaseMaterials:
             "size": len(content),
             "created_at": created_at or datetime.now(UTC).isoformat(),
             "source_event_id": source_event_id,
+            "host_acl_explicit": True,
         }
 
     @staticmethod
@@ -699,6 +701,7 @@ class CaseMaterials:
             size=int(version["size"]),
             created_at=version.get("created_at"),
             source_event_id=version.get("source_event_id"),
+            host_acl_explicit=version.get("host_acl_explicit") if "host_acl_explicit" in version else None,
         )
 
     @staticmethod
