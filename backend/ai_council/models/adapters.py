@@ -50,6 +50,9 @@ class ModelRequest:
     meeting_id: str | None = None
     on_token_delta: Callable[[str], None] | None = None
     output_schema_id: str = DEFAULT_OUTPUT_SCHEMA_ID
+    # Canonical chatroom layers.  None is the compatibility signal for all
+    # formal-mode callers and preserves their legacy single prompt payload.
+    messages: list[dict[str, str]] | None = None
 
 
 class TokenUsage(TypedDict):
@@ -65,7 +68,10 @@ class ModelResponse:
 
 
 class MockModelAdapter:
+    last_request: ModelRequest | None = None
+
     def complete(self, request: ModelRequest) -> ModelResponse:
+        self.last_request = request
         chunks = request.model_config.extra_body.get("mock_stream_chunks", [])
         if request.on_token_delta is not None and isinstance(chunks, list):
             for chunk in chunks:
@@ -341,7 +347,47 @@ def _post_json(url: str, payload: dict[str, object], headers: dict[str, str]) ->
     return _request_json(url, method="POST", payload=payload, headers=headers)
 
 
+def _messages_by_role(request: ModelRequest) -> dict[str, str]:
+    return {
+        str(message["role"]): str(message["content"])
+        for message in (request.messages or [])
+        if isinstance(message, dict) and "role" in message and "content" in message
+    }
+
+
+def _merged_system_developer(messages: list[dict[str, str]]) -> str:
+    by_role = _messages_by_role(ModelRequest(prompt="", model_config=ModelConfig(id="_", adapter="mock"), messages=messages))
+    return "\n\n".join(
+        value for value in (by_role.get("system", ""), by_role.get("developer", "")) if value
+    )
+
+
+def _user_message(messages: list[dict[str, str]]) -> str:
+    by_role = _messages_by_role(ModelRequest(prompt="", model_config=ModelConfig(id="_", adapter="mock"), messages=messages))
+    return by_role.get("user", "")
+
+
+def _openai_messages(request: ModelRequest, supports_developer_role: bool) -> list[dict[str, str]]:
+    if request.messages is None:
+        return [{"role": "user", "content": request.prompt}]
+    if supports_developer_role:
+        return [dict(message) for message in request.messages]
+    return [
+        {"role": "system", "content": _merged_system_developer(request.messages)},
+        {"role": "user", "content": _user_message(request.messages)},
+    ]
+
+
+def _anthropic_messages(request: ModelRequest) -> list[dict[str, str]]:
+    if request.messages is None:
+        return [{"role": "user", "content": request.prompt}]
+    return [{"role": "user", "content": _user_message(request.messages)}]
+
+
 class OpenAICompatibleHTTPAdapter:
+    def __init__(self, *, supports_developer_role: bool = False) -> None:
+        self.supports_developer_role = supports_developer_role
+
     def complete(self, request: ModelRequest) -> ModelResponse:
         config = request.model_config
         if not config.base_url or not config.model:
@@ -350,10 +396,7 @@ class OpenAICompatibleHTTPAdapter:
                 failure_kind="configuration_error",
             )
 
-        payload: dict[str, object] = {
-            "model": config.model,
-            "messages": [{"role": "user", "content": request.prompt}],
-        }
+        payload: dict[str, object] = {"model": config.model, "messages": _openai_messages(request, self.supports_developer_role)}
         if config.supports_json_mode:
             payload["response_format"] = {"type": "json_object"}
         payload.update(config.extra_body)
@@ -405,8 +448,10 @@ class AnthropicHTTPAdapter:
         payload: dict[str, object] = {
             "model": config.model,
             "max_tokens": 4096,
-            "messages": [{"role": "user", "content": request.prompt}],
+            "messages": _anthropic_messages(request),
         }
+        if request.messages is not None:
+            payload["system"] = _merged_system_developer(request.messages)
         payload.update(config.extra_body)
 
         headers = {"Content-Type": "application/json", "anthropic-version": "2023-06-01"}
@@ -456,6 +501,9 @@ class AnthropicHTTPAdapter:
 
 
 class GeminiHTTPAdapter:
+    def __init__(self, *, supports_system_instruction: bool = True) -> None:
+        self.supports_system_instruction = supports_system_instruction
+
     def complete(self, request: ModelRequest) -> ModelResponse:
         config = request.model_config
         if not config.base_url or not config.model:
@@ -464,9 +512,20 @@ class GeminiHTTPAdapter:
                 failure_kind="configuration_error",
             )
 
-        payload: dict[str, object] = {
-            "contents": [{"parts": [{"text": request.prompt}]}],
-        }
+        if request.messages is not None and self.supports_system_instruction:
+            payload: dict[str, object] = {
+                "systemInstruction": {"parts": [{"text": _merged_system_developer(request.messages)}]},
+                "contents": [{"role": "user", "parts": [{"text": _user_message(request.messages)}]}],
+            }
+        else:
+            payload = {
+                "contents": [
+                    {
+                        **({"role": "user"} if request.messages is not None else {}),
+                        "parts": [{"text": request.prompt}],
+                    }
+                ]
+            }
         payload.update(config.extra_body)
 
         url = f"{config.base_url.rstrip('/')}/models/{config.model}:generateContent"

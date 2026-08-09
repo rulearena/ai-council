@@ -387,6 +387,7 @@ class MeetingRunner:
             prompt_input_overrides={
                 "instruction": instruction,
                 "role_display_name": role_display_name,
+                "persona_prompt": str((inputs or {}).get("__chatroom_persona_prompts", {}).get(role, "")),
             },
         )
 
@@ -525,18 +526,14 @@ class MeetingRunner:
             config = model_assignments[role]
             event_step_id = f"chat-fanout-{timestamp_ms}-{role}"
             prompt_metadata = self._prompt_metadata("chatroom_response", output_schema)
-            prompt = self.prompt_renderer.render(
-                template_name="chatroom_response",
+            prompt, prompt_messages = self._chatroom_prompt(
                 role=role,
+                role_display_name=role_display_names.get(role, role),
                 goal=goal,
+                instruction=instruction,
                 prior_transcript=prior_transcript,
                 required_json_schema=output_schema.schema,
-                inputs=self._prompt_inputs_for_role(
-                    inputs, role, extra={
-                        "instruction": instruction,
-                        "role_display_name": role_display_names.get(role, role),
-                    },
-                ),
+                persona_prompt=str((inputs or {}).get("__chatroom_persona_prompts", {}).get(role, "")),
             )
             started_at = datetime.now(UTC).isoformat()
             started_clock = time.monotonic()
@@ -548,6 +545,7 @@ class MeetingRunner:
                         model_config=config,
                         output_schema_id=output_schema.id,
                         meeting_id=meeting_id,
+                        messages=prompt_messages,
                     )
                 )
                 parsed_output = output_schema.parse(response.raw_output)
@@ -562,7 +560,7 @@ class MeetingRunner:
                     "attempt": 1,
                     "model_config_id": config.id,
                     "adapter": config.adapter,
-                    "prompt_messages": [{"role": "user", "content": prompt}],
+                    "prompt_messages": prompt_messages,
                     "status": "failed",
                     "failure_kind": self._failure_kind(error),
                     "error": str(error),
@@ -588,7 +586,7 @@ class MeetingRunner:
                 "attempt": 1,
                 "model_config_id": config.id,
                 "adapter": config.adapter,
-                "prompt_messages": [{"role": "user", "content": prompt}],
+                "prompt_messages": prompt_messages,
                 "raw_output": response.raw_output,
                 "parsed_output": parsed_output,
                 "status": "completed",
@@ -846,6 +844,17 @@ class MeetingRunner:
                 inputs, step.role, extra=prompt_input_overrides
             ),
         )
+        prompt_messages: list[dict[str, str]] | None = None
+        if step.template_name == "chatroom_response":
+            prompt, prompt_messages = self._chatroom_prompt(
+                role=step.role,
+                role_display_name=(prompt_input_overrides or {}).get("role_display_name", step.role),
+                goal=goal,
+                instruction=(prompt_input_overrides or {}).get("instruction", ""),
+                prior_transcript=prior_transcript_override or "",
+                required_json_schema=output_schema.schema,
+                persona_prompt=(prompt_input_overrides or {}).get("persona_prompt", ""),
+            )
 
         def emit_token_delta(content: str) -> None:
             if self.stream_sink is None:
@@ -873,6 +882,7 @@ class MeetingRunner:
             model_config_id=config.id,
             adapter=config.adapter,
             prompt=prompt,
+            prompt_messages=prompt_messages,
             prompt_metadata=prompt_metadata,
             extra_event_fields=extra_event_fields,
         )
@@ -887,6 +897,7 @@ class MeetingRunner:
                     output_schema_id=output_schema.id,
                     meeting_id=meeting_id,
                     on_token_delta=emit_token_delta,
+                    messages=prompt_messages,
                 )
             )
             parsed_output = output_schema.parse(response.raw_output)
@@ -911,7 +922,7 @@ class MeetingRunner:
                 "attempt": attempt,
                 "model_config_id": config.id,
                 "adapter": config.adapter,
-                "prompt_messages": [{"role": "user", "content": prompt}],
+                "prompt_messages": prompt_messages or [{"role": "user", "content": prompt}],
                 "raw_output": error.raw_output,
                 "status": "failed",
                 "failure_kind": "parse_error",
@@ -959,7 +970,7 @@ class MeetingRunner:
                 "attempt": attempt,
                 "model_config_id": config.id,
                 "adapter": config.adapter,
-                "prompt_messages": [{"role": "user", "content": prompt}],
+                "prompt_messages": prompt_messages or [{"role": "user", "content": prompt}],
                 "status": "failed",
                 "failure_kind": self._failure_kind(error),
                 "error": str(error),
@@ -991,7 +1002,7 @@ class MeetingRunner:
             "model_config_id": config.id,
             "adapter": config.adapter,
             **prompt_metadata,
-            "prompt_messages": [{"role": "user", "content": prompt}],
+            "prompt_messages": prompt_messages or [{"role": "user", "content": prompt}],
             "raw_output": response.raw_output,
             "parsed_output": parsed_output,
             "status": "completed",
@@ -1344,6 +1355,7 @@ class MeetingRunner:
         model_config_id: str,
         adapter: str,
         prompt: str,
+        prompt_messages: list[dict[str, str]] | None = None,
         prompt_metadata: dict[str, object],
         extra_event_fields: dict[str, object],
     ) -> None:
@@ -1358,7 +1370,7 @@ class MeetingRunner:
             "attempt": attempt,
             "model_config_id": model_config_id,
             "adapter": adapter,
-            "prompt_messages": [{"role": "user", "content": prompt}],
+            "prompt_messages": prompt_messages or [{"role": "user", "content": prompt}],
             "status": "running",
             "deliberation_epoch_id": DeliberationEpochs.view(
                 self.repository.read_events(meeting_id)
@@ -1401,6 +1413,45 @@ class MeetingRunner:
             "output_schema_id": output_schema.id,
             "output_schema_hash": output_schema.hash,
         }
+
+    def _chatroom_prompt(
+        self,
+        *,
+        role: str,
+        role_display_name: str,
+        goal: str,
+        instruction: str,
+        prior_transcript: str,
+        required_json_schema: str,
+        persona_prompt: str,
+    ) -> tuple[str, list[dict[str, str]]]:
+        system = (
+            f"你是 AI Council 聊天室中的{role_display_name}（固定角色 {role}）。\n"
+            f"會議目標：{goal or '協助使用者釐清問題'}\n"
+            f"工作 Persona：{persona_prompt or '以清楚、誠實、能推進對話的方式回應。'}\n"
+            "遵守安全與格式要求：不得捏造事實；除非使用者要求，不要宣告自己是某種角色，"
+            "也不要使用固定報告標題。"
+        )
+        developer = (
+            "這是 chatroom_response 自然對話回合。只回答目前指令，依需要參考引用與近期對話；用有用的 Markdown，"
+            "長度依問題調整，不要固定篇幅或事後截斷。回傳一個符合 chat-message/v1 的 JSON 物件。\n"
+            f"Schema:\n{required_json_schema}"
+        )
+        user = (
+            "近期對話與引用（僅限以下內容）：\n"
+            f"{prior_transcript}\n\n"
+            f"目前指令：\n{instruction}"
+        )
+        messages = [
+            {"role": "system", "content": system},
+            {"role": "developer", "content": developer},
+            {"role": "user", "content": user},
+        ]
+        prompt = "\n\n".join(
+            f"{label.upper()}\n{message['content']}"
+            for label, message in zip(("system", "developer", "user"), messages)
+        )
+        return prompt, messages
 
     def _prompt_inputs_for_role(
         self,

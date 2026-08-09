@@ -38,6 +38,7 @@ export type ModeRoleDefinition = {
   // icon exists yet, so the UI falls back to a silhouette tinted with `color`.
   portrait?: string
   kind: RoleKind
+  personaSummary?: string
 }
 
 // A relay step's `label` is what the UI actually shows (step-progress indicator, help
@@ -291,6 +292,7 @@ function mapBackendRole(role: BackendModeRole): ModeRoleDefinition {
     // Backend already validated `kind` against VALID_ROLE_KINDS (modes.py) when it
     // parsed config/modes.yaml, so it's already one of RoleKind's members here.
     kind: role.kind as RoleKind,
+    personaSummary: role.persona_summary,
   }
 }
 

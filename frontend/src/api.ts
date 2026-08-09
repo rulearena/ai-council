@@ -213,6 +213,7 @@ export type MeetingParticipant = {
   instance_prompt: string | null
   model_assignment_source: 'metadata' | 'latest-event' | 'default' | 'unavailable'
   model_assignment_warning: string | null
+  persona_summary?: string
 }
 
 export type BackendModeRole = {
@@ -222,6 +223,7 @@ export type BackendModeRole = {
   kind: string
   portrait: string | null
   output_schema: string
+  persona_summary?: string
 }
 export type BackendModeStep = { role: string; template: string; label: string }
 export type BackendModeInput = { id: string; label: string; kind: string }

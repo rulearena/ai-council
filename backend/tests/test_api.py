@@ -7072,6 +7072,7 @@ def test_chat_mention_non_participant_role_returns_400(
             "title": "子集聊天",
             "mode_id": "chatroom",
             "participants": [
+                {"role_id": "host", "model_config_id": "mock-fast"},
                 {"role_id": "Advisor", "model_config_id": "mock-fast"},
                 {"role_id": "Critic", "model_config_id": "mock-fast"},
             ],
@@ -7112,7 +7113,7 @@ def test_chat_mention_with_quoted_event_passes_content_to_runner(
     assert response_event["status"] == "completed"
     prompt_messages = response_event.get("prompt_messages", [])
     assert len(prompt_messages) >= 1
-    prompt_content = prompt_messages[0]["content"]
+    prompt_content = "\n".join(message["content"] for message in prompt_messages)
     assert "這是一則關於架構的重要訊息" in prompt_content
 
 

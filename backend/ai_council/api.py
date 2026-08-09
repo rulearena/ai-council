@@ -2479,15 +2479,17 @@ def create_app(
     ]:
         metadata = metadata_store.get(meeting_id)
         reject_terminal_meeting(repository, meeting_id)
-        material_view = require_case_materials_ready(
-            repository, case_materials, meeting_id, ignore_pending_impact=True
-        )
         mode = meeting_mode(mode_catalog, metadata)
         if mode.category != "chatroom":
             raise HTTPException(status_code=409, detail="Mode does not support chat mentions")
         participants = project_participants(mode, metadata)
         model_assignments = resolved_meeting_models(meeting_assignments, metadata, mode)
-        inputs = material_inputs_for_runner(metadata, material_view)
+        # Slice 2 is message-only. Do not project or open case-file/evidence/note
+        # bodies here; explicit source selection and retrieval are Slice 3.
+        inputs: dict[str, Any] = {}
+        inputs["__chatroom_persona_prompts"] = {
+            role.id: str(role.persona_prompt or "") for role in mode.roles
+        }
         return metadata, mode, model_assignments, inputs, participants
 
     @app.post("/meetings/{meeting_id}/chat/mention")
@@ -3159,6 +3161,7 @@ def project_mode(mode: ModeDefinition) -> dict[str, Any]:
                 "kind": role.kind,
                 "portrait": role.portrait,
                 "output_schema": role.output_schema,
+                **({"persona_summary": role.persona_summary} if role.persona_summary is not None else {}),
             }
             for role in mode.roles
         ],
@@ -3223,6 +3226,12 @@ def normalize_participants(
                 {"role_id": role_id, "model_config_id": default_model_id}
                 for role_id in mode.role_ids()
             ]
+        else:
+            role_ids = [str(item.get("role_id")) for item in participants]
+            if "host" not in role_ids:
+                raise HTTPException(status_code=400, detail="Chatroom Host participant is mandatory")
+            if len(role_ids) != len(set(role_ids)):
+                raise HTTPException(status_code=400, detail="Duplicate participant roles")
         validate_participant_ids(
             mode=mode,
             participants=participants,
@@ -3713,6 +3722,10 @@ def project_participants(mode: ModeDefinition, metadata: dict[str, Any]) -> list
         for item in (metadata.get("participants") or [])
         if isinstance(item, dict)
     }
+    active_role_ids: set[str] | None = None
+    if mode.category == "chatroom" and stored:
+        active_role_ids = set(stored)
+        active_role_ids.add("host")
     projected = []
     courtroom_profile = None
     if mode.id == "courtroom":
@@ -3721,6 +3734,8 @@ def project_participants(mode: ModeDefinition, metadata: dict[str, Any]) -> list
         except CourtroomCaseProfileError:
             pass
     for role in mode.roles:
+        if active_role_ids is not None and role.id not in active_role_ids:
+            continue
         entry = stored.get(role.id, {})
         role_name = (
             courtroom_profile.role_display(role.id)
@@ -3737,6 +3752,7 @@ def project_participants(mode: ModeDefinition, metadata: dict[str, Any]) -> list
                 "model_config_id": entry.get("model_config_id"),
                 "display_name": entry.get("display_name") or role_name,
                 "instance_prompt": entry.get("instance_prompt"),
+                **({"persona_summary": role.persona_summary} if role.persona_summary is not None else {}),
             }
         )
     return projected

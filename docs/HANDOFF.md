@@ -116,6 +116,8 @@ Backlog 90「會議工作區與時間序對話介面」已實作、完成法院�
 
 **目前下一步（2026-08-08）**：Human Owner 重新驗收 #103 Slice 1 的 acceptance regression fix（PDF upload、emoji 前綴 mention，以及原 Slice 1 routing 清單）；確認後依序進入 Slice 2 prompt layering／Persona、Slice 3 `#` attachment selection／citations、Slice 4 shared memory／summary。原 #96 contract 已驗收完成，但本次 upload regression follow-up 尚待重新驗收。#102 仍維持 `implemented / awaiting acceptance`，不與 #103 Slice 1 混為同一驗收。
 
+**2026-08-09 #103 Slice 2 Executor implementation**：固定 base `825a640dda02e815329b6017850673a84936b9e3`，worktree `.worktrees/chatroom-prompt-layering-slice2`、branch `implementation/chatroom-prompt-layering-slice2`。已完成固定五角色 Persona（公開 summary／backend-only prompt）、Host mandatory 與 immutable active roster projection、canonical chatroom `system/developer/user` request/audit、provider native/fallback payload mapping，以及 message-only/no-body chat prompt boundary；OpenSpec tasks 2.1–2.7 已更新。證據：Slice 2 **9**、chatroom runner **13**、adapter/catalog aggregate **70**、chatroom API regression **13** backend tests；frontend unit **172**、production build 綠。Full backend bounded run 在既有 startup-health timing baseline failure 停止（非本變更）；Chromium E2E 未執行。Exact implementation HEAD／commit chain 待 commit 後交 Gate B，尚未宣告 acceptance；Slice 3 `#` source/citations 與 Slice 4 summary 未實作。
+
 **歷史候選（2026-07-31；僅保留作為追蹤紀錄，不代表目前狀態）**：backlog #94 遺留 Minor（②③④⑤⑥⑦⑨⑩⑭⑮，其中 ⑧⑪⑫⑬ 已於 2026-07-30 修畢、⑭⑮ 為 2026-07-31 Gate B 審查新增，勿重做）、#95 遺留的 `MeetingsModal.vue` `@keyup.enter` 中文選字提早觸發，以及 backlog #96（LINE 式聊天附件，需先開 OpenSpec proposal）。尚未建立 OpenSpec change，須先登錄 `spec.md` §15 再提 proposal。#96 是否與 #94/#95 同批或獨立批次由 Human Owner 裁定。
 
 **Human Owner follow-up**：新角色立繪由使用者自行產圖，不屬於 agent 開發佇列或產品執行批次。

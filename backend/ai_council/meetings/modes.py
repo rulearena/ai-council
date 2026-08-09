@@ -31,6 +31,8 @@ class ModeRole:
     kind: str
     portrait: str | None = None
     output_schema: str = DEFAULT_OUTPUT_SCHEMA_ID
+    persona_summary: str | None = None
+    persona_prompt: str | None = None
 
 
 @dataclass(frozen=True)
@@ -240,6 +242,15 @@ def _mode_from_yaml_item(
     role_ids = {role.id for role in roles}
     if len(role_ids) != len(roles):
         raise ModeConfigError(f"Mode {mode_id!r} has duplicate role ids")
+    if mode_id == "chatroom":
+        expected = {"host", "Advisor", "Critic", "Strategist", "Analyst"}
+        if role_ids != expected:
+            raise ModeConfigError("Chatroom must declare exactly the five fixed roles")
+        for role in roles:
+            if not isinstance(role.persona_summary, str) or not role.persona_summary.strip():
+                raise ModeConfigError(f"Chatroom role {role.id!r} requires persona_summary")
+            if not isinstance(role.persona_prompt, str) or not role.persona_prompt.strip():
+                raise ModeConfigError(f"Chatroom role {role.id!r} requires persona_prompt")
 
     raw_inputs = _require_list(mode_id, raw_mode.get("inputs"), "inputs")
     inputs = [_input_from_yaml_item(mode_id, item) for item in raw_inputs]
@@ -321,6 +332,8 @@ def _role_from_yaml_item(
         kind=kind,
         portrait=raw_role.get("portrait"),
         output_schema=output_schema,
+        persona_summary=raw_role.get("persona_summary"),
+        persona_prompt=raw_role.get("persona_prompt"),
     )
 
 

@@ -84,8 +84,11 @@ modes:
     default_scene: meeting-room
     inputs: []
     roles:
-      - { id: Advisor, name: 顧問, color: "#4d8dff", kind: member }
-      - { id: Critic, name: 評論者, color: "#ff6b5e", kind: member }
+      - { id: host, name: 主持 AI, color: "#e8b44c", kind: member, persona_summary: 主持, persona_prompt: 主持對話 }
+      - { id: Advisor, name: 顧問, color: "#4d8dff", kind: member, persona_summary: 顧問, persona_prompt: 提出建議 }
+      - { id: Critic, name: 評論者, color: "#ff6b5e", kind: member, persona_summary: 評論, persona_prompt: 指出風險 }
+      - { id: Strategist, name: 策略師, color: "#8b6dd9", kind: member, persona_summary: 策略, persona_prompt: 衡量取捨 }
+      - { id: Analyst, name: 分析師, color: "#3dd68c", kind: member, persona_summary: 分析, persona_prompt: 區分證據 }
 """
 
 
@@ -513,7 +516,7 @@ def test_chatroom_mode_loads(tmp_path: Path) -> None:
     assert mode.id == "chatroom"
     assert mode.category == "chatroom"
     assert mode.default_scene == "meeting-room"
-    assert mode.role_ids() == ["Advisor", "Critic"]
+    assert mode.role_ids() == ["host", "Advisor", "Critic", "Strategist", "Analyst"]
     assert all(role.kind == "member" for role in mode.roles)
     assert mode.steps == []
     assert mode.fanout is None

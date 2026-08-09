@@ -55,6 +55,7 @@ const caseFileLimitsError = ref('')
 let caseFileLimitsRequestGeneration = 0
 const parallelMemberCount = ref(2)
 const parallelMembers = ref<Array<{ displayName: string; instancePrompt: string }>>([])
+const chatroomRoleIds = ref<string[]>([])
 const draftModelAssignments = ref<Record<string, string>>({})
 const textInputs = computed(() => selectedMode.value.inputs.filter((input) => input.kind === 'text'))
 const hasEmptyRequiredInput = computed(() =>
@@ -100,6 +101,9 @@ function hasFixedParallelRoster(mode: ModeDefinition) {
 
 const selectedModeParticipants = computed(() => {
   const mode = selectedMode.value
+  if (mode.category === 'chatroom') {
+    return mode.roles.filter((role) => role.id === 'host' || chatroomRoleIds.value.includes(role.id))
+  }
   if (
     mode.category !== 'parallel' ||
     !mode.fanout ||
@@ -186,6 +190,7 @@ function chooseMode(mode: ModeDefinition) {
     resetParallelMembers(mode)
   }
   selectedModeId.value = mode.id
+  chatroomRoleIds.value = mode.category === 'chatroom' ? mode.roles.map((role) => role.id) : []
   resetModelAssignments()
   step.value = 'participants'
 }
@@ -247,6 +252,14 @@ function resetModelAssignments(preserveExisting = false) {
   )
 }
 
+function toggleChatroomRole(roleId: string) {
+  if (roleId === 'host') return
+  chatroomRoleIds.value = chatroomRoleIds.value.includes(roleId)
+    ? chatroomRoleIds.value.filter((id) => id !== roleId)
+    : [...chatroomRoleIds.value, roleId]
+  resetModelAssignments(true)
+}
+
 function addCaseFile() {
   caseFiles.value.push({ title: '', content: '', visibleRoles: [] })
 }
@@ -294,7 +307,7 @@ function buildParticipants() {
     !mode.synthesis ||
     hasFixedParallelRoster(mode)
   ) {
-    return mode.roles.map((role) => ({
+    return selectedModeParticipants.value.map((role) => ({
       role_id: role.id,
       model_config_id: draftModelAssignments.value[role.id],
     }))
@@ -379,6 +392,21 @@ function buildParticipants() {
         目標{{ selectedMode.category === 'chatroom' ? '（選填）' : '' }}
         <textarea v-model="goal" aria-label="目標" />
       </label>
+
+      <fieldset v-if="selectedMode.category === 'chatroom'" class="chatroom-role-selection" data-testid="chatroom-role-selection">
+        <legend>聊天室成員（主持 AI 固定加入）</legend>
+        <label v-for="role in selectedMode.roles" :key="role.id" class="case-file-role-toggle">
+          <input
+            type="checkbox"
+            :checked="role.id === 'host' || chatroomRoleIds.includes(role.id)"
+            :disabled="role.id === 'host'"
+            :data-testid="`chatroom-role-${role.id}`"
+            @change="toggleChatroomRole(role.id)"
+          />
+          <span>{{ role.name }}</span>
+          <small v-if="role.personaSummary">{{ role.personaSummary }}</small>
+        </label>
+      </fieldset>
 
       <label v-if="selectedMode.id === 'courtroom'" class="topic-input-row">
         案件類型
