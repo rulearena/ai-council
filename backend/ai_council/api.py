@@ -782,7 +782,12 @@ def create_app(
                 status_code=400,
                 detail="Case type is only available for courtroom meetings",
             )
-        participants = normalize_participants(mode, request.participants, model_repository)
+        participants = normalize_participants(
+            mode,
+            request.participants,
+            model_repository,
+            participants_supplied="participants" in request.model_fields_set,
+        )
         case_files = normalize_case_files(mode, participants, request.case_files, limits)
 
         declared_input_ids = {item.id for item in mode.inputs}
@@ -3185,6 +3190,8 @@ def normalize_participants(
     mode: ModeDefinition,
     requested: list[MeetingParticipantRequest],
     model_repository: ModelConfigRepository,
+    *,
+    participants_supplied: bool,
 ) -> list[dict[str, Any]]:
     configured_models = model_repository.list_models()
     default_model_id = configured_models[0].id if configured_models else None
@@ -3212,7 +3219,7 @@ def normalize_participants(
 
     if mode.category == "chatroom":
         participants = [participant.model_dump() for participant in requested]
-        if not participants:
+        if not participants_supplied:
             participants = [
                 {"role_id": role_id, "model_config_id": default_model_id}
                 for role_id in mode.role_ids()

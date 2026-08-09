@@ -3685,6 +3685,156 @@ def test_create_chatroom_meeting_without_goal(tmp_path: Path) -> None:
     assert metadata["goal"] == ""
 
 
+@pytest.mark.parametrize(
+    ("participant_field", "expected_status", "expected_role_ids"),
+    [
+        pytest.param(
+            None,
+            200,
+            ["host", "Advisor", "Critic", "Strategist", "Analyst"],
+            id="participants-omitted-defaults-all-five",
+        ),
+        pytest.param(
+            [],
+            400,
+            None,
+            id="participants-explicit-empty-rejects-missing-host",
+        ),
+        pytest.param(
+            [{"role_id": "Advisor", "model_config_id": "mock-fast"}],
+            400,
+            None,
+            id="participants-explicit-nonempty-rejects-missing-host",
+        ),
+        pytest.param(
+            [
+                {"role_id": "host", "model_config_id": "mock-fast"},
+                {"role_id": "host", "model_config_id": "mock-fast"},
+            ],
+            400,
+            None,
+            id="participants-explicit-duplicate-rejects",
+        ),
+        pytest.param(
+            [
+                {"role_id": "host", "model_config_id": "mock-fast"},
+                {"role_id": "Advisor", "model_config_id": "mock-fast"},
+            ],
+            200,
+            ["host", "Advisor"],
+            id="participants-explicit-host-subset-is-frozen",
+        ),
+    ],
+)
+def test_create_chatroom_distinguishes_omitted_from_explicit_participant_rosters(
+    tmp_path: Path,
+    participant_field: list[dict[str, str]] | None,
+    expected_status: int,
+    expected_role_ids: list[str] | None,
+) -> None:
+    client = TestClient(create_test_app(tmp_path))
+    payload: dict[str, object] = {"title": "Roster contract", "mode_id": "chatroom"}
+    if participant_field is not None:
+        payload["participants"] = participant_field
+
+    response = client.post("/meetings", json=payload)
+
+    assert response.status_code == expected_status
+    if expected_role_ids is not None:
+        assert [
+            participant["role_id"] for participant in response.json()["participants"]
+        ] == expected_role_ids
+
+
+def test_non_chatroom_explicit_empty_participants_preserve_default_roster(
+    tmp_path: Path,
+) -> None:
+    client = TestClient(create_test_app(tmp_path))
+
+    response = client.post(
+        "/meetings",
+        json={
+            "title": "Relay explicit empty compatibility",
+            "goal": "Preserve legacy defaults",
+            "mode_id": "red-blue",
+            "participants": [],
+        },
+    )
+
+    assert response.status_code == 200
+    assert [participant["role_id"] for participant in response.json()["participants"]] == [
+        "Blue",
+        "Red",
+        "Judge",
+    ]
+
+
+def test_public_mode_and_meeting_projections_expose_only_persona_summaries(
+    tmp_path: Path,
+) -> None:
+    client = TestClient(create_test_app(tmp_path))
+
+    modes_response = client.get("/modes")
+    assert modes_response.status_code == 200
+    chatroom = next(mode for mode in modes_response.json() if mode["id"] == "chatroom")
+    summaries_by_role = {
+        role["id"]: role["persona_summary"] for role in chatroom["roles"]
+    }
+    assert set(summaries_by_role) == {
+        "host",
+        "Advisor",
+        "Critic",
+        "Strategist",
+        "Analyst",
+    }
+    assert all(summary.strip() for summary in summaries_by_role.values())
+
+    creation_response = client.post(
+        "/meetings",
+        json={
+            "title": "Public Persona projection",
+            "mode_id": "chatroom",
+            "participants": [
+                {"role_id": "host", "model_config_id": "mock-fast"},
+                {"role_id": "Advisor", "model_config_id": "mock-fast"},
+            ],
+        },
+    )
+    assert creation_response.status_code == 200
+    meeting_response = client.get(
+        f"/meetings/{creation_response.json()['meeting_id']}"
+    )
+    assert meeting_response.status_code == 200
+
+    for payload in (
+        modes_response.json(),
+        creation_response.json(),
+        meeting_response.json(),
+    ):
+        nested_keys: set[str] = set()
+
+        def collect_keys(value: object) -> None:
+            if isinstance(value, dict):
+                nested_keys.update(str(key) for key in value)
+                for nested in value.values():
+                    collect_keys(nested)
+            elif isinstance(value, list):
+                for nested in value:
+                    collect_keys(nested)
+
+        collect_keys(payload)
+        assert "persona_prompt" not in nested_keys
+
+    for projected in (creation_response.json(), meeting_response.json()):
+        assert {
+            participant["role_id"]: participant["persona_summary"]
+            for participant in projected["participants"]
+        } == {
+            "host": summaries_by_role["host"],
+            "Advisor": summaries_by_role["Advisor"],
+        }
+
+
 def test_chatroom_participant_models_update_without_goal(tmp_path: Path) -> None:
     """換模型不得因為聊天室沒有目標而失敗。
 
@@ -3722,6 +3872,112 @@ def test_chatroom_participant_models_update_without_goal(tmp_path: Path) -> None
         role_id: "mock-alt" for role_id in role_ids
     }
     assert projected["goal"] is None
+
+
+def test_chatroom_model_update_apis_enforce_frozen_active_roster_without_mutation(
+    tmp_path: Path,
+) -> None:
+    client = TestClient(
+        create_test_app(
+            tmp_path,
+            models_yaml=(
+                "models:\n"
+                "  - id: mock-fast\n"
+                "    adapter: mock\n"
+                "  - id: mock-alt\n"
+                "    adapter: mock\n"
+            ),
+        )
+    )
+    created = client.post(
+        "/meetings",
+        json={
+            "title": "Frozen model roster",
+            "mode_id": "chatroom",
+            "participants": [
+                {"role_id": "host", "model_config_id": "mock-fast"},
+                {"role_id": "Advisor", "model_config_id": "mock-fast"},
+            ],
+        },
+    ).json()
+    meeting_id = created["meeting_id"]
+    before = client.get(f"/meetings/{meeting_id}").json()
+    metadata_path = tmp_path / "data" / "meetings" / meeting_id / "metadata.json"
+    metadata_before_rejections = metadata_path.read_bytes()
+
+    def assert_rejection_did_not_mutate_roster() -> None:
+        assert metadata_path.read_bytes() == metadata_before_rejections
+        projected = client.get(f"/meetings/{meeting_id}").json()
+        assert projected["settings_revision"] == before["settings_revision"]
+        assert projected["title"] == before["title"]
+        assert [
+            participant["role_id"] for participant in projected["participants"]
+        ] == ["host", "Advisor"]
+
+    rejected_assignment = client.put(
+        f"/meetings/{meeting_id}/participant-models",
+        json={
+            "models": {
+                "host": "mock-fast",
+                "Advisor": "mock-fast",
+                "Strategist": "mock-alt",
+            }
+        },
+    )
+    assert rejected_assignment.status_code == 400
+    assert "unknown roles: Strategist" in rejected_assignment.json()["detail"]
+    assert_rejection_did_not_mutate_roster()
+
+    rejected_settings = client.put(
+        f"/meetings/{meeting_id}/settings",
+        json={
+            "expected_revision": before["settings_revision"],
+            "title": "Must not persist",
+            "goal": "",
+            "case_type": None,
+            "scene": before["scene"],
+            "participant_models": {
+                "host": "mock-fast",
+                "Advisor": "mock-fast",
+                "Strategist": "mock-alt",
+            },
+        },
+    )
+    assert rejected_settings.status_code == 400
+    assert "unknown roles: Strategist" in rejected_settings.json()["detail"]
+    assert_rejection_did_not_mutate_roster()
+
+    accepted_assignment = client.put(
+        f"/meetings/{meeting_id}/participant-models",
+        json={"models": {"host": "mock-alt", "Advisor": "mock-alt"}},
+    )
+    assert accepted_assignment.status_code == 200
+    after_assignment = client.get(f"/meetings/{meeting_id}").json()
+    assert {
+        participant["role_id"]: participant["model_config_id"]
+        for participant in after_assignment["participants"]
+    } == {"host": "mock-alt", "Advisor": "mock-alt"}
+
+    accepted_settings = client.put(
+        f"/meetings/{meeting_id}/settings",
+        json={
+            "expected_revision": after_assignment["settings_revision"],
+            "title": "Accepted active roster settings",
+            "goal": "",
+            "case_type": None,
+            "scene": after_assignment["scene"],
+            "participant_models": {
+                "host": "mock-fast",
+                "Advisor": "mock-alt",
+            },
+        },
+    )
+    assert accepted_settings.status_code == 200
+    assert accepted_settings.json()["title"] == "Accepted active roster settings"
+    assert {
+        participant["role_id"]: participant["model_config_id"]
+        for participant in accepted_settings.json()["participants"]
+    } == {"host": "mock-fast", "Advisor": "mock-alt"}
 
 
 def test_chatroom_settings_update_keeps_goal_optional(tmp_path: Path) -> None:

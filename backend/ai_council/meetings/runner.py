@@ -1434,10 +1434,14 @@ class MeetingRunner:
             f"你是 AI Council 聊天室中的{role_display_name}（固定角色 {role}）。\n"
             f"會議目標：{goal or '協助使用者釐清問題'}\n"
             f"工作 Persona：{persona_prompt}\n"
+            "Language rule: Answer in the language of the current user message and meeting "
+            "conversation unless the user explicitly requests another language.\n"
             "遵守安全與格式要求：不得捏造事實；除非使用者要求，不要宣告自己是某種角色，"
             "也不要使用固定報告標題。"
         )
         developer = (
+            "The language used by this prompt template must not determine the answer language. "
+            "Follow the system language rule.\n"
             "這是 chatroom_response 自然對話回合。只回答目前指令，依需要參考引用與近期對話；用有用的 Markdown，"
             "長度依問題調整，不要固定篇幅或事後截斷。回傳一個符合 chat-message/v1 的 JSON 物件。\n"
             f"Schema:\n{required_json_schema}"

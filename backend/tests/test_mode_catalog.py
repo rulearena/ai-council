@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
+import yaml
 
 from ai_council.meetings.modes import (
     ModeCatalogRepository,
@@ -521,6 +522,52 @@ def test_chatroom_mode_loads(tmp_path: Path) -> None:
     assert mode.steps == []
     assert mode.fanout is None
     assert mode.synthesis is None
+
+
+@pytest.mark.parametrize(
+    "role_id",
+    ["host", "Advisor", "Critic", "Strategist", "Analyst"],
+)
+@pytest.mark.parametrize("field_name", ["persona_summary", "persona_prompt"])
+@pytest.mark.parametrize("invalid_value", ["missing", "blank", "non-string"])
+def test_chatroom_fixed_role_persona_fields_reject_every_invalid_shape(
+    tmp_path: Path,
+    role_id: str,
+    field_name: str,
+    invalid_value: str,
+) -> None:
+    config = yaml.safe_load(CHATROOM_MODE_YAML)
+    role = next(
+        candidate
+        for candidate in config["modes"][0]["roles"]
+        if candidate["id"] == role_id
+    )
+    if invalid_value == "missing":
+        role.pop(field_name)
+    elif invalid_value == "blank":
+        role[field_name] = "   "
+    else:
+        role[field_name] = 17
+    config_path = _write_yaml(
+        tmp_path,
+        yaml.safe_dump(config, allow_unicode=True, sort_keys=False),
+    )
+
+    with pytest.raises(
+        ModeConfigError,
+        match=rf"Chatroom role {role_id!r} requires {field_name}",
+    ):
+        ModeCatalogRepository(config_path).list_modes()
+
+
+def test_non_chatroom_role_persona_fields_remain_optional(tmp_path: Path) -> None:
+    mode = ModeCatalogRepository(_write_yaml(tmp_path, RELAY_MODE_YAML)).get_mode(
+        "red-blue"
+    )
+
+    assert mode is not None
+    assert all(role.persona_summary is None for role in mode.roles)
+    assert all(role.persona_prompt is None for role in mode.roles)
 
 
 def test_chatroom_relay_plan_rejected(tmp_path: Path) -> None:

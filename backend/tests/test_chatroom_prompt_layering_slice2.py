@@ -1,15 +1,21 @@
 import json
+import sys
+import threading
 from dataclasses import replace
 from pathlib import Path
 
 import pytest
 
 from ai_council.meetings.modes import ModeCatalogRepository, ModeConfigError
+from ai_council.meetings.execution_state import MeetingExecutionStateStore
 from ai_council.models.adapters import (
+    AdapterError,
     AnthropicHTTPAdapter,
     GeminiHTTPAdapter,
     ModelRequest,
+    MockModelAdapter,
     OpenAICompatibleHTTPAdapter,
+    SubscriptionCLIAdapter,
 )
 from ai_council.models.config import ModelConfig
 from ai_council.meetings.runner import MeetingRunner, RunnerAdapters
@@ -100,6 +106,57 @@ def test_gemini_layered_request_uses_system_instruction_or_flattened_fallback(mo
     }
 
 
+def test_subscription_cli_receives_exact_canonical_flattening_and_legacy_prompt(
+    tmp_path: Path,
+) -> None:
+    echo_cli = tmp_path / "echo_prompt.py"
+    echo_cli.write_text(
+        "import sys\nprint(sys.argv[1], end='')\n",
+        encoding="utf-8",
+    )
+    config = ModelConfig(
+        id="subscription",
+        adapter="subscription-cli",
+        command=[sys.executable, str(echo_cli), "{prompt}"],
+        timeout_seconds=5,
+    )
+    canonical_prompt = "SYSTEM\nsystem text\n\nDEVELOPER\ndeveloper text\n\nUSER\nuser text"
+    canonical = replace(layered_request(), model_config=config)
+
+    canonical_response = SubscriptionCLIAdapter().complete(canonical)
+    legacy = ModelRequest(
+        prompt="legacy formal prompt without labels",
+        model_config=config,
+    )
+    legacy_response = SubscriptionCLIAdapter().complete(legacy)
+
+    assert canonical.messages == [
+        {"role": "system", "content": "system text"},
+        {"role": "developer", "content": "developer text"},
+        {"role": "user", "content": "user text"},
+    ]
+    assert canonical_response.raw_output == canonical_prompt
+    assert legacy.messages is None
+    assert legacy_response.raw_output == "legacy formal prompt without labels"
+
+
+def test_mock_adapter_observably_receives_canonical_messages_and_prompt() -> None:
+    adapter = MockModelAdapter()
+    request = layered_request()
+
+    adapter.complete(request)
+
+    assert adapter.last_request is not None
+    assert adapter.last_request.prompt == (
+        "SYSTEM\nsystem text\n\nDEVELOPER\ndeveloper text\n\nUSER\nuser text"
+    )
+    assert adapter.last_request.messages == [
+        {"role": "system", "content": "system text"},
+        {"role": "developer", "content": "developer text"},
+        {"role": "user", "content": "user text"},
+    ]
+
+
 def test_chatroom_roles_expose_summary_but_keep_prompt_backend_only() -> None:
     mode = ModeCatalogRepository(Path(__file__).parents[2] / "config" / "modes.yaml").get_mode("chatroom")
     assert mode is not None
@@ -151,6 +208,115 @@ def test_chatroom_attempt_audit_contains_exact_three_layers(tmp_path) -> None:
     assert "Case files visible to you" not in "".join(
         message["content"] for message in event["prompt_messages"]
     )
+
+
+def test_chatroom_running_and_adapter_failure_persist_identical_canonical_messages(
+    tmp_path: Path,
+) -> None:
+    prompt_dir = tmp_path / "prompts"
+    prompt_dir.mkdir()
+    (prompt_dir / "chatroom_response.md").write_text("unused", encoding="utf-8")
+    entered = threading.Event()
+    release = threading.Event()
+
+    class Adapter:
+        def complete(self, request: ModelRequest) -> ModelResponse:
+            entered.set()
+            assert release.wait(timeout=5)
+            raise AdapterError("transport failed")
+
+    state_store = MeetingExecutionStateStore(tmp_path / "data")
+    runner = MeetingRunner(
+        repository=MeetingRepository(tmp_path / "data"),
+        prompt_renderer=PromptRenderer(prompt_dir),
+        adapters=RunnerAdapters(by_name={"mock": Adapter()}),
+        execution_state_store=state_store,
+    )
+    worker = threading.Thread(
+        target=runner.chat_respond_as_role,
+        kwargs={
+            "meeting_id": "meeting-1",
+            "goal": "Audit persistence",
+            "role": "host",
+            "role_display_name": "Host AI",
+            "instruction": "Keep these layers exact.",
+            "model_assignments": {"host": ModelConfig(id="m", adapter="mock")},
+            "inputs": {"__chatroom_persona_prompts": {"host": "Fixed Host Persona"}},
+        },
+    )
+
+    worker.start()
+    try:
+        assert entered.wait(timeout=2)
+        running = state_store.read_active("meeting-1")
+        assert running is not None
+        assert running["status"] == "running"
+        canonical_messages = running["prompt_messages"]
+        assert [message["role"] for message in canonical_messages] == [
+            "system",
+            "developer",
+            "user",
+        ]
+    finally:
+        release.set()
+        worker.join(timeout=5)
+
+    assert not worker.is_alive()
+    failed = runner.repository.read_events("meeting-1")[-1]
+    assert failed["status"] == "failed"
+    assert failed["failure_kind"] == "adapter_error"
+    assert failed["prompt_messages"] == canonical_messages
+    assert state_store.read_active("meeting-1") is None
+
+
+def test_chatroom_prompt_audit_uses_current_conversation_language_not_template_language(
+    tmp_path,
+) -> None:
+    prompt_dir = tmp_path / "prompts"
+    prompt_dir.mkdir()
+    (prompt_dir / "chatroom_response.md").write_text("unused", encoding="utf-8")
+
+    class Adapter:
+        def complete(self, request: ModelRequest) -> ModelResponse:
+            return ModelResponse('{"message":"ok"}')
+
+    runner = MeetingRunner(
+        repository=MeetingRepository(tmp_path / "data"),
+        prompt_renderer=PromptRenderer(prompt_dir),
+        adapters=RunnerAdapters(by_name={"mock": Adapter()}),
+    )
+    instruction = "Please compare the two options and recommend one."
+    persona = "UNIQUE_HOST_PERSONA"
+
+    runner.chat_respond_as_role(
+        meeting_id="meeting-1",
+        goal="Product decision",
+        role="host",
+        role_display_name="Host AI",
+        instruction=instruction,
+        model_assignments={"host": ModelConfig(id="m", adapter="mock")},
+        inputs={"__chatroom_persona_prompts": {"host": persona}},
+    )
+
+    messages = runner.repository.read_events("meeting-1")[-1]["prompt_messages"]
+    assert [message["role"] for message in messages] == ["system", "developer", "user"]
+    system, developer, user = [message["content"] for message in messages]
+    assert (
+        "Answer in the language of the current user message and meeting conversation "
+        "unless the user explicitly requests another language."
+    ) in system
+    assert (
+        "The language used by this prompt template must not determine the answer language."
+    ) in developer
+    assert persona in system
+    assert persona not in developer
+    assert persona not in user
+    assert "chat-message/v1" not in system
+    assert "chat-message/v1" in developer
+    assert "chat-message/v1" not in user
+    assert instruction not in system
+    assert instruction not in developer
+    assert user.endswith(instruction)
 
 
 def test_chatroom_parse_retry_reuses_byte_identical_prompt_messages(tmp_path) -> None:
