@@ -19,12 +19,22 @@ Chatroom prompt construction SHALL accept source material only through explicit 
 - **AND** no cross-meeting content enters the prompt
 
 ### Requirement: Chatroom source projection includes attachments and case materials
-The chatroom source selector SHALL project active chat-upload attachments and existing or newly created active evidence with non-empty string content from the current meeting, excluding `notes`. Attachment sources SHALL use `attachment:<file_id>` IDs; evidence sources SHALL use `evidence:<evidence_id>` IDs. `GET /meetings/{meeting_id}/chat/sources` and the meeting read projection SHALL expose each source's authoritative `source_ref`, display label, kind, readable/active state, `reader_ref`, and `available_segment_refs`. Same-name sources SHALL show kind/size/date and retain the hidden source ref for disambiguation. Existing meetings SHALL be projected at read time without migration. A source SHALL be readable through the attachment reader/blob store or current active evidence-version reader, and deletion, tombstoning, or inactive status SHALL make it invalid for send-time validation.
+The chatroom source selector SHALL project active chat-upload attachments and independently created active evidence with non-empty string content from the current meeting, excluding `notes`. A text-upload attachment whose event carries `evidence_id` SHALL appear exactly once using canonical `attachment:<file_id>`; its exactly linked mirrored `evidence:<evidence_id>` option SHALL be suppressed and SHALL NOT be injected or cited separately. Evidence without that exact active attachment link remains a separate `evidence:` source even when its label matches; title/label matching SHALL never deduplicate. `GET /meetings/{meeting_id}/chat/sources` and the meeting read projection SHALL expose each source's authoritative `source_ref`, display label, kind, readable/active state, `reader_ref`, and informational `available_segment_refs`. Same-name independent sources SHALL show kind/size/date and retain the hidden source ref. Existing meetings SHALL be projected at read time without migration.
 
 #### Scenario: Legacy case material is selectable
 - **WHEN** an old meeting already has a readable text case material
 - **THEN** it appears in the source projection with an `evidence:` ID
 - **AND** it can be selected with `#` without rewriting meeting metadata
+
+#### Scenario: Mirrored text upload appears once
+- **WHEN** an active `.md` attachment event links to a mirrored evidence ID
+- **THEN** the selector contains only its `attachment:<file_id>` option
+- **AND** no duplicate linked `evidence:<evidence_id>` option can be injected or cited
+
+#### Scenario: Same-label independent evidence remains separate
+- **WHEN** an attachment and an independently created evidence item have the same display label but no exact link
+- **THEN** both options remain selectable with distinct refs and kind metadata
+- **AND** the system does not infer identity from the label
 
 #### Scenario: Host fallback sees legacy material
 - **WHEN** a legacy case material has no explicit `host` in `visible_roles`
@@ -44,7 +54,7 @@ The system SHALL apply this closed source-kind matrix:
 | Chat-upload attachment | `attachment:<file_id>` | extension is `.txt` or `.md` and the active blob is readable | PDF, image, ZIP, or any other binary/extension, or inactive/unreadable blob → `SOURCE_NOT_READABLE` |
 | Versioned case-material evidence | `evidence:<evidence_id>` | active evidence version has non-empty string `content`; no extension check | inactive evidence or empty/non-string content → `SOURCE_NOT_READABLE` |
 
-Evidence readability SHALL depend on the evidence data model's `title`, `content`, and `visible_roles`, not on a filename or extension. Initial and legacy evidence without an extension SHALL therefore be readable when active with non-empty string content. `notes` SHALL never appear in the source projection or prompt authorization. Both kinds SHALL expose `source_ref`, label, kind, `reader_ref`, and `available_segment_refs` and SHALL use the same citation validation rules.
+Evidence readability SHALL depend on the evidence data model's `title`, `content`, and `visible_roles`, not on a filename or extension. Initial and legacy evidence without an extension SHALL therefore be readable when active with non-empty string content. A linked text attachment SHALL use the exact linked evidence item's active state and `visible_roles`, with the existing legacy Host fallback; an unlinked legacy attachment SHALL be meeting-wide to the frozen active roster because attachment events have no role ACL. `notes` SHALL never appear in the source projection or prompt authorization. Both kinds SHALL expose `source_ref`, label, kind, `reader_ref`, and informational projection segment refs, while only the frozen invocation snapshot authorizes citations.
 
 #### Scenario: Initial no-extension evidence is readable
 - **WHEN** a new or legacy meeting has active evidence with title/content but no filename extension
@@ -64,6 +74,16 @@ Evidence readability SHALL depend on the evidence data model's `title`, `content
 - **WHEN** a selected `attachment:<file_id>` points to a PDF, image, ZIP, or other binary
 - **THEN** the whole request returns `SOURCE_NOT_READABLE`
 - **AND** a selected `evidence:<evidence_id>` is evaluated by active content instead of extension
+
+#### Scenario: Linked attachment inherits evidence visibility
+- **WHEN** a text attachment links to evidence visible to Advisor but not Critic
+- **THEN** its canonical `attachment:` source is visible to Advisor and not Critic
+- **AND** a request targeting both roles is rejected atomically
+
+#### Scenario: Unlinked legacy attachment is meeting-wide
+- **WHEN** a legacy readable attachment has no evidence link or role ACL
+- **THEN** it is visible to every frozen active chatroom role
+- **AND** no omitted catalog role gains access
 
 ### Requirement: Attachment references are validated at send time
 Every selected `source_ref` SHALL be validated immediately before the AI job starts using the approved source-kind matrix. The source SHALL exist, be active, belong to the meeting, be visible to the target role, and have a readable body under its kind rule. If any selected source ref fails validation, the entire AI request SHALL be blocked; the system SHALL not silently skip, substitute, or downgrade that source. The composer SHALL preserve the input and source tokens for correction.
@@ -85,7 +105,11 @@ Every selected `source_ref` SHALL be validated immediately before the AI job sta
 - **AND** both roles receive the same authorized source snapshot
 
 ### Requirement: Readable attachment retrieval is bounded and auditable
-Approved readable sources SHALL be text bodies from either a readable `.txt`/`.md` attachment or active evidence with non-empty string content. A small selected source SHALL be eligible for full-text inclusion when it fits the context budget, yielding `segment_refs: ["full"]`. A larger selected source SHALL be segmented and searched for relevant paragraphs using a deterministic local retrieval strategy, yielding IDs such as `paragraph:0001`; retrieved content SHALL be bounded by the remaining token budget and SHALL carry source metadata. The system SHALL not silently truncate a source while claiming to have read it, and PDF extraction, image OCR, ZIP inspection, external vector databases, and cloud retrieval SHALL remain out of scope.
+Approved readable sources SHALL be text bodies from either a readable `.txt`/`.md` attachment or active evidence with non-empty string content. After send-time validation, retrieval SHALL freeze one immutable `chatroom-source-context/v1` snapshot per human request, shared by every fanout target. Each source entry SHALL contain `source_ref`, authoritative label/kind/reader ref, `content_identity`, exact ordered retrieved segments, `available_segment_refs` equal to the segment IDs actually included in canonical user/context, and deterministic omission metadata. Attachment identity SHALL include attachment event ID, file ID, byte size, and SHA-256 of the bytes read; evidence identity SHALL include evidence ID and active version number.
+
+The exact excerpt text SHALL be persisted in canonical `prompt_messages`; the attempt event SHALL also persist `selected_source_snapshot` metadata without duplicating the excerpt body. Automatic model/parse retries SHALL reuse the same snapshot and prompt messages. A new human request SHALL revalidate and create a new snapshot. The output validator SHALL use only this frozen snapshot—never the current source listing—as its citation allow-list.
+
+A small selected source SHALL be eligible for full-text inclusion when it fits the context budget, yielding `segment_refs: ["full"]`. A larger selected source SHALL be segmented and searched for relevant paragraphs using a deterministic local retrieval strategy, yielding IDs such as `paragraph:0001`; retrieved content SHALL be bounded by the remaining token budget and SHALL carry source metadata. The system SHALL not silently truncate a source while claiming to have read it, and PDF extraction, image OCR, ZIP inspection, external vector databases, and cloud retrieval SHALL remain out of scope.
 
 #### Scenario: Small file fits in context
 - **WHEN** a selected `.md` file is small enough for the remaining budget
@@ -102,8 +126,18 @@ Approved readable sources SHALL be text bodies from either a readable `.txt`/`.m
 - **THEN** the prompt tells the role that only selected excerpts are available
 - **AND** no full-document claim is generated by the retrieval layer
 
+#### Scenario: Retry reuses the same source snapshot
+- **WHEN** an automatic retry follows an adapter or output-parse failure
+- **THEN** it reuses byte-identical canonical prompt messages and the same content identities/segment allow-list
+- **AND** a changed or deleted current source does not silently replace the in-flight snapshot
+
+#### Scenario: Snapshot distinguishes projection from actual retrieval
+- **WHEN** the source projection advertises more segments than fit the invocation budget
+- **THEN** only the snapshot's actual `available_segment_refs` authorize output citations
+- **AND** projection metadata alone cannot validate an omitted segment
+
 ### Requirement: Attachment source citations are structured
-When a chatroom response uses a concrete fact from a selected source, the prompt and output contract SHALL require a structured `attachment_refs` array. Each item SHALL be exactly `{source_ref: string, label: string, segment_refs: string[]}`; `source_ref` SHALL belong to the selected allow-list, `label` SHALL exactly equal the server projection label, and every `segment_ref` SHALL belong to the request's retrieved `available_segment_refs`. At least one valid segment ref SHALL be present for factual selected-source use. Generic chat that does not use selected-source facts MAY omit `attachment_refs`. Unknown labels/segments or deleted sources SHALL fail existing output parse/semantic validation. The natural `message` text SHALL remain free-form and SHALL not be forced to contain `[附件一]` anchors. A response SHALL not contain source references for unselected or unavailable sources.
+When a Slice-3 chatroom response uses a concrete fact from a selected source, the prompt and output contract SHALL require a structured `attachment_refs` array. Each item SHALL be exactly `{source_ref: string, label: string, segment_refs: string[]}`; `source_ref`, exact label, and every segment ref SHALL be validated solely against the request's frozen `chatroom-source-context/v1` snapshot, with at least one actual retrieved segment. Generic chat that does not use selected-source facts MAY omit `attachment_refs`. Wrong labels, unselected refs, or segments absent from the snapshot SHALL fail existing output parse/semantic validation. Deletion after completion SHALL not retroactively invalidate the event; the current UI SHALL render that historical citation unavailable. The natural `message` text SHALL remain free-form and SHALL not be forced to contain `[附件一]` anchors.
 
 #### Scenario: Factual answer carries a source chip
 - **WHEN** a role answers using a concrete fact from a selected source
@@ -121,9 +155,14 @@ When a chatroom response uses a concrete fact from a selected source, the prompt
 - **AND** the completed event does not claim that source supported the answer
 
 #### Scenario: Citation provenance is exact
-- **WHEN** a response cites a selected source with a wrong label, unknown segment, or deleted source
+- **WHEN** a response cites a source with a wrong label, unknown segment, or ref absent from the frozen snapshot
 - **THEN** output parse/semantic validation fails
 - **AND** no completed event contains that citation
+
+#### Scenario: Deleted historical citation remains auditable
+- **WHEN** a correctly cited source is deleted after the completed event is saved
+- **THEN** the event retains its frozen source ref, label, and segment refs
+- **AND** the current UI shows the citation as unavailable without breaking the message
 
 ## MODIFIED Requirements
 

@@ -1,5 +1,23 @@
 ## ADDED Requirements
 
+### Requirement: New chatroom selects a fixed active roster
+The new-meeting chatroom participant step SHALL keep Host selected and non-removable, and SHALL allow the user to include or omit Advisor, Critic, Strategist, and Analyst before creation. Each fixed role MAY show its public `persona_summary`; the frontend SHALL never receive or render `persona_prompt`. After creation, meeting settings SHALL expose model assignment only for the frozen active roster and SHALL NOT provide add/remove controls in this change.
+
+#### Scenario: Host is mandatory and members are optional
+- **WHEN** the user creates a chatroom
+- **THEN** Host is visibly selected and cannot be deselected
+- **AND** the other four fixed roles can be independently included or omitted
+
+#### Scenario: Active roles own chatroom controls
+- **WHEN** a chatroom was created with Host, Advisor, and Critic
+- **THEN** autocomplete, model settings, and `@all` presentation use those three roles
+- **AND** Strategist and Analyst are not presented as active participants
+
+#### Scenario: UI exposes summary but not internal prompt
+- **WHEN** a fixed role is shown in creation or its role drawer
+- **THEN** the UI may display `persona_summary`
+- **AND** no API state or DOM content contains `persona_prompt`
+
 ### Requirement: Chatroom composer exposes @ and # controls
 The chatroom composer SHALL visibly explain that `@` selects responding AI roles and `#` selects attachment sources. The idle placeholder or nearby helper text SHALL indicate that omitting `@` routes to 「主持 AI」. Typing `@` SHALL open role autocomplete and typing `#` SHALL open attachment autocomplete without changing the existing direct-upload `+` behavior.
 

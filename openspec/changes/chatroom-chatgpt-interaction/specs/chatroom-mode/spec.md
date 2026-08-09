@@ -1,7 +1,7 @@
 ## ADDED Requirements
 
-### Requirement: Chatroom has a fixed Host role
-The chatroom mode SHALL expose one fixed role with stable internal ID `host` and display name 「主持 AI」. The Host SHALL be available in the active chatroom participant projection, SHALL have a model assignment through the existing meeting model mechanism, and SHALL be included when the `all` role chip is resolved. The Host SHALL be a chatroom role only; other modes SHALL not gain this role through this change.
+### Requirement: Chatroom has a mandatory Host and a frozen active roster
+The chatroom mode SHALL expose one fixed role with stable internal ID `host` and display name 「主持 AI」. Host SHALL be mandatory in every new chatroom. At creation the user MAY include or omit each of Advisor, Critic, Strategist, and Analyst; an omitted participant list SHALL preserve the compatibility default of all five, while an explicit list that omits Host or contains an unknown/duplicate role SHALL be rejected. The stored active role set SHALL NOT be changed after creation; model settings MAY update assignments only for that exact set. `@` autocomplete, `all`, pending state, source authorization, and model assignment SHALL use only the active meeting projection.
 
 #### Scenario: Chatroom participant projection includes Host
 - **WHEN** the chatroom mode catalog or an open chatroom meeting is projected
@@ -13,8 +13,23 @@ The chatroom mode SHALL expose one fixed role with stable internal ID `host` and
 - **THEN** the Host is one of the expected fanout roles
 - **AND** the Host receives the same frozen pre-send context as the other targeted roles
 
-### Requirement: Chatroom roles use explicit Personas
-Each chatroom role SHALL have a stable Persona containing its working perspective and hard behavioral rules. The Host Persona SHALL direct, clarify, and organize; Advisor SHALL offer practical options; Critic SHALL challenge assumptions and surface risks; Strategist SHALL prioritize trade-offs and next steps; Analyst SHALL distinguish evidence, data, and uncertainty. Persona instructions SHALL not require the role to announce its role or use a fixed report template.
+#### Scenario: User selects the discussion roles at creation
+- **WHEN** a new chatroom is created with Host, Advisor, and Critic selected
+- **THEN** those three roles are the active meeting projection
+- **AND** Strategist and Analyst are absent from autocomplete, `all`, pending state, and source visibility checks
+
+#### Scenario: Active roster cannot change after creation
+- **WHEN** meeting settings update models for an existing chatroom
+- **THEN** the request must preserve the exact stored active role IDs
+- **AND** adding or removing a role is rejected without rewriting meeting metadata
+
+#### Scenario: Legacy meeting gains only missing Host
+- **WHEN** a legacy chatroom stores an active member subset without Host
+- **THEN** read-time projection appends Host and preserves that subset
+- **AND** it does not append other omitted catalog roles or rewrite historical data
+
+### Requirement: Fixed chatroom roles use validated Personas
+Each of the five fixed chatroom role entries in `config/modes.yaml` SHALL contain a required non-blank `persona_summary:string` and `persona_prompt:string`. `persona_summary` is the only Persona field exposed by mode/participant APIs; `persona_prompt` is backend-only and SHALL be rendered in the system layer. Missing, blank, or non-string Persona fields SHALL make mode loading fail with `ModeConfigError`; the system SHALL NOT silently substitute a generic Persona. Host SHALL direct, clarify, and organize; Advisor SHALL offer practical options; Critic SHALL challenge assumptions and surface risks; Strategist SHALL prioritize trade-offs and next steps; Analyst SHALL distinguish evidence, data, and uncertainty. Persona instructions SHALL not require role announcements or a fixed report template. Non-chatroom role definitions SHALL remain valid and unchanged without these fields.
 
 #### Scenario: Persona changes working perspective
 - **WHEN** the same user question is sent to Critic and Strategist
@@ -25,6 +40,21 @@ Each chatroom role SHALL have a stable Persona containing its working perspectiv
 - **WHEN** a role generates a chat response
 - **THEN** the role may answer in its natural voice
 - **AND** the prompt does not require a prefix such as "我是評論者"
+
+#### Scenario: Public projection hides the full Persona
+- **WHEN** mode catalog or meeting participants are returned to the frontend
+- **THEN** the response may contain `persona_summary`
+- **AND** it does not contain `persona_prompt`
+
+#### Scenario: Invalid fixed Persona fails configuration
+- **WHEN** any fixed chatroom role has a missing, blank, or non-string Persona field
+- **THEN** `ModeCatalogRepository` raises `ModeConfigError`
+- **AND** no generic role behavior is substituted
+
+#### Scenario: Old meeting uses current fixed Persona
+- **WHEN** an existing meeting created before Persona fields is opened or invokes a role
+- **THEN** the backend resolves the current Persona by stable role ID
+- **AND** no meeting metadata or historical event is migrated
 
 ## MODIFIED Requirements
 
@@ -115,7 +145,7 @@ The chatroom mode SHALL NOT have an auto-start behavior. Pressing "start meeting
 - **AND** Host is invoked without requiring a separate start action
 
 ### Requirement: Deterministic context/token-budget policy
-Each AI call in chatroom mode SHALL assemble context in this order: system and developer instructions; the current human message; the current shared-summary revision when available; a quoted message identified by event ID; recent published transcript events; and content retrieved only from explicitly selected readable attachments. The context SHALL use a deterministic token budget configurable per meeting (default from `AI_COUNCIL_CHATROOM_CONTEXT_TOKEN_BUDGET`, default 4096), SHALL remain within one meeting, and SHALL preserve required current/quote/summary blocks by evicting older transcript material first. Attachment retrieval SHALL be bounded by the remaining budget and SHALL NOT silently claim that omitted content was read.
+Each AI call in chatroom mode SHALL assemble canonical context in this order as the corresponding slices become available: system and developer instructions; the current human message; current shared-summary revision (Slice 4); a quoted message; recent published transcript events; and content from the frozen explicitly selected source snapshot (Slice 3). In Slice 2, user/context SHALL contain only current instruction, quote, and recent transcript; it SHALL remove the legacy chatroom case-material injection path and SHALL open/read no attachment, evidence, or note body. The context SHALL use a deterministic token budget configurable per meeting (default from `AI_COUNCIL_CHATROOM_CONTEXT_TOKEN_BUDGET`, default 4096), remain within one meeting, and preserve required blocks by evicting older transcript material first. Attachment retrieval SHALL be bounded by the remaining budget and SHALL NOT claim omitted content was read.
 
 #### Scenario: Context includes current and quoted messages
 - **WHEN** a role responds to a message that quotes an earlier message
@@ -131,6 +161,11 @@ Each AI call in chatroom mode SHALL assemble context in this order: system and d
 - **WHEN** a chatroom message contains no source token
 - **THEN** no attachment body is retrieved or injected into the prompt
 - **AND** the prompt does not infer an attachment from natural-language wording
+
+#### Scenario: Slice 2 has no source or summary dependency
+- **WHEN** prompt layering is deployed before explicit sources and shared memory
+- **THEN** the canonical user/context message contains only current instruction, quote, and recent transcript
+- **AND** `chat-message/v1` remains message-only with no attachment body or attachment reference field
 
 #### Scenario: Context does not cross meeting boundaries
 - **WHEN** a chatroom meeting is open

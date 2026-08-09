@@ -4,7 +4,7 @@ Chatroom currently has three separate paths: `/messages` records a human-only ev
 
 This change crosses the chatroom API, participant projection, runner/context builder, prompt rendering, model adapters, attachment projection, summary persistence, and Conversation workspace. The existing `events.jsonl` contract is append-only and is the source of truth for historical meetings. Existing formal modes, the accepted `@all` fanout-round display, attachment storage/deletion behavior, and legacy chatroom read projection must remain compatible.
 
-The Human Owner has chosen one fixed Host role (`host`, 「主持 AI」), default Host routing for plain chatroom text, explicit `@` responder selection, explicit `#` attachment selection, shared rather than private memory, adaptive natural replies, and a visible derived summary outside the message feed.
+The Human Owner has chosen one mandatory fixed Host role (`host`, 「主持 AI」), creation-time selection of the other four fixed roles, a roster that does not change after creation, default Host routing for plain chatroom text, explicit `@` responder selection, explicit `#` attachment selection, shared rather than private memory, adaptive natural replies, and a visible derived summary outside the message feed. User-authored roles/Persona are a separate backlog-93 capability and are not part of this change.
 
 ## Goals / Non-Goals
 
@@ -13,6 +13,7 @@ The Human Owner has chosen one fixed Host role (`host`, 「主持 AI」), defaul
 - Make chatroom turns behave like a normal conversation: plain text persists and invokes Host, while explicit mentions remain deterministic.
 - Keep role and source selection independent, with backend-authoritative validation for `@` and `#`.
 - Give every chatroom role a distinct working Persona without imposing report headings or fixed response length.
+- Keep Host active in every chatroom while allowing the user to choose the other fixed participants at creation; route and authorize only against that frozen active roster.
 - Build bounded prompt context from layered instructions, shared summary, recent transcript, quote, and explicitly selected readable attachments.
 - Preserve structured, verifiable attachment citations without forcing citation anchors into natural message text.
 - Keep the complete transcript canonical and add a reconstructable shared summary that never appears as a fake chat bubble.
@@ -25,16 +26,19 @@ The Human Owner has chosen one fixed Host role (`host`, 「主持 AI」), defaul
 - Automatic responses in relay, parallel, courtroom, brainstorm, six-hats, or persona-testing modes.
 - Rewriting, migrating, or backfilling historical JSONL events or existing meeting records.
 - User accounts, multi-user permissions, or changes to attachment quotas and download authorization.
+- User-authored roles, editable fixed-role Persona prompts, or post-creation roster changes.
 
 ## Decisions
 
-### 1. Add Host to the chatroom role projection, not to other modes
+### 1. Use five fixed Persona definitions and a creation-time active roster
 
-`config/modes.yaml` will declare the fixed chatroom Host role with stable ID `host`, display name 「主持 AI」, and the chatroom Host Persona. The Host participates in the same model-assignment and status projection as the existing roles and is included in `@all`.
+`config/modes.yaml` will declare exactly five fixed chatroom roles: Host (`host`, 「主持 AI」), Advisor, Critic, Strategist, and Analyst. Each role entry owns two required non-blank strings: `persona_summary`, a short public description, and `persona_prompt`, the complete backend-only working Persona. `ModeRole`/`ModeCatalogRepository` validate both fields for these five chatroom roles and raise `ModeConfigError` when either is missing, blank, or non-string; no generic Persona is silently substituted. Non-chatroom role definitions remain valid without these fields and keep their current behavior.
 
-For an old chatroom meeting whose stored participant snapshot does not contain Host, the read-time chatroom participant projector will append the fixed Host and resolve its model through the existing meeting-default/fallback assignment path. It will not rewrite metadata or historical events. This preserves the no-migration rule while making Host behavior consistent for old and new meetings.
+`GET /modes` and meeting participant projections expose `persona_summary` but never `persona_prompt`. The prompt renderer resolves the complete Persona from the current backend mode definition by stable role ID. Existing meetings therefore gain the current fixed Persona definitions at read/run time without metadata or event migration.
 
-The alternative was to require a data migration for every existing chatroom. That would violate the historical-data constraint and create an unnecessary recovery path, so read-time projection is preferred.
+Host is mandatory in every new chatroom. The creation UI keeps Host selected and allows Advisor, Critic, Strategist, and Analyst to be included or omitted; an explicit create payload that omits Host or contains an unknown/duplicate role is rejected, while an omitted participant list preserves the compatibility default of all five roles. The stored active roster is immutable after creation: meeting settings may change model assignments only for that exact role set. `@` autocomplete, `@all`, pending-role capture, source visibility, and model assignment use only the active meeting projection, not every catalog role.
+
+For an old chatroom meeting whose stored participant snapshot does not contain Host, the read-time projector appends Host and resolves its model through the existing meeting-default/fallback assignment path; otherwise it preserves the stored active subset and does not append omitted member roles. It never rewrites metadata or historical events. This avoids migration while preventing inactive catalog roles from entering `@all` or source authorization.
 
 ### 2. Make the backend the routing authority and define the chat send contract
 
@@ -102,37 +106,42 @@ The frontend pending-role capture will derive expected roles from the projected 
 
 ### 4. Introduce layered model requests without breaking existing adapters
 
-`ModelRequest` will retain its current flattened `prompt` field for compatibility and gain an optional canonical `messages` sequence with `system`, `developer`, and `user` roles. Chatroom calls populate both: `messages` is authoritative for native-capable adapters, and `prompt` is a deterministic flattening for CLI, mock, and legacy adapters. Non-chatroom runners continue to use their current single-prompt path.
+`ModelRequest` will retain its current flattened `prompt` field for compatibility and gain an optional canonical `messages` sequence. Every chatroom request contains exactly three pre-transport messages in this order: `system`, `developer`, `user`. `prompt` is the deterministic labeled flattening `SYSTEM\n{system}\n\nDEVELOPER\n{developer}\n\nUSER\n{user}`. Non-chatroom runners continue to omit canonical messages and keep their current single-prompt path.
 
 Adapter mapping will be explicit:
 
-- OpenAI-compatible adapters expose `supports_developer_role`, defaulting to `false`; only `true` adapters send a native `developer` message. When false, system and developer layers are merged in fixed order into one system message, followed by the user/context message. All adapters retain the deterministic flattened `prompt`.
-- Anthropic-style adapters map developer instructions into the provider's supported system/context representation and send user/context content as user messages.
-- `GeminiHTTPAdapter` maps system/developer instructions to Gemini's system-instruction/content representation; when a deployed Gemini endpoint cannot represent a layer natively, it receives the same deterministic labeled flattening used by legacy adapters.
-- CLI adapters receive the stable flattened form with visible layer labels.
-- Mock adapters and test doubles retain the current deterministic behavior while exposing the normalized message list for assertions.
+- Role capability is owned by adapter code/constructor state, not `ModelConfig`, meeting metadata, API payloads, or user settings. The adapter protocol exposes `supports_developer_role: bool = false`; a concrete adapter may opt in only in code.
+- `OpenAICompatibleHTTPAdapter(supports_developer_role=true)` sends the canonical three messages unchanged. Its default/false form sends exactly two messages: one `system` whose content is the deterministic `SYSTEM` then `DEVELOPER` merge, followed by the canonical `user` message.
+- `AnthropicHTTPAdapter` has no native developer role: it sends the deterministic system+developer merge in the top-level Anthropic `system` field and the canonical user/context content as one `user` message.
+- `GeminiHTTPAdapter` has a code-owned `supports_system_instruction` capability, default true. True sends `{systemInstruction:{parts:[{text:merged_system_developer}]},contents:[{role:"user",parts:[{text:user_context}]}]}`; false sends `{contents:[{role:"user",parts:[{text:flattened_prompt}]}]}` with no `systemInstruction`. No paid retry is used to guess capabilities.
+- `SubscriptionCLIAdapter` receives only the labeled flattened `prompt` through its existing `{prompt}` replacement. `MockModelAdapter` retains deterministic output, receives both fields, and exposes the canonical message sequence for assertions.
+- When `ModelRequest.messages` is absent, every adapter preserves its current legacy single-prompt payload exactly; this is the non-chatroom compatibility path.
 
-Every saved chatroom event will record normalized `prompt_messages`, not only a single synthetic user message. Existing audit fields, template metadata, schema IDs, token usage, and failure diagnostics remain unchanged. The alternative was to put all instructions back into one larger prompt; that would preserve the present context ambiguity and prevent provider-native separation.
+Every chatroom attempt event that currently carries prompt diagnostics—completed, adapter failure, parse/schema failure, and automatic retry—records the exact canonical pre-transport list as `prompt_messages`, byte-for-byte stable across providers and attempts that reuse the same context snapshot. Provider payload merges are not written into `prompt_messages`. Non-chatroom events retain their existing `[ {"role":"user","content":prompt} ]` audit shape. Existing audit fields, template metadata, schema IDs, token usage, and failure diagnostics remain unchanged.
 
 ### 5. Keep Persona and response contract in prompt layers
 
-The chatroom prompt renderer will build:
+The Slice-2 chatroom prompt renderer will build:
 
 - **System:** role identity, the selected Persona, meeting language, and hard safety/format rules.
-- **Developer:** routing interpretation, shared-memory rules, context/token budget, attachment citation rules, and the `chat-message/v1` contract.
-- **User/context:** normalized current instruction, shared summary, quoted event, recent published transcript, and bounded excerpts from selected attachments.
+- **Developer:** routing interpretation, transcript/quote budget rules, natural-response guidance, and the Slice-2 `chat-message/v1` contract.
+- **User/context:** normalized current instruction, quoted event, and recent published transcript only.
 
-Persona text will be stable and configuration-driven: Host directs/clarifies/organizes; Advisor proposes practical options; Critic challenges assumptions and risks; Strategist weighs priorities and trade-offs; Analyst distinguishes evidence, data, and uncertainty. The prompt will forbid role-announcement prefixes and fixed report headings unless the user explicitly requests a format.
+Persona text is the validated backend-only `persona_prompt`: Host directs/clarifies/organizes; Advisor proposes practical options; Critic challenges assumptions and risks; Strategist weighs priorities and trade-offs; Analyst distinguishes evidence, data, and uncertainty. The prompt forbids role-announcement prefixes and fixed report headings unless the user explicitly requests a format. A user-authored Persona is not accepted by this change.
 
-The `chat-message/v1` schema will continue to require a non-blank `message` and will add optional `attachment_refs`. If the response uses a concrete fact from a selected source, the prompt and output validator SHALL require `attachment_refs`; each item is exactly `{source_ref, label, segment_refs}`, `source_ref` must belong to the request's validated selected set, `label` must exactly match the authoritative source projection, and every segment ref must belong to the request's retrieved `available_segment_refs`. Generic chat may omit the array. Invalid references follow the existing parse-error/retry/failure path rather than becoming unverified UI citations.
+Slice 2 keeps `chat-message/v1` limited to the existing required non-blank `message` and changes only natural-response guidance/validation. It also removes the legacy chatroom `case_files`/case-material body injection before any model call: because Slice 2 does not yet accept selected sources, its prompt contains no attachment, evidence, or note body under any wording. Shared summary enters in Slice 4. Optional `attachment_refs`, selected-source semantic validation, and source excerpts enter together in Slice 3 so no schema field depends on an allow-list that does not yet exist.
 
 ### 6. Build explicit, bounded attachment context
 
-The `#` source selector will list both chat-upload attachments and active evidence, including materials present when a legacy or new meeting was created, while excluding `notes`. Stable source refs use separate namespaces: `attachment:<file_id>` for chat uploads and `evidence:<evidence_id>` for active evidence. The meeting read projection and `GET /meetings/{meeting_id}/chat/sources` expose authoritative `source_ref`, display label, kind, readable/active state, `reader_ref`, and `available_segment_refs`; same-label sources show kind/size/date and retain the hidden source ref. Attachments resolve through the attachment reader/blob store, while evidence resolves through the current active-version reader. Deletion, tombstoning, or inactive evidence makes the source invalid at send time.
+The `#` source selector will list chat-upload attachments and independently created active evidence, including materials present when a legacy or new meeting was created, while excluding `notes`. A text upload produces one selector item only: canonical ref `attachment:<file_id>`; when its attachment event carries `evidence_id`, the linked mirrored `evidence:<evidence_id>` item is suppressed. Evidence without that exact active attachment link remains a separate `evidence:` source even when labels match; title matching never deduplicates. The meeting read projection and `GET /meetings/{meeting_id}/chat/sources` expose authoritative `source_ref`, display label, kind, readable/active state, `reader_ref`, and informational `available_segment_refs`; same-label independent sources show kind/size/date and retain the hidden ref.
 
-The frontend preserves first-selection order and deduplicates repeated `source_ref` values. The backend resolves each source ref within the meeting, checks active state and target-role visibility, then applies the closed kind matrix: an `attachment:<file_id>` is readable only when its active blob has a `.txt` or `.md` extension, while an `evidence:<evidence_id>` is readable when its active version contains a non-empty string, without an extension check. Host is the fixed chatroom coordinator and SHALL read evidence at read time even when legacy `visible_roles` omits `host`; other roles follow `visible_roles`. For multi-role and `@all`, every selected source is validated independently for every target; any target/source failure returns `SOURCE_NOT_VISIBLE_TO_TARGET` and rejects the whole request. Existing meeting files are read-time projected; no migration or metadata rewrite is performed. `file_id` appears only inside the `attachment:<file_id>` namespace and is never the authorization field.
+The frontend preserves first-selection order and deduplicates repeated `source_ref` values. The backend resolves each source ref within the meeting, checks active state and target-role visibility, then applies the closed kind matrix. An `attachment:<file_id>` is readable only when its active blob has a `.txt` or `.md` extension. If it has a linked evidence ID, visibility and active state come from that exact evidence item (with the legacy Host fallback); an unlinked legacy attachment has meeting-wide visibility to the active roster because attachment events have no role ACL. An `evidence:<evidence_id>` is readable when its active version contains a non-empty string and follows its explicit `visible_roles`, without an extension check. For multi-role and `@all`, any target/source failure rejects the whole request. Existing data is projected at read time without migration.
 
-An `AttachmentContextResolver` (or equivalent context-builder seam) will use the existing attachment event's evidence linkage when text was mirrored into case materials, and the existing blob/material store as the source of readable text. For small selected sources, full text is eligible if it fits. For larger sources, the resolver will split deterministic paragraph/line segments, rank them by stable lexical relevance to the normalized instruction and quote, and include only segments that fit the remaining budget. Each block carries authoritative `source_ref`, display label, and segment metadata.
+After validation and retrieval, `AttachmentContextResolver` freezes one immutable `chatroom-source-context/v1` snapshot shared by every target in the request. Each source entry records `source_ref`, authoritative label/kind/reader ref, `content_identity`, exact ordered retrieved segments, `available_segment_refs` equal to the segment IDs actually placed in the canonical user/context message, and omission metadata. Attachment identity contains the immutable attachment event ID, file ID, size, and SHA-256 of the bytes read; evidence identity contains evidence ID and active version number. The snapshot's exact excerpt text is persisted once inside canonical `prompt_messages`; event field `selected_source_snapshot` stores the metadata/segment IDs/identities without duplicating body text.
+
+Automatic parse/model retries reuse the same frozen snapshot and canonical prompt messages. Output validation receives its citation allow-list only from that snapshot—not from the current source projection—and accepts only its source refs, exact labels, and actual `available_segment_refs`. A new human send creates a new snapshot and revalidates current state. Completed event `attachment_refs` retains source/label/segment provenance; after deletion, the UI resolves the current source state and renders the historical citation unavailable without invalidating the message.
+
+For small selected sources, full text is eligible if it fits and yields `segment_refs: ["full"]`. For larger sources, the resolver splits deterministic paragraph/line segments, ranks them by stable lexical relevance to the normalized instruction and quote, and includes only segments that fit the remaining budget. The context builder never scans all visible case materials by default.
 
 The context builder will never scan all visible case materials by default. With no `#`, it will not open or read any attachment or evidence body. Unsupported selected attachments, inactive sources, and empty/non-string evidence fail validation before model execution; they remain downloadable/previewable when the existing UI supports it. This local deterministic strategy is preferred over adding a retrieval service or vector database because the current requirement is bounded selection, not global semantic search.
 
@@ -168,7 +177,7 @@ The meeting projection will expose Host, the source listing, and current summary
 ## Migration Plan
 
 1. Implement and test routing/Host projection while retaining `/messages` and all existing event shapes.
-2. Add layered prompt requests and Persona rendering; keep `prompt` fallback and formal-mode adapters unchanged.
+2. Add layered prompt requests, validated fixed Persona rendering, creation-time active-role selection, canonical audits, and the no-source/no-body chatroom guard. Keep `chat-message/v1` message-only, omit shared summary/source context, and preserve formal-mode adapters/audits.
 3. Add explicit `source_refs`, send-time validation, bounded text retrieval, schema references, and UI citation chips. Existing uploaded files remain stored; no body is automatically injected after deployment.
 4. Add lazy `chatroom-memory.json` creation, summary generation, meeting projection, and context-panel rendering. Existing meetings start with the transcript fallback and no summary.
 5. Run targeted backend/frontend tests, adapter regression suites, fanout browser smoke, and non-chatroom regression suites before Human acceptance.
@@ -177,4 +186,4 @@ Rollback is code-level and reversible: old event logs, attachment events, and me
 
 ## Open Questions
 
-None for Gate A. Provider role mapping, summary trigger configuration, attachment segmentation, and old-meeting Host fallback are specified above as implementation decisions and are covered by the task-level tests.
+None for Gate A. Adapter capability ownership/mapping, canonical audit shape, Persona storage/projection/failure behavior, creation-time active roster, Slice-2 context boundary, mirrored-source identity/visibility, and immutable retrieval/citation snapshots are specified above and covered by task-level tests.

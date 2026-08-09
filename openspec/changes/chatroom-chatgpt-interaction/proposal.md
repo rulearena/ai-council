@@ -4,11 +4,11 @@
 
 ## What Changes
 
-- 將聊天室的主持 AI 定義為固定 `host` role；未指定 `@` 時由主持回覆，`@all` 包含主持，明確角色 mention 則只呼叫指定角色。
+- 將聊天室的主持 AI 定義為固定 `host` role；建立會議時 Host 必選，Advisor／Critic／Strategist／Analyst 可選且建立後 roster 固定；未指定 `@` 時由主持回覆，`@all` 只包含 Host 與本場 active roles，明確角色 mention 則只呼叫指定角色。
 - 將 display-name role chips、結構化 `mentions[{role_id,display_text}]`、無效 mention、`all` 優先級與多角色平行回覆整理成可預期的 routing contract；穩定 ID 永不作使用者可見文字。
 - 在 composer 增加 `#` source autocomplete；只有使用者明確選取、仍存在且對目標角色可讀的 approved source 才可被檢索並注入 prompt：chat-upload 僅限 active `.txt/.md` blob，evidence 僅限 active 且 content 為非空 string；`notes` 排除。
 - 支援一則訊息引用多個 ordered/deduped `source_refs`、失效引用阻擋、相關段落擷取與結構化 source citation chip；沒有 source chip 時不讀取任何 attachment/evidence body。
-- 將角色 Persona、語氣與硬規則分離到 system/developer prompt；當輪訊息、共享記憶、引用與選取附件成為獨立上下文層。
+- 將固定角色 Persona、語氣與硬規則分離到 canonical system/developer prompt；當輪訊息、共享記憶、引用與選取附件成為 user/context 層。Prompt audit 永遠保存 transport 前的 `system → developer → user` 三層，不隨 provider mapping 改變。
 - 讓聊天室回覆長度與 Markdown 使用自適應，JSON 只作傳輸格式，不再要求固定報告欄位或固定句數。
 - 保存完整共享 transcript，並以專用摘要任務建立可重建、可查看但不產生聊天氣泡的共享會議摘要。
 - 保留現有事件 append-only、歷史事件 read-time 相容，以及 relay、parallel、courtroom、brainstorm 與正式 schema 行為不變。
@@ -48,13 +48,16 @@
 9. As a chatroom user, I want attachment citations to be clickable, so that I can verify which source supported an answer.
 10. As a chatroom user, I want the AI to respond like a conversation partner, so that simple questions are brief and complex questions receive enough explanation.
 11. As a chatroom user, I want each role to have a recognizable working perspective, so that Advisor, Critic, Strategist, Analyst, and Host provide meaningfully different contributions.
-12. As a chatroom user, I want long conversations to retain important decisions without sending the entire transcript every time, so that context remains useful and bounded.
-13. As a chatroom user, I want to inspect the shared summary without seeing it as a fake AI message, so that memory remains understandable and auditable.
-14. As an existing meeting user, I want old events and non-chatroom modes to remain readable and unchanged, so that this interaction redesign does not require migration.
+12. As a chatroom user, I want Host to remain available while choosing which other fixed roles join a new meeting, so that `@` and `@all` only involve the participants I selected.
+13. As a chatroom user, I want long conversations to retain important decisions without sending the entire transcript every time, so that context remains useful and bounded.
+14. As a chatroom user, I want to inspect the shared summary without seeing it as a fake AI message, so that memory remains understandable and auditable.
+15. As an existing meeting user, I want old events and non-chatroom modes to remain readable and unchanged, so that this interaction redesign does not require migration.
 
 ## Implementation Decisions
 
-- The host is one fixed chatroom role with internal ID `host` and display name 「主持 AI」; it is included in the active chatroom participant set and uses the existing meeting model-assignment mechanism.
+- The host is one fixed chatroom role with internal ID `host` and display name 「主持 AI」; it is mandatory in every chatroom participant set and uses the existing meeting model-assignment mechanism. The other four fixed roles are selected at meeting creation, the active roster is immutable afterwards, and `@all` resolves only that active set.
+- Each fixed role owns a required non-blank backend `persona_prompt` and a public `persona_summary` in `config/modes.yaml`. The catalog/meeting APIs expose only the summary; missing fixed-role Persona configuration is a configuration error, while old meetings resolve the current definitions at read/run time without migration.
+- Adapter role support is code-owned capability, never meeting/model/user configuration. `supports_developer_role` defaults to false; canonical chatroom audits always store the pre-transport `system`, `developer`, `user` layers in that order.
 - Routing and attachment selection are separate: `@` chooses responders, while `#` chooses allowable material sources.
 - Same-round fanout roles receive one frozen pre-send context and cannot observe each other’s in-flight output; later turns can observe completed published events.
 - Full transcript remains canonical. A shared summary is derived state, not a replacement for events, and can be regenerated.
@@ -74,6 +77,7 @@
 
 - Tests assert observable routing, prompt contents, event persistence, context boundaries, and rendered UI behavior rather than private helper implementation.
 - Backend coverage will exercise default host, display-name chip routing, code-point span validation, exact closed API envelopes/statuses, no-side-effect rejection, multi-role/all fanout, invalid/stale chip rejection, source authorization and kind-specific readability, notes exclusion, initial/legacy no-extension evidence, Host fallback, bounded full/segmented retrieval, exact citation provenance, summary regeneration/status events, concurrent chat during generation, duplicate reservation, terminal `@all` scheduling, stale-write ordering, and adapter message-layer contracts.
+- Mode/catalog coverage will exercise required fixed Persona validation, public-summary-only projection, mandatory Host plus optional member selection, immutable active rosters, and old-meeting Host/Persona read-time fallback.
 - Frontend unit and Playwright coverage will exercise role/source chips, composer hints, mixed role/source input, citation chips, exact summary regeneration states, summary visibility, pending fanout behavior, and non-chatroom regressions.
 - Existing formal-mode tests and historical-event fixtures remain regression gates.
 - Slice acceptance includes targeted tests, frontend build, relevant full suites, and direct browser smoke for the composer and context panel.
@@ -87,6 +91,7 @@
 - Automatic AI replies in relay, parallel, courtroom, or other non-chatroom modes.
 - Rewriting, migrating, or backfilling historical events or existing meeting data.
 - User accounts, multi-user permissions, or shared workspace collaboration.
+- User-authored/custom chatroom roles or editable Persona prompts. That separately approved future capability remains backlog 93; user-authored Persona will be untrusted `user/context` content and will not replace system/developer rules.
 
 ## Further Notes
 

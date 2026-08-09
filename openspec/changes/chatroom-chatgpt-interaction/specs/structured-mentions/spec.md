@@ -50,7 +50,7 @@ The composer SHALL represent each role/source selection as a chip with a unique 
 - **AND** no source body is retrieved
 
 ### Requirement: Plain chatroom input defaults to Host
-In chatroom mode, a human message with no role chip SHALL route to the fixed role ID `host`. The message SHALL still be persisted as a human event before the Host response job is started. This default SHALL apply only to chatroom mode.
+In chatroom mode, a human message with no role chip SHALL route to the mandatory active role ID `host`. The message SHALL still be persisted as a human event before the Host response job is started. This default SHALL apply only to chatroom mode.
 
 #### Scenario: Ordinary text invokes Host
 - **WHEN** the user sends `請幫我整理一下目前討論` without an @mention in chatroom mode
@@ -250,7 +250,7 @@ A single message MAY contain multiple valid role chips. When multiple roles are 
 - **AND** the human message is persisted once
 
 ### Requirement: Mention autocomplete in composer
-The frontend composer SHALL provide an autocomplete/selection menu when the user types `@` followed by characters. The menu SHALL list all active chatroom roles, including Host, and selection SHALL insert a display-name role chip with a hidden stable `role_id`. The menu SHALL include an `@全部角色` chip whose hidden ID is `all`. The composer SHALL never insert `@Advisor` or `@host` as user-visible text. The same composer SHALL provide the separate `#` source autocomplete defined by this change.
+The frontend composer SHALL provide an autocomplete/selection menu when the user types `@` followed by characters. The menu SHALL list only the meeting's frozen active chatroom roles, always including Host, and selection SHALL insert a display-name role chip with a hidden stable `role_id`. Catalog roles omitted at creation SHALL not appear and SHALL fail stale/inactive validation if submitted. The menu SHALL include an `@全部角色` chip whose hidden ID is `all`; it resolves only the frozen active set. The composer SHALL never insert `@Advisor` or `@host` as user-visible text. The same composer SHALL provide the separate `#` source autocomplete defined by this change.
 
 #### Scenario: Autocomplete shows Host and participants
 - **WHEN** the user types `@` in a chatroom composer
@@ -269,3 +269,8 @@ The frontend composer SHALL provide an autocomplete/selection menu when the user
 #### Scenario: No autocomplete in non-chatroom modes
 - **WHEN** the current meeting mode is not `chatroom`
 - **THEN** the composer does not show chatroom role or attachment autocomplete
+
+#### Scenario: Omitted fixed role stays inactive
+- **WHEN** Strategist was omitted when the chatroom was created
+- **THEN** Strategist is absent from autocomplete and `@全部角色`
+- **AND** a stale Strategist chip is rejected before any human event or AI job
