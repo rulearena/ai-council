@@ -1,10 +1,17 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
 import type { ChatroomSource, ChatSourceToken } from '../api'
+import {
+  detectSourceTrigger,
+  filterSourceOptions,
+  insertSourceToken,
+  sourceOptionMetadata,
+} from '../chatroomSources'
 
 const props = defineProps<{
   modelValue: string
   sources: ChatroomSource[]
+  selectionStart?: number
   disabled?: boolean
 }>()
 const emit = defineEmits<{
@@ -14,44 +21,58 @@ const emit = defineEmits<{
 
 const open = ref(false)
 const filterText = ref('')
-const items = computed(() => props.sources.filter((source) => {
-  if (!source.active || !source.readable) return false
-  return !filterText.value || source.label.toLowerCase().includes(filterText.value.toLowerCase())
-}))
+const activeIndex = ref(0)
+const items = computed(() => filterSourceOptions(props.sources, filterText.value))
 
-watch(() => props.modelValue, (text) => {
-  const index = text.lastIndexOf('#')
-  if (index < 0 || (index > 0 && !/[\s\n]/.test(text[index - 1]))) {
+watch([() => props.modelValue, () => props.selectionStart], ([text]) => {
+  if (props.disabled) {
     open.value = false
     return
   }
-  const suffix = text.slice(index + 1)
-  if (/\s/.test(suffix)) {
+  const trigger = detectSourceTrigger(text, props.selectionStart ?? text.length)
+  if (!trigger.triggered) {
     open.value = false
     return
   }
-  filterText.value = suffix
+  filterText.value = trigger.filterText
+  activeIndex.value = 0
   open.value = true
 })
 
+function handleKeyDown(event: KeyboardEvent): boolean {
+  if (!open.value || !items.value.length) return false
+  if (event.key === 'Escape') {
+    event.preventDefault()
+    open.value = false
+    return true
+  }
+  if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+    event.preventDefault()
+    const delta = event.key === 'ArrowDown' ? 1 : -1
+    activeIndex.value = (activeIndex.value + delta + items.value.length) % items.value.length
+    return true
+  }
+  if (event.key === 'Enter' || event.key === 'Tab') {
+    event.preventDefault()
+    select(items.value[activeIndex.value])
+    return true
+  }
+  return false
+}
+
 function select(source: ChatroomSource) {
-  const index = props.modelValue.lastIndexOf('#')
-  const before = props.modelValue.slice(0, index)
-  const displayText = `#${source.label}`
-  const next = `${before}${displayText} `
-  const start = Array.from(before).length
-  emit('update:modelValue', next)
-  emit('source-inserted', {
-    token_id: `source-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-    source_ref: source.source_ref,
-    display_text: displayText,
-    start,
-    end: start + Array.from(displayText).length,
-  })
+  const result = insertSourceToken(
+    props.modelValue,
+    props.selectionStart ?? props.modelValue.length,
+    source,
+    `source-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+  )
+  emit('update:modelValue', result.content)
+  emit('source-inserted', result.token)
   open.value = false
 }
 
-defineExpose({ isExpanded: open })
+defineExpose({ isExpanded: open, handleKeyDown })
 </script>
 
 <template>
@@ -61,12 +82,13 @@ defineExpose({ isExpanded: open })
         v-for="source in items"
         :key="source.source_ref"
         class="source-option"
+        :class="{ active: activeIndex === items.indexOf(source) }"
         data-testid="source-option"
         role="option"
         @mousedown.prevent="select(source)"
       >
         <span>#{{ source.label }}</span>
-        <small>{{ source.kind === 'attachment' ? '附件' : '證據' }} · {{ source.source_ref }}</small>
+        <small>{{ sourceOptionMetadata(source) }}</small>
       </li>
     </ul>
   </div>
@@ -77,5 +99,6 @@ defineExpose({ isExpanded: open })
 .source-menu { list-style: none; margin: 0; padding: 4px 0; border: 1px solid var(--color-border); border-radius: var(--radius-sm); background: var(--color-surface); box-shadow: var(--shadow-md); max-height: 220px; overflow-y: auto; }
 .source-option { display: flex; justify-content: space-between; gap: 8px; padding: 6px 10px; cursor: pointer; color: var(--color-text); }
 .source-option:hover { background: var(--color-surface-muted); }
+.source-option.active { background: var(--color-surface-muted); }
 .source-option small { color: var(--color-text-muted); }
 </style>

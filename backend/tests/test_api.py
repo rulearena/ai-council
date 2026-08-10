@@ -7671,6 +7671,7 @@ def test_upload_text_file_in_chatroom_ingests_evidence_and_attachment(
             "Strategist",
             "Analyst",
         }
+        assert active_version["host_acl_explicit"] is True
 
         # The blob serves the full text through the file_id download endpoint.
         download = client.get(f"/meetings/{meeting_id}/attachments/{body['file_id']}")
@@ -7684,6 +7685,56 @@ def test_upload_text_file_in_chatroom_ingests_evidence_and_attachment(
     assert sorted(p.name for p in blob_dir.iterdir()) == sorted(
         e["file_id"] for e in attachment_events
     )
+
+
+def test_chatroom_sources_project_mirror_once_and_freezes_selected_context(
+    tmp_path: Path,
+) -> None:
+    app = create_test_app(tmp_path)
+    client = TestClient(app)
+    meeting_id = _create_chatroom_meeting(client)
+    status, upload = _upload_attachment(
+        client,
+        meeting_id,
+        filename="待辦總覽.md",
+        content="deadline: tomorrow\n",
+        content_type="text/markdown",
+    )
+    assert status == 200
+
+    sources = client.get(f"/meetings/{meeting_id}/chat/sources").json()
+    assert [item["source_ref"] for item in sources].count(
+        f"attachment:{upload['file_id']}"
+    ) == 1
+    assert not any(item["source_ref"].startswith("evidence:") for item in sources)
+    source = next(item for item in sources if item["source_ref"].startswith("attachment:"))
+    assert source["label"] == "待辦總覽.md"
+    assert source["readable"] is True
+
+    content = "@顧問 請查看 #待辦總覽.md"
+    source_start = content.index("#")
+    payload = _structured_chat_payload(content, "Advisor")
+    payload["mentions"] = [{
+        "token_id": "mention-1", "role_id": "Advisor", "display_text": "@顧問",
+        "start": 0, "end": 3,
+    }]
+    payload["source_tokens"] = [{
+        "token_id": "source-1", "source_ref": source["source_ref"],
+        "display_text": "#待辦總覽.md", "start": source_start,
+        "end": source_start + len("#待辦總覽.md"),
+    }]
+    payload["source_refs"] = [source["source_ref"]]
+    response = client.post(f"/meetings/{meeting_id}/chat/mention", json=payload)
+    assert response.status_code == 202, response.json()
+    events = wait_for_event_count(client, meeting_id, 3)
+    human = events[-2]
+    assert human["source_refs"] == [source["source_ref"]]
+    response_event = events[-1]
+    snapshot = response_event["selected_source_snapshot"]
+    assert snapshot["schema_version"] == "chatroom-source-context/v1"
+    assert "deadline: tomorrow" not in str(snapshot)
+    assert snapshot["sources"][0]["available_segment_refs"] == ["full"]
+    assert "deadline: tomorrow" in str(response_event["prompt_messages"])
 
 
 def test_upload_text_file_in_non_chatroom_still_rejected(tmp_path: Path) -> None:

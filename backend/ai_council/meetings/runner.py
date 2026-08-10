@@ -552,6 +552,10 @@ class MeetingRunner:
                     )
                 )
                 parsed_output = output_schema.parse(response.raw_output)
+                try:
+                    self._validate_chatroom_attachment_refs(parsed_output, inputs)
+                except ValueError as error:
+                    raise OutputParseError(str(error), raw_output=response.raw_output) from error
             except (OutputParseError, AdapterError) as error:
                 failed_event = {
                     "event_id": self._event_id(
@@ -570,6 +574,7 @@ class MeetingRunner:
                     "retry_scheduled": False,
                     **self._timing_fields(started_at, started_clock),
                     **prompt_metadata,
+                    **self._audit_event_fields(inputs),
                     "interaction_type": "chatroom-fanout-response",
                     "in_response_to_event_id": human_event_id,
                 }
@@ -595,6 +600,7 @@ class MeetingRunner:
                 "status": "completed",
                 **self._timing_fields(started_at, started_clock),
                 **prompt_metadata,
+                **self._audit_event_fields(inputs),
                 "interaction_type": "chatroom-fanout-response",
                 "in_response_to_event_id": human_event_id,
             }
@@ -913,7 +919,10 @@ class MeetingRunner:
                         str(error), raw_output=response.raw_output
                     ) from error
             if step.template_name == "chatroom_response":
-                self._validate_chatroom_attachment_refs(parsed_output, inputs)
+                try:
+                    self._validate_chatroom_attachment_refs(parsed_output, inputs)
+                except ValueError as error:
+                    raise OutputParseError(str(error), raw_output=response.raw_output) from error
         except OutputParseError as error:
             self._clear_active_execution(meeting_id)
             failed_event: dict[str, object] = {
@@ -1502,8 +1511,13 @@ class MeetingRunner:
             if source is None or ref.get("label") != source.get("label"):
                 raise ValueError("attachment_refs cites an unavailable source")
             segment_refs = ref.get("segment_refs")
-            if not isinstance(segment_refs, list) or not set(segment_refs).issubset(
-                set(source.get("available_segment_refs", []))
+            if (
+                not isinstance(segment_refs, list)
+                or not segment_refs
+                or any(not isinstance(segment, str) for segment in segment_refs)
+                or not set(segment_refs).issubset(
+                    set(source.get("available_segment_refs", []))
+                )
             ):
                 raise ValueError("attachment_refs cites an unavailable segment")
 

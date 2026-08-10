@@ -82,6 +82,8 @@ from ai_council.meetings.chatroom_sources import (
     make_attachment_identity,
     make_evidence_identity,
     project_chatroom_sources,
+    retrieve_source_segments,
+    SourceSnapshotError,
     validate_chatroom_sources,
 )
 from ai_council.meetings.input_envelope import CASE_EVIDENCE_BY_ROLE_INPUT
@@ -2543,6 +2545,8 @@ def create_app(
         source_refs: list[str],
         source_projection: list[dict[str, Any]],
         materials: dict[str, Any],
+        instruction: str,
+        remaining_budget_chars: int,
     ) -> dict[str, Any]:
         """Read only selected bodies and freeze their provenance for this request."""
         snapshot: list[dict[str, Any]] = []
@@ -2551,8 +2555,14 @@ def create_app(
             str(item.get("id")): item for item in materials.get("evidence", [])
             if isinstance(item, dict)
         }
+        remaining = max(1, remaining_budget_chars)
         for source_ref in source_refs:
-            projection = next(item for item in source_projection if item["source_ref"] == source_ref)
+            projection = next(
+                (item for item in source_projection if item["source_ref"] == source_ref),
+                None,
+            )
+            if projection is None:
+                raise SourceSnapshotError("Selected source disappeared before retrieval")
             content: str
             identity: dict[str, Any]
             if source_ref.startswith("attachment:"):
@@ -2560,35 +2570,43 @@ def create_app(
                 event = attachments.attachment_event(meeting_id, file_id)
                 blob = attachments.blob_path(meeting_id, file_id)
                 if event is None or blob is None or not blob.is_file():
-                    continue
+                    raise SourceSnapshotError("Selected attachment disappeared before retrieval")
                 raw = blob.read_bytes()
-                content = raw.decode("utf-8")
+                try:
+                    content = raw.decode("utf-8")
+                except UnicodeDecodeError as error:
+                    raise SourceSnapshotError("Selected attachment is not valid UTF-8") from error
                 identity = make_attachment_identity(event, raw)
             else:
                 evidence_id = source_ref.split(":", 1)[1]
-                evidence = evidence_by_id[evidence_id]
+                evidence = evidence_by_id.get(evidence_id)
+                if evidence is None:
+                    raise SourceSnapshotError("Selected evidence disappeared before retrieval")
                 version = next(
-                    version for version in evidence.get("versions", [])
-                    if version.get("version") == evidence.get("active_version")
+                    (
+                        version for version in evidence.get("versions", [])
+                        if version.get("version") == evidence.get("active_version")
+                    ),
+                    None,
                 )
-                content = str(version.get("content"))
+                if version is None or not isinstance(version.get("content"), str):
+                    raise SourceSnapshotError("Selected evidence is not readable")
+                content = version["content"]
                 identity = make_evidence_identity(evidence_id, version)
-            # Keep retrieval deterministic and bounded. A full source is one
-            # citation segment; larger sources use numbered line paragraphs.
-            if len(content) <= 6000:
+            budget = remaining
+            if len(content) <= budget:
                 segment_refs = ["full"]
                 segment_text = content
             else:
-                paragraphs = [line for line in content.splitlines() if line.strip()]
-                selected: list[str] = []
-                used = 0
-                for paragraph in paragraphs:
-                    if used + len(paragraph) + 1 > 6000:
-                        break
-                    selected.append(paragraph)
-                    used += len(paragraph) + 1
-                segment_refs = [f"paragraph:{index:04d}" for index in range(1, len(selected) + 1)]
-                segment_text = "\n".join(selected)
+                segments, omitted = retrieve_source_segments(
+                    content,
+                    query=instruction,
+                    char_budget=budget,
+                )
+                segment_refs = [segment["segment_ref"] for segment in segments]
+                segment_text = "\n".join(segment["content"] for segment in segments)
+            omitted = len(segment_text) < len(content)
+            remaining = max(1, remaining - len(segment_text))
             snapshot.append({
                 "source_ref": source_ref,
                 "label": projection["label"],
@@ -2596,9 +2614,10 @@ def create_app(
                 "reader_ref": projection["reader_ref"],
                 "content_identity": identity,
                 "available_segment_refs": segment_refs,
+                "segments": list(segment_refs),
                 "omission": {
-                    "omitted": len(segment_text) < len(content),
-                    "reason": "context_budget" if len(segment_text) < len(content) else None,
+                    "omitted": omitted,
+                    "reason": "context_budget" if omitted else None,
                 },
             })
             excerpts.append(
@@ -2694,17 +2713,29 @@ def create_app(
                         status_code=400,
                         content=rejected(source_error or "INVALID_SOURCE_REF", "source_refs", details),
                     )
-                inputs["__chatroom_source_snapshot"] = _build_chatroom_source_snapshot(
-                    meeting_id=meeting_id,
-                    source_refs=list(request.source_refs),
-                    source_projection=source_projection,
-                    materials=project_case_materials(
-                        case_materials.view(meeting_id),
-                        active_epoch_id=DeliberationEpochs.view(repository.read_events(meeting_id)).active_epoch.id,
-                        mode_id=metadata.get("mode_id"),
-                        category=mode.category,
-                    ),
-                )
+                try:
+                    inputs["__chatroom_source_snapshot"] = _build_chatroom_source_snapshot(
+                        meeting_id=meeting_id,
+                        source_refs=list(request.source_refs),
+                        source_projection=source_projection,
+                        materials=project_case_materials(
+                            case_materials.view(meeting_id),
+                            active_epoch_id=DeliberationEpochs.view(repository.read_events(meeting_id)).active_epoch.id,
+                            mode_id=metadata.get("mode_id"),
+                            category=mode.category,
+                        ),
+                        instruction=routing.instruction,
+                        remaining_budget_chars=max(
+                            512,
+                            int(os.environ.get("AI_COUNCIL_CHATROOM_CONTEXT_TOKEN_BUDGET", "4096")) * 4
+                            - len(routing.instruction) * 4,
+                        ),
+                    )
+                except SourceSnapshotError:
+                    return JSONResponse(
+                        status_code=400,
+                        content=rejected("SOURCE_NOT_READABLE", "source_refs"),
+                    )
             else:
                 inputs["__chatroom_source_snapshot"] = {
                     "selected_source_snapshot": {
@@ -3583,7 +3614,15 @@ def project_case_materials(
             "size": version.size,
             "created_at": version.created_at,
             "source_event_id": version.source_event_id,
-            **({"host_acl_explicit": True} if getattr(version, "host_acl_explicit", None) is True else {}),
+            # Preserve an explicitly stored invalid marker so the source
+            # projection can reject it deterministically.  Only an absent
+            # marker is legacy fallback data; dropping false/non-bool here
+            # would incorrectly turn invalid material into legacy Host access.
+            **(
+                {"host_acl_explicit": version.host_acl_explicit}
+                if version.host_acl_explicit is not None
+                else {}
+            ),
         }
 
     impact = view.pending_impact

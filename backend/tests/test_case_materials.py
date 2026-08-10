@@ -149,6 +149,8 @@ def test_versions_keep_role_visibility_and_optimistic_revision(tmp_path: Path) -
     assert evidence.active_version == 2
     assert evidence.versions[0].visible_roles == ["Judge"]
     assert evidence.versions[1].visible_roles == ["Defense"]
+    assert evidence.versions[0].host_acl_explicit is True
+    assert evidence.versions[1].host_acl_explicit is True
     with pytest.raises(CaseMaterialConflict, match="expected 2, got 1"):
         materials.set_evidence_active(
             "meeting-1",

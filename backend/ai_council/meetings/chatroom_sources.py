@@ -10,6 +10,10 @@ from ai_council.meetings.attachments import TEXT_EXTENSIONS
 SOURCE_CONTEXT_VERSION = "chatroom-source-context/v1"
 
 
+class SourceSnapshotError(ValueError):
+    pass
+
+
 def _active_version(item: dict[str, Any]) -> dict[str, Any] | None:
     versions = item.get("versions")
     if not isinstance(versions, list):
@@ -28,6 +32,11 @@ def _active_version(item: dict[str, Any]) -> dict[str, Any] | None:
 def _host_acl_is_valid(version: dict[str, Any]) -> bool:
     marker = version.get("host_acl_explicit")
     return marker is None or marker is True
+
+
+def _host_acl_is_invalid(version: dict[str, Any]) -> bool:
+    marker = version.get("host_acl_explicit")
+    return "host_acl_explicit" in version and marker is not True
 
 
 def _evidence_visible(version: dict[str, Any], role_id: str) -> bool:
@@ -56,6 +65,7 @@ def _source_entry(
     created_at: str | None = None,
     content: str | None = None,
     content_identity: dict[str, Any] | None = None,
+    acl_invalid: bool = False,
 ) -> dict[str, Any]:
     return {
         "source_ref": source_ref,
@@ -66,6 +76,7 @@ def _source_entry(
         "reader_ref": reader_ref,
         "available_segment_refs": ["full"] if readable else [],
         "visible_roles": list(visible_roles),
+        "acl_invalid": acl_invalid,
         **({"size": size} if size is not None else {}),
         **({"created_at": created_at} if created_at else {}),
         **({"content": content} if content is not None else {}),
@@ -98,12 +109,17 @@ def project_chatroom_sources(
         file_id = str(event.get("file_id", ""))
         if not file_id:
             continue
-        evidence = evidence_by_id.get(str(event.get("evidence_id"))) if event.get("evidence_id") else None
+        has_link = bool(event.get("evidence_id"))
+        evidence = evidence_by_id.get(str(event.get("evidence_id"))) if has_link else None
         version = _active_version(evidence) if evidence else None
         extension = str(event.get("extension") or Path(str(event.get("filename", ""))).suffix).lower()
         readable = extension in TEXT_EXTENSIONS and file_id in readable_attachment_ids
         visible_roles = list(active_role_ids)
-        if version is not None:
+        evidence_active = not has_link or bool(evidence and evidence.get("status") == "active" and version)
+        if has_link and not evidence_active:
+            visible_roles = []
+            readable = False
+        elif version is not None:
             visible_roles = [
                 role_id for role_id in active_role_ids if _evidence_visible(version, role_id)
             ]
@@ -119,9 +135,10 @@ def project_chatroom_sources(
                 label=str(event.get("filename") or file_id),
                 kind="attachment",
                 reader_ref=f"attachment:{file_id}",
-                active=True,
+                active=evidence_active,
                 readable=readable,
                 visible_roles=visible_roles,
+                acl_invalid=bool(version and _host_acl_is_invalid(version)),
                 size=int(event.get("size", 0) or 0),
                 created_at=str(event.get("created_at")) if event.get("created_at") else None,
             )
@@ -147,6 +164,7 @@ def project_chatroom_sources(
                 active=True,
                 readable=readable,
                 visible_roles=visible_roles,
+                acl_invalid=_host_acl_is_invalid(version),
                 size=int(version.get("size", len(content) if isinstance(content, str) else 0) or 0),
                 created_at=str(version.get("created_at")) if version.get("created_at") else None,
             )
@@ -163,6 +181,8 @@ def validate_chatroom_sources(
     for source_ref in source_refs:
         source = by_ref.get(source_ref)
         if source is None or not source.get("active"):
+            return False, "INVALID_SOURCE_REF", source_ref, None
+        if source.get("acl_invalid"):
             return False, "INVALID_SOURCE_REF", source_ref, None
         if not source.get("readable"):
             return False, "SOURCE_NOT_READABLE", source_ref, None
@@ -183,3 +203,31 @@ def make_attachment_identity(event: dict[str, Any], content: bytes) -> dict[str,
 
 def make_evidence_identity(evidence_id: str, version: dict[str, Any]) -> dict[str, Any]:
     return {"evidence_id": evidence_id, "version": version.get("version")}
+
+
+def retrieve_source_segments(
+    content: str,
+    *,
+    query: str,
+    char_budget: int,
+) -> tuple[list[dict[str, str]], bool]:
+    """Deterministically rank non-empty lines and return only budget-fitting segments."""
+    lines = [line.strip() for line in content.splitlines() if line.strip()]
+    terms = [term.casefold() for term in query.split() if term.strip()]
+    ranked = sorted(
+        enumerate(lines, start=1),
+        key=lambda item: (-sum(term in item[1].casefold() for term in terms), item[0]),
+    )
+    selected: list[tuple[int, str]] = []
+    used = 0
+    for index, line in ranked:
+        cost = len(line) + (1 if selected else 0)
+        if used + cost > max(1, char_budget):
+            continue
+        selected.append((index, line))
+        used += cost
+    selected.sort(key=lambda item: item[0])
+    return [
+        {"segment_ref": f"paragraph:{index:04d}", "content": line}
+        for index, line in selected
+    ], len(selected) < len(lines)

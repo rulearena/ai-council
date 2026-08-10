@@ -27,6 +27,7 @@ const messageText = ref('')
 const mentionTokens = ref<ChatMention[]>([])
 const sourceTokens = ref<ChatSourceToken[]>([])
 const lastTrackedContent = ref('')
+const cursorPosition = ref(0)
 const sending = ref(false)
 
 function trackContentUpdate(nextContent: string) {
@@ -94,6 +95,7 @@ function onSendPointerCancel(event: PointerEvent) {
 }
 
 const mentionMenu = ref<InstanceType<typeof MentionAutocomplete> | null>(null)
+const sourceMenu = ref<InstanceType<typeof SourceAutocomplete> | null>(null)
 const mentionExpanded = computed(() => Boolean(mentionMenu.value?.isExpanded))
 const mentionMenuId = computed(() => (mentionExpanded.value ? mentionMenu.value?.menuId : undefined))
 const mentionActiveOptionId = computed(() => mentionMenu.value?.activeOptionId)
@@ -106,6 +108,7 @@ function onTextareaKeydown(event: KeyboardEvent) {
   // The mention menu owns the arrows, Enter, Tab and Escape while it is open, and
   // reports whether it consumed the key so Enter is not also read as send.
   if (mentionMenu.value?.handleKeyDown(event)) return
+  if (sourceMenu.value?.handleKeyDown(event)) return
 
   if (event.key !== 'Enter') return
   if (event.shiftKey || event.ctrlKey || event.altKey || event.metaKey) return
@@ -177,6 +180,9 @@ function onSourceInserted(token: ChatSourceToken) {
   sourceTokens.value = [...rebasedSources, token]
   mentionTokens.value = rebasedMentions
   lastTrackedContent.value = nextContent
+  // DOM selectionStart is UTF-16 code-unit based; the emitted API span is
+  // converted to Unicode code points by insertSourceToken.
+  cursorPosition.value = nextContent.length
 }
 
 function onSendClick(event: MouseEvent) {
@@ -235,8 +241,10 @@ function onSendClick(event: MouseEvent) {
           @mention-inserted="onMentionInserted"
         />
         <SourceAutocomplete
+          ref="sourceMenu"
           :model-value="messageText"
           :sources="sources ?? []"
+          :selection-start="cursorPosition"
           :disabled="disabled"
           @update:model-value="messageText = $event"
           @source-inserted="onSourceInserted"
@@ -256,6 +264,9 @@ function onSendClick(event: MouseEvent) {
           @compositionstart="composing = true"
           @compositionend="composing = false"
           @keydown="onTextareaKeydown"
+          @input="cursorPosition = ($event.target as HTMLTextAreaElement).selectionStart"
+          @click="cursorPosition = ($event.target as HTMLTextAreaElement).selectionStart"
+          @keyup="cursorPosition = ($event.target as HTMLTextAreaElement).selectionStart"
         />
       </div>
       <button

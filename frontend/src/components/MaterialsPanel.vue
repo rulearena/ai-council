@@ -39,6 +39,7 @@ const props = defineProps<{
   uploads: UploadEntry[]
   textDraft: TextDraft | null
   simple?: boolean
+  citationSourceRef?: string | null
 }>()
 
 const emit = defineEmits<{
@@ -255,7 +256,7 @@ async function confirmDeleteAttachment(event: MeetingEvent) {
         <h3>{{ vocab.itemPlural }}檔案（{{ attachments.length }}）</h3>
         <ul class="materials-attachment-list">
           <template v-for="event in attachments" :key="event.event_id">
-            <li v-if="event.file_id" class="materials-attachment-row" data-testid="materials-attachment-row">
+            <li v-if="event.file_id" class="materials-attachment-row" :class="{ 'citation-reader-target': props.citationSourceRef === `attachment:${event.file_id}` }" data-testid="materials-attachment-row">
               <a :href="attachmentDownloadUrl(props.meetingId, event.file_id)" download :data-testid="`materials-attachment-download-${event.file_id}`">
                 <strong>{{ event.filename ?? event.file_id }}</strong>
                 <small>{{ formatAttachmentSize(event.size ?? 0) }}</small>
@@ -268,7 +269,7 @@ async function confirmDeleteAttachment(event: MeetingEvent) {
 
       <section class="materials-section">
         <h3>{{ vocab.itemPlural }}（{{ materials.evidence.filter(item => item.status === 'active').length }}）</h3>
-        <article v-for="item in materials.evidence" :key="item.id" class="material-card" :data-status="item.status" :data-material-id="item.id" data-testid="case-evidence-card">
+        <article v-for="item in materials.evidence" :key="item.id" class="material-card" :class="{ 'citation-reader-target': props.citationSourceRef === `evidence:${item.id}` }" :data-status="item.status" :data-material-id="item.id" data-testid="case-evidence-card">
           <header><strong>{{ item.citation_anchor }} · {{ latest(item).title }}</strong><span v-if="!simple">v{{ item.active_version }} · {{ item.status === 'active' ? '使用中' : '已停用' }}</span></header>
           <p>{{ latest(item).content }}</p>
           <small>可見：{{ latest(item).visible_roles.map(displayRole).join('、') }}</small>
@@ -405,6 +406,11 @@ async function confirmDeleteAttachment(event: MeetingEvent) {
 .materials-attachment-row small {
   flex: none;
   color: var(--color-text-muted);
+}
+
+.citation-reader-target {
+  outline: 2px solid var(--color-border-strong);
+  outline-offset: 2px;
 }
 
 .materials-impact-warning {

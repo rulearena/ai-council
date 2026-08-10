@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from ai_council.meetings.chatroom_sources import (
     project_chatroom_sources,
+    retrieve_source_segments,
     validate_chatroom_sources,
 )
 
@@ -108,3 +109,55 @@ def test_source_validation_is_atomic_and_uses_kind_specific_readability() -> Non
     assert validate_chatroom_sources(
         sources, ["evidence:no-extension"], ["Advisor"]
     )[0] is True
+
+
+def test_linked_inactive_evidence_makes_attachment_inactive_and_unreadable() -> None:
+    materials = {
+        "evidence": [{
+            "id": "evidence-mirror",
+            "status": "inactive",
+            "active_version": 1,
+            "versions": [{
+                "version": 1,
+                "title": "待辦.md",
+                "content": "body",
+                "visible_roles": ["host"],
+                "host_acl_explicit": True,
+            }],
+        }],
+        "notes": [],
+    }
+    source = project_chatroom_sources(
+        meeting_id="meeting-1",
+        materials=materials,
+        attachment_events=[{"file_id": "file-1", "filename": "待辦.md", "extension": ".md", "evidence_id": "evidence-mirror"}],
+        active_role_ids=["host"],
+        readable_attachment_ids={"file-1"},
+    )[0]
+    assert source["active"] is False
+    assert source["readable"] is False
+    assert source["visible_roles"] == []
+
+
+def test_invalid_present_host_acl_marker_is_distinct_from_unreadable() -> None:
+    sources = [{
+        "source_ref": "evidence:bad",
+        "active": True,
+        "readable": False,
+        "acl_invalid": True,
+        "visible_roles": ["host"],
+    }]
+    assert validate_chatroom_sources(sources, ["evidence:bad"], ["host"])[1] == "INVALID_SOURCE_REF"
+
+
+def test_large_source_retrieval_ranks_matching_paragraphs_and_keeps_real_ids() -> None:
+    content = "\n".join([
+        "background one",
+        "unrelated two",
+        "deadline decision three",
+        "unrelated four",
+    ])
+    segments, omitted = retrieve_source_segments(content, query="deadline decision", char_budget=32)
+    assert [item["segment_ref"] for item in segments] == ["paragraph:0003"]
+    assert "deadline" in segments[0]["content"]
+    assert omitted is True

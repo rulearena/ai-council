@@ -27,6 +27,7 @@ import {
 } from '../meetingWorkspace'
 import { projectAssignmentWarnings } from '../assignmentWarnings'
 import { uploadAttachment } from '../api'
+import { resolveChatroomCitation, type ChatroomCitation } from '../chatroomCitations'
 import { useMaterialUploads } from '../materialUploads'
 import type { SceneConfig } from '../scenes'
 import { modelDisplayLabel } from '../providers'
@@ -94,6 +95,7 @@ const sceneLightboxOpen = ref(false)
 const openModelSeatId = ref<string | null>(null)
 type ContextTab = 'context' | 'records' | 'materials'
 const activeContextTab = ref<ContextTab>('context')
+const citationSourceRef = ref<string | null>(null)
 const feedRef = ref<HTMLDivElement | null>(null)
 
 // 快速選單「資料管理」與 .txt/.md 分流共用：切到資料頁，並依容器展開側欄
@@ -108,8 +110,15 @@ function citationSource(sourceRef: string) {
   return selectedMeeting.value?.chatroom_sources?.find((source) => source.source_ref === sourceRef)
 }
 
-function openCitation(sourceRef: string) {
-  if (citationSource(sourceRef)?.active && citationSource(sourceRef)?.readable) openMaterialsTab()
+function citationState(citation: ChatroomCitation) {
+  return resolveChatroomCitation(citation, selectedMeeting.value?.chatroom_sources ?? [])
+}
+
+function openCitation(citation: ChatroomCitation) {
+  const state = citationState(citation)
+  if (!state.available) return
+  citationSourceRef.value = citation.source_ref
+  openMaterialsTab()
 }
 
 const workspace = computed<ConversationWorkspaceProjection | null>(() => {
@@ -494,11 +503,11 @@ async function retryRole(roleId: string) {
                 :key="`${item.message.id}-${citation.source_ref}-${citation.segment_refs.join(',')}`"
                 type="button"
                 class="workspace-citation-chip"
-                :class="{ unavailable: !citationSource(citation.source_ref)?.active || !citationSource(citation.source_ref)?.readable }"
-                :disabled="!citationSource(citation.source_ref)?.active || !citationSource(citation.source_ref)?.readable"
+                :class="{ unavailable: !citationState(citation).available }"
+                :disabled="!citationState(citation).available"
                 :data-testid="`citation-chip-${citation.source_ref}`"
-                @click="openCitation(citation.source_ref)"
-              >{{ citation.label }}<span v-if="!citationSource(citation.source_ref)?.active || !citationSource(citation.source_ref)?.readable">（不可用）</span></button>
+                @click="openCitation(citation)"
+              >{{ citation.label }}<span v-if="!citationState(citation).available">（不可用）</span></button>
             </div>
             <button
               v-if="messageClampPolicy(item.message.content).collapsible"
@@ -560,11 +569,11 @@ async function retryRole(roleId: string) {
                   :key="`${message.id}-${citation.source_ref}-${citation.segment_refs.join(',')}`"
                   type="button"
                   class="workspace-citation-chip"
-                  :class="{ unavailable: !citationSource(citation.source_ref)?.active || !citationSource(citation.source_ref)?.readable }"
-                  :disabled="!citationSource(citation.source_ref)?.active || !citationSource(citation.source_ref)?.readable"
+                  :class="{ unavailable: !citationState(citation).available }"
+                  :disabled="!citationState(citation).available"
                   :data-testid="`citation-chip-${citation.source_ref}`"
-                  @click="openCitation(citation.source_ref)"
-                >{{ citation.label }}<span v-if="!citationSource(citation.source_ref)?.active || !citationSource(citation.source_ref)?.readable">（不可用）</span></button>
+                  @click="openCitation(citation)"
+                >{{ citation.label }}<span v-if="!citationState(citation).available">（不可用）</span></button>
               </div>
               <button
                 v-if="messageClampPolicy(message.content).collapsible"
@@ -698,6 +707,7 @@ async function retryRole(roleId: string) {
           :uploads="uploadList"
           :text-draft="textDraftRef"
           :simple="isChatroom"
+          :citation-source-ref="citationSourceRef"
           @retry-upload="retryUpload"
           @dismiss-upload="dismissUpload"
           @text-draft-consumed="textDraftRef = null"

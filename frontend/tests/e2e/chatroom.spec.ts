@@ -568,6 +568,50 @@ test('13.10b emoji prefix preserves mention span at the chat API boundary', asyn
   await waitForRoleMessage(page, '顧問')
 })
 
+test('13.10c emoji + @顧問 + #待辦總覽.md sends exact source tokens', async ({ page }) => {
+  await page.goto('/')
+  const title = `E2E chatroom explicit source ${Date.now()}`
+  await createChatroomMeeting(page, title, { modelAssignments: defaultModels })
+
+  await page.getByTestId('attachment-upload-input').setInputFiles({
+    name: '待辦總覽.md',
+    mimeType: 'text/markdown',
+    buffer: Buffer.from('deadline: tomorrow\n'),
+  })
+  await expect(page.getByTestId('source-autocomplete')).toBeVisible({ timeout: 15_000 })
+
+  const input = page.getByTestId('chat-message-input')
+  await input.fill('😀 @')
+  await expect(page.getByTestId('mention-menu')).toBeVisible()
+  await page.getByTestId('mention-option').filter({ hasText: '顧問' }).first().click()
+  await input.fill(`${await input.inputValue()} 請查看 #待辦`)
+  await expect(page.getByTestId('source-menu')).toBeVisible()
+  await expect(page.getByTestId('source-option').first()).toContainText('待辦總覽.md')
+  await page.getByTestId('source-option').first().click()
+
+  const request = page.waitForRequest(
+    (candidate) => candidate.request().method() === 'POST' && candidate.url().endsWith('/chat/mention'),
+  )
+  const response = page.waitForResponse(
+    (candidate) => candidate.request().method() === 'POST' && candidate.url().endsWith('/chat/mention'),
+  )
+  await page.getByTestId('send-chat-message-button').click()
+  expect((await response).status()).toBe(202)
+  const payload = (await request).postDataJSON() as {
+    content: string
+    mentions: Array<{ display_text: string; start: number; end: number }>
+    source_tokens: Array<{ source_ref: string; display_text: string; start: number; end: number }>
+    source_refs: string[]
+  }
+  expect(payload.content).toContain('😀 @顧問')
+  expect(payload.content).toContain('#待辦總覽.md')
+  expect(payload.mentions).toHaveLength(1)
+  expect(payload.mentions[0].display_text).toBe('@顧問')
+  expect(payload.source_tokens).toHaveLength(1)
+  expect(payload.source_tokens[0].display_text).toBe('#待辦總覽.md')
+  expect(payload.source_refs).toEqual([payload.source_tokens[0].source_ref])
+})
+
 test('13.10a mention active descendant stays valid when participants shrink', async ({ page }) => {
   await page.goto('/')
   const title = `E2E chatroom autocomplete participants shrink ${Date.now()}`
