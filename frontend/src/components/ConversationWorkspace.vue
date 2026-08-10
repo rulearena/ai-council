@@ -718,6 +718,7 @@ async function retryRole(roleId: string) {
           :simple="isChatroom"
           :citation-source-ref="citationSourceRef"
           :citation-reader-ref="citationReaderRef"
+          @citation-close="citationSourceRef = null; citationReaderRef = null"
           @retry-upload="retryUpload"
           @dismiss-upload="dismissUpload"
           @text-draft-consumed="textDraftRef = null"

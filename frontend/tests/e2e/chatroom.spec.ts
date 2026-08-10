@@ -673,6 +673,64 @@ test('13.10d citation chip opens its exact reader target and becomes unavailable
   await expect(unavailable).toContainText('不可用')
 })
 
+test('13.10e unloaded evidence citation waits for materials, then closes and reopens', async ({ page }) => {
+  await page.goto('/')
+  const title = `E2E chatroom evidence reader ${Date.now()}`
+  const meetingId = await createChatroomMeeting(page, title, { modelAssignments: defaultModels })
+  const apiOrigin = process.env.E2E_API_BASE_URL ?? 'http://127.0.0.1:5009'
+  const created = await page.request.post(`${apiOrigin}/meetings/${meetingId}/materials/evidence`, {
+    data: {
+      revision: 0,
+      title: '獨立證據',
+      content: 'standalone evidence body',
+      visible_roles: ['host'],
+    },
+  })
+  expect(created.ok()).toBeTruthy()
+  const sources = await (await page.request.get(`${apiOrigin}/meetings/${meetingId}/chat/sources`)).json() as Array<{
+    source_ref: string
+    label: string
+  }>
+  const source = sources.find((candidate) => candidate.source_ref.startsWith('evidence:'))
+  expect(source).toBeTruthy()
+
+  // Keep the injected public GET projection authoritative for this reader
+  // test; a live snapshot without the test-only persisted-shape event would
+  // otherwise replace the projection between the two user activations.
+  await page.routeWebSocket(`**/meetings/${meetingId}/events`, (socket) => socket.close())
+  await page.route(`**/meetings/${meetingId}`, async (route) => {
+    if (route.request().method() !== 'GET') return route.continue()
+    const upstream = await route.fetch()
+    const body = await upstream.json() as { events: Array<Record<string, unknown>> }
+    body.events.push({
+      event_id: `${meetingId}:chat-directed-1-host-response:completed`,
+      meeting_id: meetingId,
+      step_id: 'chat-directed-1-host-response',
+      role: 'host',
+      status: 'completed',
+      attempt: 1,
+      content: '已核對獨立證據',
+      parsed_output: {
+        message: '已核對獨立證據',
+        attachment_refs: [{ source_ref: source!.source_ref, label: source!.label, segment_refs: ['full'] }],
+      },
+    })
+    await route.fulfill({ response: upstream, body: JSON.stringify(body) })
+  })
+
+  await page.reload()
+  await openChatroom(page, title)
+  const chip = page.getByTestId(`citation-chip-${source!.source_ref}`)
+  await expect(page.locator('.overlay')).toHaveCount(0)
+  await expect(page.getByTestId('case-evidence-card')).toHaveCount(0)
+  await chip.click()
+  await expect(page.getByTestId('citation-reader-content')).toHaveText('standalone evidence body')
+  await page.getByTestId('citation-reader-close').click()
+  await expect(page.getByTestId('citation-reader')).toHaveCount(0)
+  await chip.click()
+  await expect(page.getByTestId('citation-reader-content')).toHaveText('standalone evidence body')
+})
+
 test('13.10a mention active descendant stays valid when participants shrink', async ({ page }) => {
   await page.goto('/')
   const title = `E2E chatroom autocomplete participants shrink ${Date.now()}`

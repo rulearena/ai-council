@@ -21,6 +21,11 @@ def estimate_tokens(text: str) -> int:
     return cjk_count // 2 + other_count // 4
 
 
+def estimate_prompt_tokens(messages: list[dict[str, str]]) -> int:
+    """Count the canonical message payload with the same deterministic metric."""
+    return sum(estimate_tokens(str(message.get("content", ""))) for message in messages)
+
+
 class ChatroomContextBuilder:
     def __init__(
         self,
@@ -91,6 +96,7 @@ class ChatroomContextBuilder:
         goal: str,
         instruction: str,
         quoted_event_id: str | None = None,
+        reserved_tokens: int = 0,
     ) -> str:
         """Build the user/context block from one request-wide budget.
 
@@ -111,13 +117,10 @@ class ChatroomContextBuilder:
         quote_text = ""
         if quoted_event is not None:
             quote_text = f"引用訊息（{quoted_event.get('role', 'Human')}）：{quoted_event.get('content', '')}"
-        current_text = f"目前指令：\n{instruction}"
-        fixed_prefix = "近期對話與引用（僅限以下內容）：\n"
-        # Estimate the required labels and required blocks before selecting
-        # optional transcript history.  This prevents source retrieval from
-        # borrowing budget that belongs to the current request or quote.
-        fixed_tokens = estimate_tokens(f"{fixed_prefix}{quote_text}\n\n{current_text}")
-        transcript_budget = max(0, self.token_budget - fixed_tokens)
+        # `reserved_tokens` is calculated from the same rendered system,
+        # developer, and empty-user layers that the runner sends.  The quote
+        # is the only required user block not present in that reservation.
+        transcript_budget = max(0, self.token_budget - reserved_tokens - estimate_tokens(quote_text))
         selected: list[dict[str, Any]] = []
         used_tokens = 0
         for event in reversed(filtered):

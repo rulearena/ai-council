@@ -10,7 +10,7 @@ from datetime import UTC, datetime
 from typing import Any, Callable, Literal, Protocol, TypedDict
 
 from ai_council.meetings.attachments import ATTACHMENT_EVENT_KIND, ATTACHMENT_REMOVED_KIND
-from ai_council.meetings.chatroom_context import ChatroomContextBuilder
+from ai_council.meetings.chatroom_context import ChatroomContextBuilder, estimate_prompt_tokens
 from ai_council.meetings.execution_state import ActiveExecutionState, MeetingExecutionStateStore
 from ai_council.meetings.deliberation import DeliberationEpochs
 from ai_council.meetings.input_envelope import CASE_EVIDENCE_BY_ROLE_INPUT
@@ -1484,6 +1484,31 @@ class MeetingRunner:
             for label, message in zip(("system", "developer", "user"), messages)
         )
         return prompt, messages
+
+    def chatroom_prompt_budget_tokens(
+        self,
+        *,
+        role: str,
+        role_display_name: str,
+        goal: str,
+        instruction: str,
+        prior_transcript: str,
+        persona_prompt: str,
+        source_placeholder: str = "",
+    ) -> int:
+        """Expose the canonical prompt cost used by request-wide allocation."""
+        output_schema = self.output_schemas.get(CHAT_MESSAGE_V1_ID)
+        _, messages = self._chatroom_prompt(
+            role=role,
+            role_display_name=role_display_name,
+            goal=goal,
+            instruction=instruction,
+            prior_transcript=prior_transcript,
+            required_json_schema=output_schema.schema,
+            persona_prompt=persona_prompt,
+            source_context=source_placeholder,
+        )
+        return estimate_prompt_tokens(messages)
 
     @staticmethod
     def _source_context(inputs: dict[str, Any] | None) -> str:

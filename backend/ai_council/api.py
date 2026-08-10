@@ -86,7 +86,7 @@ from ai_council.meetings.chatroom_sources import (
     SourceSnapshotError,
     validate_chatroom_sources,
 )
-from ai_council.meetings.chatroom_context import estimate_tokens
+from ai_council.meetings.chatroom_context import estimate_prompt_tokens
 from ai_council.meetings.input_envelope import CASE_EVIDENCE_BY_ROLE_INPUT
 from ai_council.meetings.runner import (
     CASE_FILES_BY_ROLE_INPUT,
@@ -2693,11 +2693,32 @@ def create_app(
                     return JSONResponse(status_code=400, content=payload)
                 return JSONResponse(status_code=400, content=rejected("INVALID_REQUEST_SCHEMA", None))
             target_role_ids = routing.target_role_ids
+            request_budget_tokens = int(os.environ.get("AI_COUNCIL_CHATROOM_CONTEXT_TOKEN_BUDGET", "4096"))
+            source_placeholder = "__selected_source__" if request.source_refs else ""
+            prompt_reservations = [
+                runner.chatroom_prompt_budget_tokens(
+                    role=role,
+                    role_display_name=role_display_names.get(role, role),
+                    goal=str(metadata.get("goal", "")),
+                    instruction=routing.instruction,
+                    prior_transcript="",
+                    persona_prompt=str(inputs.get("__chatroom_persona_prompts", {}).get(role, "")),
+                    source_placeholder=source_placeholder,
+                )
+                for role in target_role_ids
+            ]
+            # A fanout/retry uses one frozen source snapshot but each target
+            # may have a different Persona. Reserve the worst fixed layer so
+            # every actual adapter request satisfies the same request budget.
+            prompt_reservation = max(prompt_reservations, default=0)
+            if source_placeholder:
+                prompt_reservation -= estimate_prompt_tokens([{"content": source_placeholder}])
             inputs["__chatroom_prior_transcript"] = runner.chatroom_context_builder.build_request_context(
                 runner._active_events(meeting_id),
                 goal=str(metadata.get("goal", "")),
                 instruction=routing.instruction,
                 quoted_event_id=request.quoted_event_id,
+                reserved_tokens=max(0, prompt_reservation),
             )
             human_event_fields = {
                 "mentions": [token.model_dump() for token in request.mentions],
@@ -2705,7 +2726,6 @@ def create_app(
                 "source_refs": list(request.source_refs),
             }
 
-            request_budget_chars = int(os.environ.get("AI_COUNCIL_CHATROOM_CONTEXT_TOKEN_BUDGET", "4096")) * 4
             if request.source_refs:
                 source_projection = chatroom_source_projection(meeting_id, metadata, mode)
                 valid, source_error, bad_source_ref, bad_role_id = validate_chatroom_sources(
@@ -2736,14 +2756,21 @@ def create_app(
                         instruction=routing.instruction,
                         remaining_budget_chars=max(
                             0,
-                            request_budget_chars
-                            - estimate_tokens(
-                                "近期對話與引用（僅限以下內容）：\n"
-                                + str(inputs["__chatroom_prior_transcript"])
-                                + "\n\n目前指令：\n"
-                                + routing.instruction
-                            ) * 4,
-                        ),
+                            request_budget_tokens
+                            - max(
+                                runner.chatroom_prompt_budget_tokens(
+                                    role=role,
+                                    role_display_name=role_display_names.get(role, role),
+                                    goal=str(metadata.get("goal", "")),
+                                    instruction=routing.instruction,
+                                    prior_transcript=str(inputs["__chatroom_prior_transcript"]),
+                                    persona_prompt=str(inputs.get("__chatroom_persona_prompts", {}).get(role, "")),
+                                    source_placeholder=source_placeholder,
+                                )
+                                for role in target_role_ids
+                            )
+                            - estimate_prompt_tokens([{"content": source_placeholder}]),
+                        ) * 2,
                     )
                 except SourceSnapshotError:
                     return JSONResponse(

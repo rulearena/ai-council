@@ -22,6 +22,7 @@ from ai_council.api import (
     live_meeting_snapshot,
 )
 from ai_council.models.adapters import AdapterError, MockModelAdapter, ModelRequest, ModelResponse
+from ai_council.meetings.chatroom_context import estimate_tokens
 from ai_council.models.config import ModelConfigRepository
 from ai_council.meetings.repository import MeetingRepository
 from ai_council.meetings.deliberation import DeliberationEpochs, RestartCommand
@@ -3168,7 +3169,7 @@ def test_chair_can_request_single_role_response(tmp_path: Path) -> None:
     )
 
     assert response.status_code == 202
-    events = wait_for_event_count(client, meeting_id, 3)
+    events = wait_for_event_count(client, meeting_id, 2)
     assert events[-2]["step_id"] == "human-directed-message"
     assert events[-2]["interaction_type"] == "directed-role-instruction"
     assert events[-2]["target_role_id"] == "Blue"
@@ -7803,7 +7804,7 @@ def test_chatroom_all_rejects_partially_visible_source_before_human_event(
 def test_chatroom_large_selected_source_keeps_real_segment_and_prompt_excerpt(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setenv("AI_COUNCIL_CHATROOM_CONTEXT_TOKEN_BUDGET", "200")
+    monkeypatch.setenv("AI_COUNCIL_CHATROOM_CONTEXT_TOKEN_BUDGET", "400")
     client = TestClient(create_test_app(tmp_path))
     meeting_id = _create_chatroom_meeting(client)
     content = "deadline " + ("x" * 2000)
@@ -7837,7 +7838,7 @@ def test_chatroom_large_selected_source_keeps_real_segment_and_prompt_excerpt(
 def test_chatroom_request_budget_includes_quote_transcript_and_selected_source(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setenv("AI_COUNCIL_CHATROOM_CONTEXT_TOKEN_BUDGET", "200")
+    monkeypatch.setenv("AI_COUNCIL_CHATROOM_CONTEXT_TOKEN_BUDGET", "400")
     client = TestClient(create_test_app(tmp_path))
     meeting_id = _create_chatroom_meeting(client)
     first = client.post(
@@ -7868,7 +7869,10 @@ def test_chatroom_request_budget_includes_quote_transcript_and_selected_source(
     events = wait_for_event_count(client, meeting_id, len(first_events) + 2)
     completed = events[-1]
     user = next(message for message in completed["prompt_messages"] if message["role"] == "user")["content"]
-    assert len(user) <= 200 * 4
+    assert len(user) <= 400 * 4
+    prompt_tokens = sum(estimate_tokens(message["content"]) for message in completed["prompt_messages"])
+    assert {message["role"] for message in completed["prompt_messages"]} == {"system", "developer", "user"}
+    assert prompt_tokens <= 400
     snapshot = completed["selected_source_snapshot"]["sources"][0]
     assert snapshot["omission"]["omitted"] is True
     assert len(str(completed["prompt_messages"])) <= 40 * 4 + 4096

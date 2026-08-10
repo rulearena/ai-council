@@ -48,6 +48,7 @@ const emit = defineEmits<{
   'retry-upload': [entry: UploadEntry]
   'dismiss-upload': [entry: UploadEntry]
   'text-draft-consumed': []
+  'citation-close': []
 }>()
 
 const store = inject(councilKey)!
@@ -164,6 +165,11 @@ async function openCitationReader() {
   if (!readerRef || !sourceRef || citationReaderOpen.value) return
   const source = selectedMeeting.value?.chatroom_sources?.find((item) => item.source_ref === sourceRef)
   if (!source?.active || !source.readable || source.reader_ref !== readerRef) return
+  // Evidence bodies come from the authoritative materials request.  A first
+  // citation click may race that request; keep the parent target pending and
+  // retry when `materials` changes instead of converting loading into a
+  // permanent unavailable reader.
+  if (readerRef.startsWith('evidence:') && !materials.value) return
   citationReaderOpen.value = true
   citationReaderLoading.value = true
   citationReaderError.value = ''
@@ -197,6 +203,9 @@ watch(
 function closeCitationReader() {
   citationReaderOpen.value = false
   citationReaderContent.value = ''
+  citationReaderLoading.value = false
+  citationReaderError.value = ''
+  emit('citation-close')
 }
 
 function edit(item: VersionedCaseMaterial, kind: 'evidence' | 'note') {
