@@ -3661,7 +3661,7 @@ def project_case_materials(
             # would incorrectly turn invalid material into legacy Host access.
             **(
                 {"host_acl_explicit": version.host_acl_explicit}
-                if version.host_acl_explicit is not None
+                if version.host_acl_explicit_present
                 else {}
             ),
         }

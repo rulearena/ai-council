@@ -7770,6 +7770,85 @@ def test_chatroom_no_source_reference_never_reads_blob_or_material_body(
     assert read_calls == []
 
 
+@pytest.mark.parametrize("marker", [None, False, "true", 0, 1])
+def test_chatroom_persisted_present_non_true_acl_marker_fails_closed_before_send(
+    tmp_path: Path, marker: object,
+) -> None:
+    client = TestClient(create_test_app(tmp_path))
+    meeting_id = _create_chatroom_meeting(client)
+    created = client.post(
+        f"/meetings/{meeting_id}/materials/evidence",
+        json={
+            "revision": 0,
+            "title": "顧問限定",
+            "content": "advisor-only body",
+            "visible_roles": ["Advisor"],
+        },
+    )
+    assert created.status_code == 200
+
+    repository = MeetingRepository(tmp_path / "data")
+    persisted = repository.read_case_materials_raw(meeting_id)
+    assert isinstance(persisted, dict)
+    version = persisted["evidence"][0]["versions"][0]
+    version["host_acl_explicit"] = marker
+    repository.save_case_materials(meeting_id, persisted)
+
+    source = client.get(f"/meetings/{meeting_id}/chat/sources").json()[0]
+    assert source["acl_invalid"] is True
+    assert source["readable"] is False
+    assert "host" not in source["visible_roles"]
+
+    before = client.get(f"/meetings/{meeting_id}").json()["events"]
+    response = client.post(
+        f"/meetings/{meeting_id}/chat/mention",
+        json={
+            "content": "#顧問限定 請查看",
+            "mentions": [],
+            "source_tokens": [{
+                "token_id": "source-1",
+                "source_ref": source["source_ref"],
+                "display_text": "#顧問限定",
+                "start": 0,
+                "end": len("#顧問限定"),
+            }],
+            "source_refs": [source["source_ref"]],
+            "quoted_event_id": None,
+        },
+    )
+    assert response.status_code == 400
+    assert response.json()["error"]["code"] == "INVALID_SOURCE_REF"
+    assert client.get(f"/meetings/{meeting_id}").json()["events"] == before
+
+
+def test_chatroom_persisted_absent_acl_marker_keeps_legacy_host_fallback(
+    tmp_path: Path,
+) -> None:
+    client = TestClient(create_test_app(tmp_path))
+    meeting_id = _create_chatroom_meeting(client)
+    created = client.post(
+        f"/meetings/{meeting_id}/materials/evidence",
+        json={
+            "revision": 0,
+            "title": "舊資料",
+            "content": "legacy body",
+            "visible_roles": ["Advisor"],
+        },
+    )
+    assert created.status_code == 200
+
+    repository = MeetingRepository(tmp_path / "data")
+    persisted = repository.read_case_materials_raw(meeting_id)
+    assert isinstance(persisted, dict)
+    persisted["evidence"][0]["versions"][0].pop("host_acl_explicit")
+    repository.save_case_materials(meeting_id, persisted)
+
+    source = client.get(f"/meetings/{meeting_id}/chat/sources").json()[0]
+    assert source["acl_invalid"] is False
+    assert source["readable"] is True
+    assert "host" in source["visible_roles"]
+
+
 def test_chatroom_all_rejects_partially_visible_source_before_human_event(
     tmp_path: Path,
 ) -> None:

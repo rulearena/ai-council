@@ -187,6 +187,8 @@ Human Owner 已明確確認 #96 驗收通過，狀態為 `accepted / done`。Exa
 
 ## 6. 交接時的未結事項
 
+**2026-08-10 #103 Slice 3 ACL finding 修正 Executor continuation**：固定 failed HEAD `31a535a37bae0b86c8ddc59dd4fe9833c4ee03fc`、approved base `521d6c1398da449ed1fa2920aae62cb49e5785d7`。只修 marker presence/value 分離：persisted `null`／`false`／字串／`0`／`1` 均在 source projection fail-closed，Host 不進 `visible_roles`，明確 source request 於 AI 執行前回 `400 INVALID_SOURCE_REF` 且不增加 events；真正缺席的 legacy marker 仍 fallback。新增 API matrix **6 passed**、source/case **24 passed**、isolated runner/prompt/context **1 + 85 passed**；frontend unit **180 passed**、production build、OpenSpec strict；installed Chrome channel `13.10c`／`13.10d`／`13.10e` **3/3 passed**。full backend 未執行；仍未獨立 Gate B re-review、merge 或 Human acceptance，tracked implementation commit 待建立。
+
 - Mode system slice A–D、§17、Backlog 75–78 均已完成並驗證。
 - Evidence to Verdict 批次（backlog 80、63–65）已實作、雙軸 review 與完整驗收通過，等待 Human Owner acceptance。
 - Backlog 81 已實作、雙軸 review 與完整驗收通過，等待 Human Owner acceptance。

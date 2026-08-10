@@ -35,6 +35,7 @@ class MaterialVersion:
     created_at: str | None
     source_event_id: str | None
     host_acl_explicit: bool | None = None
+    host_acl_explicit_present: bool = False
 
 
 @dataclass(frozen=True)
@@ -701,7 +702,8 @@ class CaseMaterials:
             size=int(version["size"]),
             created_at=version.get("created_at"),
             source_event_id=version.get("source_event_id"),
-            host_acl_explicit=version.get("host_acl_explicit") if "host_acl_explicit" in version else None,
+            host_acl_explicit=version.get("host_acl_explicit"),
+            host_acl_explicit_present="host_acl_explicit" in version,
         )
 
     @staticmethod
