@@ -612,6 +612,63 @@ test('13.10c emoji + @顧問 + #待辦總覽.md sends exact source tokens', asyn
   expect(payload.source_refs).toEqual([payload.source_tokens[0].source_ref])
 })
 
+test('13.10d citation chip opens its exact reader target and becomes unavailable after deletion', async ({ page }) => {
+  await page.goto('/')
+  const title = `E2E chatroom citation reader ${Date.now()}`
+  const meetingId = await createChatroomMeeting(page, title, { modelAssignments: defaultModels })
+
+  await page.getByTestId('attachment-upload-input').setInputFiles({
+    name: '引用來源.md',
+    mimeType: 'text/markdown',
+    buffer: Buffer.from('citation body', 'utf-8'),
+  })
+  await expect(page.getByTestId('source-autocomplete')).toBeVisible({ timeout: 15_000 })
+
+  // Inject a persisted-shape completed event only at the public meeting GET
+  // boundary. This keeps the test on the real workspace, citation chip, and
+  // materials reader seams without coupling it to the mock model's prose.
+  let citationRef = ''
+  await page.route(`**/meetings/${meetingId}`, async (route) => {
+    if (route.request().method() !== 'GET') return route.continue()
+    const upstream = await route.fetch()
+    const body = await upstream.json() as {
+      events: Array<Record<string, unknown>>
+      chatroom_sources?: Array<{ source_ref: string }>
+    }
+    const source = body.chatroom_sources?.find((candidate) => candidate.source_ref.startsWith('attachment:'))
+    if (source && !citationRef) citationRef = source.source_ref
+    if (citationRef) {
+      body.events.push({
+        event_id: `${meetingId}:chat-directed-1-host-response:completed`,
+        meeting_id: meetingId,
+        step_id: 'chat-directed-1-host-response',
+        role: 'host',
+        status: 'completed',
+        attempt: 1,
+        content: '已核對來源',
+        parsed_output: {
+          message: '已核對來源',
+          attachment_refs: [{ source_ref: citationRef, label: '引用來源.md', segment_refs: ['full'] }],
+        },
+      })
+    }
+    await route.fulfill({ response: upstream, body: JSON.stringify(body) })
+  })
+
+  await page.reload()
+  await openChatroom(page, title)
+  await expect(page.getByTestId(`citation-chip-${citationRef}`)).toBeVisible()
+  await page.getByTestId(`citation-chip-${citationRef}`).click()
+  await expect(page.getByTestId('context-tab-materials')).toHaveClass(/active/)
+  await expect(page.locator(`[data-citation-source-ref="${citationRef}"]`)).toBeVisible()
+
+  await page.once('dialog', (dialog) => dialog.accept())
+  await page.locator(`[data-citation-source-ref="${citationRef}"]`).locator('[data-testid^="attachment-delete-"]').click()
+  const unavailable = page.getByTestId(`citation-chip-${citationRef}`)
+  await expect(unavailable).toBeDisabled()
+  await expect(unavailable).toContainText('不可用')
+})
+
 test('13.10a mention active descendant stays valid when participants shrink', async ({ page }) => {
   await page.goto('/')
   const title = `E2E chatroom autocomplete participants shrink ${Date.now()}`

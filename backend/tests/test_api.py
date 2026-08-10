@@ -3350,7 +3350,7 @@ models:
     )
 
     assert retried.status_code == 202
-    events = wait_for_event_count(client, meeting_id, 3)
+    events = wait_for_event_count(client, meeting_id, 2)
     assert len([event for event in events if event["role"] == "Human"]) == 1
     completed = events[-1]
     assert completed["status"] == "completed"
@@ -7735,6 +7735,103 @@ def test_chatroom_sources_project_mirror_once_and_freezes_selected_context(
     assert "deadline: tomorrow" not in str(snapshot)
     assert snapshot["sources"][0]["available_segment_refs"] == ["full"]
     assert "deadline: tomorrow" in str(response_event["prompt_messages"])
+
+
+def test_chatroom_no_source_reference_never_reads_blob_or_material_body(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = TestClient(create_test_app(tmp_path))
+    meeting_id = _create_chatroom_meeting(client)
+    material = client.post(
+        f"/meetings/{meeting_id}/materials/evidence",
+        json={"revision": 0, "title": "機密.md", "content": "TOP SECRET BODY", "visible_roles": ["host"]},
+    )
+    assert material.status_code == 200
+    before = client.get(f"/meetings/{meeting_id}").json()["events"]
+    read_calls: list[str] = []
+    original_read_bytes = Path.read_bytes
+
+    def spy_read_bytes(path: Path) -> bytes:
+        read_calls.append(str(path))
+        return original_read_bytes(path)
+
+    monkeypatch.setattr(Path, "read_bytes", spy_read_bytes)
+    response = client.post(
+        f"/meetings/{meeting_id}/chat/mention",
+        json=_structured_chat_payload("請看機密.md 並回答"),
+    )
+    assert response.status_code == 202
+    events = wait_for_event_count(client, meeting_id, len(before) + 2)
+    prompt_events = [event for event in events if event.get("prompt_messages")]
+    assert prompt_events
+    assert all("TOP SECRET BODY" not in str(event) for event in prompt_events)
+    assert all(event.get("selected_source_snapshot", {}).get("source_refs") == [] for event in prompt_events)
+    assert read_calls == []
+
+
+def test_chatroom_all_rejects_partially_visible_source_before_human_event(
+    tmp_path: Path,
+) -> None:
+    client = TestClient(create_test_app(tmp_path))
+    meeting_id = _create_chatroom_meeting(client)
+    created = client.post(
+        f"/meetings/{meeting_id}/materials/evidence",
+        json={"revision": 0, "title": "顧問限定", "content": "advisor only", "visible_roles": ["Advisor"]},
+    )
+    assert created.status_code == 200
+    source = client.get(f"/meetings/{meeting_id}/chat/sources").json()[0]
+    before = client.get(f"/meetings/{meeting_id}").json()["events"]
+    content = "@全部角色 #顧問限定 請比較"
+    response = client.post(
+        f"/meetings/{meeting_id}/chat/mention",
+        json={
+            "content": content,
+            "mentions": [{"token_id": "m-1", "role_id": "all", "display_text": "@全部角色", "start": 0, "end": 5}],
+            "source_tokens": [{"token_id": "s-1", "source_ref": source["source_ref"], "display_text": "#顧問限定", "start": 6, "end": 11}],
+            "source_refs": [source["source_ref"]],
+            "quoted_event_id": None,
+        },
+    )
+    assert response.status_code == 400
+    assert response.json() == {
+        "status": "rejected",
+        "error": {"code": "SOURCE_NOT_VISIBLE_TO_TARGET", "field": "source_refs", "details": [{"source_ref": source["source_ref"], "role_id": "host"}]},
+    }
+    assert client.get(f"/meetings/{meeting_id}").json()["events"] == before
+
+
+def test_chatroom_large_selected_source_keeps_real_segment_and_prompt_excerpt(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("AI_COUNCIL_CHATROOM_CONTEXT_TOKEN_BUDGET", "1")
+    client = TestClient(create_test_app(tmp_path))
+    meeting_id = _create_chatroom_meeting(client)
+    content = "deadline " + ("x" * 2000)
+    created = client.post(
+        f"/meetings/{meeting_id}/materials/evidence",
+        json={"revision": 0, "title": "長段落", "content": content, "visible_roles": ["host"]},
+    )
+    assert created.status_code == 200
+    source = client.get(f"/meetings/{meeting_id}/chat/sources").json()[0]
+    text = "#長段落 deadline"
+    response = client.post(
+        f"/meetings/{meeting_id}/chat/mention",
+        json={
+            "content": text,
+            "mentions": [],
+            "source_tokens": [{"token_id": "s-1", "source_ref": source["source_ref"], "display_text": "#長段落", "start": 0, "end": 4}],
+            "source_refs": [source["source_ref"]],
+            "quoted_event_id": None,
+        },
+    )
+    assert response.status_code == 202
+    events = wait_for_event_count(client, meeting_id, 2)
+    completed = events[-1]
+    snapshot = completed["selected_source_snapshot"]["sources"][0]
+    assert snapshot["available_segment_refs"]
+    assert snapshot["omission"]["omitted"] is True
+    assert content not in str(completed["selected_source_snapshot"])
+    assert "deadline" in str(completed["prompt_messages"])
 
 
 def test_upload_text_file_in_non_chatroom_still_rejected(tmp_path: Path) -> None:

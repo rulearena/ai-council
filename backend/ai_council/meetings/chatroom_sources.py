@@ -30,8 +30,10 @@ def _active_version(item: dict[str, Any]) -> dict[str, Any] | None:
 
 
 def _host_acl_is_valid(version: dict[str, Any]) -> bool:
-    marker = version.get("host_acl_explicit")
-    return marker is None or marker is True
+    # Only an absent marker is legacy data.  ``None`` is an explicitly stored,
+    # non-boolean marker and must fail closed just like False, strings, and
+    # numbers; otherwise malformed new records could become readable sources.
+    return "host_acl_explicit" not in version or version.get("host_acl_explicit") is True
 
 
 def _host_acl_is_invalid(version: dict[str, Any]) -> bool:
@@ -220,14 +222,22 @@ def retrieve_source_segments(
     )
     selected: list[tuple[int, str]] = []
     used = 0
+    truncated = False
     for index, line in ranked:
         cost = len(line) + (1 if selected else 0)
         if used + cost > max(1, char_budget):
             continue
         selected.append((index, line))
         used += cost
+    if not selected and ranked:
+        # A relevant paragraph may itself exceed the remaining budget. Keep a
+        # real segment identity and bounded prefix rather than returning an
+        # apparently readable source with an empty prompt excerpt.
+        index, line = ranked[0]
+        selected.append((index, line[:max(1, char_budget)]))
+        truncated = len(line) > max(1, char_budget)
     selected.sort(key=lambda item: item[0])
     return [
         {"segment_ref": f"paragraph:{index:04d}", "content": line}
         for index, line in selected
-    ], len(selected) < len(lines)
+    ], truncated or len(selected) < len(lines)

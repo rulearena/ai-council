@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pytest
+
 from ai_council.meetings.chatroom_sources import (
     project_chatroom_sources,
     retrieve_source_segments,
@@ -150,6 +152,34 @@ def test_invalid_present_host_acl_marker_is_distinct_from_unreadable() -> None:
     assert validate_chatroom_sources(sources, ["evidence:bad"], ["host"])[1] == "INVALID_SOURCE_REF"
 
 
+@pytest.mark.parametrize("marker", [False, None, "true", 1])
+def test_present_non_true_host_acl_markers_are_invalid_and_not_legacy_fallback(marker) -> None:
+    materials = {
+        "evidence": [{
+            "id": "evidence:bad",
+            "status": "active",
+            "active_version": 1,
+            "versions": [{
+                "version": 1,
+                "title": "bad marker",
+                "content": "body",
+                "visible_roles": ["host"],
+                "host_acl_explicit": marker,
+            }],
+        }],
+        "notes": [],
+    }
+    source = project_chatroom_sources(
+        meeting_id="meeting-1",
+        materials=materials,
+        attachment_events=[],
+        active_role_ids=["host"],
+    )[0]
+    assert source["acl_invalid"] is True
+    assert source["readable"] is False
+    assert source["visible_roles"] == []
+
+
 def test_large_source_retrieval_ranks_matching_paragraphs_and_keeps_real_ids() -> None:
     content = "\n".join([
         "background one",
@@ -160,4 +190,14 @@ def test_large_source_retrieval_ranks_matching_paragraphs_and_keeps_real_ids() -
     segments, omitted = retrieve_source_segments(content, query="deadline decision", char_budget=32)
     assert [item["segment_ref"] for item in segments] == ["paragraph:0003"]
     assert "deadline" in segments[0]["content"]
+    assert omitted is True
+
+
+def test_large_single_paragraph_never_returns_an_empty_retrieval() -> None:
+    segments, omitted = retrieve_source_segments(
+        "deadline " + "x" * 200,
+        query="deadline",
+        char_budget=8,
+    )
+    assert segments == [{"segment_ref": "paragraph:0001", "content": "deadline"}]
     assert omitted is True

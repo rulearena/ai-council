@@ -119,6 +119,11 @@ function openCitation(citation: ChatroomCitation) {
   if (!state.available) return
   citationSourceRef.value = citation.source_ref
   openMaterialsTab()
+  nextTick(() => {
+    document
+      .querySelector<HTMLElement>(`[data-citation-source-ref="${CSS.escape(citation.source_ref)}"]`)
+      ?.scrollIntoView({ block: 'nearest' })
+  })
 }
 
 const workspace = computed<ConversationWorkspaceProjection | null>(() => {
@@ -135,6 +140,7 @@ const workspace = computed<ConversationWorkspaceProjection | null>(() => {
 watch(() => selectedMeeting.value?.meeting_id, () => {
   roleFilter.value = null
   expandedMessageIds.value = new Set()
+  citationSourceRef.value = null
 })
 
 const selectedRoleId = computed(() => {
