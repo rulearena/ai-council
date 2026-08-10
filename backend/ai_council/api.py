@@ -86,7 +86,6 @@ from ai_council.meetings.chatroom_sources import (
     SourceSnapshotError,
     validate_chatroom_sources,
 )
-from ai_council.meetings.chatroom_context import estimate_prompt_tokens
 from ai_council.meetings.input_envelope import CASE_EVIDENCE_BY_ROLE_INPUT
 from ai_council.meetings.runner import (
     CASE_FILES_BY_ROLE_INPUT,
@@ -2694,38 +2693,18 @@ def create_app(
                 return JSONResponse(status_code=400, content=rejected("INVALID_REQUEST_SCHEMA", None))
             target_role_ids = routing.target_role_ids
             request_budget_tokens = int(os.environ.get("AI_COUNCIL_CHATROOM_CONTEXT_TOKEN_BUDGET", "4096"))
-            source_placeholder = "__selected_source__" if request.source_refs else ""
-            prompt_reservations = [
-                runner.chatroom_prompt_budget_tokens(
-                    role=role,
-                    role_display_name=role_display_names.get(role, role),
-                    goal=str(metadata.get("goal", "")),
-                    instruction=routing.instruction,
-                    prior_transcript="",
-                    persona_prompt=str(inputs.get("__chatroom_persona_prompts", {}).get(role, "")),
-                    source_placeholder=source_placeholder,
-                )
-                for role in target_role_ids
-            ]
-            # A fanout/retry uses one frozen source snapshot but each target
-            # may have a different Persona. Reserve the worst fixed layer so
-            # every actual adapter request satisfies the same request budget.
-            prompt_reservation = max(prompt_reservations, default=0)
-            if source_placeholder:
-                prompt_reservation -= estimate_prompt_tokens([{"content": source_placeholder}])
-            inputs["__chatroom_prior_transcript"] = runner.chatroom_context_builder.build_request_context(
-                runner._active_events(meeting_id),
-                goal=str(metadata.get("goal", "")),
-                instruction=routing.instruction,
-                quoted_event_id=request.quoted_event_id,
-                reserved_tokens=max(0, prompt_reservation),
-            )
             human_event_fields = {
                 "mentions": [token.model_dump() for token in request.mentions],
                 "source_tokens": [token.model_dump() for token in request.source_tokens],
                 "source_refs": list(request.source_refs),
             }
 
+            # Validate the metadata projection before reserving prompt space or
+            # opening any selected body.  The exact projected labels/refs are
+            # sufficient to build the allow-list envelope; bodies are read only
+            # by _build_chatroom_source_snapshot below.
+            source_projection: list[dict[str, Any]] = []
+            selected_sources: list[dict[str, Any]] = []
             if request.source_refs:
                 source_projection = chatroom_source_projection(meeting_id, metadata, mode)
                 valid, source_error, bad_source_ref, bad_role_id = validate_chatroom_sources(
@@ -2742,35 +2721,68 @@ def create_app(
                         status_code=400,
                         content=rejected(source_error or "INVALID_SOURCE_REF", "source_refs", details),
                     )
+                by_ref = {str(item["source_ref"]): item for item in source_projection}
+                selected_sources = [by_ref[ref] for ref in request.source_refs]
+
+            source_allow_list = runner.chatroom_source_allow_list(selected_sources)
+            retry_feedback = runner.chatroom_retry_feedback(selected_sources)
+
+            def prompt_budget_for(role: str, prior_transcript: str, feedback: str = "") -> int:
+                return runner.chatroom_prompt_budget_tokens(
+                    role=role,
+                    role_display_name=role_display_names.get(role, role),
+                    goal=str(metadata.get("goal", "")),
+                    instruction=routing.instruction,
+                    prior_transcript=prior_transcript,
+                    persona_prompt=str(inputs.get("__chatroom_persona_prompts", {}).get(role, "")),
+                    source_allow_list=source_allow_list,
+                    validation_feedback=feedback,
+                )
+
+            def max_fixed_prompt_budget(prior_transcript: str) -> int:
+                # Both the first request and its one automatic retry must fit
+                # the same configured request budget.
+                return max(
+                    max(prompt_budget_for(role, prior_transcript), prompt_budget_for(role, prior_transcript, retry_feedback))
+                    for role in target_role_ids
+                ) if target_role_ids else 0
+
+            inputs["__chatroom_prior_transcript"] = runner.chatroom_context_builder.build_request_context(
+                runner._active_events(meeting_id),
+                goal=str(metadata.get("goal", "")),
+                instruction=routing.instruction,
+                quoted_event_id=request.quoted_event_id,
+                # Keep transcript selection below the exact fixed envelope so
+                # prompt framing and integer estimator floors cannot consume
+                # the final request token.
+                reserved_tokens=max_fixed_prompt_budget("") + 8,
+            )
+
+            # Leave the remaining request budget for selected excerpts. Four
+            # chars per token is conservative for the mixed CJK/ASCII estimator.
+            if request.source_refs:
                 try:
+                    materials = project_case_materials(
+                        case_materials.view(meeting_id),
+                        active_epoch_id=DeliberationEpochs.view(repository.read_events(meeting_id)).active_epoch.id,
+                        mode_id=metadata.get("mode_id"),
+                        category=mode.category,
+                    )
                     inputs["__chatroom_source_snapshot"] = _build_chatroom_source_snapshot(
                         meeting_id=meeting_id,
                         source_refs=list(request.source_refs),
                         source_projection=source_projection,
-                        materials=project_case_materials(
-                            case_materials.view(meeting_id),
-                            active_epoch_id=DeliberationEpochs.view(repository.read_events(meeting_id)).active_epoch.id,
-                            mode_id=metadata.get("mode_id"),
-                            category=mode.category,
-                        ),
+                        materials=materials,
                         instruction=routing.instruction,
                         remaining_budget_chars=max(
                             0,
                             request_budget_tokens
-                            - max(
-                                runner.chatroom_prompt_budget_tokens(
-                                    role=role,
-                                    role_display_name=role_display_names.get(role, role),
-                                    goal=str(metadata.get("goal", "")),
-                                    instruction=routing.instruction,
-                                    prior_transcript=str(inputs["__chatroom_prior_transcript"]),
-                                    persona_prompt=str(inputs.get("__chatroom_persona_prompts", {}).get(role, "")),
-                                    source_placeholder=source_placeholder,
-                                )
-                                for role in target_role_ids
-                            )
-                            - estimate_prompt_tokens([{"content": source_placeholder}]),
-                        ) * 2,
+                            - max_fixed_prompt_budget(str(inputs["__chatroom_prior_transcript"]))
+                            - 8,
+                        # Keep a small deterministic headroom for the source
+                        # section framing and estimator floor; body text still
+                        # uses the conservative four-chars-per-token bound.
+                        ) * 4,
                     )
                 except SourceSnapshotError:
                     return JSONResponse(

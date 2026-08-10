@@ -1471,7 +1471,7 @@ class MeetingRunner:
             + (
                 "\n若使用選取來源中的具體事實，attachment_refs 必須精確引用實際可用來源與 segment_refs；"
                 "一般聊天可省略。"
-                if source_context
+                if source_context or source_allow_list
                 else ""
             )
             + source_allow_list
@@ -1495,10 +1495,7 @@ class MeetingRunner:
         return prompt, messages
 
     @staticmethod
-    def _chatroom_source_allow_list(inputs: dict[str, Any] | None) -> str:
-        """Return explicit citation choices without weakening server-side validation."""
-        snapshot = (inputs or {}).get("__chatroom_source_snapshot", {})
-        sources = snapshot.get("selected_source_snapshot", {}).get("sources", [])
+    def _format_chatroom_source_allow_list(sources: list[dict[str, Any]]) -> str:
         allowed = [
             {
                 "source_ref": str(source.get("source_ref")),
@@ -1511,15 +1508,27 @@ class MeetingRunner:
         if not allowed:
             return ""
         return (
-            "\n可引用來源的 exact allow-list（source_ref、label、segment_refs 必須逐字相同）："
-            f"{json.dumps(allowed, ensure_ascii=False)}"
+            "\nExact legal citations (source_ref/label/segment_refs):"
+            f"{json.dumps(allowed, ensure_ascii=False, separators=(',', ':'))}"
+        )
+
+    @classmethod
+    def chatroom_source_allow_list(cls, sources: list[dict[str, Any]]) -> str:
+        """Format the exact source metadata used in prompts and reservations."""
+        return cls._format_chatroom_source_allow_list(sources)
+
+    @classmethod
+    def _chatroom_source_allow_list(cls, inputs: dict[str, Any] | None) -> str:
+        """Return explicit citation choices without weakening server-side validation."""
+        snapshot = (inputs or {}).get("__chatroom_source_snapshot", {})
+        sources = snapshot.get("selected_source_snapshot", {}).get("sources", [])
+        return cls._format_chatroom_source_allow_list(
+            [source for source in sources if isinstance(source, dict)]
         )
 
     @staticmethod
-    def _chatroom_retry_feedback(error: OutputParseError, inputs: dict[str, Any] | None) -> str:
-        snapshot = (inputs or {}).get("__chatroom_source_snapshot", {})
-        sources = snapshot.get("selected_source_snapshot", {}).get("sources", [])
-        allowed = [
+    def _format_chatroom_retry_feedback(sources: list[dict[str, Any]]) -> str:
+        allow_list = [
             {
                 "source_ref": str(source.get("source_ref")),
                 "label": str(source.get("label")),
@@ -1528,14 +1537,37 @@ class MeetingRunner:
             for source in sources
             if isinstance(source, dict)
         ]
-        lines = " ".join(
-            f"Allowed segment_refs for {item['label']}: {json.dumps(item['segment_refs'], ensure_ascii=False)}."
-            for item in allowed
+        if not allow_list:
+            return (
+                "\n上一個輸出未通過引用驗證；重送 JSON；若引用，只用本回合 exact refs。"
+            )
+        feedback = (
+            "\n上一個輸出未通過引用驗證；重送 JSON；attachment_refs segment_refs must be non-empty strings；"
+            "只用上方 exact allow-list。"
         )
-        return (
-            "\n上一個輸出未通過引用驗證："
-            f"{error}。請重新輸出完整 JSON；不要輸出空的 segment_refs，只能使用 exact source_ref、label 與允許值。 "
-            f"{lines}"
+        # Keep the legacy human-readable hint for ordinary labels, but never
+        # duplicate an arbitrarily long label into retry feedback.  The exact
+        # full allow-list above remains the authoritative legal set.
+        if all(len(str(source.get("label", ""))) <= 80 for source in sources):
+            hints = " ".join(
+                f"Allowed segment_refs for {source.get('label')}: "
+                f"{json.dumps(list(source.get('available_segment_refs', [])), ensure_ascii=False)}."
+                for source in sources
+            )
+            feedback += f" {hints}"
+        return feedback
+
+    @classmethod
+    def chatroom_retry_feedback(cls, sources: list[dict[str, Any]]) -> str:
+        """Return the bounded correction envelope reserved for a citation retry."""
+        return cls._format_chatroom_retry_feedback(sources)
+
+    @classmethod
+    def _chatroom_retry_feedback(cls, error: OutputParseError, inputs: dict[str, Any] | None) -> str:
+        snapshot = (inputs or {}).get("__chatroom_source_snapshot", {})
+        sources = snapshot.get("selected_source_snapshot", {}).get("sources", [])
+        return cls._format_chatroom_retry_feedback(
+            [source for source in sources if isinstance(source, dict)]
         )
 
     def chatroom_prompt_budget_tokens(
@@ -1548,9 +1580,16 @@ class MeetingRunner:
         prior_transcript: str,
         persona_prompt: str,
         source_placeholder: str = "",
+        source_allow_list: str = "",
+        validation_feedback: str = "",
     ) -> int:
         """Expose the canonical prompt cost used by request-wide allocation."""
         output_schema = self.output_schemas.get(CHAT_MESSAGE_V1_ID)
+        # Reserve the source-section framing without guessing the selected body
+        # length.  The API allocates the residual to excerpts separately.
+        reservation_source_context = source_placeholder
+        if source_allow_list and not reservation_source_context:
+            reservation_source_context = "\n"
         _, messages = self._chatroom_prompt(
             role=role,
             role_display_name=role_display_name,
@@ -1559,20 +1598,11 @@ class MeetingRunner:
             prior_transcript=prior_transcript,
             required_json_schema=output_schema.schema,
             persona_prompt=persona_prompt,
-            source_context=source_placeholder,
+            source_context=reservation_source_context,
+            source_allow_list=source_allow_list,
+            validation_feedback=validation_feedback,
         )
         prompt_tokens = estimate_prompt_tokens(messages)
-        if source_placeholder:
-            # The request budget is reserved before source retrieval knows the final
-            # labels/refs. Reserve the citation guidance envelope here so the exact
-            # snapshot allow-list added later cannot push the request over budget.
-            prompt_tokens += estimate_prompt_tokens([{
-                "content": (
-                    "Allowed exact source citation choices: source_ref=<exact selected source_ref>; "
-                    "label=<exact selected label>; Allowed segment_refs for each selected source "
-                    "are the exact listed segment refs, such as [\"full\"]."
-                ),
-            }])
         return prompt_tokens
 
     @staticmethod

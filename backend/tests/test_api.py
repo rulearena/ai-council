@@ -7957,6 +7957,80 @@ def test_chatroom_request_budget_includes_quote_transcript_and_selected_source(
     assert len(str(completed["prompt_messages"])) <= 40 * 4 + 4096
 
 
+def test_chatroom_long_source_metadata_and_retry_stay_within_request_budget(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    request_budget = 1050
+    monkeypatch.setenv("AI_COUNCIL_CHATROOM_CONTEXT_TOKEN_BUDGET", str(request_budget))
+    requests: list[ModelRequest] = []
+    selected: dict[str, str] = {}
+
+    def citation_retry(self: MockModelAdapter, request: ModelRequest) -> ModelResponse:
+        requests.append(request)
+        segment_refs = [] if len(requests) == 1 else ["full"]
+        return ModelResponse(json.dumps({
+            "message": "依據來源",
+            "attachment_refs": [{
+                "source_ref": selected["source_ref"],
+                "label": selected["label"],
+                "segment_refs": segment_refs,
+            }],
+        }, ensure_ascii=False))
+
+    monkeypatch.setattr(MockModelAdapter, "complete", citation_retry)
+    client = TestClient(create_test_app(tmp_path))
+    meeting_id = _create_chatroom_meeting(client)
+    long_label = "很長的來源標題" * 65
+    source_body = "本週必須完成驗收與部署。"
+    created = client.post(
+        f"/meetings/{meeting_id}/materials/evidence",
+        json={
+            "revision": 0,
+            "title": long_label,
+            "content": source_body,
+            "visible_roles": ["host"],
+        },
+    )
+    assert created.status_code == 200
+    source = client.get(f"/meetings/{meeting_id}/chat/sources").json()[0]
+    selected.update(source_ref=source["source_ref"], label=source["label"])
+    content = f"#{long_label} 請依附件回答"
+
+    response = client.post(
+        f"/meetings/{meeting_id}/chat/mention",
+        json={
+            "content": content,
+            "mentions": [],
+            "source_tokens": [{
+                "token_id": "s-1",
+                "source_ref": source["source_ref"],
+                "display_text": f"#{long_label}",
+                "start": 0,
+                "end": len(long_label) + 1,
+            }],
+            "source_refs": [source["source_ref"]],
+            "quoted_event_id": None,
+        },
+    )
+
+    assert response.status_code == 202
+    events = wait_for_event_count(client, meeting_id, 3)
+    assert len(requests) == 2
+    assert all(request.messages is not None for request in requests)
+    prompt_token_counts = [
+        sum(estimate_tokens(message["content"]) for message in request.messages or [])
+        for request in requests
+    ]
+    assert prompt_token_counts and max(prompt_token_counts) <= request_budget, prompt_token_counts
+    attempts = [event for event in events if event.get("role") == "host"]
+    assert [event["status"] for event in attempts] == ["failed", "completed"]
+    snapshot = attempts[-1]["selected_source_snapshot"]["sources"][0]
+    assert snapshot["available_segment_refs"] == ["full"]
+    assert snapshot["omission"]["omitted"] is False
+    assert "content" not in snapshot
+    assert source_body in requests[-1].prompt
+
+
 def test_upload_text_file_in_non_chatroom_still_rejected(tmp_path: Path) -> None:
     app = create_test_app(tmp_path)
     client = TestClient(app)
