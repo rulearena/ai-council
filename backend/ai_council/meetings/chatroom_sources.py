@@ -54,6 +54,16 @@ def _evidence_visible(version: dict[str, Any], role_id: str) -> bool:
     return role_id == "host" and "host_acl_explicit" not in version
 
 
+def _content_valid(version: dict[str, Any]) -> bool:
+    """Accept only an explicit write-time body validity marker.
+
+    Size is retained for quotas and display, but is not evidence that the
+    persisted body is readable.  Missing markers are legacy/unknown and fail
+    closed on the body-free chat POST path.
+    """
+    return version.get("content_valid") is True
+
+
 def _source_entry(
     *,
     source_ref: str,
@@ -130,10 +140,7 @@ def project_chatroom_sources(
             readable = (
                 readable
                 and _host_acl_is_valid(version)
-                and (
-                    (isinstance(version.get("content"), str) and bool(version.get("content")))
-                    or int(version.get("size", 0) or 0) > 0
-                )
+                and _content_valid(version)
             )
         result.append(
             _source_entry(
@@ -157,10 +164,7 @@ def project_chatroom_sources(
         if version is None:
             continue
         content = version.get("content")
-        readable = _host_acl_is_valid(version) and (
-            (isinstance(content, str) and bool(content))
-            or int(version.get("size", 0) or 0) > 0
-        )
+        readable = _host_acl_is_valid(version) and _content_valid(version)
         visible_roles = [
             role_id for role_id in active_role_ids if _evidence_visible(version, role_id)
         ]

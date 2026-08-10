@@ -2539,6 +2539,7 @@ def create_app(
             if event.get("file_id")
             and attachments.blob_path(meeting_id, str(event["file_id"]))
             and attachments.blob_path(meeting_id, str(event["file_id"])).is_file()
+            and attachments.blob_path(meeting_id, str(event["file_id"])).stat().st_size > 0
         }
         if body_free:
             # Source validation must be body-free.  The current metadata header
@@ -2570,9 +2571,15 @@ def create_app(
                                 "active_version": item.get("active_version"),
                                 "versions": [
                                     {
-                                        key: value
-                                        for key, value in version.items()
-                                        if key != "content"
+                                        **{
+                                            key: value
+                                            for key, value in version.items()
+                                            if key != "content"
+                                        },
+                                        "content_valid": (
+                                            isinstance(version.get("content"), str)
+                                            and bool(version.get("content", "").strip())
+                                        ),
                                     }
                                     for version in item.get("versions", [])
                                 ],
@@ -2582,6 +2589,12 @@ def create_app(
                         "notes": [],
                     },
                 },
+            )
+            # Return the same body-free, marker-bearing header that was
+            # persisted above; do not project readability from the temporary
+            # body-bearing listing view.
+            material_view = metadata_store.get(meeting_id).get(
+                "chatroom_source_metadata", {"evidence": [], "notes": []}
             )
         return project_chatroom_sources(
             meeting_id=meeting_id,
@@ -2649,6 +2662,8 @@ def create_app(
                 except (CaseMaterialValidationError, KeyError, TypeError, ValueError) as error:
                     raise SourceSnapshotError("Selected evidence is not readable") from error
                 identity = make_evidence_identity(evidence_id, version)
+            if not isinstance(content, str) or not content.strip():
+                raise SourceSnapshotError("Selected source is empty or not readable")
             # The source label/ref is part of canonical user/context too.
             source_label_overhead = len(f"來源 {projection['label']}（{source_ref}）\n")
             budget = max(0, remaining - source_label_overhead)
@@ -3635,6 +3650,10 @@ def chatroom_source_metadata_from_case_files(
                     "title": str(item.get("title", "")),
                     "visible_roles": [str(role) for role in item.get("visible_roles", [])],
                     "size": int(item.get("size", 0) or 0),
+                    "content_valid": (
+                        isinstance(item.get("content"), str)
+                        and bool(item.get("content", "").strip())
+                    ),
                     "created_at": item.get("created_at"),
                     "host_acl_explicit": True,
                 }],
@@ -3661,6 +3680,7 @@ def chatroom_source_metadata_from_view(view: CaseMaterialsView) -> dict[str, Any
                         "title": version.title,
                         "visible_roles": list(version.visible_roles),
                         "size": version.size,
+                        "content_valid": bool(version.content.strip()),
                         "created_at": version.created_at,
                         **(
                             {"host_acl_explicit": version.host_acl_explicit}

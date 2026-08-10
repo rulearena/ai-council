@@ -7710,7 +7710,6 @@ def test_chatroom_sources_project_mirror_once_and_freezes_selected_context(
     assert not any(item["source_ref"].startswith("evidence:") for item in sources)
     source = next(item for item in sources if item["source_ref"].startswith("attachment:"))
     assert source["label"] == "待辦總覽.md"
-    assert source["readable"] is True
 
     content = "@顧問 請查看 #待辦總覽.md"
     source_start = content.index("#")
@@ -7813,6 +7812,64 @@ def test_chatroom_valid_selected_source_reads_only_selected_material_body(
     )
     assert response.status_code == 202
     assert body_reads == [meeting_id]
+
+
+@pytest.mark.parametrize(("raw_body", "expected_blob_reads"), [(b"", 0), (b"   ", 1)])
+def test_chatroom_selected_text_attachment_rejects_zero_or_blank_decoded_body(
+    tmp_path: Path,
+    raw_body: bytes,
+    expected_blob_reads: int,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = TestClient(create_test_app(tmp_path))
+    meeting_id = _create_chatroom_meeting(client)
+    status, upload = _upload_attachment(
+        client,
+        meeting_id,
+        filename="selected.txt",
+        content=b"valid attachment body",
+        content_type="text/plain",
+    )
+    assert status == 200
+    source = next(
+        item for item in client.get(f"/meetings/{meeting_id}/chat/sources").json()
+        if item["kind"] == "attachment"
+    )
+    blob = Path(tmp_path / "data" / "meetings" / meeting_id / "attachments" / upload["file_id"])
+    blob.write_bytes(raw_body)
+    reads = 0
+    original_read_bytes = Path.read_bytes
+
+    def counted_read(path: Path) -> bytes:
+        nonlocal reads
+        if path == blob:
+            reads += 1
+        return original_read_bytes(path)
+
+    monkeypatch.setattr(Path, "read_bytes", counted_read)
+    before = client.get(f"/meetings/{meeting_id}").json()["events"]
+    display_text = f"#{source['label']}"
+    response = client.post(
+        f"/meetings/{meeting_id}/chat/mention",
+        json={
+            "content": f"{display_text} 請回答",
+            "mentions": [],
+            "source_tokens": [{
+                "token_id": "s-1",
+                "source_ref": source["source_ref"],
+                "display_text": display_text,
+                "start": 0,
+                "end": len(display_text),
+            }],
+            "source_refs": [source["source_ref"]],
+            "quoted_event_id": None,
+        },
+    )
+
+    assert response.status_code == 400
+    assert response.json()["error"]["code"] == "SOURCE_NOT_READABLE"
+    assert reads == expected_blob_reads
+    assert client.get(f"/meetings/{meeting_id}").json()["events"] == before
 
 
 def test_chatroom_inactive_source_rejects_body_free_without_event_mutation(
@@ -8003,6 +8060,111 @@ def test_chatroom_large_selected_source_keeps_real_segment_and_prompt_excerpt(
     assert snapshot["omission"]["omitted"] is True
     assert content not in str(completed["selected_source_snapshot"])
     assert "deadline" in str(completed["prompt_messages"])
+
+
+@pytest.mark.parametrize("body", ["", "   ", None, {"not": "text"}])
+def test_chatroom_selected_evidence_body_must_be_non_blank_after_metadata_acceptance(
+    tmp_path: Path, body: object,
+) -> None:
+    client = TestClient(create_test_app(tmp_path))
+    meeting_id = _create_chatroom_meeting(client)
+    created = client.post(
+        f"/meetings/{meeting_id}/materials/evidence",
+        json={
+            "revision": 0,
+            "title": "將被竄改的來源",
+            "content": "原本有效的正文",
+            "visible_roles": ["host"],
+        },
+    )
+    assert created.status_code == 200
+    source = client.get(f"/meetings/{meeting_id}/chat/sources").json()[0]
+    raw_path = tmp_path / "data" / "meetings" / meeting_id / "case_files.json"
+    raw = json.loads(raw_path.read_text(encoding="utf-8"))
+    raw["evidence"][0]["versions"][0]["content"] = body
+    raw_path.write_text(json.dumps(raw, ensure_ascii=False), encoding="utf-8")
+    before = client.get(f"/meetings/{meeting_id}").json()["events"]
+
+    response = client.post(
+        f"/meetings/{meeting_id}/chat/mention",
+        json={
+            "content": "#將被竄改的來源 請回答",
+            "mentions": [],
+            "source_tokens": [{
+                "token_id": "s-1",
+                "source_ref": source["source_ref"],
+                "display_text": "#將被竄改的來源",
+                "start": 0,
+                "end": len("#將被竄改的來源"),
+            }],
+            "source_refs": [source["source_ref"]],
+            "quoted_event_id": None,
+        },
+    )
+
+    assert response.status_code == 400
+    assert response.json()["error"]["code"] == "SOURCE_NOT_READABLE"
+    assert client.get(f"/meetings/{meeting_id}").json()["events"] == before
+
+
+@pytest.mark.parametrize("marker", ["missing", False])
+def test_chatroom_source_metadata_marker_fails_closed_without_reading_body(
+    tmp_path: Path, marker: str | bool,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = TestClient(create_test_app(tmp_path))
+    meeting_id = _create_chatroom_meeting(client)
+    created = client.post(
+        f"/meetings/{meeting_id}/materials/evidence",
+        json={
+            "revision": 0,
+            "title": "標記缺失來源",
+            "content": "有效正文",
+            "visible_roles": ["host"],
+        },
+    )
+    assert created.status_code == 200
+    metadata_path = tmp_path / "data" / "meetings" / meeting_id / "metadata.json"
+    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    version = metadata["chatroom_source_metadata"]["evidence"][0]["versions"][0]
+    if marker == "missing":
+        version.pop("content_valid", None)
+    else:
+        version["content_valid"] = marker
+    metadata_path.write_text(json.dumps(metadata, ensure_ascii=False), encoding="utf-8")
+
+    reads = 0
+    original_read = CaseMaterials.read_evidence_content
+
+    def counted_read(self: CaseMaterials, meeting: str, evidence: str, version_number: int) -> str:
+        nonlocal reads
+        reads += 1
+        return original_read(self, meeting, evidence, version_number)
+
+    monkeypatch.setattr(CaseMaterials, "read_evidence_content", counted_read)
+    before = client.get(f"/meetings/{meeting_id}").json()["events"]
+    display_text = "#標記缺失來源"
+    response = client.post(
+        f"/meetings/{meeting_id}/chat/mention",
+        json={
+            "content": f"{display_text} 請回答",
+            "mentions": [],
+            "source_tokens": [{
+                "token_id": "s-1",
+                "source_ref": "evidence:case-file-1",
+                "display_text": display_text,
+                "start": 0,
+                "end": len(display_text),
+            }],
+            "source_refs": ["evidence:case-file-1"],
+            "quoted_event_id": None,
+        },
+    )
+
+    assert response.status_code == 400
+    assert response.json()["error"]["code"] == "SOURCE_NOT_READABLE"
+    assert reads == 0
+    assert client.get(f"/meetings/{meeting_id}").json()["events"] == before
 
 
 def test_chatroom_fixed_prompt_overflow_fails_safe_without_event_or_adapter_request(

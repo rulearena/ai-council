@@ -244,6 +244,46 @@ def test_chatroom_citation_retry_reuses_identical_prompt_and_source_snapshot(
         assert '"full"' in str(event["prompt_messages"])
 
 
+def test_chatroom_fanout_reuses_canonical_source_allow_list_for_every_role(
+    tmp_path: Path,
+) -> None:
+    adapter = FakeAdapter([VALID_OUTPUT, VALID_OUTPUT])
+    runner = build_chatroom_runner(tmp_path, adapter)
+    source_snapshot = {
+        "selected_source_snapshot": {
+            "schema_version": "chatroom-source-context/v1",
+            "source_refs": ["evidence:brief"],
+            "sources": [{
+                "source_ref": "evidence:brief",
+                "label": "brief.md",
+                "available_segment_refs": ["full"],
+            }],
+        },
+        "source_excerpts": ["來源 brief.md（evidence:brief）\nbrief excerpt"],
+    }
+
+    runner.fanout_chatroom_all(
+        meeting_id="meeting-1",
+        goal="測試來源引用",
+        instruction="@all 請比較 #brief.md",
+        role_display_names={"Blue": "藍軍", "Red": "紅軍"},
+        model_assignments={
+            "Blue": ModelConfig(id="mock-blue", adapter="mock"),
+            "Red": ModelConfig(id="mock-red", adapter="mock"),
+        },
+        inputs={
+            **persona_inputs("Blue", "Red"),
+            "__chatroom_source_snapshot": source_snapshot,
+        },
+    )
+
+    assert len(adapter.requests) == 2
+    assert all(request.messages is not None for request in adapter.requests)
+    assert all("evidence:brief" in request.prompt for request in adapter.requests)
+    allow_list = '"source_ref":"evidence:brief","label":"brief.md","segment_refs":["full"]'
+    assert all(allow_list in request.prompt for request in adapter.requests)
+
+
 def test_chat_directed_increments_sequence(tmp_path: Path) -> None:
     adapter = FakeAdapter([VALID_OUTPUT, VALID_OUTPUT])
     runner = build_chatroom_runner(tmp_path, adapter)

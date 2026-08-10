@@ -540,6 +540,7 @@ class MeetingRunner:
                 required_json_schema=output_schema.schema,
                 persona_prompt=str((inputs or {}).get("__chatroom_persona_prompts", {}).get(role, "")),
                 source_context=self._source_context(inputs),
+                source_allow_list=self._chatroom_source_allow_list(inputs),
             )
             started_at = datetime.now(UTC).isoformat()
             started_clock = time.monotonic()
