@@ -2528,8 +2528,6 @@ def create_app(
         meeting_id: str,
         metadata: dict[str, Any],
         mode: ModeDefinition,
-        *,
-        body_free: bool = True,
     ) -> list[dict[str, Any]]:
         participants = project_participants(mode, metadata)
         active_role_ids = [str(item["role_id"]) for item in participants]
@@ -2541,61 +2539,12 @@ def create_app(
             and attachments.blob_path(meeting_id, str(event["file_id"])).is_file()
             and attachments.blob_path(meeting_id, str(event["file_id"])).stat().st_size > 0
         }
-        if body_free:
-            # Source validation must be body-free.  The current metadata header
-            # is a read-time ACL/label projection; selected bodies are opened
-            # only after this projection has accepted every requested source.
-            material_view = metadata.get("chatroom_source_metadata")
-            if not isinstance(material_view, dict):
-                material_view = {"evidence": [], "notes": []}
-        else:
-            # The public listing retains the legacy read-time fallback for
-            # meetings created before the metadata header existed.  A listing
-            # refreshes only the metadata header; the send/validation path above
-            # never uses this body-bearing branch.
-            material_view = project_case_materials(
-                case_materials.view(meeting_id),
-                active_epoch_id=DeliberationEpochs.view(repository.read_events(meeting_id)).active_epoch.id,
-                mode_id=metadata.get("mode_id"),
-                category=mode.category,
-            )
-            metadata_store.update(
-                meeting_id,
-                lambda current: {
-                    **current,
-                    "chatroom_source_metadata": {
-                        "evidence": [
-                            {
-                                "id": item.get("id"),
-                                "status": item.get("status"),
-                                "active_version": item.get("active_version"),
-                                "versions": [
-                                    {
-                                        **{
-                                            key: value
-                                            for key, value in version.items()
-                                            if key != "content"
-                                        },
-                                        "content_valid": (
-                                            isinstance(version.get("content"), str)
-                                            and bool(version.get("content", "").strip())
-                                        ),
-                                    }
-                                    for version in item.get("versions", [])
-                                ],
-                            }
-                            for item in material_view.get("evidence", [])
-                        ],
-                        "notes": [],
-                    },
-                },
-            )
-            # Return the same body-free, marker-bearing header that was
-            # persisted above; do not project readability from the temporary
-            # body-bearing listing view.
-            material_view = metadata_store.get(meeting_id).get(
-                "chatroom_source_metadata", {"evidence": [], "notes": []}
-            )
+        # Source validation and public listing are body-free.  Only an explicit
+        # material write may create or refresh this authoritative header; a
+        # legacy meeting without it is intentionally projected as unreadable.
+        material_view = metadata.get("chatroom_source_metadata")
+        if not isinstance(material_view, dict):
+            material_view = {"evidence": [], "notes": []}
         return project_chatroom_sources(
             meeting_id=meeting_id,
             materials=material_view,
@@ -2710,7 +2659,7 @@ def create_app(
         mode = meeting_mode(mode_catalog, metadata)
         if mode.category != "chatroom":
             raise HTTPException(status_code=404, detail="Chatroom sources are unavailable")
-        return chatroom_source_projection(meeting_id, metadata, mode, body_free=False)
+        return chatroom_source_projection(meeting_id, metadata, mode)
 
     @app.post("/meetings/{meeting_id}/chat/mention")
     def chat_mention(

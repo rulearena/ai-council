@@ -7737,6 +7737,155 @@ def test_chatroom_sources_project_mirror_once_and_freezes_selected_context(
     assert "deadline: tomorrow" in str(response_event["prompt_messages"])
 
 
+def test_legacy_chatroom_source_listing_is_body_free_idempotent_and_fail_closed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = TestClient(create_test_app(tmp_path))
+    meeting_id = _create_chatroom_meeting(client)
+    created = client.post(
+        f"/meetings/{meeting_id}/materials/evidence",
+        json={
+            "revision": 0,
+            "title": "既有來源",
+            "content": "LEGACY_SOURCE_BODY",
+            "visible_roles": ["host"],
+        },
+    )
+    assert created.status_code == 200
+    evidence_id = created.json()["evidence"][0]["id"]
+
+    meeting_dir = tmp_path / "data" / "meetings" / meeting_id
+    metadata_path = meeting_dir / "metadata.json"
+    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    metadata.pop("chatroom_source_metadata")
+    metadata_path.write_text(json.dumps(metadata, ensure_ascii=False), encoding="utf-8")
+    tracked_paths = [
+        metadata_path,
+        meeting_dir / "case_files.json",
+        meeting_dir / "events.jsonl",
+    ]
+    def persisted_bytes(path: Path) -> bytes | None:
+        return path.read_bytes() if path.exists() else None
+
+    before_bytes = {path: persisted_bytes(path) for path in tracked_paths}
+
+    body_reads: list[str] = []
+    original_material_read = MeetingRepository.read_case_materials_raw
+    original_adapter_complete = MockModelAdapter.complete
+    original_job_start = MeetingJobManager.start
+    job_starts: list[str] = []
+
+    def forbidden_material_read(repository: MeetingRepository, current_meeting_id: str):
+        body_reads.append("case_files.json")
+        return original_material_read(repository, current_meeting_id)
+
+    def counted_job_start(manager: MeetingJobManager, current_meeting_id: str, target):
+        job_starts.append(current_meeting_id)
+        return original_job_start(manager, current_meeting_id, target)
+
+    adapter_calls: list[str] = []
+
+    def counted_adapter_complete(adapter: MockModelAdapter, request: ModelRequest):
+        adapter_calls.append(request.meeting_id)
+        return original_adapter_complete(adapter, request)
+
+    monkeypatch.setattr(MeetingRepository, "read_case_materials_raw", forbidden_material_read)
+    monkeypatch.setattr(MeetingJobManager, "start", counted_job_start)
+    monkeypatch.setattr(MockModelAdapter, "complete", counted_adapter_complete)
+
+    first_listing = client.get(f"/meetings/{meeting_id}/chat/sources")
+    second_listing = client.get(f"/meetings/{meeting_id}/chat/sources")
+
+    assert first_listing.status_code == 200
+    assert second_listing.status_code == 200
+    assert first_listing.json() == second_listing.json()
+    assert all(not source["readable"] for source in first_listing.json())
+    assert body_reads == []
+    assert {path: persisted_bytes(path) for path in tracked_paths} == before_bytes
+
+    rejected = client.post(
+        f"/meetings/{meeting_id}/chat/mention",
+        json={
+            "content": "#既有來源 請回答",
+            "mentions": [],
+            "source_tokens": [{
+                "token_id": "source-1",
+                "source_ref": f"evidence:{evidence_id}",
+                "display_text": "#既有來源",
+                "start": 0,
+                "end": 5,
+            }],
+            "source_refs": [f"evidence:{evidence_id}"],
+            "quoted_event_id": None,
+        },
+    )
+
+    assert rejected.status_code == 400
+    assert rejected.json()["error"]["code"] == "INVALID_SOURCE_REF"
+    assert persisted_bytes(meeting_dir / "events.jsonl") == before_bytes[meeting_dir / "events.jsonl"]
+    assert body_reads == []
+    assert job_starts == []
+    assert adapter_calls == []
+
+
+def test_legacy_chatroom_source_is_restored_only_by_explicit_material_write(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = TestClient(create_test_app(tmp_path))
+    meeting_id = _create_chatroom_meeting(client)
+    created = client.post(
+        f"/meetings/{meeting_id}/materials/evidence",
+        json={
+            "revision": 0,
+            "title": "待補正來源",
+            "content": "EXPLICITLY_RESTORED_BODY",
+            "visible_roles": ["host"],
+        },
+    )
+    assert created.status_code == 200
+    metadata_path = tmp_path / "data" / "meetings" / meeting_id / "metadata.json"
+    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    metadata.pop("chatroom_source_metadata")
+    metadata_path.write_text(json.dumps(metadata, ensure_ascii=False), encoding="utf-8")
+
+    assert client.get(f"/meetings/{meeting_id}/chat/sources").json() == []
+
+    repaired = client.post(
+        f"/meetings/{meeting_id}/materials/evidence",
+        json={
+            "revision": 1,
+            "title": "新權威來源",
+            "content": "EXPLICITLY_RESTORED_BODY",
+            "visible_roles": ["host"],
+        },
+    )
+    assert repaired.status_code == 200
+    sources = client.get(f"/meetings/{meeting_id}/chat/sources").json()
+    source = next(item for item in sources if item["label"] == "新權威來源")
+    assert source["readable"] is True
+    before_events = client.get(f"/meetings/{meeting_id}").json()["events"]
+
+    response = client.post(
+        f"/meetings/{meeting_id}/chat/mention",
+        json={
+            "content": "#新權威來源 請回答",
+            "mentions": [],
+            "source_tokens": [{
+                "token_id": "source-1",
+                "source_ref": source["source_ref"],
+                "display_text": "#新權威來源",
+                "start": 0,
+                "end": 6,
+            }],
+            "source_refs": [source["source_ref"]],
+            "quoted_event_id": None,
+        },
+    )
+    assert response.status_code == 202
+    events = wait_for_event_count(client, meeting_id, len(before_events) + 2)
+    assert events[-1]["selected_source_snapshot"]["source_refs"] == [source["source_ref"]]
+
+
 def test_chatroom_no_source_reference_never_reads_blob_or_material_body(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -7935,12 +8084,11 @@ def test_chatroom_persisted_present_non_true_acl_marker_fails_closed_before_send
     )
     assert created.status_code == 200
 
-    repository = MeetingRepository(tmp_path / "data")
-    persisted = repository.read_case_materials_raw(meeting_id)
-    assert isinstance(persisted, dict)
-    version = persisted["evidence"][0]["versions"][0]
+    metadata_path = tmp_path / "data" / "meetings" / meeting_id / "metadata.json"
+    persisted = json.loads(metadata_path.read_text(encoding="utf-8"))
+    version = persisted["chatroom_source_metadata"]["evidence"][0]["versions"][0]
     version["host_acl_explicit"] = marker
-    repository.save_case_materials(meeting_id, persisted)
+    metadata_path.write_text(json.dumps(persisted, ensure_ascii=False), encoding="utf-8")
 
     source = client.get(f"/meetings/{meeting_id}/chat/sources").json()[0]
     assert source["acl_invalid"] is True
@@ -7985,11 +8133,12 @@ def test_chatroom_persisted_absent_acl_marker_keeps_legacy_host_fallback(
     )
     assert created.status_code == 200
 
-    repository = MeetingRepository(tmp_path / "data")
-    persisted = repository.read_case_materials_raw(meeting_id)
-    assert isinstance(persisted, dict)
-    persisted["evidence"][0]["versions"][0].pop("host_acl_explicit")
-    repository.save_case_materials(meeting_id, persisted)
+    metadata_path = tmp_path / "data" / "meetings" / meeting_id / "metadata.json"
+    persisted = json.loads(metadata_path.read_text(encoding="utf-8"))
+    persisted["chatroom_source_metadata"]["evidence"][0]["versions"][0].pop(
+        "host_acl_explicit"
+    )
+    metadata_path.write_text(json.dumps(persisted, ensure_ascii=False), encoding="utf-8")
 
     source = client.get(f"/meetings/{meeting_id}/chat/sources").json()[0]
     assert source["acl_invalid"] is False
