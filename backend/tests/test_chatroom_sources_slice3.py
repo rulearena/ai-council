@@ -201,3 +201,24 @@ def test_large_single_paragraph_never_returns_an_empty_retrieval() -> None:
     )
     assert segments == [{"segment_ref": "paragraph:0001", "content": "deadline"}]
     assert omitted is True
+
+
+def test_same_label_same_kind_size_and_date_get_stable_public_discriminators() -> None:
+    materials = {
+        "evidence": [
+            {
+                "id": "e-1", "status": "active", "active_version": 1,
+                "versions": [{"version": 1, "title": "相同.md", "content": "one", "size": 3, "created_at": "2026-08-10", "visible_roles": ["host"], "host_acl_explicit": True}],
+            },
+            {
+                "id": "e-2", "status": "active", "active_version": 1,
+                "versions": [{"version": 1, "title": "相同.md", "content": "two", "size": 3, "created_at": "2026-08-10", "visible_roles": ["host"], "host_acl_explicit": True}],
+            },
+        ],
+        "notes": [],
+    }
+    sources = project_chatroom_sources(
+        meeting_id="meeting-1", materials=materials, attachment_events=[], active_role_ids=["host"]
+    )
+    assert [source["presentation_discriminator"] for source in sources] == ["1", "2"]
+    assert all("evidence:" not in source["presentation_discriminator"] for source in sources)

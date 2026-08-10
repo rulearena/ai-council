@@ -19,6 +19,7 @@ import { activeMode, councilKey } from '../composables/useCouncil'
 import { uploadStatusLabel, type UploadEntry } from '../attachmentUpload'
 import { type TextDraft } from '../materialUploads'
 import { roleDisplayName } from '../presentation'
+import Modal from './Modal.vue'
 import {
   formatAttachmentSize,
   hasAiOutput,
@@ -40,6 +41,7 @@ const props = defineProps<{
   textDraft: TextDraft | null
   simple?: boolean
   citationSourceRef?: string | null
+  citationReaderRef?: string | null
 }>()
 
 const emit = defineEmits<{
@@ -54,6 +56,10 @@ const materials = ref<CaseMaterials | null>(null)
 const localError = ref('')
 const materialsLoadError = ref('')
 const materialsLoading = ref(false)
+const citationReaderOpen = ref(false)
+const citationReaderContent = ref('')
+const citationReaderLoading = ref(false)
+const citationReaderError = ref('')
 const formKind = ref<'evidence' | 'note'>('evidence')
 const editingId = ref<string | null>(null)
 const form = reactive({ title: '', content: '', visibleRoles: [] as string[] })
@@ -151,6 +157,47 @@ watch(
   },
   { immediate: true },
 )
+
+async function openCitationReader() {
+  const readerRef = props.citationReaderRef
+  const sourceRef = props.citationSourceRef
+  if (!readerRef || !sourceRef || citationReaderOpen.value) return
+  const source = selectedMeeting.value?.chatroom_sources?.find((item) => item.source_ref === sourceRef)
+  if (!source?.active || !source.readable || source.reader_ref !== readerRef) return
+  citationReaderOpen.value = true
+  citationReaderLoading.value = true
+  citationReaderError.value = ''
+  citationReaderContent.value = ''
+  try {
+    if (readerRef.startsWith('attachment:')) {
+      const response = await fetch(attachmentDownloadUrl(props.meetingId, readerRef.slice('attachment:'.length)))
+      if (!response.ok) throw new Error(`HTTP ${response.status}`)
+      citationReaderContent.value = await response.text()
+    } else {
+      const evidence = materials.value?.evidence.find((item) => item.id === readerRef.slice('evidence:'.length))
+      const version = evidence && latest(evidence)
+      if (!version || evidence?.status !== 'active' || !version.content) throw new Error('來源不可用')
+      citationReaderContent.value = version.content
+    }
+  } catch (caught) {
+    citationReaderError.value = caught instanceof Error ? caught.message : String(caught)
+  } finally {
+    citationReaderLoading.value = false
+  }
+}
+
+watch(
+  () => [props.citationSourceRef, props.citationReaderRef, materials.value] as const,
+  () => {
+    if (!props.citationSourceRef || !props.citationReaderRef) closeCitationReader()
+    else void openCitationReader()
+  },
+)
+
+function closeCitationReader() {
+  citationReaderOpen.value = false
+  citationReaderContent.value = ''
+}
 
 function edit(item: VersionedCaseMaterial, kind: 'evidence' | 'note') {
   formKind.value = kind
@@ -256,7 +303,7 @@ async function confirmDeleteAttachment(event: MeetingEvent) {
         <h3>{{ vocab.itemPlural }}檔案（{{ attachments.length }}）</h3>
         <ul class="materials-attachment-list">
           <template v-for="event in attachments" :key="event.event_id">
-            <li v-if="event.file_id" class="materials-attachment-row" :class="{ 'citation-reader-target': props.citationSourceRef === `attachment:${event.file_id}` }" :data-citation-source-ref="`attachment:${event.file_id}`" data-testid="materials-attachment-row">
+            <li v-if="event.file_id" class="materials-attachment-row" :class="{ 'citation-reader-target': props.citationReaderRef === `attachment:${event.file_id}` }" :data-citation-source-ref="`attachment:${event.file_id}`" :data-citation-reader-ref="`attachment:${event.file_id}`" data-testid="materials-attachment-row">
               <a :href="attachmentDownloadUrl(props.meetingId, event.file_id)" download :data-testid="`materials-attachment-download-${event.file_id}`">
                 <strong>{{ event.filename ?? event.file_id }}</strong>
                 <small>{{ formatAttachmentSize(event.size ?? 0) }}</small>
@@ -269,7 +316,7 @@ async function confirmDeleteAttachment(event: MeetingEvent) {
 
       <section class="materials-section">
         <h3>{{ vocab.itemPlural }}（{{ materials.evidence.filter(item => item.status === 'active').length }}）</h3>
-        <article v-for="item in materials.evidence" :key="item.id" class="material-card" :class="{ 'citation-reader-target': props.citationSourceRef === `evidence:${item.id}` }" :data-citation-source-ref="`evidence:${item.id}`" :data-status="item.status" :data-material-id="item.id" data-testid="case-evidence-card">
+        <article v-for="item in materials.evidence" :key="item.id" class="material-card" :class="{ 'citation-reader-target': props.citationReaderRef === `evidence:${item.id}` }" :data-citation-source-ref="`evidence:${item.id}`" :data-citation-reader-ref="`evidence:${item.id}`" :data-status="item.status" :data-material-id="item.id" data-testid="case-evidence-card">
           <header><strong>{{ item.citation_anchor }} · {{ latest(item).title }}</strong><span v-if="!simple">v{{ item.active_version }} · {{ item.status === 'active' ? '使用中' : '已停用' }}</span></header>
           <p>{{ latest(item).content }}</p>
           <small>可見：{{ latest(item).visible_roles.map(displayRole).join('、') }}</small>
@@ -298,6 +345,11 @@ async function confirmDeleteAttachment(event: MeetingEvent) {
       </form>
     </template>
     <p v-else-if="!materialsLoadError" class="empty-state">{{ vocab.loading }}</p>
+    <Modal :show="citationReaderOpen" title="引用來源" test-id="citation-reader" close-test-id="citation-reader-close" @close="closeCitationReader">
+      <p v-if="citationReaderLoading" data-testid="citation-reader-status">讀取中…</p>
+      <p v-else-if="citationReaderError" data-testid="citation-reader-error">{{ citationReaderError }}</p>
+      <pre v-else data-testid="citation-reader-content">{{ citationReaderContent }}</pre>
+    </Modal>
   </div>
 </template>
 

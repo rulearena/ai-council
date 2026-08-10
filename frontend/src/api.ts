@@ -73,6 +73,7 @@ export type ChatroomSource = {
   readable: boolean
   reader_ref: string
   available_segment_refs: string[]
+  presentation_discriminator?: string
   visible_roles?: string[]
   size?: number
   created_at?: string | null

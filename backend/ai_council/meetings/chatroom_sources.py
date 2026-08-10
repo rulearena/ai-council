@@ -68,6 +68,7 @@ def _source_entry(
     content: str | None = None,
     content_identity: dict[str, Any] | None = None,
     acl_invalid: bool = False,
+    presentation_discriminator: str = "1",
 ) -> dict[str, Any]:
     return {
         "source_ref": source_ref,
@@ -79,6 +80,7 @@ def _source_entry(
         "available_segment_refs": ["full"] if readable else [],
         "visible_roles": list(visible_roles),
         "acl_invalid": acl_invalid,
+        "presentation_discriminator": presentation_discriminator,
         **({"size": size} if size is not None else {}),
         **({"created_at": created_at} if created_at else {}),
         **({"content": content} if content is not None else {}),
@@ -171,6 +173,13 @@ def project_chatroom_sources(
                 created_at=str(version.get("created_at")) if version.get("created_at") else None,
             )
         )
+    groups: dict[tuple[object, ...], int] = {}
+    for item in result:
+        key = (
+            item.get("label"), item.get("kind"), item.get("size"), item.get("created_at"),
+        )
+        groups[key] = groups.get(key, 0) + 1
+        item["presentation_discriminator"] = str(groups[key])
     return result
 
 
@@ -214,6 +223,8 @@ def retrieve_source_segments(
     char_budget: int,
 ) -> tuple[list[dict[str, str]], bool]:
     """Deterministically rank non-empty lines and return only budget-fitting segments."""
+    if char_budget <= 0:
+        return [], True
     lines = [line.strip() for line in content.splitlines() if line.strip()]
     terms = [term.casefold() for term in query.split() if term.strip()]
     ranked = sorted(
@@ -234,8 +245,8 @@ def retrieve_source_segments(
         # real segment identity and bounded prefix rather than returning an
         # apparently readable source with an empty prompt excerpt.
         index, line = ranked[0]
-        selected.append((index, line[:max(1, char_budget)]))
-        truncated = len(line) > max(1, char_budget)
+        selected.append((index, line[:char_budget]))
+        truncated = len(line) > char_budget
     selected.sort(key=lambda item: item[0])
     return [
         {"segment_ref": f"paragraph:{index:04d}", "content": line}

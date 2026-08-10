@@ -86,6 +86,7 @@ from ai_council.meetings.chatroom_sources import (
     SourceSnapshotError,
     validate_chatroom_sources,
 )
+from ai_council.meetings.chatroom_context import estimate_tokens
 from ai_council.meetings.input_envelope import CASE_EVIDENCE_BY_ROLE_INPUT
 from ai_council.meetings.runner import (
     CASE_FILES_BY_ROLE_INPUT,
@@ -2555,7 +2556,7 @@ def create_app(
             str(item.get("id")): item for item in materials.get("evidence", [])
             if isinstance(item, dict)
         }
-        remaining = max(1, remaining_budget_chars)
+        remaining = max(0, remaining_budget_chars)
         for source_ref in source_refs:
             projection = next(
                 (item for item in source_projection if item["source_ref"] == source_ref),
@@ -2593,7 +2594,9 @@ def create_app(
                     raise SourceSnapshotError("Selected evidence is not readable")
                 content = version["content"]
                 identity = make_evidence_identity(evidence_id, version)
-            budget = remaining
+            # The source label/ref is part of canonical user/context too.
+            source_label_overhead = len(f"來源 {projection['label']}（{source_ref}）\n")
+            budget = max(0, remaining - source_label_overhead)
             if len(content) <= budget:
                 segment_refs = ["full"]
                 segment_text = content
@@ -2606,7 +2609,7 @@ def create_app(
                 segment_refs = [segment["segment_ref"] for segment in segments]
                 segment_text = "\n".join(segment["content"] for segment in segments)
             omitted = len(segment_text) < len(content)
-            remaining = max(1, remaining - len(segment_text))
+            remaining = max(0, remaining - source_label_overhead - len(segment_text))
             snapshot.append({
                 "source_ref": source_ref,
                 "label": projection["label"],
@@ -2620,9 +2623,8 @@ def create_app(
                     "reason": "context_budget" if omitted else None,
                 },
             })
-            excerpts.append(
-                f"來源 {projection['label']}（{source_ref}）\n{segment_text}"
-            )
+            if segment_text:
+                excerpts.append(f"來源 {projection['label']}（{source_ref}）\n{segment_text}")
         return {
             "selected_source_snapshot": {
                 "schema_version": SOURCE_CONTEXT_VERSION,
@@ -2691,12 +2693,19 @@ def create_app(
                     return JSONResponse(status_code=400, content=payload)
                 return JSONResponse(status_code=400, content=rejected("INVALID_REQUEST_SCHEMA", None))
             target_role_ids = routing.target_role_ids
+            inputs["__chatroom_prior_transcript"] = runner.chatroom_context_builder.build_request_context(
+                runner._active_events(meeting_id),
+                goal=str(metadata.get("goal", "")),
+                instruction=routing.instruction,
+                quoted_event_id=request.quoted_event_id,
+            )
             human_event_fields = {
                 "mentions": [token.model_dump() for token in request.mentions],
                 "source_tokens": [token.model_dump() for token in request.source_tokens],
                 "source_refs": list(request.source_refs),
             }
 
+            request_budget_chars = int(os.environ.get("AI_COUNCIL_CHATROOM_CONTEXT_TOKEN_BUDGET", "4096")) * 4
             if request.source_refs:
                 source_projection = chatroom_source_projection(meeting_id, metadata, mode)
                 valid, source_error, bad_source_ref, bad_role_id = validate_chatroom_sources(
@@ -2726,9 +2735,14 @@ def create_app(
                         ),
                         instruction=routing.instruction,
                         remaining_budget_chars=max(
-                            512,
-                            int(os.environ.get("AI_COUNCIL_CHATROOM_CONTEXT_TOKEN_BUDGET", "4096")) * 4
-                            - len(routing.instruction) * 4,
+                            0,
+                            request_budget_chars
+                            - estimate_tokens(
+                                "近期對話與引用（僅限以下內容）：\n"
+                                + str(inputs["__chatroom_prior_transcript"])
+                                + "\n\n目前指令：\n"
+                                + routing.instruction
+                            ) * 4,
                         ),
                     )
                 except SourceSnapshotError:

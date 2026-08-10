@@ -25,7 +25,8 @@ export function sourceOptionMetadata(source: ChatroomSource): string {
   const kind = source.kind === 'attachment' ? '附件' : '證據'
   const size = source.size === undefined ? '' : ` · ${source.size} bytes`
   const date = source.created_at ? ` · ${source.created_at}` : ''
-  return `${kind}${size}${date}`
+  const discriminator = source.presentation_discriminator ? ` · #${source.presentation_discriminator}` : ''
+  return `${kind}${size}${date}${discriminator}`
 }
 
 export function insertSourceToken(

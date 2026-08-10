@@ -95,7 +95,7 @@ defineExpose({ isExpanded: open, handleKeyDown })
 </template>
 
 <style scoped>
-.source-autocomplete { position: absolute; bottom: 100%; left: 230px; z-index: 100; width: 300px; }
+.source-autocomplete { position: absolute; bottom: 100%; left: 230px; z-index: 100; width: 300px; min-height: 1px; }
 .source-menu { list-style: none; margin: 0; padding: 4px 0; border: 1px solid var(--color-border); border-radius: var(--radius-sm); background: var(--color-surface); box-shadow: var(--shadow-md); max-height: 220px; overflow-y: auto; }
 .source-option { display: flex; justify-content: space-between; gap: 8px; padding: 6px 10px; cursor: pointer; color: var(--color-text); }
 .source-option:hover { background: var(--color-surface-muted); }

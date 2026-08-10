@@ -12,7 +12,7 @@ import {
 const source = (overrides: Partial<ChatroomSource> = {}): ChatroomSource => ({
   source_ref: 'attachment:file-1', label: '待辦總覽.md', kind: 'attachment', active: true,
   readable: true, reader_ref: 'attachment:file-1', available_segment_refs: ['full'], size: 42,
-  created_at: '2026-08-10T00:00:00Z', ...overrides,
+  created_at: '2026-08-10T00:00:00Z', presentation_discriminator: '1', ...overrides,
 })
 
 test('source trigger supports astral prefixes and filters only readable active options', () => {
@@ -37,6 +37,10 @@ test('source option metadata disambiguates same-label sources without exposing s
   assert.match(metadata, /證據/)
   assert.match(metadata, /42 bytes/)
   assert.doesNotMatch(metadata, /evidence:2/)
+})
+
+test('source option metadata includes a stable same-label discriminator', () => {
+  assert.match(sourceOptionMetadata(source({ presentation_discriminator: '2' })), /#2/)
 })
 
 test('ordered source refs deduplicate repeated selections without changing first order', () => {

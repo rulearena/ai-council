@@ -590,7 +590,7 @@ test('13.10c emoji + @顧問 + #待辦總覽.md sends exact source tokens', asyn
   await page.getByTestId('source-option').first().click()
 
   const request = page.waitForRequest(
-    (candidate) => candidate.request().method() === 'POST' && candidate.url().endsWith('/chat/mention'),
+    (candidate) => candidate.method() === 'POST' && candidate.url().endsWith('/chat/mention'),
   )
   const response = page.waitForResponse(
     (candidate) => candidate.request().method() === 'POST' && candidate.url().endsWith('/chat/mention'),
@@ -661,6 +661,10 @@ test('13.10d citation chip opens its exact reader target and becomes unavailable
   await page.getByTestId(`citation-chip-${citationRef}`).click()
   await expect(page.getByTestId('context-tab-materials')).toHaveClass(/active/)
   await expect(page.locator(`[data-citation-source-ref="${citationRef}"]`)).toBeVisible()
+  await expect(page.getByTestId('citation-reader')).toBeVisible()
+  await expect(page.getByTestId('citation-reader-content')).toHaveText('citation body')
+  await page.getByTestId('citation-reader-close').click()
+  await expect(page.getByTestId('citation-reader')).toHaveCount(0)
 
   await page.once('dialog', (dialog) => dialog.accept())
   await page.locator(`[data-citation-source-ref="${citationRef}"]`).locator('[data-testid^="attachment-delete-"]').click()

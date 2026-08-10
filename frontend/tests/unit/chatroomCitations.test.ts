@@ -21,3 +21,12 @@ test('historical citation stays unavailable when the source is deleted or inacti
     source_ref: 'evidence:e-1', reader_ref: 'evidence:e-1', active: false,
   })]).available, false)
 })
+
+test('citation resolution exposes the authoritative reader target, not a presentation row', () => {
+  const state = resolveChatroomCitation(
+    { source_ref: 'evidence:e-9', label: '同名資料', segment_refs: ['full'] },
+    [source({ source_ref: 'evidence:e-9', reader_ref: 'evidence:e-9', label: '同名資料' })],
+  )
+  assert.equal(state.reader_ref, 'evidence:e-9')
+  assert.equal(state.available, true)
+})

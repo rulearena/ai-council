@@ -3168,7 +3168,7 @@ def test_chair_can_request_single_role_response(tmp_path: Path) -> None:
     )
 
     assert response.status_code == 202
-    events = wait_for_event_count(client, meeting_id, 2)
+    events = wait_for_event_count(client, meeting_id, 3)
     assert events[-2]["step_id"] == "human-directed-message"
     assert events[-2]["interaction_type"] == "directed-role-instruction"
     assert events[-2]["target_role_id"] == "Blue"
@@ -3350,7 +3350,7 @@ models:
     )
 
     assert retried.status_code == 202
-    events = wait_for_event_count(client, meeting_id, 2)
+    events = wait_for_event_count(client, meeting_id, 3)
     assert len([event for event in events if event["role"] == "Human"]) == 1
     completed = events[-1]
     assert completed["status"] == "completed"
@@ -7803,7 +7803,7 @@ def test_chatroom_all_rejects_partially_visible_source_before_human_event(
 def test_chatroom_large_selected_source_keeps_real_segment_and_prompt_excerpt(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setenv("AI_COUNCIL_CHATROOM_CONTEXT_TOKEN_BUDGET", "1")
+    monkeypatch.setenv("AI_COUNCIL_CHATROOM_CONTEXT_TOKEN_BUDGET", "200")
     client = TestClient(create_test_app(tmp_path))
     meeting_id = _create_chatroom_meeting(client)
     content = "deadline " + ("x" * 2000)
@@ -7832,6 +7832,46 @@ def test_chatroom_large_selected_source_keeps_real_segment_and_prompt_excerpt(
     assert snapshot["omission"]["omitted"] is True
     assert content not in str(completed["selected_source_snapshot"])
     assert "deadline" in str(completed["prompt_messages"])
+
+
+def test_chatroom_request_budget_includes_quote_transcript_and_selected_source(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("AI_COUNCIL_CHATROOM_CONTEXT_TOKEN_BUDGET", "200")
+    client = TestClient(create_test_app(tmp_path))
+    meeting_id = _create_chatroom_meeting(client)
+    first = client.post(
+        f"/meetings/{meeting_id}/messages",
+        json={"content": "歷史訊息 " + ("x" * 400)},
+    )
+    assert first.status_code == 200
+    first_events = wait_for_event_count(client, meeting_id, 1)
+    quote_id = first_events[0]["event_id"]
+    created = client.post(
+        f"/meetings/{meeting_id}/materials/evidence",
+        json={"revision": 0, "title": "滿載來源", "content": "來源正文 " + ("y" * 1200), "visible_roles": ["host"]},
+    )
+    assert created.status_code == 200
+    source = client.get(f"/meetings/{meeting_id}/chat/sources").json()[0]
+    content = "#滿載來源 請核對目前內容"
+    response = client.post(
+        f"/meetings/{meeting_id}/chat/mention",
+        json={
+            "content": content,
+            "mentions": [],
+            "source_tokens": [{"token_id": "s-1", "source_ref": source["source_ref"], "display_text": "#滿載來源", "start": 0, "end": 5}],
+            "source_refs": [source["source_ref"]],
+            "quoted_event_id": quote_id,
+        },
+    )
+    assert response.status_code == 202
+    events = wait_for_event_count(client, meeting_id, len(first_events) + 2)
+    completed = events[-1]
+    user = next(message for message in completed["prompt_messages"] if message["role"] == "user")["content"]
+    assert len(user) <= 200 * 4
+    snapshot = completed["selected_source_snapshot"]["sources"][0]
+    assert snapshot["omission"]["omitted"] is True
+    assert len(str(completed["prompt_messages"])) <= 40 * 4 + 4096
 
 
 def test_upload_text_file_in_non_chatroom_still_rejected(tmp_path: Path) -> None:

@@ -96,6 +96,7 @@ const openModelSeatId = ref<string | null>(null)
 type ContextTab = 'context' | 'records' | 'materials'
 const activeContextTab = ref<ContextTab>('context')
 const citationSourceRef = ref<string | null>(null)
+const citationReaderRef = ref<string | null>(null)
 const feedRef = ref<HTMLDivElement | null>(null)
 
 // 快速選單「資料管理」與 .txt/.md 分流共用：切到資料頁，並依容器展開側欄
@@ -118,10 +119,11 @@ function openCitation(citation: ChatroomCitation) {
   const state = citationState(citation)
   if (!state.available) return
   citationSourceRef.value = citation.source_ref
+  citationReaderRef.value = state.reader_ref
   openMaterialsTab()
   nextTick(() => {
     document
-      .querySelector<HTMLElement>(`[data-citation-source-ref="${CSS.escape(citation.source_ref)}"]`)
+      .querySelector<HTMLElement>(`[data-citation-reader-ref="${CSS.escape(state.reader_ref)}"]`)
       ?.scrollIntoView({ block: 'nearest' })
   })
 }
@@ -141,6 +143,7 @@ watch(() => selectedMeeting.value?.meeting_id, () => {
   roleFilter.value = null
   expandedMessageIds.value = new Set()
   citationSourceRef.value = null
+  citationReaderRef.value = null
 })
 
 const selectedRoleId = computed(() => {
@@ -714,6 +717,7 @@ async function retryRole(roleId: string) {
           :text-draft="textDraftRef"
           :simple="isChatroom"
           :citation-source-ref="citationSourceRef"
+          :citation-reader-ref="citationReaderRef"
           @retry-upload="retryUpload"
           @dismiss-upload="dismissUpload"
           @text-draft-consumed="textDraftRef = null"
