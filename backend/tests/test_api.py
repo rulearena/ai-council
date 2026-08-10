@@ -7751,23 +7751,114 @@ def test_chatroom_no_source_reference_never_reads_blob_or_material_body(
     before = client.get(f"/meetings/{meeting_id}").json()["events"]
     read_calls: list[str] = []
     original_read_bytes = Path.read_bytes
+    original_material_read = MeetingRepository.read_case_materials_raw
 
     def spy_read_bytes(path: Path) -> bytes:
         read_calls.append(str(path))
         return original_read_bytes(path)
 
     monkeypatch.setattr(Path, "read_bytes", spy_read_bytes)
+    monkeypatch.setattr(
+        MeetingRepository,
+        "read_case_materials_raw",
+        lambda repository, current_meeting_id: (
+            read_calls.append("case_files.json")
+            or original_material_read(repository, current_meeting_id)
+        ),
+    )
     response = client.post(
         f"/meetings/{meeting_id}/chat/mention",
         json=_structured_chat_payload("請看機密.md 並回答"),
     )
     assert response.status_code == 202
+    assert read_calls == []
     events = wait_for_event_count(client, meeting_id, len(before) + 2)
     prompt_events = [event for event in events if event.get("prompt_messages")]
     assert prompt_events
     assert all("TOP SECRET BODY" not in str(event) for event in prompt_events)
     assert all(event.get("selected_source_snapshot", {}).get("source_refs") == [] for event in prompt_events)
-    assert read_calls == []
+
+
+def test_chatroom_valid_selected_source_reads_only_selected_material_body(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = TestClient(create_test_app(tmp_path))
+    meeting_id = _create_chatroom_meeting(client)
+    created = client.post(
+        f"/meetings/{meeting_id}/materials/evidence",
+        json={"revision": 0, "title": "指定來源", "content": "SELECTED_BODY", "visible_roles": ["host"]},
+    )
+    assert created.status_code == 200
+    source = client.get(f"/meetings/{meeting_id}/chat/sources").json()[0]
+    body_reads: list[str] = []
+    original_material_read = MeetingRepository.read_case_materials_raw
+
+    def spy_material_read(repository: MeetingRepository, current_meeting_id: str):
+        body_reads.append(current_meeting_id)
+        return original_material_read(repository, current_meeting_id)
+
+    monkeypatch.setattr(MeetingRepository, "read_case_materials_raw", spy_material_read)
+    response = client.post(
+        f"/meetings/{meeting_id}/chat/mention",
+        json={
+            "content": "#指定來源 請回答",
+            "mentions": [],
+            "source_tokens": [{
+                "token_id": "s-1", "source_ref": source["source_ref"],
+                "display_text": "#指定來源", "start": 0, "end": 5,
+            }],
+            "source_refs": [source["source_ref"]],
+            "quoted_event_id": None,
+        },
+    )
+    assert response.status_code == 202
+    assert body_reads == [meeting_id]
+
+
+def test_chatroom_inactive_source_rejects_body_free_without_event_mutation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = TestClient(create_test_app(tmp_path))
+    meeting_id = _create_chatroom_meeting(client)
+    created = client.post(
+        f"/meetings/{meeting_id}/materials/evidence",
+        json={"revision": 0, "title": "停用來源", "content": "HIDDEN_BODY", "visible_roles": ["host"]},
+    )
+    assert created.status_code == 200
+    source = client.get(f"/meetings/{meeting_id}/chat/sources").json()[0]
+    assert client.post(
+        f"/meetings/{meeting_id}/materials/evidence/{source['source_ref'].split(':', 1)[1]}/deactivate",
+        json={"revision": 1},
+    ).status_code == 200
+    client.get(f"/meetings/{meeting_id}/chat/sources")  # refresh the metadata-only header
+    before = client.get(f"/meetings/{meeting_id}").json()["events"]
+    reads: list[str] = []
+    original_material_read = MeetingRepository.read_case_materials_raw
+    monkeypatch.setattr(
+        MeetingRepository,
+        "read_case_materials_raw",
+        lambda repository, current_meeting_id: (
+            reads.append("case_files.json")
+            or original_material_read(repository, current_meeting_id)
+        ),
+    )
+    response = client.post(
+        f"/meetings/{meeting_id}/chat/mention",
+        json={
+            "content": "#停用來源 請回答",
+            "mentions": [],
+            "source_tokens": [{
+                "token_id": "s-1", "source_ref": source["source_ref"],
+                "display_text": "#停用來源", "start": 0, "end": 5,
+            }],
+            "source_refs": [source["source_ref"]],
+            "quoted_event_id": None,
+        },
+    )
+    assert response.status_code == 400
+    assert response.json()["error"]["code"] == "INVALID_SOURCE_REF"
+    assert reads == []
+    assert client.get(f"/meetings/{meeting_id}").json()["events"] == before
 
 
 @pytest.mark.parametrize("marker", [None, False, "true", 0, 1])
@@ -7914,7 +8005,7 @@ def test_chatroom_large_selected_source_keeps_real_segment_and_prompt_excerpt(
     assert "deadline" in str(completed["prompt_messages"])
 
 
-def test_chatroom_request_budget_includes_quote_transcript_and_selected_source(
+def test_chatroom_fixed_prompt_overflow_fails_safe_without_event_or_adapter_request(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("AI_COUNCIL_CHATROOM_CONTEXT_TOKEN_BUDGET", "400")
@@ -7944,17 +8035,9 @@ def test_chatroom_request_budget_includes_quote_transcript_and_selected_source(
             "quoted_event_id": quote_id,
         },
     )
-    assert response.status_code == 202
-    events = wait_for_event_count(client, meeting_id, len(first_events) + 2)
-    completed = events[-1]
-    user = next(message for message in completed["prompt_messages"] if message["role"] == "user")["content"]
-    assert len(user) <= 400 * 4
-    prompt_tokens = sum(estimate_tokens(message["content"]) for message in completed["prompt_messages"])
-    assert {message["role"] for message in completed["prompt_messages"]} == {"system", "developer", "user"}
-    assert prompt_tokens <= 400
-    snapshot = completed["selected_source_snapshot"]["sources"][0]
-    assert snapshot["omission"]["omitted"] is True
-    assert len(str(completed["prompt_messages"])) <= 40 * 4 + 4096
+    assert response.status_code == 400
+    assert response.json()["error"]["code"] == "SOURCE_CONTEXT_TOO_LARGE"
+    assert client.get(f"/meetings/{meeting_id}").json()["events"] == first_events
 
 
 def test_chatroom_long_source_metadata_and_retry_stay_within_request_budget(
@@ -8029,6 +8112,129 @@ def test_chatroom_long_source_metadata_and_retry_stay_within_request_budget(
     assert snapshot["omission"]["omitted"] is False
     assert "content" not in snapshot
     assert source_body in requests[-1].prompt
+
+
+def test_chatroom_multi_segment_snapshot_bounds_initial_and_retry_full_requests(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    request_budget = 1050
+    monkeypatch.setenv("AI_COUNCIL_CHATROOM_CONTEXT_TOKEN_BUDGET", str(request_budget))
+    requests: list[ModelRequest] = []
+    selected: dict[str, str] = {}
+
+    def invalid_then_valid(self: MockModelAdapter, request: ModelRequest) -> ModelResponse:
+        requests.append(request)
+        segment_refs = [] if len(requests) == 1 else [
+            selected["segment_ref"],
+        ]
+        return ModelResponse(json.dumps({
+            "message": "依據多段來源",
+            "attachment_refs": [{
+                "source_ref": selected["source_ref"],
+                "label": selected["label"],
+                "segment_refs": segment_refs,
+            }],
+        }, ensure_ascii=False))
+
+    monkeypatch.setattr(MockModelAdapter, "complete", invalid_then_valid)
+    client = TestClient(create_test_app(tmp_path))
+    meeting_id = _create_chatroom_meeting(client)
+    source_body = "\n".join(
+        f"paragraph {index:03d}: deadline decision detail {index:03d} " + ("x" * 60)
+        for index in range(1, 301)
+    )
+    created = client.post(
+        f"/meetings/{meeting_id}/materials/evidence",
+        json={
+            "revision": 0,
+            "title": "三百段來源" * 20,
+            "content": source_body,
+            "visible_roles": ["host"],
+        },
+    )
+    assert created.status_code == 200
+    source = client.get(f"/meetings/{meeting_id}/chat/sources").json()[0]
+    selected.update(
+        source_ref=source["source_ref"],
+        label=source["label"],
+        segment_ref="paragraph:0001",
+    )
+    response = client.post(
+        f"/meetings/{meeting_id}/chat/mention",
+        json={
+            "content": "#三百段來源 請依 deadline decision 回答",
+            "mentions": [],
+            "source_tokens": [{
+                "token_id": "s-1",
+                "source_ref": source["source_ref"],
+                "display_text": "#三百段來源",
+                "start": 0,
+                "end": 6,
+            }],
+            "source_refs": [source["source_ref"]],
+            "quoted_event_id": None,
+        },
+    )
+
+    assert response.status_code == 202
+    events = wait_for_event_count(client, meeting_id, 3)
+    assert len(requests) == 2
+    prompt_token_counts = [
+        sum(estimate_tokens(message["content"]) for message in request.messages or [])
+        for request in requests
+    ]
+    assert prompt_token_counts and max(prompt_token_counts) <= request_budget, prompt_token_counts
+    attempts = [event for event in events if event.get("role") == "host"]
+    assert [event["status"] for event in attempts] == ["failed", "completed"]
+    snapshot = attempts[-1]["selected_source_snapshot"]["sources"][0]
+    assert snapshot["available_segment_refs"]
+    assert "paragraph:0001" in snapshot["available_segment_refs"]
+    assert snapshot["available_segment_refs"] != ["full"]
+
+
+def test_chatroom_invalid_source_rejects_before_case_body_or_attachment_reads(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = TestClient(create_test_app(tmp_path))
+    meeting_id = _create_chatroom_meeting(client)
+    before = client.get(f"/meetings/{meeting_id}").json()["events"]
+    reads: list[str] = []
+
+    original_raw = MeetingRepository.read_case_materials_raw
+    original_blob = Path.read_bytes
+
+    def forbidden_case_body(self: MeetingRepository, current_meeting_id: str):
+        reads.append("case_files.json")
+        return original_raw(self, current_meeting_id)
+
+    def forbidden_blob(self: Path):
+        if "attachments" in self.parts:
+            reads.append("attachment blob")
+        return original_blob(self)
+
+    monkeypatch.setattr(MeetingRepository, "read_case_materials_raw", forbidden_case_body)
+    monkeypatch.setattr(Path, "read_bytes", forbidden_blob)
+    response = client.post(
+        f"/meetings/{meeting_id}/chat/mention",
+        json={
+            "content": "#不存在 請回答",
+            "mentions": [],
+            "source_tokens": [{
+                "token_id": "s-1",
+                "source_ref": "evidence:stale",
+                "display_text": "#不存在",
+                "start": 0,
+                "end": 4,
+            }],
+            "source_refs": ["evidence:stale"],
+            "quoted_event_id": None,
+        },
+    )
+
+    assert response.status_code == 400
+    assert response.json()["error"]["code"] == "INVALID_SOURCE_REF"
+    assert reads == []
+    assert client.get(f"/meetings/{meeting_id}").json()["events"] == before
 
 
 def test_upload_text_file_in_non_chatroom_still_rejected(tmp_path: Path) -> None:

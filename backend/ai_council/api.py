@@ -86,6 +86,10 @@ from ai_council.meetings.chatroom_sources import (
     SourceSnapshotError,
     validate_chatroom_sources,
 )
+from ai_council.meetings.chatroom_prompt_planning import (
+    ChatroomPromptPlanError,
+    plan_chatroom_prompt,
+)
 from ai_council.meetings.input_envelope import CASE_EVIDENCE_BY_ROLE_INPUT
 from ai_council.meetings.runner import (
     CASE_FILES_BY_ROLE_INPUT,
@@ -827,6 +831,7 @@ def create_app(
             "inputs": request.inputs,
             "settings_revision": 0,
             "scene": mode.default_scene,
+            "chatroom_source_metadata": chatroom_source_metadata_from_case_files(case_files),
         }
         if request.case_type is not None:
             metadata["case_type"] = request.case_type
@@ -1006,6 +1011,14 @@ def create_app(
             raise HTTPException(status_code=409, detail=str(error)) from error
         except CaseMaterialValidationError as error:
             raise HTTPException(status_code=400, detail=str(error)) from error
+        if meeting_mode(mode_catalog, metadata).category == "chatroom":
+            metadata_store.update(
+                meeting_id,
+                lambda current: {
+                    **current,
+                    "chatroom_source_metadata": chatroom_source_metadata_from_view(view),
+                },
+            )
         active_epoch_id = DeliberationEpochs.view(
             repository.read_events(meeting_id)
         ).active_epoch.id
@@ -2515,6 +2528,8 @@ def create_app(
         meeting_id: str,
         metadata: dict[str, Any],
         mode: ModeDefinition,
+        *,
+        body_free: bool = True,
     ) -> list[dict[str, Any]]:
         participants = project_participants(mode, metadata)
         active_role_ids = [str(item["role_id"]) for item in participants]
@@ -2525,12 +2540,49 @@ def create_app(
             and attachments.blob_path(meeting_id, str(event["file_id"]))
             and attachments.blob_path(meeting_id, str(event["file_id"])).is_file()
         }
-        material_view = project_case_materials(
-            case_materials.view(meeting_id),
-            active_epoch_id=DeliberationEpochs.view(repository.read_events(meeting_id)).active_epoch.id,
-            mode_id=metadata.get("mode_id"),
-            category=mode.category,
-        )
+        if body_free:
+            # Source validation must be body-free.  The current metadata header
+            # is a read-time ACL/label projection; selected bodies are opened
+            # only after this projection has accepted every requested source.
+            material_view = metadata.get("chatroom_source_metadata")
+            if not isinstance(material_view, dict):
+                material_view = {"evidence": [], "notes": []}
+        else:
+            # The public listing retains the legacy read-time fallback for
+            # meetings created before the metadata header existed.  A listing
+            # refreshes only the metadata header; the send/validation path above
+            # never uses this body-bearing branch.
+            material_view = project_case_materials(
+                case_materials.view(meeting_id),
+                active_epoch_id=DeliberationEpochs.view(repository.read_events(meeting_id)).active_epoch.id,
+                mode_id=metadata.get("mode_id"),
+                category=mode.category,
+            )
+            metadata_store.update(
+                meeting_id,
+                lambda current: {
+                    **current,
+                    "chatroom_source_metadata": {
+                        "evidence": [
+                            {
+                                "id": item.get("id"),
+                                "status": item.get("status"),
+                                "active_version": item.get("active_version"),
+                                "versions": [
+                                    {
+                                        key: value
+                                        for key, value in version.items()
+                                        if key != "content"
+                                    }
+                                    for version in item.get("versions", [])
+                                ],
+                            }
+                            for item in material_view.get("evidence", [])
+                        ],
+                        "notes": [],
+                    },
+                },
+            )
         return project_chatroom_sources(
             meeting_id=meeting_id,
             materials=material_view,
@@ -2547,6 +2599,7 @@ def create_app(
         materials: dict[str, Any],
         instruction: str,
         remaining_budget_chars: int,
+        read_evidence_content: Callable[[str, int], str],
     ) -> dict[str, Any]:
         """Read only selected bodies and freeze their provenance for this request."""
         snapshot: list[dict[str, Any]] = []
@@ -2589,9 +2642,12 @@ def create_app(
                     ),
                     None,
                 )
-                if version is None or not isinstance(version.get("content"), str):
+                if version is None:
                     raise SourceSnapshotError("Selected evidence is not readable")
-                content = version["content"]
+                try:
+                    content = read_evidence_content(evidence_id, int(version["version"]))
+                except (CaseMaterialValidationError, KeyError, TypeError, ValueError) as error:
+                    raise SourceSnapshotError("Selected evidence is not readable") from error
                 identity = make_evidence_identity(evidence_id, version)
             # The source label/ref is part of canonical user/context too.
             source_label_overhead = len(f"來源 {projection['label']}（{source_ref}）\n")
@@ -2639,7 +2695,7 @@ def create_app(
         mode = meeting_mode(mode_catalog, metadata)
         if mode.category != "chatroom":
             raise HTTPException(status_code=404, detail="Chatroom sources are unavailable")
-        return chatroom_source_projection(meeting_id, metadata, mode)
+        return chatroom_source_projection(meeting_id, metadata, mode, body_free=False)
 
     @app.post("/meetings/{meeting_id}/chat/mention")
     def chat_mention(
@@ -2724,10 +2780,12 @@ def create_app(
                 by_ref = {str(item["source_ref"]): item for item in source_projection}
                 selected_sources = [by_ref[ref] for ref in request.source_refs]
 
-            source_allow_list = runner.chatroom_source_allow_list(selected_sources)
-            retry_feedback = runner.chatroom_retry_feedback(selected_sources)
-
-            def prompt_budget_for(role: str, prior_transcript: str, feedback: str = "") -> int:
+            def prompt_budget_for(
+                role: str,
+                prior_transcript: str,
+                allow_list: str,
+                feedback: str,
+            ) -> int:
                 return runner.chatroom_prompt_budget_tokens(
                     role=role,
                     role_display_name=role_display_names.get(role, role),
@@ -2735,69 +2793,57 @@ def create_app(
                     instruction=routing.instruction,
                     prior_transcript=prior_transcript,
                     persona_prompt=str(inputs.get("__chatroom_persona_prompts", {}).get(role, "")),
-                    source_allow_list=source_allow_list,
+                    source_allow_list=allow_list,
                     validation_feedback=feedback,
                 )
 
-            def max_fixed_prompt_budget(prior_transcript: str) -> int:
-                # Both the first request and its one automatic retry must fit
-                # the same configured request budget.
-                return max(
-                    max(prompt_budget_for(role, prior_transcript), prompt_budget_for(role, prior_transcript, retry_feedback))
-                    for role in target_role_ids
-                ) if target_role_ids else 0
+            selected_body_cache: dict[tuple[str, int], str] = {}
 
-            inputs["__chatroom_prior_transcript"] = runner.chatroom_context_builder.build_request_context(
-                runner._active_events(meeting_id),
-                goal=str(metadata.get("goal", "")),
-                instruction=routing.instruction,
-                quoted_event_id=request.quoted_event_id,
-                # Keep transcript selection below the exact fixed envelope so
-                # prompt framing and integer estimator floors cannot consume
-                # the final request token.
-                reserved_tokens=max_fixed_prompt_budget("") + 8,
-            )
+            def read_selected_evidence(evidence_id: str, version_number: int) -> str:
+                key = (evidence_id, version_number)
+                if key not in selected_body_cache:
+                    selected_body_cache[key] = case_materials.read_evidence_content(
+                        meeting_id, evidence_id, version_number
+                    )
+                return selected_body_cache[key]
 
-            # Leave the remaining request budget for selected excerpts. Four
-            # chars per token is conservative for the mixed CJK/ASCII estimator.
-            if request.source_refs:
-                try:
-                    materials = project_case_materials(
-                        case_materials.view(meeting_id),
-                        active_epoch_id=DeliberationEpochs.view(repository.read_events(meeting_id)).active_epoch.id,
-                        mode_id=metadata.get("mode_id"),
-                        category=mode.category,
-                    )
-                    inputs["__chatroom_source_snapshot"] = _build_chatroom_source_snapshot(
-                        meeting_id=meeting_id,
-                        source_refs=list(request.source_refs),
-                        source_projection=source_projection,
-                        materials=materials,
-                        instruction=routing.instruction,
-                        remaining_budget_chars=max(
-                            0,
-                            request_budget_tokens
-                            - max_fixed_prompt_budget(str(inputs["__chatroom_prior_transcript"]))
-                            - 8,
-                        # Keep a small deterministic headroom for the source
-                        # section framing and estimator floor; body text still
-                        # uses the conservative four-chars-per-token bound.
-                        ) * 4,
-                    )
-                except SourceSnapshotError:
-                    return JSONResponse(
-                        status_code=400,
-                        content=rejected("SOURCE_NOT_READABLE", "source_refs"),
-                    )
-            else:
-                inputs["__chatroom_source_snapshot"] = {
-                    "selected_source_snapshot": {
-                        "schema_version": SOURCE_CONTEXT_VERSION,
-                        "source_refs": [],
-                        "sources": [],
-                    },
-                    "source_excerpts": [],
-                }
+            try:
+                plan = plan_chatroom_prompt(
+                    request_budget_tokens=request_budget_tokens,
+                    target_role_ids=target_role_ids,
+                    source_refs=list(request.source_refs),
+                    selected_sources=selected_sources,
+                    active_events=runner._active_events(meeting_id),
+                    goal=str(metadata.get("goal", "")),
+                    instruction=routing.instruction,
+                    quoted_event_id=request.quoted_event_id,
+                    prompt_budget_for=prompt_budget_for,
+                    build_context=lambda events, plan_goal, plan_instruction, quote_id, reserved: runner.chatroom_context_builder.build_request_context(
+                        events,
+                        goal=plan_goal,
+                        instruction=plan_instruction,
+                        quoted_event_id=quote_id,
+                        reserved_tokens=reserved,
+                    ),
+                    build_snapshot=(
+                        lambda chars: _build_chatroom_source_snapshot(
+                            meeting_id=meeting_id,
+                            source_refs=list(request.source_refs),
+                            source_projection=source_projection,
+                            materials=metadata.get("chatroom_source_metadata") or {"evidence": [], "notes": []},
+                            instruction=routing.instruction,
+                            remaining_budget_chars=chars,
+                            read_evidence_content=read_selected_evidence,
+                        )
+                    ),
+                    source_allow_list_for=runner.chatroom_source_allow_list,
+                    retry_feedback_for=runner.chatroom_retry_feedback,
+                )
+            except (SourceSnapshotError, ChatroomPromptPlanError) as error:
+                code = error.code if isinstance(error, ChatroomPromptPlanError) else "SOURCE_NOT_READABLE"
+                return JSONResponse(status_code=400, content=rejected(code, "source_refs"))
+            inputs["__chatroom_prior_transcript"] = plan.prior_transcript
+            inputs["__chatroom_source_snapshot"] = plan.source_snapshot
 
             def run_mention() -> None:
                 if len(target_role_ids) > 1:
@@ -3574,6 +3620,64 @@ def normalize_case_files(
             }
         )
     return case_files
+
+
+def chatroom_source_metadata_from_case_files(
+    case_files: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Return labels/ACL/status headers without retaining case-file bodies."""
+    return {
+        "evidence": [
+            {
+                "id": str(item.get("id")),
+                "evidence_index": int(item.get("evidence_index", index)),
+                "status": "active",
+                "active_version": 1,
+                "versions": [{
+                    "version": 1,
+                    "title": str(item.get("title", "")),
+                    "visible_roles": [str(role) for role in item.get("visible_roles", [])],
+                    "size": int(item.get("size", 0) or 0),
+                    "created_at": item.get("created_at"),
+                    "host_acl_explicit": True,
+                }],
+            }
+            for index, item in enumerate(case_files, start=1)
+            if isinstance(item, dict)
+        ],
+        "notes": [],
+    }
+
+
+def chatroom_source_metadata_from_view(view: CaseMaterialsView) -> dict[str, Any]:
+    """Project only source identity, lifecycle, and ACL fields into metadata."""
+    return {
+        "evidence": [
+            {
+                "id": item.id,
+                "evidence_index": item.evidence_index,
+                "status": item.status,
+                "active_version": item.active_version,
+                "versions": [
+                    {
+                        "version": version.version,
+                        "title": version.title,
+                        "visible_roles": list(version.visible_roles),
+                        "size": version.size,
+                        "created_at": version.created_at,
+                        **(
+                            {"host_acl_explicit": version.host_acl_explicit}
+                            if version.host_acl_explicit_present
+                            else {}
+                        ),
+                    }
+                    for version in item.versions
+                ],
+            }
+            for item in view.evidence
+        ],
+        "notes": [],
+    }
 
 
 def evidence_anchor_label(mode_id: str | None) -> str:

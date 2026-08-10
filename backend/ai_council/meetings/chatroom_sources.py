@@ -130,8 +130,10 @@ def project_chatroom_sources(
             readable = (
                 readable
                 and _host_acl_is_valid(version)
-                and isinstance(version.get("content"), str)
-                and bool(version.get("content"))
+                and (
+                    (isinstance(version.get("content"), str) and bool(version.get("content")))
+                    or int(version.get("size", 0) or 0) > 0
+                )
             )
         result.append(
             _source_entry(
@@ -155,7 +157,10 @@ def project_chatroom_sources(
         if version is None:
             continue
         content = version.get("content")
-        readable = _host_acl_is_valid(version) and isinstance(content, str) and bool(content)
+        readable = _host_acl_is_valid(version) and (
+            (isinstance(content, str) and bool(content))
+            or int(version.get("size", 0) or 0) > 0
+        )
         visible_roles = [
             role_id for role_id in active_role_ids if _evidence_visible(version, role_id)
         ]

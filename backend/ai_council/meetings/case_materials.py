@@ -95,6 +95,25 @@ class CaseMaterials:
         document, schema_version = self._document(raw)
         return self._view(document, schema_version=schema_version)
 
+    def read_evidence_content(
+        self, meeting_id: str, evidence_id: str, version_number: int,
+    ) -> str:
+        """Read one selected evidence body after metadata/ACL validation."""
+        raw = self.repository.read_case_materials_raw(meeting_id)
+        document, _ = self._document(raw)
+        evidence = self._find(document["evidence"], evidence_id, "evidence")
+        version = next(
+            (
+                candidate
+                for candidate in evidence.get("versions", [])
+                if int(candidate.get("version")) == version_number
+            ),
+            None,
+        )
+        if version is None or not isinstance(version.get("content"), str):
+            raise CaseMaterialValidationError("Selected evidence is not readable")
+        return version["content"]
+
     def summary(self, meeting_id: str) -> CaseMaterialsSummary:
         """Project counts and revision without copying versions or revision history."""
         raw = self.repository.read_case_materials_raw(meeting_id)
