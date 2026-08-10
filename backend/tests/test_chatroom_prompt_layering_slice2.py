@@ -319,7 +319,7 @@ def test_chatroom_prompt_audit_uses_current_conversation_language_not_template_l
     assert user.endswith(instruction)
 
 
-def test_chatroom_parse_retry_keeps_context_and_adds_actionable_feedback(tmp_path) -> None:
+def test_chatroom_parse_retry_reuses_identical_canonical_prompt(tmp_path) -> None:
     prompt_dir = tmp_path / "prompts"
     prompt_dir.mkdir()
     (prompt_dir / "chatroom_response.md").write_text("unused", encoding="utf-8")
@@ -349,9 +349,7 @@ def test_chatroom_parse_retry_keeps_context_and_adds_actionable_feedback(tmp_pat
     events = runner.repository.read_events("meeting-1")
     attempts = [event for event in events if event.get("role") == "host"]
     assert [event["status"] for event in attempts] == ["failed", "completed"]
-    assert attempts[0]["prompt_messages"][0] == attempts[1]["prompt_messages"][0]
-    assert attempts[0]["prompt_messages"][2] == attempts[1]["prompt_messages"][2]
-    assert "上一個輸出未通過引用驗證" in attempts[1]["prompt_messages"][1]["content"]
+    assert attempts[0]["prompt_messages"] == attempts[1]["prompt_messages"]
 
 
 def test_chatroom_execution_rejects_a_missing_persona_before_transport(tmp_path) -> None:

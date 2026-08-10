@@ -41,15 +41,10 @@ def test_planner_uses_actual_frozen_segment_allow_list() -> None:
         goal="answer",
         instruction="use the source",
         quoted_event_id=None,
-        prompt_budget_for=lambda _role, _transcript, allow_list, retry: (
-            100 + len(allow_list) + len(retry)
-        ),
+        prompt_budget_for=lambda _role, _transcript, allow_list: 100 + len(allow_list),
         build_context=lambda *_args: "prior",
         build_snapshot=build_snapshot,
         source_allow_list_for=lambda sources: ",".join(
-            ref for source in sources for ref in source["available_segment_refs"]
-        ),
-        retry_feedback_for=lambda sources: "retry:" + ",".join(
             ref for source in sources for ref in source["available_segment_refs"]
         ),
     )
@@ -62,7 +57,7 @@ def test_planner_uses_actual_frozen_segment_allow_list() -> None:
     assert "full" not in plan.source_allow_list
 
 
-def test_planner_fails_safe_when_fixed_retry_envelope_cannot_fit() -> None:
+def test_planner_fails_safe_when_fixed_prompt_cannot_fit() -> None:
     with pytest.raises(ChatroomPromptPlanError) as raised:
         plan_chatroom_prompt(
             request_budget_tokens=1050,
@@ -80,7 +75,6 @@ def test_planner_fails_safe_when_fixed_retry_envelope_cannot_fit() -> None:
                 "source_excerpts": [],
             },
             source_allow_list_for=lambda _sources: "",
-            retry_feedback_for=lambda _sources: "",
         )
 
     assert raised.value.code == "SOURCE_CONTEXT_TOO_LARGE"

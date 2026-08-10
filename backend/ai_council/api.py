@@ -2784,7 +2784,6 @@ def create_app(
                 role: str,
                 prior_transcript: str,
                 allow_list: str,
-                feedback: str,
             ) -> int:
                 return runner.chatroom_prompt_budget_tokens(
                     role=role,
@@ -2794,7 +2793,6 @@ def create_app(
                     prior_transcript=prior_transcript,
                     persona_prompt=str(inputs.get("__chatroom_persona_prompts", {}).get(role, "")),
                     source_allow_list=allow_list,
-                    validation_feedback=feedback,
                 )
 
             selected_body_cache: dict[tuple[str, int], str] = {}
@@ -2837,7 +2835,6 @@ def create_app(
                         )
                     ),
                     source_allow_list_for=runner.chatroom_source_allow_list,
-                    retry_feedback_for=runner.chatroom_retry_feedback,
                 )
             except (SourceSnapshotError, ChatroomPromptPlanError) as error:
                 code = error.code if isinstance(error, ChatroomPromptPlanError) else "SOURCE_NOT_READABLE"

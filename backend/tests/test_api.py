@@ -8105,8 +8105,12 @@ def test_chatroom_long_source_metadata_and_retry_stay_within_request_budget(
         for request in requests
     ]
     assert prompt_token_counts and max(prompt_token_counts) <= request_budget, prompt_token_counts
+    assert requests[0].messages == requests[1].messages
+    assert prompt_token_counts[0] == prompt_token_counts[1]
     attempts = [event for event in events if event.get("role") == "host"]
     assert [event["status"] for event in attempts] == ["failed", "completed"]
+    assert attempts[0]["prompt_messages"] == attempts[1]["prompt_messages"]
+    assert attempts[0]["selected_source_snapshot"] == attempts[1]["selected_source_snapshot"]
     snapshot = attempts[-1]["selected_source_snapshot"]["sources"][0]
     assert snapshot["available_segment_refs"] == ["full"]
     assert snapshot["omission"]["omitted"] is False
@@ -8184,8 +8188,12 @@ def test_chatroom_multi_segment_snapshot_bounds_initial_and_retry_full_requests(
         for request in requests
     ]
     assert prompt_token_counts and max(prompt_token_counts) <= request_budget, prompt_token_counts
+    assert requests[0].messages == requests[1].messages
+    assert prompt_token_counts[0] == prompt_token_counts[1]
     attempts = [event for event in events if event.get("role") == "host"]
     assert [event["status"] for event in attempts] == ["failed", "completed"]
+    assert attempts[0]["prompt_messages"] == attempts[1]["prompt_messages"]
+    assert attempts[0]["selected_source_snapshot"] == attempts[1]["selected_source_snapshot"]
     snapshot = attempts[-1]["selected_source_snapshot"]["sources"][0]
     assert snapshot["available_segment_refs"]
     assert "paragraph:0001" in snapshot["available_segment_refs"]

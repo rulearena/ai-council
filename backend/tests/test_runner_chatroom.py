@@ -185,7 +185,7 @@ def test_invalid_chatroom_citation_becomes_retry_diagnostics_not_runner_crash(
     assert all("attachment_refs" in event["error"] for event in attempts)
 
 
-def test_chatroom_citation_retry_prompt_lists_exact_allowed_segments_and_recovers(
+def test_chatroom_citation_retry_reuses_identical_prompt_and_source_snapshot(
     tmp_path: Path,
 ) -> None:
     invalid = json.dumps({
@@ -226,13 +226,22 @@ def test_chatroom_citation_retry_prompt_lists_exact_allowed_segments_and_recover
     )
 
     assert len(adapter.requests) == 2
+    assert adapter.requests[0].messages == adapter.requests[1].messages
     assert '"full"' in adapter.requests[0].prompt
     assert 'attachment:brief' in adapter.requests[0].prompt
-    assert 'attachment_refs segment_refs must be non-empty strings' in adapter.requests[1].prompt
-    assert 'Allowed segment_refs for brief.md: ["full"]' in adapter.requests[1].prompt
     response_events = [event for event in runner.repository.read_events("meeting-1") if event.get("role") == "host"]
     assert response_events[-1]["status"] == "completed"
     assert response_events[-1]["parsed_output"]["attachment_refs"][0]["segment_refs"] == ["full"]
+    assert response_events[0]["prompt_messages"] == response_events[1]["prompt_messages"]
+    assert response_events[0]["selected_source_snapshot"] == response_events[1]["selected_source_snapshot"]
+    for event in response_events:
+        source = event["selected_source_snapshot"]["sources"][0]
+        assert source["source_ref"] == "attachment:brief"
+        assert source["label"] == "brief.md"
+        assert source["available_segment_refs"] == ["full"]
+        assert 'attachment:brief' in str(event["prompt_messages"])
+        assert 'brief.md' in str(event["prompt_messages"])
+        assert '"full"' in str(event["prompt_messages"])
 
 
 def test_chat_directed_increments_sequence(tmp_path: Path) -> None:

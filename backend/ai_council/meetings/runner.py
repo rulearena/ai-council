@@ -827,7 +827,6 @@ class MeetingRunner:
         prior_transcript_override: str | None,
         prompt_input_overrides: dict[str, str] | None = None,
         parse_retries_remaining: int = 1,
-        parse_error_feedback: str = "",
     ) -> bool:
         if self._is_terminal(meeting_id):
             return False
@@ -869,7 +868,6 @@ class MeetingRunner:
                 persona_prompt=(prompt_input_overrides or {}).get("persona_prompt", ""),
                 source_context=self._source_context(inputs),
                 source_allow_list=self._chatroom_source_allow_list(inputs),
-                validation_feedback=parse_error_feedback,
             )
 
         def emit_token_delta(content: str) -> None:
@@ -975,7 +973,6 @@ class MeetingRunner:
                     prior_transcript_override=prior_transcript_override,
                     prompt_input_overrides=prompt_input_overrides,
                     parse_retries_remaining=parse_retries_remaining - 1,
-                    parse_error_feedback=self._chatroom_retry_feedback(error, inputs),
                 )
             return False
         except (AdapterError, KeyError) as error:
@@ -1448,7 +1445,6 @@ class MeetingRunner:
         persona_prompt: str,
         source_context: str = "",
         source_allow_list: str = "",
-        validation_feedback: str = "",
     ) -> tuple[str, list[dict[str, str]]]:
         persona_prompt = persona_prompt.strip()
         if not persona_prompt:
@@ -1475,7 +1471,6 @@ class MeetingRunner:
                 else ""
             )
             + source_allow_list
-            + (f"\n{validation_feedback}" if validation_feedback else "")
         )
         user = (
             "近期對話與引用（僅限以下內容）：\n"
@@ -1526,50 +1521,6 @@ class MeetingRunner:
             [source for source in sources if isinstance(source, dict)]
         )
 
-    @staticmethod
-    def _format_chatroom_retry_feedback(sources: list[dict[str, Any]]) -> str:
-        allow_list = [
-            {
-                "source_ref": str(source.get("source_ref")),
-                "label": str(source.get("label")),
-                "segment_refs": list(source.get("available_segment_refs", [])),
-            }
-            for source in sources
-            if isinstance(source, dict)
-        ]
-        if not allow_list:
-            return (
-                "\n上一個輸出未通過引用驗證；重送 JSON；若引用，只用本回合 exact refs。"
-            )
-        feedback = (
-            "\n上一個輸出未通過引用驗證；重送 JSON；attachment_refs segment_refs must be non-empty strings；"
-            "只用上方 exact allow-list。"
-        )
-        # Keep the legacy human-readable hint for ordinary labels, but never
-        # duplicate an arbitrarily long label into retry feedback.  The exact
-        # full allow-list above remains the authoritative legal set.
-        if all(len(str(source.get("label", ""))) <= 80 for source in sources):
-            hints = " ".join(
-                f"Allowed segment_refs for {source.get('label')}: "
-                f"{json.dumps(list(source.get('available_segment_refs', [])), ensure_ascii=False)}."
-                for source in sources
-            )
-            feedback += f" {hints}"
-        return feedback
-
-    @classmethod
-    def chatroom_retry_feedback(cls, sources: list[dict[str, Any]]) -> str:
-        """Return the bounded correction envelope reserved for a citation retry."""
-        return cls._format_chatroom_retry_feedback(sources)
-
-    @classmethod
-    def _chatroom_retry_feedback(cls, error: OutputParseError, inputs: dict[str, Any] | None) -> str:
-        snapshot = (inputs or {}).get("__chatroom_source_snapshot", {})
-        sources = snapshot.get("selected_source_snapshot", {}).get("sources", [])
-        return cls._format_chatroom_retry_feedback(
-            [source for source in sources if isinstance(source, dict)]
-        )
-
     def chatroom_prompt_budget_tokens(
         self,
         *,
@@ -1581,7 +1532,6 @@ class MeetingRunner:
         persona_prompt: str,
         source_placeholder: str = "",
         source_allow_list: str = "",
-        validation_feedback: str = "",
     ) -> int:
         """Expose the canonical prompt cost used by request-wide allocation."""
         output_schema = self.output_schemas.get(CHAT_MESSAGE_V1_ID)
@@ -1600,7 +1550,6 @@ class MeetingRunner:
             persona_prompt=persona_prompt,
             source_context=reservation_source_context,
             source_allow_list=source_allow_list,
-            validation_feedback=validation_feedback,
         )
         prompt_tokens = estimate_prompt_tokens(messages)
         return prompt_tokens

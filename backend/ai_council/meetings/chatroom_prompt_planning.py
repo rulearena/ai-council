@@ -9,7 +9,6 @@ class ChatroomPromptPlan:
     prior_transcript: str
     source_snapshot: dict[str, Any]
     source_allow_list: str
-    retry_feedback: str
 
 
 class ChatroomPromptPlanError(ValueError):
@@ -28,11 +27,10 @@ def plan_chatroom_prompt(
     goal: str,
     instruction: str,
     quoted_event_id: str | None,
-    prompt_budget_for: Callable[[str, str, str, str], int],
+    prompt_budget_for: Callable[[str, str, str], int],
     build_context: Callable[[list[dict[str, Any]], str, str, str | None, int], str],
     build_snapshot: Callable[[int], dict[str, Any]],
     source_allow_list_for: Callable[[list[dict[str, Any]]], str],
-    retry_feedback_for: Callable[[list[dict[str, Any]]], str],
 ) -> ChatroomPromptPlan:
     """Compute one request/fanout prompt envelope from actual frozen refs.
 
@@ -42,16 +40,12 @@ def plan_chatroom_prompt(
     reuse the returned envelope for every target and automatic retry.
     """
     source_allow_list = source_allow_list_for(selected_sources)
-    retry_feedback = retry_feedback_for(selected_sources)
 
     def fixed_budget(prior_transcript: str) -> int:
         if not target_role_ids:
             return 0
         return max(
-            max(
-                prompt_budget_for(role, prior_transcript, source_allow_list, ""),
-                prompt_budget_for(role, prior_transcript, source_allow_list, retry_feedback),
-            )
+            prompt_budget_for(role, prior_transcript, source_allow_list)
             for role in target_role_ids
         )
 
@@ -75,7 +69,6 @@ def plan_chatroom_prompt(
                 "source_excerpts": [],
             },
             source_allow_list="",
-            retry_feedback=retry_feedback,
         )
 
     snapshot: dict[str, Any] = {
@@ -94,7 +87,6 @@ def plan_chatroom_prompt(
         snapshot = build_snapshot(max(0, request_budget_tokens - fixed - 32) * 4)
         snapshot_sources = snapshot["selected_source_snapshot"]["sources"]
         source_allow_list = source_allow_list_for(snapshot_sources)
-        retry_feedback = retry_feedback_for(snapshot_sources)
         prior_transcript = build_context(
             active_events,
             goal,
@@ -113,5 +105,4 @@ def plan_chatroom_prompt(
         prior_transcript=prior_transcript,
         source_snapshot=snapshot,
         source_allow_list=source_allow_list,
-        retry_feedback=retry_feedback,
     )
