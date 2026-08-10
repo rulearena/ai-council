@@ -185,6 +185,56 @@ def test_invalid_chatroom_citation_becomes_retry_diagnostics_not_runner_crash(
     assert all("attachment_refs" in event["error"] for event in attempts)
 
 
+def test_chatroom_citation_retry_prompt_lists_exact_allowed_segments_and_recovers(
+    tmp_path: Path,
+) -> None:
+    invalid = json.dumps({
+        "message": "依據來源",
+        "attachment_refs": [{
+            "source_ref": "attachment:brief",
+            "label": "brief.md",
+            "segment_refs": [],
+        }],
+    })
+    valid = json.dumps({
+        "message": "依據來源",
+        "attachment_refs": [{
+            "source_ref": "attachment:brief",
+            "label": "brief.md",
+            "segment_refs": ["full"],
+        }],
+    })
+    adapter = FakeAdapter([invalid, valid])
+    runner = build_chatroom_runner(tmp_path, adapter)
+    runner.chat_respond_as_role(
+        meeting_id="meeting-1", goal="測試引用", role="host", role_display_name="主持 AI",
+        instruction="請引用", model_assignments={"host": ModelConfig(id="mock-host", adapter="mock")},
+        inputs={
+            **persona_inputs("host"),
+            "__chatroom_source_snapshot": {
+                "selected_source_snapshot": {
+                    "schema_version": "chatroom-source-context/v1",
+                    "source_refs": ["attachment:brief"],
+                    "sources": [{
+                        "source_ref": "attachment:brief", "label": "brief.md",
+                        "available_segment_refs": ["full"],
+                    }],
+                },
+                "source_excerpts": ["brief excerpt"],
+            },
+        },
+    )
+
+    assert len(adapter.requests) == 2
+    assert '"full"' in adapter.requests[0].prompt
+    assert 'attachment:brief' in adapter.requests[0].prompt
+    assert 'attachment_refs segment_refs must be non-empty strings' in adapter.requests[1].prompt
+    assert 'Allowed segment_refs for brief.md: ["full"]' in adapter.requests[1].prompt
+    response_events = [event for event in runner.repository.read_events("meeting-1") if event.get("role") == "host"]
+    assert response_events[-1]["status"] == "completed"
+    assert response_events[-1]["parsed_output"]["attachment_refs"][0]["segment_refs"] == ["full"]
+
+
 def test_chat_directed_increments_sequence(tmp_path: Path) -> None:
     adapter = FakeAdapter([VALID_OUTPUT, VALID_OUTPUT])
     runner = build_chatroom_runner(tmp_path, adapter)

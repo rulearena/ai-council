@@ -27,7 +27,7 @@ ROLE_OUTPUT_V1_SCHEMA = (
     '{"summary":"string","arguments":[{"title":"string","detail":"string"}],'
     '"risks":[{"title":"string","detail":"string"}],"recommendation":"string"}'
 )
-CHAT_MESSAGE_V1_SCHEMA = '{"message":"string","attachment_refs":[{"source_ref":"string","label":"string","segment_refs":["string"]}]}'
+CHAT_MESSAGE_V1_SCHEMA = '{"message":"string","attachment_refs":[{"source_ref":"<exact selected source_ref>","label":"<exact selected label>","segment_refs":["<exact allowed segment_ref>"]}]}'
 STRUCTURED_VERDICT_V1_SCHEMA = (
     '{"summary":"string","decision":"approve | approve-with-conditions | reject | '
     'insufficient-evidence","findings":[{"title":"string","detail":"string",'

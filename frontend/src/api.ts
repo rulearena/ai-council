@@ -407,7 +407,10 @@ export class ApiError extends Error {
 async function readErrorDetail(response: Response): Promise<unknown> {
   try {
     const body = await response.json()
-    return body && typeof body === 'object' && 'detail' in body ? (body as { detail: unknown }).detail : undefined
+    if (!body || typeof body !== 'object') return undefined
+    if ('detail' in body) return (body as { detail: unknown }).detail
+    if ((body as { status?: unknown }).status === 'rejected') return body
+    return undefined
   } catch {
     return undefined
   }

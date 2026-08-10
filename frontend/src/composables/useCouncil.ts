@@ -94,6 +94,25 @@ export type RoleSeatStatus = 'waiting' | 'thinking' | 'completed' | 'failed'
 
 const ASSIGNMENT_UPDATE_ERROR_MESSAGE = '模型指派儲存失敗，請稍後再試。'
 
+function formatActionError(caught: unknown): string {
+  if (!(caught instanceof ApiError)) {
+    return caught instanceof Error ? caught.message : String(caught)
+  }
+  if (typeof caught.detail === 'string') return caught.detail
+  if (caught.detail && typeof caught.detail === 'object') {
+    const detail = caught.detail as {
+      error?: { code?: unknown; field?: unknown; details?: unknown }
+      code?: unknown
+      field?: unknown
+    }
+    const rejection = detail.error && typeof detail.error === 'object' ? detail.error : detail
+    const code = typeof rejection.code === 'string' ? rejection.code : ''
+    const field = typeof rejection.field === 'string' ? rejection.field : ''
+    if (code || field) return [code, field && `field: ${field}`].filter(Boolean).join(' · ')
+  }
+  return caught.message
+}
+
 export { chatroomQueuedRoleIds } from '../chatroomPending'
 
 // The mode currently driving the open meeting, defaulting to red-blue when no meeting is
@@ -1281,9 +1300,7 @@ export function useCouncil() {
       await action()
       return true
     } catch (caught) {
-      error.value = caught instanceof ApiError && typeof caught.detail === 'string'
-        ? caught.detail
-        : caught instanceof Error ? caught.message : String(caught)
+      error.value = formatActionError(caught)
       return false
     } finally {
       loading.value = false

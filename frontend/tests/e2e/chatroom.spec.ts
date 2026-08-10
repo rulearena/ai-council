@@ -216,6 +216,8 @@ test('13.2a raw role-like mention is rejected without an event and keeps the dra
   await page.getByTestId('send-chat-message-button').click()
   await expect((await response).status()).toBe(400)
   await expect(input).toHaveValue('@Advisor 這不是已選取的角色 chip')
+  await expect(page.getByTestId('app-error')).toContainText('INVALID_MENTION_TOKEN')
+  await expect(page.getByTestId('app-error')).toContainText('content')
   await expect(page.getByTestId('workspace-message')).toHaveCount(0)
 })
 
@@ -584,10 +586,11 @@ test('13.10c emoji + @顧問 + #待辦總覽.md sends exact source tokens', asyn
   await input.fill('😀 @')
   await expect(page.getByTestId('mention-menu')).toBeVisible()
   await page.getByTestId('mention-option').filter({ hasText: '顧問' }).first().click()
-  await input.fill(`${await input.inputValue()} 請查看 #待辦`)
+  await input.fill(`${await input.inputValue()}我們 #待辦`)
   await expect(page.getByTestId('source-menu')).toBeVisible()
   await expect(page.getByTestId('source-option').first()).toContainText('待辦總覽.md')
   await page.getByTestId('source-option').first().click()
+  await input.fill(`${await input.inputValue()}本週有什麼需要完成的？`)
 
   const request = page.waitForRequest(
     (candidate) => candidate.method() === 'POST' && candidate.url().endsWith('/chat/mention'),
@@ -603,13 +606,50 @@ test('13.10c emoji + @顧問 + #待辦總覽.md sends exact source tokens', asyn
     source_tokens: Array<{ source_ref: string; display_text: string; start: number; end: number }>
     source_refs: string[]
   }
-  expect(payload.content).toContain('😀 @顧問')
-  expect(payload.content).toContain('#待辦總覽.md')
-  expect(payload.mentions).toHaveLength(1)
-  expect(payload.mentions[0].display_text).toBe('@顧問')
-  expect(payload.source_tokens).toHaveLength(1)
-  expect(payload.source_tokens[0].display_text).toBe('#待辦總覽.md')
+  expect(payload.content).toBe('😀 @顧問 我們 #待辦總覽.md 本週有什麼需要完成的？')
+  expect(payload.mentions).toEqual([expect.objectContaining({ display_text: '@顧問', start: 2, end: 5 })])
+  expect(payload.source_tokens).toEqual([expect.objectContaining({
+    display_text: '#待辦總覽.md', start: 9, end: 17,
+  })])
   expect(payload.source_refs).toEqual([payload.source_tokens[0].source_ref])
+  await expect(input).toHaveValue('')
+})
+
+test('13.10f source selected before @主持 AI preserves both token spans', async ({ page }) => {
+  await page.goto('/')
+  const title = `E2E chatroom source before mention ${Date.now()}`
+  await createChatroomMeeting(page, title, { modelAssignments: defaultModels })
+
+  await page.getByTestId('attachment-upload-input').setInputFiles({
+    name: '待辦總覽.md', mimeType: 'text/markdown', buffer: Buffer.from('unfinished: one\n'),
+  })
+  await expect(page.getByTestId('source-autocomplete')).toBeVisible({ timeout: 15_000 })
+  const input = page.getByTestId('chat-message-input')
+  await input.fill('#待辦')
+  await expect(page.getByTestId('source-menu')).toBeVisible()
+  await page.getByTestId('source-option').first().click()
+  await input.fill(`${await input.inputValue()}@主`)
+  await expect(page.getByTestId('mention-menu')).toBeVisible()
+  await page.getByTestId('mention-option').filter({ hasText: '主持 AI' }).first().click()
+  await input.fill(`${await input.inputValue()}還有哪些未完成？`)
+
+  const request = page.waitForRequest(
+    (candidate) => candidate.method() === 'POST' && candidate.url().endsWith('/chat/mention'),
+  )
+  const response = page.waitForResponse(
+    (candidate) => candidate.request().method() === 'POST' && candidate.url().endsWith('/chat/mention'),
+  )
+  await page.getByTestId('send-chat-message-button').click()
+  expect((await response).status()).toBe(202)
+  const payload = (await request).postDataJSON() as {
+    content: string
+    mentions: Array<{ display_text: string; start: number; end: number }>
+    source_tokens: Array<{ display_text: string; start: number; end: number }>
+  }
+  expect(payload.content).toBe('#待辦總覽.md @主持 AI 還有哪些未完成？')
+  expect(payload.source_tokens).toEqual([expect.objectContaining({ display_text: '#待辦總覽.md', start: 0, end: 8 })])
+  expect(payload.mentions).toEqual([expect.objectContaining({ display_text: '@主持 AI', start: 9, end: 15 })])
+  await expect(input).toHaveValue('')
 })
 
 test('13.10d citation chip opens its exact reader target and becomes unavailable after deletion', async ({ page }) => {

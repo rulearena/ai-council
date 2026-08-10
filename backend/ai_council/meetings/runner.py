@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import re
 import time
 import uuid
@@ -826,6 +827,7 @@ class MeetingRunner:
         prior_transcript_override: str | None,
         prompt_input_overrides: dict[str, str] | None = None,
         parse_retries_remaining: int = 1,
+        parse_error_feedback: str = "",
     ) -> bool:
         if self._is_terminal(meeting_id):
             return False
@@ -866,6 +868,8 @@ class MeetingRunner:
                 required_json_schema=output_schema.schema,
                 persona_prompt=(prompt_input_overrides or {}).get("persona_prompt", ""),
                 source_context=self._source_context(inputs),
+                source_allow_list=self._chatroom_source_allow_list(inputs),
+                validation_feedback=parse_error_feedback,
             )
 
         def emit_token_delta(content: str) -> None:
@@ -971,6 +975,7 @@ class MeetingRunner:
                     prior_transcript_override=prior_transcript_override,
                     prompt_input_overrides=prompt_input_overrides,
                     parse_retries_remaining=parse_retries_remaining - 1,
+                    parse_error_feedback=self._chatroom_retry_feedback(error, inputs),
                 )
             return False
         except (AdapterError, KeyError) as error:
@@ -1442,6 +1447,8 @@ class MeetingRunner:
         required_json_schema: str,
         persona_prompt: str,
         source_context: str = "",
+        source_allow_list: str = "",
+        validation_feedback: str = "",
     ) -> tuple[str, list[dict[str, str]]]:
         persona_prompt = persona_prompt.strip()
         if not persona_prompt:
@@ -1467,6 +1474,8 @@ class MeetingRunner:
                 if source_context
                 else ""
             )
+            + source_allow_list
+            + (f"\n{validation_feedback}" if validation_feedback else "")
         )
         user = (
             "近期對話與引用（僅限以下內容）：\n"
@@ -1484,6 +1493,50 @@ class MeetingRunner:
             for label, message in zip(("system", "developer", "user"), messages)
         )
         return prompt, messages
+
+    @staticmethod
+    def _chatroom_source_allow_list(inputs: dict[str, Any] | None) -> str:
+        """Return explicit citation choices without weakening server-side validation."""
+        snapshot = (inputs or {}).get("__chatroom_source_snapshot", {})
+        sources = snapshot.get("selected_source_snapshot", {}).get("sources", [])
+        allowed = [
+            {
+                "source_ref": str(source.get("source_ref")),
+                "label": str(source.get("label")),
+                "segment_refs": list(source.get("available_segment_refs", [])),
+            }
+            for source in sources
+            if isinstance(source, dict)
+        ]
+        if not allowed:
+            return ""
+        return (
+            "\n可引用來源的 exact allow-list（source_ref、label、segment_refs 必須逐字相同）："
+            f"{json.dumps(allowed, ensure_ascii=False)}"
+        )
+
+    @staticmethod
+    def _chatroom_retry_feedback(error: OutputParseError, inputs: dict[str, Any] | None) -> str:
+        snapshot = (inputs or {}).get("__chatroom_source_snapshot", {})
+        sources = snapshot.get("selected_source_snapshot", {}).get("sources", [])
+        allowed = [
+            {
+                "source_ref": str(source.get("source_ref")),
+                "label": str(source.get("label")),
+                "segment_refs": list(source.get("available_segment_refs", [])),
+            }
+            for source in sources
+            if isinstance(source, dict)
+        ]
+        lines = " ".join(
+            f"Allowed segment_refs for {item['label']}: {json.dumps(item['segment_refs'], ensure_ascii=False)}."
+            for item in allowed
+        )
+        return (
+            "\n上一個輸出未通過引用驗證："
+            f"{error}。請重新輸出完整 JSON；不要輸出空的 segment_refs，只能使用 exact source_ref、label 與允許值。 "
+            f"{lines}"
+        )
 
     def chatroom_prompt_budget_tokens(
         self,
@@ -1508,7 +1561,19 @@ class MeetingRunner:
             persona_prompt=persona_prompt,
             source_context=source_placeholder,
         )
-        return estimate_prompt_tokens(messages)
+        prompt_tokens = estimate_prompt_tokens(messages)
+        if source_placeholder:
+            # The request budget is reserved before source retrieval knows the final
+            # labels/refs. Reserve the citation guidance envelope here so the exact
+            # snapshot allow-list added later cannot push the request over budget.
+            prompt_tokens += estimate_prompt_tokens([{
+                "content": (
+                    "Allowed exact source citation choices: source_ref=<exact selected source_ref>; "
+                    "label=<exact selected label>; Allowed segment_refs for each selected source "
+                    "are the exact listed segment refs, such as [\"full\"]."
+                ),
+            }])
+        return prompt_tokens
 
     @staticmethod
     def _source_context(inputs: dict[str, Any] | None) -> str:
