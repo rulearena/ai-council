@@ -947,7 +947,12 @@ def create_app(
                 "total_bytes": attachment_summary.total_bytes,
             },
             "chatroom_sources": (
-                chatroom_source_projection(meeting_id, metadata, mode)
+                chatroom_source_projection(
+                    meeting_id,
+                    metadata,
+                    mode,
+                    legacy_material_view=material_view,
+                )
                 if mode.category == "chatroom"
                 else []
             ),
@@ -2524,10 +2529,29 @@ def create_app(
         }
         return metadata, mode, model_assignments, inputs, participants
 
+    def chatroom_source_materials(
+        meeting_id: str,
+        metadata: dict[str, Any],
+        *,
+        legacy_material_view: CaseMaterialsView | None = None,
+    ) -> dict[str, Any]:
+        if "chatroom_source_metadata" in metadata:
+            material_view = metadata.get("chatroom_source_metadata")
+            if isinstance(material_view, dict):
+                return material_view
+            return {"evidence": [], "notes": []}
+        # Historical meetings predate the body-free source header. Preserve
+        # their existing read-time projection without persisting a migration.
+        view = legacy_material_view or case_materials.view(meeting_id)
+        return chatroom_source_metadata_from_view(view)
+
     def chatroom_source_projection(
         meeting_id: str,
         metadata: dict[str, Any],
         mode: ModeDefinition,
+        *,
+        source_materials: dict[str, Any] | None = None,
+        legacy_material_view: CaseMaterialsView | None = None,
     ) -> list[dict[str, Any]]:
         participants = project_participants(mode, metadata)
         active_role_ids = [str(item["role_id"]) for item in participants]
@@ -2539,12 +2563,15 @@ def create_app(
             and attachments.blob_path(meeting_id, str(event["file_id"])).is_file()
             and attachments.blob_path(meeting_id, str(event["file_id"])).stat().st_size > 0
         }
-        # Source validation and public listing are body-free.  Only an explicit
-        # material write may create or refresh this authoritative header; a
-        # legacy meeting without it is intentionally projected as unreadable.
-        material_view = metadata.get("chatroom_source_metadata")
-        if not isinstance(material_view, dict):
-            material_view = {"evidence": [], "notes": []}
+        material_view = (
+            source_materials
+            if source_materials is not None
+            else chatroom_source_materials(
+                meeting_id,
+                metadata,
+                legacy_material_view=legacy_material_view,
+            )
+        )
         return project_chatroom_sources(
             meeting_id=meeting_id,
             materials=material_view,
@@ -2725,8 +2752,15 @@ def create_app(
             # by _build_chatroom_source_snapshot below.
             source_projection: list[dict[str, Any]] = []
             selected_sources: list[dict[str, Any]] = []
+            source_materials: dict[str, Any] = {"evidence": [], "notes": []}
             if request.source_refs:
-                source_projection = chatroom_source_projection(meeting_id, metadata, mode)
+                source_materials = chatroom_source_materials(meeting_id, metadata)
+                source_projection = chatroom_source_projection(
+                    meeting_id,
+                    metadata,
+                    mode,
+                    source_materials=source_materials,
+                )
                 valid, source_error, bad_source_ref, bad_role_id = validate_chatroom_sources(
                     source_projection, list(request.source_refs), target_role_ids
                 )
@@ -2810,7 +2844,7 @@ def create_app(
                             meeting_id=meeting_id,
                             source_refs=list(request.source_refs),
                             source_projection=source_projection,
-                            materials=metadata.get("chatroom_source_metadata") or {"evidence": [], "notes": []},
+                            materials=source_materials,
                             instruction=routing.instruction,
                             remaining_budget_chars=chars,
                             read_evidence_content=read_selected_evidence,
@@ -2818,9 +2852,21 @@ def create_app(
                     ),
                     source_allow_list_for=runner.chatroom_source_allow_list,
                 )
-            except (SourceSnapshotError, ChatroomPromptPlanError) as error:
-                code = error.code if isinstance(error, ChatroomPromptPlanError) else "SOURCE_NOT_READABLE"
-                return JSONResponse(status_code=400, content=rejected(code, "source_refs"))
+            except SourceSnapshotError:
+                return JSONResponse(
+                    status_code=400,
+                    content=rejected("SOURCE_NOT_READABLE", "source_refs"),
+                )
+            except ChatroomPromptPlanError as error:
+                field = (
+                    "content"
+                    if error.code == "CHATROOM_PROMPT_TOO_LARGE"
+                    else "source_refs"
+                )
+                return JSONResponse(
+                    status_code=400,
+                    content=rejected("INVALID_REQUEST_SCHEMA", field),
+                )
             inputs["__chatroom_prior_transcript"] = plan.prior_transcript
             inputs["__chatroom_source_snapshot"] = plan.source_snapshot
 

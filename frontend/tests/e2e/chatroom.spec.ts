@@ -93,6 +93,38 @@ async function waitForRoleMessage(page: Page, roleText: string) {
   ).toBeVisible({ timeout: 15_000 })
 }
 
+type MockChatResponse = {
+  message: string
+  attachment_refs: Array<{ source_ref: string; label: string; segment_refs: string[] }>
+}
+
+const e2eApiOrigin = () => process.env.E2E_API_BASE_URL ?? 'http://127.0.0.1:5009'
+
+async function createMockChatFixtureModel(page: Page, modelId: string) {
+  const response = await page.request.post(`${e2eApiOrigin()}/models`, {
+    data: {
+      id: modelId,
+      adapter: 'mock',
+      extra_body: { mock_chat_response_sequence: [] },
+    },
+  })
+  expect(response.status()).toBe(201)
+}
+
+async function setMockChatResponses(
+  page: Page,
+  modelId: string,
+  responses: MockChatResponse[],
+) {
+  const response = await page.request.put(`${e2eApiOrigin()}/models/${modelId}`, {
+    data: {
+      adapter: 'mock',
+      extra_body: { mock_chat_response_sequence: responses },
+    },
+  })
+  expect(response.ok()).toBeTruthy()
+}
+
 // Default model assignments for chatroom creation (all mock-fast for speed).
 const defaultModels = {
   Advisor: 'mock-fast',
@@ -571,16 +603,37 @@ test('13.10b emoji prefix preserves mention span at the chat API boundary', asyn
 })
 
 test('13.10c emoji + @顧問 + #待辦總覽.md sends exact source tokens', async ({ page }) => {
+  const fixtureModel = `mock-source-advisor-${Date.now()}`
+  await createMockChatFixtureModel(page, fixtureModel)
   await page.goto('/')
   const title = `E2E chatroom explicit source ${Date.now()}`
-  await createChatroomMeeting(page, title, { modelAssignments: defaultModels })
+  const meetingId = await createChatroomMeeting(page, title, {
+    modelAssignments: { ...defaultModels, Advisor: fixtureModel },
+  })
 
+  const uploadResponse = page.waitForResponse(
+    (candidate) => candidate.request().method() === 'POST' && candidate.url().endsWith('/attachments'),
+  )
   await page.getByTestId('attachment-upload-input').setInputFiles({
     name: '待辦總覽.md',
     mimeType: 'text/markdown',
     buffer: Buffer.from('deadline: tomorrow\n'),
   })
+  expect((await uploadResponse).ok()).toBeTruthy()
   await expect(page.getByTestId('source-autocomplete')).toBeVisible({ timeout: 15_000 })
+  const sources = await (await page.request.get(
+    `${e2eApiOrigin()}/meetings/${meetingId}/chat/sources`,
+  )).json() as Array<{ source_ref: string; label: string }>
+  const source = sources.find((candidate) => candidate.label === '待辦總覽.md')
+  expect(source).toBeTruthy()
+  await setMockChatResponses(page, fixtureModel, [{
+    message: '顧問已完成待辦來源核對。',
+    attachment_refs: [{
+      source_ref: source!.source_ref,
+      label: source!.label,
+      segment_refs: ['full'],
+    }],
+  }])
 
   const input = page.getByTestId('chat-message-input')
   await input.fill('😀 @')
@@ -611,19 +664,58 @@ test('13.10c emoji + @顧問 + #待辦總覽.md sends exact source tokens', asyn
   expect(payload.source_tokens).toEqual([expect.objectContaining({
     display_text: '#待辦總覽.md', start: 9, end: 17,
   })])
-  expect(payload.source_refs).toEqual([payload.source_tokens[0].source_ref])
+  expect(payload.source_refs).toEqual([source!.source_ref])
+  expect(payload.source_tokens[0].source_ref).toBe(source!.source_ref)
   await expect(input).toHaveValue('')
+  const advisorCompleted = page.locator(
+    '[data-testid="workspace-message"][data-role="Advisor"].workspace-message-ai',
+  ).filter({ hasText: '顧問已完成待辦來源核對。' })
+  await expect(advisorCompleted).toBeVisible({ timeout: 15_000 })
+  await expect(
+    advisorCompleted.getByTestId(`citation-chip-${source!.source_ref}`),
+  ).toBeVisible()
 })
 
 test('13.10f source selected before @主持 AI preserves both token spans', async ({ page }) => {
+  const fixtureModel = `mock-source-host-retry-${Date.now()}`
+  await createMockChatFixtureModel(page, fixtureModel)
   await page.goto('/')
   const title = `E2E chatroom source before mention ${Date.now()}`
-  await createChatroomMeeting(page, title, { modelAssignments: defaultModels })
+  const meetingId = await createChatroomMeeting(page, title, {
+    modelAssignments: { ...defaultModels, host: fixtureModel },
+  })
 
+  const uploadResponse = page.waitForResponse(
+    (candidate) => candidate.request().method() === 'POST' && candidate.url().endsWith('/attachments'),
+  )
   await page.getByTestId('attachment-upload-input').setInputFiles({
     name: '待辦總覽.md', mimeType: 'text/markdown', buffer: Buffer.from('unfinished: one\n'),
   })
+  expect((await uploadResponse).ok()).toBeTruthy()
   await expect(page.getByTestId('source-autocomplete')).toBeVisible({ timeout: 15_000 })
+  const sources = await (await page.request.get(
+    `${e2eApiOrigin()}/meetings/${meetingId}/chat/sources`,
+  )).json() as Array<{ source_ref: string; label: string }>
+  const source = sources.find((candidate) => candidate.label === '待辦總覽.md')
+  expect(source).toBeTruthy()
+  await setMockChatResponses(page, fixtureModel, [
+    {
+      message: '這個引用必須觸發 parse retry。',
+      attachment_refs: [{
+        source_ref: source!.source_ref,
+        label: source!.label,
+        segment_refs: [],
+      }],
+    },
+    {
+      message: '主持 AI 已完成來源核對。',
+      attachment_refs: [{
+        source_ref: source!.source_ref,
+        label: source!.label,
+        segment_refs: ['full'],
+      }],
+    },
+  ])
   const input = page.getByTestId('chat-message-input')
   await input.fill('#待辦')
   await expect(page.getByTestId('source-menu')).toBeVisible()
@@ -650,6 +742,33 @@ test('13.10f source selected before @主持 AI preserves both token spans', asyn
   expect(payload.source_tokens).toEqual([expect.objectContaining({ display_text: '#待辦總覽.md', start: 0, end: 8 })])
   expect(payload.mentions).toEqual([expect.objectContaining({ display_text: '@主持 AI', start: 9, end: 15 })])
   await expect(input).toHaveValue('')
+  const hostCompleted = page.locator(
+    '[data-testid="workspace-message"][data-role="host"].workspace-message-ai',
+  ).filter({ hasText: '主持 AI 已完成來源核對。' })
+  await expect(hostCompleted).toBeVisible({ timeout: 15_000 })
+  await expect(
+    hostCompleted.getByTestId(`citation-chip-${source!.source_ref}`),
+  ).toBeVisible()
+  await expect(page.locator(
+    '[data-testid="workspace-message"][data-role="host"].workspace-message-failed',
+  )).toHaveCount(0)
+
+  const meeting = await (await page.request.get(
+    `${e2eApiOrigin()}/meetings/${meetingId}`,
+  )).json() as { events: Array<Record<string, unknown>> }
+  const attempts = meeting.events.filter((event) => event.role === 'host')
+  expect(attempts.map((event) => event.status)).toEqual(['failed', 'completed'])
+  expect(attempts[0].retry_scheduled).toBe(true)
+  expect(attempts[0].prompt_messages).toEqual(attempts[1].prompt_messages)
+  expect(attempts[0].selected_source_snapshot).toEqual(attempts[1].selected_source_snapshot)
+  expect(attempts[1].parsed_output).toEqual({
+    message: '主持 AI 已完成來源核對。',
+    attachment_refs: [{
+      source_ref: source!.source_ref,
+      label: source!.label,
+      segment_refs: ['full'],
+    }],
+  })
 })
 
 test('13.10d citation chip opens its exact reader target and becomes unavailable after deletion', async ({ page }) => {

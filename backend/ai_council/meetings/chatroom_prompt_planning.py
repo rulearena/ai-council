@@ -103,6 +103,13 @@ def plan_chatroom_prompt(
         },
         "source_excerpts": [],
     }
+    # Classify a prompt that cannot fit even without source metadata or body as
+    # an overall request-content overflow. Source fitting below is responsible
+    # only for failures introduced by the selected sources themselves.
+    _, fixed_prompt_tokens = prompt_costs("", "")
+    if fixed_prompt_tokens > request_budget_tokens:
+        raise ChatroomPromptPlanError("CHATROOM_PROMPT_TOO_LARGE")
+
     # The full snapshot gives an exact search upper bound in characters.  The
     # fitting predicate is the canonical full-message estimator, not a
     # chars-per-token conversion; this remains valid for CJK, emoji, and
@@ -131,8 +138,24 @@ def plan_chatroom_prompt(
     if best is None:
         raise ChatroomPromptPlanError("SOURCE_CONTEXT_TOO_LARGE")
     snapshot, prior_transcript, source_allow_list = best
+    frozen = snapshot.get("selected_source_snapshot", {})
+    frozen_sources = frozen.get("sources", []) if isinstance(frozen, dict) else []
+    source_excerpts = snapshot.get("source_excerpts", [])
+    if (
+        not isinstance(frozen_sources, list)
+        or len(frozen_sources) != len(source_refs)
+        or not isinstance(source_excerpts, list)
+        or len(source_excerpts) != len(source_refs)
+        or any(
+            not isinstance(source, dict)
+            or source.get("source_ref") != source_ref
+            or not source.get("available_segment_refs")
+            for source_ref, source in zip(source_refs, frozen_sources)
+        )
+    ):
+        raise ChatroomPromptPlanError("SOURCE_CONTEXT_TOO_LARGE")
     source_context = "\n\n".join(
-        str(item) for item in snapshot.get("source_excerpts", [])
+        str(item) for item in source_excerpts
     )
     final_prompt_tokens = max(
         prompt_tokens_for(

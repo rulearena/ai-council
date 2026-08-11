@@ -170,6 +170,48 @@ def test_mock_adapter_supports_configurable_delay(monkeypatch) -> None:
     assert delays == [0.25]
 
 
+def test_mock_chat_response_sequence_is_ordered_and_scoped_per_meeting() -> None:
+    adapter = MockModelAdapter()
+    first = {
+        "message": "retry me",
+        "attachment_refs": [{
+            "source_ref": "attachment:file-1",
+            "label": "source.md",
+            "segment_refs": [],
+        }],
+    }
+    second = {
+        "message": "completed",
+        "attachment_refs": [{
+            "source_ref": "attachment:file-1",
+            "label": "source.md",
+            "segment_refs": ["full"],
+        }],
+    }
+    config = ModelConfig(
+        id="mock-chat-sequence",
+        adapter="mock",
+        extra_body={"mock_chat_response_sequence": [first, second]},
+    )
+
+    meeting_one = ModelRequest(
+        prompt="source prompt",
+        model_config=config,
+        meeting_id="meeting-1",
+        output_schema_id="chat-message/v1",
+    )
+    meeting_two = ModelRequest(
+        prompt="source prompt",
+        model_config=config,
+        meeting_id="meeting-2",
+        output_schema_id="chat-message/v1",
+    )
+
+    assert json.loads(adapter.complete(meeting_one).raw_output) == first
+    assert json.loads(adapter.complete(meeting_one).raw_output) == second
+    assert json.loads(adapter.complete(meeting_two).raw_output) == first
+
+
 def test_subscription_cli_adapter_passes_prompt_and_returns_stdout(tmp_path) -> None:
     fake_cli = tmp_path / "fake_cli.py"
     fake_cli.write_text(

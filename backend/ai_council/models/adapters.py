@@ -70,6 +70,11 @@ class ModelResponse:
 class MockModelAdapter:
     last_request: ModelRequest | None = None
 
+    def __init__(self) -> None:
+        self.last_request = None
+        self._chat_response_offsets: dict[tuple[str | None, str], int] = {}
+        self._chat_response_lock = threading.Lock()
+
     def complete(self, request: ModelRequest) -> ModelResponse:
         self.last_request = request
         chunks = request.model_config.extra_body.get("mock_stream_chunks", [])
@@ -84,9 +89,22 @@ class MockModelAdapter:
         if isinstance(mock_error, str) and mock_error:
             raise AdapterError(mock_error)
         if request.output_schema_id == CHAT_MESSAGE_V1_ID:
-            payload = {
-                "message": "Mock chat response.",
-            }
+            sequence = request.model_config.extra_body.get(
+                "mock_chat_response_sequence"
+            )
+            payload: dict[str, object] | None = None
+            if isinstance(sequence, list) and sequence:
+                key = (request.meeting_id, request.model_config.id)
+                with self._chat_response_lock:
+                    offset = self._chat_response_offsets.get(key, 0)
+                    self._chat_response_offsets[key] = offset + 1
+                candidate = sequence[min(offset, len(sequence) - 1)]
+                if isinstance(candidate, dict):
+                    payload = candidate
+            if payload is None:
+                payload = {
+                    "message": "Mock chat response.",
+                }
         elif request.output_schema_id == COURTROOM_ISSUE_DRAFT_V1_ID:
             payload = {"issues": [{"title": "Mock generated issue"}]}
         elif request.output_schema_id == COURTROOM_RULING_V1_ID:

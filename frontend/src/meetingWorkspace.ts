@@ -214,6 +214,7 @@ type WorkspaceEvent = {
   created_at?: string
   error?: string
   failure_kind?: string
+  retry_scheduled?: boolean
   issue_id?: string
   issue_phase?: 'charge' | 'defense' | 'rebuttal' | 'ruling'
   interaction_type?: string
@@ -532,19 +533,25 @@ function projectMessages(
   const names = new Map(
     meeting.participants.map((participant) => [participant.role_id, participantName(participant, mode)]),
   )
-  return (meeting.events ?? []).map((event, order) => ({
-    id: event.event_id,
-    order,
-    event,
-    kind: messageKind(event, mode),
-    roleId: event.role,
-    roleName: event.role === 'Human'
-      ? '主席'
-      : event.role === 'System' ? '系統' : names.get(event.role) ?? event.role,
-    content: messageContent(event),
-    createdAt: event.created_at ?? null,
-    issueId: event.issue_id ?? null,
-  }))
+  return (meeting.events ?? [])
+    .filter((event) => !(
+      mode.category === 'chatroom'
+      && event.status === 'failed'
+      && event.retry_scheduled === true
+    ))
+    .map((event, order) => ({
+      id: event.event_id,
+      order,
+      event,
+      kind: messageKind(event, mode),
+      roleId: event.role,
+      roleName: event.role === 'Human'
+        ? '主席'
+        : event.role === 'System' ? '系統' : names.get(event.role) ?? event.role,
+      content: messageContent(event),
+      createdAt: event.created_at ?? null,
+      issueId: event.issue_id ?? null,
+    }))
 }
 
 function projectRoles(

@@ -147,6 +147,38 @@ test('chatroom @all pending projection includes the fixed Host role', () => {
   assert.equal(workspace.fanoutRounds[0].roleStates.find((role) => role.roleId === 'host')?.state, 'pending')
 })
 
+test('chatroom hides an automatic parse-retry failure from the message feed', () => {
+  const workspace = projectMeetingWorkspace({
+    meeting: {
+      ...chatroomMeeting,
+      activity_status: 'idle',
+      events: [
+        ...chatroomMeeting.events,
+        {
+          event_id: 'advisor-attempt-1', meeting_id: 'meeting-chat',
+          step_id: 'chat-directed-1-advisor-response', role: 'Advisor',
+          attempt: 1, status: 'failed', failure_kind: 'parse_error',
+          retry_scheduled: true, error: 'invalid attachment segment',
+        },
+        {
+          event_id: 'advisor-attempt-2', meeting_id: 'meeting-chat',
+          step_id: 'chat-directed-1-advisor-response', role: 'Advisor',
+          attempt: 2, status: 'completed', output_schema_id: 'chat-message/v1',
+          parsed_output: { message: '完成來源核對' },
+        },
+      ],
+    },
+    mode: chatroomMode,
+  })
+
+  assert.equal(workspace.family, 'conversation')
+  assert.deepEqual(
+    workspace.messages.map((message) => message.id),
+    ['human-chat-1', 'advisor-attempt-2'],
+  )
+  assert.equal(workspace.messages.some((message) => message.kind === 'failed'), false)
+})
+
 test('chatroom @all keeps arrival order and a fixed denominator', () => {
   const workspace = projectMeetingWorkspace({
     meeting: {
