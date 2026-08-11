@@ -254,7 +254,7 @@ test('13.2a raw role-like mention is rejected without an event and keeps the dra
   await expect(page.getByTestId('workspace-message')).toHaveCount(0)
 })
 
-test('13.2c pasted role-like and exact source labels are rejected in content order', async ({ page }) => {
+test('13.2c pasted raw hashtags stay ordinary while raw mentions get actionable guidance', async ({ page }) => {
   await page.goto('/')
   const title = `E2E chatroom pasted invalid tokens ${Date.now()}`
   await createChatroomMeeting(page, title, { modelAssignments: defaultModels })
@@ -284,11 +284,53 @@ test('13.2c pasted role-like and exact source labels are rejected in content ord
 
   await input.fill('#待辦總覽.md  @主持 AI  還有哪些未完成？')
   await page.getByTestId('send-chat-message-button').click()
-  await expect(page.getByTestId('chatroom-composer-error')).toContainText('「#待辦總覽.md」尚未選取附件')
-  await expect(page.getByTestId('chatroom-composer-error')).toContainText('從附件候選選單點選附件')
+  await expect(page.getByTestId('chatroom-composer-error')).toContainText('「@主持」尚未選取 AI')
+  await expect(page.getByTestId('chatroom-composer-error')).toContainText('從候選選單點選角色')
   await expect(input).toHaveValue('#待辦總覽.md  @主持 AI  還有哪些未完成？')
   expect(mentionRequests).toEqual([])
   await expect(page.getByTestId('workspace-message')).toHaveCount(workspaceMessageCount)
+  await expect(page.getByTestId('app-error').filter({ hasText: 'INVALID_MENTION_TOKEN' })).toHaveCount(0)
+})
+
+test('13.2d exact raw source label posts as ordinary text without source authorization', async ({ page }) => {
+  await page.goto('/')
+  const title = `E2E chatroom raw source ordinary text ${Date.now()}`
+  await createChatroomMeeting(page, title, { modelAssignments: defaultModels })
+  const uploadResponse = page.waitForResponse(
+    (candidate) => candidate.request().method() === 'POST' && candidate.url().endsWith('/attachments'),
+  )
+  await page.getByTestId('attachment-upload-input').setInputFiles({
+    name: '待辦總覽.md', mimeType: 'text/markdown', buffer: Buffer.from('SECRET ATTACHMENT BODY\n'),
+  })
+  expect((await uploadResponse).ok()).toBeTruthy()
+
+  const input = page.getByTestId('chat-message-input')
+  await input.fill('#待辦')
+  await expect(page.getByTestId('source-option').first()).toContainText('待辦總覽.md')
+  await input.fill('#待辦總覽.md 請把這段當作普通文字')
+
+  const request = page.waitForRequest(
+    (candidate) => candidate.method() === 'POST' && candidate.url().endsWith('/chat/mention'),
+  )
+  const response = page.waitForResponse(
+    (candidate) => candidate.request().method() === 'POST' && candidate.url().endsWith('/chat/mention'),
+  )
+  await page.getByTestId('send-chat-message-button').click()
+  const acceptedResponse = await response
+  expect(acceptedResponse.status()).toBe(202)
+  const payload = (await request).postDataJSON() as {
+    content: string
+    mentions: unknown[]
+    source_tokens: unknown[]
+    source_refs: string[]
+  }
+  expect(payload).toMatchObject({
+    content: '#待辦總覽.md 請把這段當作普通文字',
+    mentions: [], source_tokens: [], source_refs: [],
+  })
+  expect(await acceptedResponse.json()).toMatchObject({ source_refs: [] })
+  await expect(page.getByTestId('selected-chatroom-sources')).toHaveCount(0)
+  await expect(input).toHaveValue('')
 })
 
 test('13.2b accepted @all keeps the exact invalid-mention warning while AI proceeds', async ({ page }) => {

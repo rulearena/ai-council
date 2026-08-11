@@ -3,7 +3,7 @@ import test from 'node:test'
 
 import {
   buildCanonicalChatroomPayload,
-  findFirstUncoveredChatroomToken,
+  findFirstUncoveredRoleLikeSpan,
   findUncoveredRoleLikeSpans,
   parseAndSendChatMessage,
   rebaseTrackedChatroomTokens,
@@ -62,20 +62,16 @@ test('preflight preserves backend warnings when a structured all token covers th
     token_id: 'all-1', role_id: 'all', display_text: '@全部角色', start: 0, end: 5,
   }
   assert.equal(
-    findFirstUncoveredChatroomToken('@全部角色 @Adviser 請回答', [all]),
+    findFirstUncoveredRoleLikeSpan('@全部角色 @Adviser 請回答', [all]),
     null,
   )
   assert.deepEqual(
-    findFirstUncoveredChatroomToken('@顧問 @Adviser 請回答', [advisor()]),
-    { kind: 'mention', displayText: '@Adviser', start: 4, end: 12 },
+    findFirstUncoveredRoleLikeSpan('@顧問 @Adviser 請回答', [advisor()]),
+    { displayText: '@Adviser', start: 4, end: 12 },
   )
-  const sources = [{
-    source_ref: 'attachment:brief', label: '待辦總覽.md', kind: 'attachment' as const,
-    active: true, readable: true, reader_ref: 'reader:brief', available_segment_refs: ['full'],
-  }]
   assert.deepEqual(
-    findFirstUncoveredChatroomToken('@全部角色 #待辦總覽.md', [all], sources),
-    { kind: 'source', displayText: '#待辦總覽.md', start: 6, end: 14 },
+    findFirstUncoveredRoleLikeSpan('@全部角色 #待辦總覽.md', [all]),
+    null,
   )
 })
 
@@ -105,33 +101,24 @@ test('frontend raw mention boundaries stay aligned with backend routing fixtures
   }
 })
 
-test('preflight reports the first uncovered structured-looking token by content order', () => {
-  const sources = [{
-    source_ref: 'attachment:brief', label: '待辦總覽.md', kind: 'attachment' as const,
-    active: true, readable: true, reader_ref: 'reader:brief', available_segment_refs: ['full'],
-  }]
+test('preflight ignores raw hashtags and reports only uncovered role-like text', () => {
   assert.deepEqual(
-    findFirstUncoveredChatroomToken(
-      '😀 @顧問 請看 #待辦總覽.md', [], sources,
+    findFirstUncoveredRoleLikeSpan(
+      '😀 @顧問 請看 #待辦總覽.md', [],
     ),
-    { kind: 'mention', displayText: '@顧問', start: 2, end: 5 },
+    { displayText: '@顧問', start: 2, end: 5 },
   )
   assert.deepEqual(
-    findFirstUncoveredChatroomToken(
-      '#待辦總覽.md  @主持 AI 還有哪些未完成？', [], sources,
+    findFirstUncoveredRoleLikeSpan(
+      '#待辦總覽.md  @主持 AI 還有哪些未完成？', [],
     ),
-    { kind: 'source', displayText: '#待辦總覽.md', start: 0, end: 8 },
+    { displayText: '@主持', start: 10, end: 13 },
   )
 })
 
-test('preflight ignores unknown hashtags and unavailable or unreadable sources', () => {
-  const source = {
-    source_ref: 'attachment:brief', label: '待辦總覽.md', kind: 'attachment' as const,
-    active: true, readable: true, reader_ref: 'reader:brief', available_segment_refs: ['full'],
-  }
-  assert.equal(findFirstUncoveredChatroomToken('#一般標籤 @foo.bar', [], [source]), null)
-  assert.equal(findFirstUncoveredChatroomToken('#待辦總覽.md', [], [{ ...source, readable: false }]), null)
-  assert.equal(findFirstUncoveredChatroomToken('#待辦總覽.md', [], [{ ...source, active: false }]), null)
+test('preflight ignores every raw hashtag', () => {
+  assert.equal(findFirstUncoveredRoleLikeSpan('#一般標籤 @foo.bar'), null)
+  assert.equal(findFirstUncoveredRoleLikeSpan('#待辦總覽.md'), null)
 })
 
 test('accepted routing response and warning survive the composer boundary', async () => {

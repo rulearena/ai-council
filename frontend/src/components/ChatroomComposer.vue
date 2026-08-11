@@ -3,7 +3,7 @@ import { computed, inject, ref, watch } from 'vue'
 import type { ChatMention, ChatSourceToken, ChatroomSource } from '../api'
 import type { ChairmanParticipant } from '../chairmanActions'
 import {
-  findFirstUncoveredChatroomToken,
+  findFirstUncoveredRoleLikeSpan,
   parseAndSendChatMessage,
   rebaseTrackedChatroomTokens,
 } from '../composables/useChatroomComposer'
@@ -129,15 +129,12 @@ const canSend = computed(() => {
 
 async function handleSend() {
   if (composing.value || !canSend.value) return
-  const uncoveredToken = findFirstUncoveredChatroomToken(
+  const uncoveredMention = findFirstUncoveredRoleLikeSpan(
     messageText.value,
     [...mentionTokens.value, ...sourceTokens.value],
-    props.sources ?? [],
   )
-  if (uncoveredToken) {
-    composerError.value = uncoveredToken.kind === 'mention'
-      ? `「${uncoveredToken.displayText}」尚未選取 AI。請重新輸入 @ 後，從候選選單點選角色；目前文字不會送出。`
-      : `「${uncoveredToken.displayText}」尚未選取附件。請重新輸入 # 後，從附件候選選單點選附件；目前文字不會送出。`
+  if (uncoveredMention) {
+    composerError.value = `「${uncoveredMention.displayText}」尚未選取 AI。請重新輸入 @ 後，從候選選單點選角色；目前文字不會送出。`
     return
   }
   sending.value = true

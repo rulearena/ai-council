@@ -1,4 +1,4 @@
-import type { ChatMention, ChatroomAcceptedResponse, ChatroomSource, ChatSourceToken } from '../api'
+import type { ChatMention, ChatroomAcceptedResponse, ChatSourceToken } from '../api'
 
 export type ChatMessageBoundary = {
   sendChatMention: (
@@ -82,51 +82,27 @@ export function findUncoveredRoleLikeSpans(
   return result
 }
 
-export type UncoveredChatroomToken = {
-  kind: 'mention' | 'source'
+export type UncoveredRoleLikeSpan = {
   displayText: string
   start: number
   end: number
 }
 
 /**
- * Finds the first raw token-shaped mistake that the composer can explain before
- * sending. Only currently active/readable source labels are candidates; an
- * arbitrary hashtag remains ordinary message text. Structured spans always win
- * coverage, so editing a selected chip back into the same-looking raw text does
- * not accidentally authorize it.
+ * Finds the first uncovered role-like span that the composer can explain before
+ * sending. Raw hashtags are always ordinary message text; only a selected source
+ * chip can authorize source content. Structured spans win coverage, while a
+ * selected @all preserves the backend's ignored-invalid-mention warning path.
  */
-export function findFirstUncoveredChatroomToken(
+export function findFirstUncoveredRoleLikeSpan(
   content: string,
   tokens: TrackedChatroomToken[] = [],
-  sources: ChatroomSource[] = [],
-): UncoveredChatroomToken | null {
+): UncoveredRoleLikeSpan | null {
   const codePoints = Array.from(content)
   const verifiedTokens = verifiedTrackedTokens(codePoints, tokens)
   const allSelected = verifiedTokens.some((token) => 'role_id' in token && token.role_id === 'all')
-  const mention = allSelected ? undefined : findUncoveredRoleLikeSpans(content, verifiedTokens)[0]
-  const covered = verifiedTokens.map((token) => [token.start, token.end] as const)
-  const isCovered = (index: number) => covered.some(([start, end]) => start <= index && index < end)
-  let source: UncoveredChatroomToken | null = null
-  for (let index = 0; index < codePoints.length; index += 1) {
-    if (codePoints[index] !== '#' || isCovered(index)) continue
-    const previous = codePoints[index - 1] ?? ''
-    if (previous && !/\s/u.test(previous)) continue
-    for (const candidate of sources) {
-      if (!candidate.active || !candidate.readable) continue
-      const label = Array.from(candidate.label)
-      const end = index + 1 + label.length
-      if (!label.length || codePoints.slice(index + 1, end).join('') !== candidate.label) continue
-      const following = codePoints[end] ?? ''
-      if (following && (isXidContinue(following) || following === '_')) continue
-      source = { kind: 'source', displayText: `#${candidate.label}`, start: index, end }
-      break
-    }
-    if (source) break
-  }
-  if (!mention) return source
-  if (!source || mention.start <= source.start) return { kind: 'mention', ...mention }
-  return source
+  if (allSelected) return null
+  return findUncoveredRoleLikeSpans(content, verifiedTokens)[0] ?? null
 }
 
 function codePointLength(content: string): number {
