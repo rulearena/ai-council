@@ -241,16 +241,54 @@ test('13.2a raw role-like mention is rejected without an event and keeps the dra
   await createChatroomMeeting(page, title, { modelAssignments: defaultModels })
 
   const input = page.getByTestId('chat-message-input')
+  const mentionRequests: string[] = []
+  page.on('request', (request) => {
+    if (request.method() === 'POST' && request.url().endsWith('/chat/mention')) mentionRequests.push(request.url())
+  })
   await input.fill('@Advisor 這不是已選取的角色 chip')
-  const response = page.waitForResponse(
-    (candidate) => candidate.request().method() === 'POST' && candidate.url().endsWith('/chat/mention'),
-  )
   await page.getByTestId('send-chat-message-button').click()
-  await expect((await response).status()).toBe(400)
   await expect(input).toHaveValue('@Advisor 這不是已選取的角色 chip')
-  await expect(page.getByTestId('app-error')).toContainText('INVALID_MENTION_TOKEN')
-  await expect(page.getByTestId('app-error')).toContainText('content')
+  await expect(page.getByTestId('chatroom-composer-error')).toContainText('尚未選取 AI')
+  await expect(page.getByTestId('chatroom-composer-error')).toContainText('從候選選單點選角色')
+  expect(mentionRequests).toEqual([])
   await expect(page.getByTestId('workspace-message')).toHaveCount(0)
+})
+
+test('13.2c pasted role-like and exact source labels are rejected in content order', async ({ page }) => {
+  await page.goto('/')
+  const title = `E2E chatroom pasted invalid tokens ${Date.now()}`
+  await createChatroomMeeting(page, title, { modelAssignments: defaultModels })
+  const uploadResponse = page.waitForResponse(
+    (candidate) => candidate.request().method() === 'POST' && candidate.url().endsWith('/attachments'),
+  )
+  await page.getByTestId('attachment-upload-input').setInputFiles({
+    name: '待辦總覽.md', mimeType: 'text/markdown', buffer: Buffer.from('unfinished: one\n'),
+  })
+  expect((await uploadResponse).ok()).toBeTruthy()
+  await expect(page.getByTestId('source-autocomplete')).toBeVisible({ timeout: 15_000 })
+
+  const input = page.getByTestId('chat-message-input')
+  await input.fill('#待辦')
+  await expect(page.getByTestId('source-option').first()).toContainText('待辦總覽.md')
+  const workspaceMessageCount = await page.getByTestId('workspace-message').count()
+  const mentionRequests: string[] = []
+  page.on('request', (request) => {
+    if (request.method() === 'POST' && request.url().endsWith('/chat/mention')) mentionRequests.push(request.url())
+  })
+
+  await input.fill('😀 @顧問 我們 #待辦總覽.md 本週有什麼需要完成的？')
+  await page.getByTestId('send-chat-message-button').click()
+  await expect(page.getByTestId('chatroom-composer-error')).toContainText('「@顧問」尚未選取 AI')
+  await expect(page.getByTestId('chatroom-composer-error')).toContainText('從候選選單點選角色')
+  await expect(input).toHaveValue('😀 @顧問 我們 #待辦總覽.md 本週有什麼需要完成的？')
+
+  await input.fill('#待辦總覽.md  @主持 AI  還有哪些未完成？')
+  await page.getByTestId('send-chat-message-button').click()
+  await expect(page.getByTestId('chatroom-composer-error')).toContainText('「#待辦總覽.md」尚未選取附件')
+  await expect(page.getByTestId('chatroom-composer-error')).toContainText('從附件候選選單點選附件')
+  await expect(input).toHaveValue('#待辦總覽.md  @主持 AI  還有哪些未完成？')
+  expect(mentionRequests).toEqual([])
+  await expect(page.getByTestId('workspace-message')).toHaveCount(workspaceMessageCount)
 })
 
 test('13.2b accepted @all keeps the exact invalid-mention warning while AI proceeds', async ({ page }) => {
@@ -674,6 +712,59 @@ test('13.10c emoji + @顧問 + #待辦總覽.md sends exact source tokens', asyn
   await expect(
     advisorCompleted.getByTestId(`citation-chip-${source!.source_ref}`),
   ).toBeVisible()
+})
+
+test('13.10g real typing after selecting @ and # preserves both structured token spans', async ({ page }) => {
+  await page.goto('/')
+  const title = `E2E chatroom real token typing ${Date.now()}`
+  const meetingId = await createChatroomMeeting(page, title, { modelAssignments: defaultModels })
+
+  const uploadResponse = page.waitForResponse(
+    (candidate) => candidate.request().method() === 'POST' && candidate.url().endsWith('/attachments'),
+  )
+  await page.getByTestId('attachment-upload-input').setInputFiles({
+    name: '待辦總覽.md', mimeType: 'text/markdown', buffer: Buffer.from('unfinished: one\n'),
+  })
+  expect((await uploadResponse).ok()).toBeTruthy()
+  await expect(page.getByTestId('source-autocomplete')).toBeVisible({ timeout: 15_000 })
+  const sources = await (await page.request.get(
+    `${e2eApiOrigin()}/meetings/${meetingId}/chat/sources`,
+  )).json() as Array<{ source_ref: string; label: string }>
+  const source = sources.find((candidate) => candidate.label === '待辦總覽.md')
+  expect(source).toBeTruthy()
+
+  const input = page.getByTestId('chat-message-input')
+  await input.pressSequentially('😀 @')
+  await expect(page.getByTestId('mention-menu')).toBeVisible()
+  await page.getByTestId('mention-option').filter({ hasText: '顧問' }).first().click()
+  await expect(page.getByTestId('selected-chatroom-mentions')).toContainText('已指定 AI：@顧問')
+  await input.pressSequentially('我們 #待辦')
+  await expect(page.getByTestId('source-menu')).toBeVisible()
+  await page.getByTestId('source-option').first().click()
+  await expect(page.getByTestId('selected-chatroom-sources')).toContainText('已選附件：#待辦總覽.md')
+  await input.pressSequentially('本週有什麼需要完成的？')
+
+  const request = page.waitForRequest(
+    (candidate) => candidate.method() === 'POST' && candidate.url().endsWith('/chat/mention'),
+  )
+  const response = page.waitForResponse(
+    (candidate) => candidate.request().method() === 'POST' && candidate.url().endsWith('/chat/mention'),
+  )
+  await page.getByTestId('send-chat-message-button').click()
+  const responseBody = await (await response).text()
+  const payload = (await request).postDataJSON() as {
+    content: string
+    mentions: Array<{ display_text: string; start: number; end: number }>
+    source_tokens: Array<{ display_text: string; start: number; end: number }>
+  }
+  expect({ status: (await response).status(), payload, responseBody }).toMatchObject({
+    status: 202,
+    payload: {
+      content: '😀 @顧問 我們 #待辦總覽.md 本週有什麼需要完成的？',
+      mentions: [expect.objectContaining({ display_text: '@顧問', start: 2, end: 5 })],
+      source_tokens: [expect.objectContaining({ display_text: '#待辦總覽.md', start: 9, end: 17 })],
+    },
+  })
 })
 
 test('13.10f source selected before @主持 AI preserves both token spans', async ({ page }) => {

@@ -1,4 +1,4 @@
-import type { ChatMention, ChatroomAcceptedResponse, ChatSourceToken } from '../api'
+import type { ChatMention, ChatroomAcceptedResponse, ChatroomSource, ChatSourceToken } from '../api'
 
 export type ChatMessageBoundary = {
   sendChatMention: (
@@ -19,6 +19,102 @@ type RebasedChatroomTokens = {
 }
 
 export type TrackedChatroomToken = ChatMention | ChatSourceToken
+
+const XID_CONTINUE = /[\p{L}\p{N}\p{M}]/u
+
+function isXidContinue(char: string): boolean {
+  return char === '_' || XID_CONTINUE.test(char)
+}
+
+/**
+ * Finds role-like @ text that is not covered by a selected mention chip.
+ *
+ * This intentionally mirrors the backend's fail-closed scanner. It is only a
+ * preflight diagnostic: the backend remains authoritative and raw # stays
+ * ordinary text. Code-point offsets match the API contract rather than the
+ * textarea's UTF-16 selection offsets.
+ */
+export function findUncoveredRoleLikeSpans(
+  content: string,
+  tokens: TrackedChatroomToken[] = [],
+): Array<{ displayText: string; start: number; end: number }> {
+  const codePoints = Array.from(content)
+  const covered = tokens
+    .filter((token): token is ChatMention => 'role_id' in token)
+    .map((token) => [token.start, token.end] as const)
+  const result: Array<{ displayText: string; start: number; end: number }> = []
+  let index = 0
+  while (index < codePoints.length) {
+    if (codePoints[index] !== '@' || covered.some(([start, end]) => start <= index && index < end)) {
+      index += 1
+      continue
+    }
+    const previous = codePoints[index - 1] ?? ''
+    if (previous && (isXidContinue(previous) || '@.+-'.includes(previous))) {
+      index += 1
+      continue
+    }
+    let end = index + 1
+    while (end < codePoints.length && isXidContinue(codePoints[end]) && end - index <= 64) end += 1
+    if (end === index + 1) {
+      index += 1
+      continue
+    }
+    const following = codePoints[end] ?? ''
+    if (following === '.' || (following && (isXidContinue(following) || following === '-'))) {
+      index = end
+      continue
+    }
+    result.push({ displayText: codePoints.slice(index, end).join(''), start: index, end })
+    index = end
+  }
+  return result
+}
+
+export type UncoveredChatroomToken = {
+  kind: 'mention' | 'source'
+  displayText: string
+  start: number
+  end: number
+}
+
+/**
+ * Finds the first raw token-shaped mistake that the composer can explain before
+ * sending. Only currently active/readable source labels are candidates; an
+ * arbitrary hashtag remains ordinary message text. Structured spans always win
+ * coverage, so editing a selected chip back into the same-looking raw text does
+ * not accidentally authorize it.
+ */
+export function findFirstUncoveredChatroomToken(
+  content: string,
+  tokens: TrackedChatroomToken[] = [],
+  sources: ChatroomSource[] = [],
+): UncoveredChatroomToken | null {
+  const mention = findUncoveredRoleLikeSpans(content, tokens)[0]
+  const codePoints = Array.from(content)
+  const covered = tokens.map((token) => [token.start, token.end] as const)
+  const isCovered = (index: number) => covered.some(([start, end]) => start <= index && index < end)
+  let source: UncoveredChatroomToken | null = null
+  for (let index = 0; index < codePoints.length; index += 1) {
+    if (codePoints[index] !== '#' || isCovered(index)) continue
+    const previous = codePoints[index - 1] ?? ''
+    if (previous && !/\s/u.test(previous)) continue
+    for (const candidate of sources) {
+      if (!candidate.active || !candidate.readable) continue
+      const label = Array.from(candidate.label)
+      const end = index + 1 + label.length
+      if (!label.length || codePoints.slice(index + 1, end).join('') !== candidate.label) continue
+      const following = codePoints[end] ?? ''
+      if (following && (isXidContinue(following) || following === '_')) continue
+      source = { kind: 'source', displayText: `#${candidate.label}`, start: index, end }
+      break
+    }
+    if (source) break
+  }
+  if (!mention) return source
+  if (!source || mention.start <= source.start) return { kind: 'mention', ...mention }
+  return source
+}
 
 function codePointLength(content: string): number {
   return Array.from(content).length

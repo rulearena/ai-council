@@ -3,6 +3,8 @@ import test from 'node:test'
 
 import {
   buildCanonicalChatroomPayload,
+  findFirstUncoveredChatroomToken,
+  findUncoveredRoleLikeSpans,
   parseAndSendChatMessage,
   rebaseTrackedChatroomTokens,
 } from '../../src/composables/useChatroomComposer.ts'
@@ -39,6 +41,49 @@ test('plain Host sends the exact structured payload', async () => {
 
   assert.equal(result.ok, true)
   assert.deepEqual(calls[0].args, ['meeting-1', '請整理目前討論', [], [], [], undefined])
+})
+
+test('preflight identifies uncovered role-like @ text but ignores email and raw #', () => {
+  assert.deepEqual(
+    findUncoveredRoleLikeSpans('😀 @顧問 請看 contact@example.com #待辦'),
+    [{ displayText: '@顧問', start: 2, end: 5 }],
+  )
+})
+
+test('preflight leaves a selected mention covered', () => {
+  assert.deepEqual(
+    findUncoveredRoleLikeSpans('😀 @顧問 請回答', [advisor(2, 5)]),
+    [],
+  )
+})
+
+test('preflight reports the first uncovered structured-looking token by content order', () => {
+  const sources = [{
+    source_ref: 'attachment:brief', label: '待辦總覽.md', kind: 'attachment' as const,
+    active: true, readable: true, reader_ref: 'reader:brief', available_segment_refs: ['full'],
+  }]
+  assert.deepEqual(
+    findFirstUncoveredChatroomToken(
+      '😀 @顧問 請看 #待辦總覽.md', [], sources,
+    ),
+    { kind: 'mention', displayText: '@顧問', start: 2, end: 5 },
+  )
+  assert.deepEqual(
+    findFirstUncoveredChatroomToken(
+      '#待辦總覽.md  @主持 AI 還有哪些未完成？', [], sources,
+    ),
+    { kind: 'source', displayText: '#待辦總覽.md', start: 0, end: 8 },
+  )
+})
+
+test('preflight ignores unknown hashtags and unavailable or unreadable sources', () => {
+  const source = {
+    source_ref: 'attachment:brief', label: '待辦總覽.md', kind: 'attachment' as const,
+    active: true, readable: true, reader_ref: 'reader:brief', available_segment_refs: ['full'],
+  }
+  assert.equal(findFirstUncoveredChatroomToken('#一般標籤 @foo.bar', [], [source]), null)
+  assert.equal(findFirstUncoveredChatroomToken('#待辦總覽.md', [], [{ ...source, readable: false }]), null)
+  assert.equal(findFirstUncoveredChatroomToken('#待辦總覽.md', [], [{ ...source, active: false }]), null)
 })
 
 test('accepted routing response and warning survive the composer boundary', async () => {

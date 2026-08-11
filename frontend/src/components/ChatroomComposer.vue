@@ -2,7 +2,11 @@
 import { computed, inject, ref, watch } from 'vue'
 import type { ChatMention, ChatSourceToken, ChatroomSource } from '../api'
 import type { ChairmanParticipant } from '../chairmanActions'
-import { parseAndSendChatMessage, rebaseTrackedChatroomTokens } from '../composables/useChatroomComposer'
+import {
+  findFirstUncoveredChatroomToken,
+  parseAndSendChatMessage,
+  rebaseTrackedChatroomTokens,
+} from '../composables/useChatroomComposer'
 import { councilKey } from '../composables/useCouncil'
 import MentionAutocomplete from './MentionAutocomplete.vue'
 import SourceAutocomplete from './SourceAutocomplete.vue'
@@ -29,9 +33,11 @@ const sourceTokens = ref<ChatSourceToken[]>([])
 const lastTrackedContent = ref('')
 const cursorPosition = ref(0)
 const sending = ref(false)
+const composerError = ref('')
 
 function trackContentUpdate(nextContent: string) {
   if (nextContent === lastTrackedContent.value) return
+  composerError.value = ''
   mentionTokens.value = rebaseTrackedChatroomTokens(
     lastTrackedContent.value,
     nextContent,
@@ -123,6 +129,17 @@ const canSend = computed(() => {
 
 async function handleSend() {
   if (composing.value || !canSend.value) return
+  const uncoveredToken = findFirstUncoveredChatroomToken(
+    messageText.value,
+    [...mentionTokens.value, ...sourceTokens.value],
+    props.sources ?? [],
+  )
+  if (uncoveredToken) {
+    composerError.value = uncoveredToken.kind === 'mention'
+      ? `「${uncoveredToken.displayText}」尚未選取 AI。請重新輸入 @ 後，從候選選單點選角色；目前文字不會送出。`
+      : `「${uncoveredToken.displayText}」尚未選取附件。請重新輸入 # 後，從附件候選選單點選附件；目前文字不會送出。`
+    return
+  }
   sending.value = true
   try {
     const boundary = {
@@ -137,6 +154,7 @@ async function handleSend() {
       boundary,
     })
     if (result.ok) {
+      composerError.value = ''
       messageText.value = ''
       mentionTokens.value = []
       sourceTokens.value = []
@@ -201,6 +219,15 @@ function onSendClick(event: MouseEvent) {
 
 <template>
   <div class="chatroom-composer" data-testid="chatroom-composer">
+    <div v-if="mentionTokens.length" class="chatroom-composer-selected-tokens" data-testid="selected-chatroom-mentions" aria-label="已指定 AI">
+      <span v-for="token in mentionTokens" :key="token.token_id" class="chatroom-composer-token-chip">已指定 AI：{{ token.display_text }}</span>
+    </div>
+    <div v-if="sourceTokens.length" class="chatroom-composer-selected-tokens" data-testid="selected-chatroom-sources" aria-label="已選附件">
+      <span v-for="token in sourceTokens" :key="token.token_id" class="chatroom-composer-token-chip">已選附件：{{ token.display_text }}</span>
+    </div>
+    <p v-if="composerError" class="chatroom-composer-error" data-testid="chatroom-composer-error" role="alert">
+      {{ composerError }}
+    </p>
     <div v-if="quotedMessage" class="chatroom-composer-quote" data-testid="quote-indicator">
       <span class="chatroom-composer-quote-preview">{{ quotedMessage.preview }}</span>
       <button
@@ -288,6 +315,30 @@ function onSendClick(event: MouseEvent) {
 .chatroom-composer {
   border-top: 1px solid var(--border, #ddd);
   padding: 8px 12px;
+}
+
+.chatroom-composer-selected-tokens {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  margin-bottom: 6px;
+  color: var(--color-text-muted);
+  font-size: 0.78em;
+}
+
+.chatroom-composer-token-chip {
+  border: 1px solid var(--color-border-strong);
+  border-radius: 999px;
+  padding: 2px 7px;
+  background: var(--color-surface-muted);
+  color: var(--color-text);
+}
+
+.chatroom-composer-error {
+  margin: 0 0 6px;
+  color: var(--color-danger, #b42318);
+  font-size: 0.85em;
 }
 
 .chatroom-composer-quote {
