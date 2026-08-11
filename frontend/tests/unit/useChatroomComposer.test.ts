@@ -57,6 +57,54 @@ test('preflight leaves a selected mention covered', () => {
   )
 })
 
+test('preflight preserves backend warnings when a structured all token covers the audience', () => {
+  const all = {
+    token_id: 'all-1', role_id: 'all', display_text: '@全部角色', start: 0, end: 5,
+  }
+  assert.equal(
+    findFirstUncoveredChatroomToken('@全部角色 @Adviser 請回答', [all]),
+    null,
+  )
+  assert.deepEqual(
+    findFirstUncoveredChatroomToken('@顧問 @Adviser 請回答', [advisor()]),
+    { kind: 'mention', displayText: '@Adviser', start: 4, end: 12 },
+  )
+  const sources = [{
+    source_ref: 'attachment:brief', label: '待辦總覽.md', kind: 'attachment' as const,
+    active: true, readable: true, reader_ref: 'reader:brief', available_segment_refs: ['full'],
+  }]
+  assert.deepEqual(
+    findFirstUncoveredChatroomToken('@全部角色 #待辦總覽.md', [all], sources),
+    { kind: 'source', displayText: '#待辦總覽.md', start: 6, end: 14 },
+  )
+})
+
+test('raw mention scanning treats a verified source token as one covered span', () => {
+  const displayText = '#附件 @顧問 資料'
+  const sourceWithMention = {
+    token_id: 's-at', source_ref: 'attachment:at', display_text: displayText,
+    start: 0, end: Array.from(displayText).length,
+  }
+  assert.deepEqual(findUncoveredRoleLikeSpans(`${displayText} 請整理`, [sourceWithMention]), [])
+})
+
+test('frontend raw mention boundaries stay aligned with backend routing fixtures', () => {
+  // These literals intentionally mirror backend
+  // test_unicode_punctuation_email_and_nfc_boundaries. A shared fixture would add
+  // cross-package file-loading plumbing to the native Node and pytest runners for
+  // a five-case table, so each public scanner seam keeps the same explicit cases.
+  const fixtures = [
+    ['Email a@advisor.example', []],
+    ['邱顧問，請回答！', []],
+    ['在句首：@Adviser。', [{ displayText: '@Adviser', start: 4, end: 12 }]],
+    ['(@Adviser)', [{ displayText: '@Adviser', start: 1, end: 9 }]],
+    ['請寄到 a+tag@example.com', []],
+  ] as const
+  for (const [content, expected] of fixtures) {
+    assert.deepEqual(findUncoveredRoleLikeSpans(content), expected, content)
+  }
+})
+
 test('preflight reports the first uncovered structured-looking token by content order', () => {
   const sources = [{
     source_ref: 'attachment:brief', label: '待辦總覽.md', kind: 'attachment' as const,

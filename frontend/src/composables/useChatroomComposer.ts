@@ -26,8 +26,20 @@ function isXidContinue(char: string): boolean {
   return char === '_' || XID_CONTINUE.test(char)
 }
 
+function verifiedTrackedTokens(
+  codePoints: string[],
+  tokens: TrackedChatroomToken[],
+): TrackedChatroomToken[] {
+  return tokens.filter((token) => (
+    token.start >= 0
+    && token.end > token.start
+    && token.end <= codePoints.length
+    && codePoints.slice(token.start, token.end).join('') === token.display_text
+  ))
+}
+
 /**
- * Finds role-like @ text that is not covered by a selected mention chip.
+ * Finds role-like @ text that is not covered by a verified structured chip.
  *
  * This intentionally mirrors the backend's fail-closed scanner. It is only a
  * preflight diagnostic: the backend remains authoritative and raw # stays
@@ -39,8 +51,7 @@ export function findUncoveredRoleLikeSpans(
   tokens: TrackedChatroomToken[] = [],
 ): Array<{ displayText: string; start: number; end: number }> {
   const codePoints = Array.from(content)
-  const covered = tokens
-    .filter((token): token is ChatMention => 'role_id' in token)
+  const covered = verifiedTrackedTokens(codePoints, tokens)
     .map((token) => [token.start, token.end] as const)
   const result: Array<{ displayText: string; start: number; end: number }> = []
   let index = 0
@@ -90,9 +101,11 @@ export function findFirstUncoveredChatroomToken(
   tokens: TrackedChatroomToken[] = [],
   sources: ChatroomSource[] = [],
 ): UncoveredChatroomToken | null {
-  const mention = findUncoveredRoleLikeSpans(content, tokens)[0]
   const codePoints = Array.from(content)
-  const covered = tokens.map((token) => [token.start, token.end] as const)
+  const verifiedTokens = verifiedTrackedTokens(codePoints, tokens)
+  const allSelected = verifiedTokens.some((token) => 'role_id' in token && token.role_id === 'all')
+  const mention = allSelected ? undefined : findUncoveredRoleLikeSpans(content, verifiedTokens)[0]
+  const covered = verifiedTokens.map((token) => [token.start, token.end] as const)
   const isCovered = (index: number) => covered.some(([start, end]) => start <= index && index < end)
   let source: UncoveredChatroomToken | null = null
   for (let index = 0; index < codePoints.length; index += 1) {

@@ -135,6 +135,8 @@ def test_schema_rejections_are_closed_and_have_no_event_or_job_side_effects(
         ("Email a@advisor.example", "accepted"),
         ("邱顧問，請回答！", "accepted"),
         ("在句首：@Adviser。", "INVALID_MENTION_TOKEN"),
+        ("(@Adviser)", "INVALID_MENTION_TOKEN"),
+        ("請寄到 a+tag@example.com", "accepted"),
     ],
 )
 def test_unicode_punctuation_email_and_nfc_boundaries(

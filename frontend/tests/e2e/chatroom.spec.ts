@@ -296,12 +296,12 @@ test('13.2b accepted @all keeps the exact invalid-mention warning while AI proce
   const title = `E2E chatroom accepted warning ${Date.now()}`
   await createChatroomMeeting(page, title, { modelAssignments: defaultModels })
 
-  await selectMention(page, 'all', '全體成員')
+  await selectMention(page, 'all', '全部角色')
   const input = page.getByTestId('chat-message-input')
   await input.fill(`${await input.inputValue()}@Adviser 也請看看`)
   await page.getByTestId('send-chat-message-button').click()
 
-  await waitForMessage(page, '@全體成員 @Adviser 也請看看')
+  await waitForMessage(page, '@全部角色 @Adviser 也請看看')
   await expect(page.getByTestId('app-error')).toContainText('IGNORED_INVALID_MENTION')
   await expect(page.getByTestId('app-error')).toContainText('@Adviser')
   await waitForRoleMessage(page, '主持 AI')
@@ -765,6 +765,47 @@ test('13.10g real typing after selecting @ and # preserves both structured token
       source_tokens: [expect.objectContaining({ display_text: '#待辦總覽.md', start: 9, end: 17 })],
     },
   })
+})
+
+test('13.10h selected source label containing @ remains one structured source token', async ({ page }) => {
+  await page.goto('/')
+  const title = `E2E chatroom source label with at ${Date.now()}`
+  await createChatroomMeeting(page, title, { modelAssignments: defaultModels })
+
+  const uploadResponse = page.waitForResponse(
+    (candidate) => candidate.request().method() === 'POST' && candidate.url().endsWith('/attachments'),
+  )
+  await page.getByTestId('attachment-upload-input').setInputFiles({
+    name: '附件 @顧問 資料.md', mimeType: 'text/markdown', buffer: Buffer.from('source body\n'),
+  })
+  expect((await uploadResponse).ok()).toBeTruthy()
+
+  const input = page.getByTestId('chat-message-input')
+  await input.fill('#附件')
+  await expect(page.getByTestId('source-option').first()).toContainText('附件 @顧問 資料.md')
+  await page.getByTestId('source-option').first().click()
+  await expect(page.getByTestId('selected-chatroom-sources')).toContainText('已選附件：#附件 @顧問 資料.md')
+  await input.pressSequentially('請整理')
+
+  const request = page.waitForRequest(
+    (candidate) => candidate.method() === 'POST' && candidate.url().endsWith('/chat/mention'),
+  )
+  const response = page.waitForResponse(
+    (candidate) => candidate.request().method() === 'POST' && candidate.url().endsWith('/chat/mention'),
+  )
+  await page.getByTestId('send-chat-message-button').click()
+  expect((await response).status()).toBe(202)
+  const payload = (await request).postDataJSON() as {
+    content: string
+    mentions: Array<{ display_text: string }>
+    source_tokens: Array<{ display_text: string; start: number; end: number }>
+  }
+  expect(payload.content).toBe('#附件 @顧問 資料.md 請整理')
+  expect(payload.mentions).toEqual([])
+  expect(payload.source_tokens).toEqual([
+    expect.objectContaining({ display_text: '#附件 @顧問 資料.md', start: 0, end: 13 }),
+  ])
+  await expect(page.getByTestId('chatroom-composer-error')).toHaveCount(0)
 })
 
 test('13.10f source selected before @主持 AI preserves both token spans', async ({ page }) => {
