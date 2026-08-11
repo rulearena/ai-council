@@ -452,9 +452,11 @@ class MeetingRunner:
             output_schema_id=CHAT_MESSAGE_V1_ID,
         )
         event_step_id = f"chat-directed-{directed_sequence}-{role.lower()}-response"
-        prior_transcript = str(
-            (inputs or {}).get("__chatroom_prior_transcript")
-            or self.chatroom_context_builder.build(
+        planned_prior = (inputs or {}).get("__chatroom_prior_transcript")
+        prior_transcript = (
+            str(planned_prior)
+            if planned_prior is not None
+            else self.chatroom_context_builder.build(
                 self._active_events(meeting_id), goal=goal, quoted_event_id=quoted_event_id
             )
         )
@@ -500,9 +502,11 @@ class MeetingRunner:
         instruction = instruction.strip()
         if not model_assignments:
             return
-        prior_transcript = str(
-            (inputs or {}).get("__chatroom_prior_transcript")
-            or self.chatroom_context_builder.build(
+        planned_prior = (inputs or {}).get("__chatroom_prior_transcript")
+        prior_transcript = (
+            str(planned_prior)
+            if planned_prior is not None
+            else self.chatroom_context_builder.build(
                 self._active_events(meeting_id), goal=goal, quoted_event_id=quoted_event_id
             )
         )

@@ -22,7 +22,7 @@ from ai_council.api import (
     live_meeting_snapshot,
 )
 from ai_council.models.adapters import AdapterError, MockModelAdapter, ModelRequest, ModelResponse
-from ai_council.meetings.chatroom_context import estimate_tokens
+from ai_council.meetings.chatroom_context import estimate_prompt_tokens, estimate_tokens
 from ai_council.models.config import ModelConfigRepository
 from ai_council.meetings.repository import MeetingRepository
 from ai_council.meetings.deliberation import DeliberationEpochs, RestartCommand
@@ -8349,6 +8349,127 @@ def test_chatroom_fixed_prompt_overflow_fails_safe_without_event_or_adapter_requ
     assert response.status_code == 400
     assert response.json()["error"]["code"] == "SOURCE_CONTEXT_TOO_LARGE"
     assert client.get(f"/meetings/{meeting_id}").json()["events"] == first_events
+
+
+def test_chatroom_cjk_source_request_never_exceeds_budget(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    request_budget = 1050
+    monkeypatch.setenv("AI_COUNCIL_CHATROOM_CONTEXT_TOKEN_BUDGET", str(request_budget))
+    requests: list[ModelRequest] = []
+
+    def record_request(self: MockModelAdapter, request: ModelRequest) -> ModelResponse:
+        requests.append(request)
+        if len(requests) == 1:
+            return ModelResponse("not json")
+        return ModelResponse(json.dumps({"message": "已收到來源"}, ensure_ascii=False))
+
+    monkeypatch.setattr(MockModelAdapter, "complete", record_request)
+    client = TestClient(create_test_app(tmp_path))
+    meeting_id = _create_chatroom_meeting(client)
+    created = client.post(
+        f"/meetings/{meeting_id}/materials/evidence",
+        json={
+            "revision": 0,
+            "title": "一二三四五六七八九十",
+            "content": "漢" * 12_000,
+            "visible_roles": ["host"],
+        },
+    )
+    assert created.status_code == 200
+    source = client.get(f"/meetings/{meeting_id}/chat/sources").json()[0]
+
+    response = client.post(
+        f"/meetings/{meeting_id}/chat/mention",
+        json={
+            "content": "#一二三四五六七八九十 請摘要來源",
+            "mentions": [],
+            "source_tokens": [{
+                "token_id": "source-1",
+                "source_ref": source["source_ref"],
+                "display_text": "#一二三四五六七八九十",
+                "start": 0,
+                "end": 11,
+            }],
+            "source_refs": [source["source_ref"]],
+            "quoted_event_id": None,
+        },
+    )
+
+    assert response.status_code == 202
+    events = wait_for_event_count(client, meeting_id, 3)
+    assert events[-1]["status"] == "completed"
+    assert len(requests) == 2
+    assert all(
+        estimate_prompt_tokens(request.messages or []) <= request_budget
+        for request in requests
+    )
+    assert requests[0].messages == requests[1].messages
+
+
+def test_chatroom_cjk_source_fanout_fits_every_target_persona(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    request_budget = 1050
+    monkeypatch.setenv("AI_COUNCIL_CHATROOM_CONTEXT_TOKEN_BUDGET", str(request_budget))
+    requests: list[ModelRequest] = []
+
+    def record_request(self: MockModelAdapter, request: ModelRequest) -> ModelResponse:
+        requests.append(request)
+        return ModelResponse(json.dumps({"message": "已收到全體來源"}, ensure_ascii=False))
+
+    monkeypatch.setattr(MockModelAdapter, "complete", record_request)
+    client = TestClient(create_test_app(tmp_path))
+    meeting_id = _create_chatroom_meeting(client)
+    active_roles = ["host", "Advisor", "Critic", "Strategist", "Analyst"]
+    created = client.post(
+        f"/meetings/{meeting_id}/materials/evidence",
+        json={
+            "revision": 0,
+            "title": "全體來源",
+            "content": "漢" * 12_000,
+            "visible_roles": active_roles,
+        },
+    )
+    assert created.status_code == 200
+    source = client.get(f"/meetings/{meeting_id}/chat/sources").json()[0]
+    mention_text = "@全部角色"
+    source_text = "#全體來源"
+    content = f"{mention_text} {source_text} 請摘要來源"
+    source_start = content.index(source_text)
+
+    response = client.post(
+        f"/meetings/{meeting_id}/chat/mention",
+        json={
+            "content": content,
+            "mentions": [{
+                "token_id": "mention-1",
+                "role_id": "all",
+                "display_text": mention_text,
+                "start": 0,
+                "end": len(mention_text),
+            }],
+            "source_tokens": [{
+                "token_id": "source-1",
+                "source_ref": source["source_ref"],
+                "display_text": source_text,
+                "start": source_start,
+                "end": source_start + len(source_text),
+            }],
+            "source_refs": [source["source_ref"]],
+            "quoted_event_id": None,
+        },
+    )
+
+    assert response.status_code == 202
+    assert response.json()["target_role_ids"] == active_roles
+    events = wait_for_event_count(client, meeting_id, 6)
+    assert len([event for event in events if event.get("role") in active_roles]) == 5
+    assert len(requests) == 5
+    assert all(
+        estimate_prompt_tokens(request.messages or []) <= request_budget
+        for request in requests
+    )
 
 
 def test_chatroom_long_source_metadata_and_retry_stay_within_request_budget(

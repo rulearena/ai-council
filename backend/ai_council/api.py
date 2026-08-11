@@ -2759,6 +2759,23 @@ def create_app(
                     source_allow_list=allow_list,
                 )
 
+            def prompt_tokens_for(
+                role: str,
+                prior_transcript: str,
+                source_context: str,
+                allow_list: str,
+            ) -> int:
+                return runner.chatroom_prompt_budget_tokens(
+                    role=role,
+                    role_display_name=role_display_names.get(role, role),
+                    goal=str(metadata.get("goal", "")),
+                    instruction=routing.instruction,
+                    prior_transcript=prior_transcript,
+                    persona_prompt=str(inputs.get("__chatroom_persona_prompts", {}).get(role, "")),
+                    source_placeholder=source_context,
+                    source_allow_list=allow_list,
+                )
+
             selected_body_cache: dict[tuple[str, int], str] = {}
 
             def read_selected_evidence(evidence_id: str, version_number: int) -> str:
@@ -2780,6 +2797,7 @@ def create_app(
                     instruction=routing.instruction,
                     quoted_event_id=request.quoted_event_id,
                     prompt_budget_for=prompt_budget_for,
+                    prompt_tokens_for=prompt_tokens_for,
                     build_context=lambda events, plan_goal, plan_instruction, quote_id, reserved: runner.chatroom_context_builder.build_request_context(
                         events,
                         goal=plan_goal,
