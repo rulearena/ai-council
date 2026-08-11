@@ -533,11 +533,23 @@ function projectMessages(
   const names = new Map(
     meeting.participants.map((participant) => [participant.role_id, participantName(participant, mode)]),
   )
-  return (meeting.events ?? [])
-    .filter((event) => !(
+  const events = meeting.events ?? []
+  const hasLaterAttemptOutcome = (event: WorkspaceEvent, index: number) => (
+    events.slice(index + 1).some((candidate) => (
+      candidate.meeting_id === event.meeting_id
+      && candidate.step_id === event.step_id
+      && candidate.role === event.role
+      && candidate.in_response_to_event_id === event.in_response_to_event_id
+      && candidate.attempt > event.attempt
+      && (candidate.status === 'completed' || candidate.status === 'failed')
+    ))
+  )
+  return events
+    .filter((event, index) => !(
       mode.category === 'chatroom'
       && event.status === 'failed'
       && event.retry_scheduled === true
+      && hasLaterAttemptOutcome(event, index)
     ))
     .map((event, order) => ({
       id: event.event_id,

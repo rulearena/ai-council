@@ -179,6 +179,101 @@ test('chatroom hides an automatic parse-retry failure from the message feed', ()
   assert.equal(workspace.messages.some((message) => message.kind === 'failed'), false)
 })
 
+test('chatroom keeps an orphaned parse-retry failure visible across later response chains', () => {
+  const workspace = projectMeetingWorkspace({
+    meeting: {
+      ...chatroomMeeting,
+      activity_status: 'idle',
+      events: [
+        ...chatroomMeeting.events,
+        {
+          event_id: 'advisor-orphan-attempt-1', meeting_id: 'meeting-chat',
+          step_id: 'chat-directed-1-advisor-response', role: 'Advisor',
+          attempt: 1, status: 'failed', failure_kind: 'parse_error',
+          retry_scheduled: true, error: 'retry was scheduled but never started',
+          in_response_to_event_id: 'human-chat-1',
+        },
+        {
+          event_id: 'critic-unrelated-attempt-2', meeting_id: 'meeting-chat',
+          step_id: 'chat-directed-1-advisor-response', role: 'Critic',
+          attempt: 2, status: 'completed', output_schema_id: 'chat-message/v1',
+          parsed_output: { message: '另一角色的後續結果' },
+          in_response_to_event_id: 'human-chat-1',
+        },
+        {
+          event_id: 'human-chat-2', meeting_id: 'meeting-chat', step_id: 'human-message',
+          role: 'Human', attempt: 1, status: 'completed', content: '請重新核對',
+        },
+        {
+          event_id: 'advisor-other-attempt-1', meeting_id: 'meeting-chat',
+          step_id: 'chat-directed-2-advisor-response', role: 'Advisor',
+          attempt: 1, status: 'failed', failure_kind: 'parse_error',
+          retry_scheduled: true, error: 'the later chain retries normally',
+          in_response_to_event_id: 'human-chat-2',
+        },
+        {
+          event_id: 'advisor-other-attempt-2', meeting_id: 'meeting-chat',
+          step_id: 'chat-directed-2-advisor-response', role: 'Advisor',
+          attempt: 2, status: 'completed', output_schema_id: 'chat-message/v1',
+          parsed_output: { message: '後續回應完成' },
+          in_response_to_event_id: 'human-chat-2',
+        },
+      ],
+    },
+    mode: chatroomMode,
+  })
+
+  assert.equal(workspace.family, 'conversation')
+  assert.deepEqual(
+    workspace.messages.map((message) => message.id),
+    [
+      'human-chat-1',
+      'advisor-orphan-attempt-1',
+      'critic-unrelated-attempt-2',
+      'human-chat-2',
+      'advisor-other-attempt-2',
+    ],
+  )
+  const orphan = workspace.messages.find((message) => message.id === 'advisor-orphan-attempt-1')
+  assert.equal(orphan?.kind, 'failed')
+  assert.equal(orphan?.content, 'retry was scheduled but never started')
+})
+
+test('chatroom shows the terminal failure after suppressing its superseded retry attempt', () => {
+  const workspace = projectMeetingWorkspace({
+    meeting: {
+      ...chatroomMeeting,
+      activity_status: 'idle',
+      events: [
+        ...chatroomMeeting.events,
+        {
+          event_id: 'advisor-attempt-1', meeting_id: 'meeting-chat',
+          step_id: 'chat-directed-1-advisor-response', role: 'Advisor',
+          attempt: 1, status: 'failed', failure_kind: 'parse_error',
+          retry_scheduled: true, error: 'first parse failed',
+          in_response_to_event_id: 'human-chat-1',
+        },
+        {
+          event_id: 'advisor-attempt-2', meeting_id: 'meeting-chat',
+          step_id: 'chat-directed-1-advisor-response', role: 'Advisor',
+          attempt: 2, status: 'failed', failure_kind: 'parse_error',
+          retry_scheduled: false, error: 'retry also failed',
+          in_response_to_event_id: 'human-chat-1',
+        },
+      ],
+    },
+    mode: chatroomMode,
+  })
+
+  assert.equal(workspace.family, 'conversation')
+  assert.deepEqual(
+    workspace.messages.map((message) => message.id),
+    ['human-chat-1', 'advisor-attempt-2'],
+  )
+  assert.equal(workspace.messages[1].kind, 'failed')
+  assert.equal(workspace.messages[1].content, 'retry also failed')
+})
+
 test('chatroom @all keeps arrival order and a fixed denominator', () => {
   const workspace = projectMeetingWorkspace({
     meeting: {
