@@ -16,3 +16,10 @@ frontend/.cache/
 frontend/dist/
 frontend/node_modules/
 frontend/test-results/
+
+# Knowledge graph build artifacts
+graphify-out/
+
+# Review runtime snapshots
+.scratch/review-runtime-*/
+.scratch/research/
