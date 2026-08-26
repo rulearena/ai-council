@@ -4,7 +4,7 @@
 
 本文件描述的是角色責任，不綁死特定工具或廠商。Codex、Claude 或其他 coding agent 都可以扮演不同角色，依當次任務調整。
 
-> **正式規範優先**：本文件是協作角色與交付流程的摘要；涉及執行行為、設定語意、API、測試邏輯或使用者流程時，優先遵循 [`docs/agents/multi-agent-development.md`](multi-agent-development.md) 的 Executor/Reviewer、worktree、TDD 與驗收規範。只有純文件、拼字及明確低風險修正可由 Orchestrator 直接完成。
+> **正式規範優先**：本文件是協作角色與交付流程的摘要；涉及執行行為、設定語意、API、測試邏輯或使用者流程時，優先遵循 [`docs/agents/project-development.md`](multi-agent-development.md) 的 Executor/Reviewer、worktree、TDD 與驗收規範。只有純文件、拼字及明確低風險修正可由 Orchestrator 直接完成。
 
 ## 1. 核心原則
 
@@ -258,11 +258,11 @@ backend skeleton + MeetingRepository append/read events tests
 
 一般任務不需要 goal。
 
-只有長時間、多 ticket、可無人看管的**已核准批次**，agent 可以依 `docs/agents/multi-agent-development.md` 建議使用 goal。產品批次仍須先從 `spec.md` §15 選定並記入 HANDOFF；只有使用者明確同意或要求時才建立 goal。
+只有長時間、多 ticket、可無人看管的**已核准批次**，agent 可以依 `docs/agents/project-development.md` 建議使用 goal。產品批次仍須先從 `spec.md` §15 選定並記入 HANDOFF；只有使用者明確同意或要求時才建立 goal。
 
 ## 13. 現階段不作為預設的流程
 
-自 2026-07-20 起，新能力、跨模組架構、資料格式與 product-surface change 已採 OpenSpec 作為執行 artifacts；`spec.md` §15 仍是唯一產品 backlog SoR。OpenSpec 的 apply/archive 必須再受 `docs/agents/multi-agent-development.md` 的 Codex review 與 Human acceptance gates 約束。
+自 2026-07-20 起，新能力、跨模組架構、資料格式與 product-surface change 已採 OpenSpec 作為執行 artifacts；`spec.md` §15 仍是唯一產品 backlog SoR。OpenSpec 的 apply/archive 必須再受 `docs/agents/project-development.md` 的 Codex review 與 Human acceptance gates 約束。
 
 以下流程不作為本專案目前預設，不代表永久不用：
 
