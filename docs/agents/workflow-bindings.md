@@ -82,10 +82,10 @@ central AIDLC Workflow revision the governance was authored against (version inf
 |---|---|---|---|---|
 | Idea | Human-facing OpenCode Orchestrator self-issued packet | `spec.md` §15 and project-approved exploration | Requirements and unresolved decisions fixed in packet/work item | Orchestrator |
 | Plan | `scripts/openspec-local` proposal/change | `docs/agents/project-development.md` | `openspec/changes/{change}/` at artifacts commit | Orchestrator |
-| `review(doc)` | Controller `review-doc` / review convergence chain | `controller.py` at `086d140bc4682e57e3a2a173c726231e592c5494` (Central AIDLC-provided at pinned revision, portable — no Mac-local absolute path) | Immutable candidate, Verdict, and reviewed plan identity | Reviewer |
+| `review(doc)` | Controller `review-doc` / review convergence chain | `controller.py` at `a8fe80a6d64960ad1c41eed30b8e85761fc13117` (Central AIDLC-provided at pinned revision, portable — no Mac-local absolute path) | Immutable candidate, Verdict, and reviewed plan identity | Reviewer |
 | Execute | Packet-fixed `.opencode/agents/executor.md` plus `scripts/openspec-local apply` | `docs/agents/project-development.md` | Base...HEAD implementation identity | Executor |
-| `review(code)` | Controller `review-code` / review convergence chain | `controller.py` at `086d140bc4682e57e3a2a173c726231e592c5494` (Central AIDLC-provided at pinned revision, portable — no Mac-local absolute path) | Immutable candidate, Verdict, and reviewed implementation identity | Reviewer |
-| closeout | Controller `closeout` plus configured delivery controller | `controller.py` at `086d140bc4682e57e3a2a173c726231e592c5494` (Central AIDLC-provided at pinned revision, portable — no Mac-local absolute path) | Human decision, integration readback, final state | Orchestrator |
+| `review(code)` | Controller `review-code` / review convergence chain | `controller.py` at `a8fe80a6d64960ad1c41eed30b8e85761fc13117` (Central AIDLC-provided at pinned revision, portable — no Mac-local absolute path) | Immutable candidate, Verdict, and reviewed implementation identity | Reviewer |
+| closeout | Controller `closeout` plus configured delivery controller | `controller.py` at `a8fe80a6d64960ad1c41eed30b8e85761fc13117` (Central AIDLC-provided at pinned revision, portable — no Mac-local absolute path) | Human decision, integration readback, final state | Orchestrator |
 
 | Transition | Value |
 |---|---|
@@ -95,7 +95,7 @@ central AIDLC Workflow revision the governance was authored against (version inf
 |---|---|
 | Gate A project capability | `git-only` |
 | Assignment subject-branch selection rule | Authorized issuer fixes exactly one git branch in every immutable packet; external Gate A branch is forbidden |
-| Gate A evidence controller locator/identity | `controller.py` at `086d140bc4682e57e3a2a173c726231e592c5494` (Central AIDLC-provided at pinned revision, portable — no Mac-local absolute path); packet and receipts are content-addressed JSON |
+| Gate A evidence controller locator/identity | `controller.py` at `a8fe80a6d64960ad1c41eed30b8e85761fc13117` (Central AIDLC-provided at pinned revision, portable — no Mac-local absolute path); packet and receipts are content-addressed JSON |
 | External Plan locator/semantic identity rule | `not-applicable` |
 | Assignment anchor path/raw identity rule | `not-applicable` |
 | Handoff identity rule | `not-applicable` |
@@ -136,7 +136,7 @@ central AIDLC Workflow revision the governance was authored against (version inf
 |---|---|
 | Delivery mode | `configured` |
 | Delivery scope locator/identity | `.github/workflows/aidlc-pilot-ci.yml` at `e8c6e02ba832a7aafa757de993e598cc5254a052`, SHA-256 `7479adf0fc376167eb5e485566f344cf93fde1e997d0bd8388c29ad82bbc7342` |
-| Closeout delivery controller locator/identity | `controller.py` at `086d140bc4682e57e3a2a173c726231e592c5494` (Central AIDLC-provided at pinned revision, portable — no Mac-local absolute path); `prepare-delivery` then Human-accepted `closeout` |
+| Closeout delivery controller locator/identity | `controller.py` at `a8fe80a6d64960ad1c41eed30b8e85761fc13117` (Central AIDLC-provided at pinned revision, portable — no Mac-local absolute path); `prepare-delivery` then Human-accepted `closeout` |
 
 Delivery is limited to repository `rulearena/ai-council`, base `main`, owner `rulearena`,
 non-force `aidlc/` branches, one exact PR, required checks `backend-tests`, `frontend-unit`,
@@ -158,7 +158,7 @@ release, tag, publication, branch deletion, automatic approval, SIEM access, or 
 
 | Field | Value |
 |---|---|
-| Packet provider/stable locator | `controller.py` at `086d140bc4682e57e3a2a173c726231e592c5494` (Central AIDLC-provided at pinned revision, portable — no Mac-local absolute path), command `bootstrap-to-packet` |
+| Packet provider/stable locator | `controller.py` at `a8fe80a6d64960ad1c41eed30b8e85761fc13117` (Central AIDLC-provided at pinned revision, portable — no Mac-local absolute path), command `bootstrap-to-packet` |
 | Packet identity rule | SHA-256 of canonical packet serialization; every refresh produces a new immutable identity |
 | Schema | `docs/templates/role-assignment-packet.md` at §0 fixed revision |
 | Initial read-only Idea sentinel | `unassigned-readonly-idea` |
