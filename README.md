@@ -1,6 +1,8 @@
+English | [繁體中文](README.zh-TW.md)
+
 # AI Council
 
-Local single-user AI meeting orchestration app.
+Local single-user AI meeting orchestration app. Licensed under the [MIT License](LICENSE) © 2026 RuleArena.
 
 The app runs meetings from a mode catalog (`config/modes.yaml`, served via `GET /modes`).
 The original relay mode is Red/Blue/Judge:
@@ -172,6 +174,12 @@ Cancelling a meeting immediately terminates any subscription CLI process still r
 
 The app does not manage or start local model services. It calls configured OpenAI-compatible
 HTTP endpoints or explicitly configured subscription CLI commands.
+
+## Community / 社群
+
+- [Contributing](CONTRIBUTING.md)
+- [Security Policy](SECURITY.md)
+- [Code of Conduct](CODE_OF_CONDUCT.md)
 
 ## Prompt Templates
 
