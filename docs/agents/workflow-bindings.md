@@ -11,12 +11,35 @@
 | Source mode | `embedded` |
 | Source locator | Central AIDLC Workflow repo — canonical source of truth; portable governance copy embedded in this repository (read from the repo root, no Mac-local clone required). |
 | Fixed revision | `ecf37e4876ecff39a08f4f0cf30ba26fe69356f1` |
-| Full-reference index | `docs/agents/multi-agent-development.md` |
+Revisions below are three distinct purposes, not conflicting versions:
+
+- `de1aca49181af3ce8583f6d59b034ea8136d42c6` — the AIDLC Workflow revision the project first adopted
+  (recorded in `spec.md` §97). Historical baseline only.
+- `ecf37e4876ecff39a08f4f0cf30ba26fe69356f1` — the current source revision. This is the pinned
+  `Fixed revision` above: the modular-v1 governance embedded in this repository was authored against it.
+- `a8fe80a6d64960ad1c41eed30b8e85761fc13117` — the current pinned `controller.py` revision (see `§3` /
+  `§5A`), also sourced from central AIDLC at the pinned revision.
+
+**Repo-local locators (resolve from this checkout, always resolvable):**
+
+| Field | Value |
+|---|---|
+| Full-reference index | `docs/agents/project-development.md` |
+| Executor prompt | `.opencode/agents/executor.md` |
+| Reviewer prompt | `.opencode/agents/reviewer.md` |
+
+**Central AIDLC-provided (at the pinned revision `ecf37e4876…`; intentionally not committed here, absent-by-design):**
+
+The runtime kernel, runtime router, the Orchestrator prompt, role/acceptance modules, and
+packet/acceptance schemas come from the central AIDLC Workflow at the pinned revision. When an
+environment cannot reach them, ordinary roles stay read-only and ask the Human Owner (see the
+`AGENTS.md` bootstrap fallback) rather than resolving a host-local path.
+
+| Field | Value |
+|---|---|
+| Orchestrator prompt | `docs/agent-prompts/orchestrator.md` |
 | Runtime router | `docs/agents/runtime-module-router.md` |
 | Runtime kernel | `docs/agents/runtime-kernel.md` |
-| Orchestrator prompt | `docs/agent-prompts/orchestrator.md` |
-| Executor prompt | `docs/agent-prompts/executor.md` |
-| Reviewer prompt | `docs/agent-prompts/reviewer.md` |
 | Role launch/rebind module | `docs/agents/modules/role-launch-and-rebind.md` |
 | Review convergence module | `docs/agents/modules/review-convergence.md` |
 | Session recovery module | `docs/agents/modules/session-recovery.md` |
@@ -38,9 +61,10 @@ no absolute host path**. `Source mode` is `embedded`; the pinned `Fixed revision
 central AIDLC Workflow revision the governance was authored against (version info).
 
 - **In-repo (always resolvable):** `AGENTS.md`, `CLAUDE.md`, this file, `docs/agents/project-development.md`,
-  `docs/HANDOFF.md`, `spec.md` §15, and `docs/adr/`.
+  `docs/HANDOFF.md`, `spec.md` §15, `docs/adr/`, and `.opencode/agents/executor.md` and
+  `.opencode/agents/reviewer.md`.
 - **Central AIDLC-provided at the pinned revision (runtime mechanics):** the runtime kernel,
-  runtime router, role prompts, role/acceptance modules, and packet/acceptance schemas. When these
+  runtime router, the Orchestrator prompt, role/acceptance modules, and packet/acceptance schemas. When these
   are unavailable in an environment, ordinary roles stay read-only and ask the Human Owner (see
   `AGENTS.md` bootstrap fallback) rather than resolving a host-local path.
 
