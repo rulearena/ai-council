@@ -1,80 +1,195 @@
-# Workflow Bindings — AI Council 專案綁定檔
+# Workflow Bindings — AI Council `modular-v1`
 
-> 本檔只保存中央流程的專案變異點：來源、三角色模型、正式流程入口、canonical 紀錄與安全邊界。中央規範與角色 prompt 由 §0 固定 revision 載入，不在此重抄。
+> This file stores project values and central locators only. Runtime mechanics come from the
+> fixed central revision and are not copied into this repository.
 
-## 0. Workflow Source Bootstrap
+## 0. Workflow source and runtime locators
 
-| 欄位 | 值 |
+| Field | Value |
 |---|---|
-| 來源模式 | local-path |
-| 來源 locator | `/Users/chrischiu/SynologyDrive/Project/VibeCoding_Workflow` |
-| 固定 revision | `de1aca49181af3ce8583f6d59b034ea8136d42c6` |
-| 規範相對路徑 | `docs/agents/multi-agent-development.md` |
-| Orchestrator prompt 相對路徑 | `docs/agent-prompts/orchestrator.md` |
-| Executor prompt 相對路徑 | `docs/agent-prompts/executor.md` |
-| Reviewer prompt 相對路徑 | `docs/agent-prompts/reviewer.md` |
+| Runtime contract | `modular-v1` |
+| Source mode | `embedded` |
+| Source locator | Central AIDLC Workflow repo — canonical source of truth; portable governance copy embedded in this repository (read from the repo root, no Mac-local clone required). |
+| Fixed revision | `ecf37e4876ecff39a08f4f0cf30ba26fe69356f1` |
+Revisions below are three distinct purposes, not conflicting versions:
 
-`local-path` 的 locator 不構成未來 session 的跨 workspace 授權；每個 session 存取前仍須取得 Human Owner 對該精確路徑的明確授權。
+- `de1aca49181af3ce8583f6d59b034ea8136d42c6` — the AIDLC Workflow revision the project first adopted
+  (recorded in `spec.md` §97). Historical baseline only.
+- `ecf37e4876ecff39a08f4f0cf30ba26fe69356f1` — the current source revision. This is the pinned
+  `Fixed revision` above: the modular-v1 governance embedded in this repository was authored against it.
+- `a8fe80a6d64960ad1c41eed30b8e85761fc13117` — the current pinned `controller.py` revision (see `§3` /
+  `§5A`), also sourced from central AIDLC at the pinned revision.
 
-## 1. 專案基本資訊
+**Repo-local locators (resolve from this checkout, always resolvable):**
 
-| 欄位 | 值 |
+| Field | Value |
 |---|---|
-| 專案名稱 | AI Council |
-| 專案根目錄 | `/Users/chrischiu/SynologyDrive/Project/AI_Council` |
-| 主分支 | main |
-| 專案政策入口 | `AGENTS.md`、`CLAUDE.md` |
-| 專案必讀文件 | `docs/agents/multi-agent-development.md`（本專案自有內容；與 §0 中央規範為不同文件。三角色分工、gate 順序、acceptance 以 §0 載入的中央規範為準；專案特定工具與 §5 不可破壞規則以本檔為準）、`docs/agent-prompts/{orchestrator,executor,reviewer}.md`、`docs/HANDOFF.md`、`CONTEXT.md`、`spec.md` §15（依閱讀順序） |
+| Full-reference index | `docs/agents/project-development.md` |
+| Executor prompt | `.opencode/agents/executor.md` |
+| Reviewer prompt | `.opencode/agents/reviewer.md` |
 
-## 2. 三角色執行者與模型（Human Owner 核准）
+**Central AIDLC-provided (at the pinned revision `ecf37e4876…`; intentionally not committed here, absent-by-design):**
 
-| 角色 | CLI／執行環境 | 模型 | Reasoning effort／能力設定 | 權限邊界 |
-|---|---|---|---|---|
-| Orchestrator | OpenCode session | session runtime 模型（觀察值 `opencode/big-pickle`） | 依 session 設定 | 唯讀調查、規劃、協調、整合、merge；不實作功能、不產生正式 Verdict |
-| Executor | Orchestrator 派遣的 subagent | session runtime 模型 | 依 session 設定 | `.worktrees/{slice}` implementation workspace 可寫；不得 merge、不得宣告 acceptance |
-| Reviewer | Orchestrator 派遣的獨立 subagent | session runtime 模型 | 依 session 設定 | 受審內容唯讀；僅可寫 `.scratch/review-runtime-*` 等授權 ephemeral runtime |
+The runtime kernel, runtime router, the Orchestrator prompt, role/acceptance modules, and
+packet/acceptance schemas come from the central AIDLC Workflow at the pinned revision. When an
+environment cannot reach them, ordinary roles stay read-only and ask the Human Owner (see the
+`AGENTS.md` bootstrap fallback) rather than resolving a host-local path.
 
-## 3. 正式流程入口（Human Owner 核准）
-
-| 階段／檢查點 | 唯一控制入口 | 調用方式或專案指引位置 | Canonical 輸出／狀態 | 負責角色 |
-|---|---|---|---|---|
-| Idea — 需求探索 | `/grill-with-docs` | `.claude/skills/grill-with-docs/` | `spec.md` §15 backlog 登錄 | Orchestrator |
-| Plan — 實作規劃 | `scripts/openspec-local` proposal/change | `openspec/changes/{change}/`（`.opencode/commands/opsx-propose.md`） | proposal、delta specs、design、tasks | Orchestrator |
-| review(doc) | AI Council Gate A Reviewer procedure | `docs/agent-prompts/reviewer.md` §Gate A | Verdict 摘要 + reviewed plan identity（記入 `spec.md` §15） | Reviewer |
-| Execute — 實作驅動 | `scripts/openspec-local apply` | `.opencode/commands/opsx-apply.md` | 固定 implementation identity（base...HEAD commit） | Executor |
-| review(code) | AI Council Gate B Reviewer procedure | `docs/agent-prompts/reviewer.md` §Gate B | Verdict 摘要 + reviewed implementation identity（記入 `spec.md` §15） | Reviewer |
-| 收尾 | 既有 closeout/archive procedure | `.opencode/commands/opsx-sync.md`、`opsx-archive.md`、closeout review | `accepted / done` 狀態、archive 位置、exact-HEAD merge | Orchestrator |
-
-## 4. Canonical 紀錄
-
-| 紀錄 | Provider 與穩定 locator | Identity／版本規則 | 誰可寫 | 誰會讀 |
-|---|---|---|---|---|
-| Backlog | `spec.md` §15 | backlog 編號（不可重用） | Orchestrator | 所有角色 |
-| Plan artifacts | `openspec/changes/{change}/` | change 名 + artifacts commit SHA | Plan 控制入口產生者 | Executor、Reviewer |
-| Review evidence／Verdict | `spec.md` §15 該條目 + review 的 fixed base...HEAD commit | Verdict 所在 commit；至少保存 Verdict、reviewed plan/implementation identity、findings、independent verification、未驗證範圍 | Reviewer | Orchestrator |
-| Human acceptance | `spec.md` §15 該條目（git 版控） | 驗收 commit；至少保存 accepted/rejected、review(code) 通過的 exact implementation identity、實際版本/環境、逐項驗收結果、日期、Human Owner 原始確認的可查核引用 | Orchestrator | Human Owner、後續 session |
-
-`docs/HANDOFF.md` 是可讀性同步摘要，不是 Human acceptance 的唯一 canonical record。
-
-## 5. 專案安全與驗證
-
-| 欄位 | 值 |
+| Field | Value |
 |---|---|
-| Implementation workspace | `.worktrees/{slice}`（每 slice 一個 worktree） |
-| Reviewer ephemeral runtime | `.scratch/review-runtime-*` |
-| Workspace 外授權 | 無；local-path workflow source 每 session 需 Human Owner 另行授權 |
-| 測試／驗證入口 | `scripts/test_all.sh`、backend `pytest`、frontend `npm run build`、`npm run test:unit`、`npm run test:e2e`（依 Execute/review 控制入口） |
-| 不可破壞規則 | 歷史 events／meeting metadata／既有資料不得回填、重寫或 migration；不覆寫來源不明的既有變更；OpenSpec 一律透過 `scripts/openspec-local`，不得裸 `openspec`／`--force`；archive 必須在 Human Owner 驗收通過後 |
-| 既有未提交變更處置 | 保留；不得 stage、commit、清理、回退或修改，除非 Human Owner 明確納入本次範圍 |
+| Orchestrator prompt | `docs/agent-prompts/orchestrator.md` |
+| Runtime router | `docs/agents/runtime-module-router.md` |
+| Runtime kernel | `docs/agents/runtime-kernel.md` |
+| Role launch/rebind module | `docs/agents/modules/role-launch-and-rebind.md` |
+| Review convergence module | `docs/agents/modules/review-convergence.md` |
+| Session recovery module | `docs/agents/modules/session-recovery.md` |
+| External publication module | `docs/agents/modules/external-publication.md` |
+| External delivery module | `docs/agents/modules/external-delivery.md` |
+| Assignment packet schema | `docs/templates/role-assignment-packet.md` |
+| Acceptance record schema | `docs/templates/acceptance-record.md` |
 
-## 6. 交接
+The source locator is not standing cross-workspace permission. Packet recipients load only Q,
+kernel, matching role prompt, current packet, packet-scoped project documents, and triggered
+modules. The authorized issuer additionally reads the router only while creating or refreshing
+a packet.
 
-新 session 至少取得：
+### Portable retrieval (Mac / srv-vm / CI)
 
-- 角色與本綁定檔位置；
-- 目前 AIDLC 階段；
-- canonical plan identity；
-- current implementation identity（若有）；
-- 未完成 findings／blockers；
-- 已驗證與未驗證範圍；
-- 下一步。
+The governance contract in this repository is self-contained and portable: Mac, the srv-vm
+sandbox, and CI all read the project rules from this repository root with **no Mac-local clone and
+no absolute host path**. `Source mode` is `embedded`; the pinned `Fixed revision` above records the
+central AIDLC Workflow revision the governance was authored against (version info).
+
+- **In-repo (always resolvable):** `AGENTS.md`, `CLAUDE.md`, this file, `docs/agents/project-development.md`,
+  `docs/HANDOFF.md`, `spec.md` §15, `docs/adr/`, and `.opencode/agents/executor.md` and
+  `.opencode/agents/reviewer.md`.
+- **Central AIDLC-provided at the pinned revision (runtime mechanics):** the runtime kernel,
+  runtime router, the Orchestrator prompt, role/acceptance modules, and packet/acceptance schemas. When these
+  are unavailable in an environment, ordinary roles stay read-only and ask the Human Owner (see
+  `AGENTS.md` bootstrap fallback) rather than resolving a host-local path.
+
+## 1. Project identity and scoped documents
+
+| Field | Value |
+|---|---|
+| Project name | `AI Council` |
+| Project root | `<repo-root>` — the `ai-council` repository checkout (canonical identity `github-rulearena:rulearena/ai-council.git` plus exact git commit); resolves to the current portable checkout, never a Mac-local path. |
+| Main branch | `main` |
+| Project policy entries | `AGENTS.md`, `CLAUDE.md` |
+| Canonical project identity | `github-rulearena:rulearena/ai-council.git` plus exact git commit |
+
+| Project document locator / identity rule | Consumer roles | Trigger | Purpose |
+|---|---|---|---|
+| `AGENTS.md` at packet-fixed project commit | all | session-start | Repository safety and bootstrap policy |
+| `CLAUDE.md` at packet-fixed project commit | all | session-start | Compatible policy entry |
+| `CONTEXT.md` at packet-fixed project commit | Orchestrator, Executor, Reviewer | idea, plan, review-doc, execute, review-code | Domain vocabulary when packet-scoped |
+| `docs/agents/project-development.md` at packet-fixed project commit | Orchestrator, Executor, Reviewer | plan, review-doc, execute, review-code, closeout | AI Council-specific tools, tests, worktrees, data safety, and archive rules |
+| `docs/HANDOFF.md` at packet-fixed project commit | Orchestrator | session-start | Current handoff state |
+| `spec.md` §15 at packet-fixed project commit | Orchestrator, Executor, Reviewer | plan, review-doc, execute, review-code, closeout | Product backlog SoR and scoped acceptance clauses |
+| `docs/adr/` entries fixed by packet | Orchestrator, Executor, Reviewer | plan, review-doc, execute, review-code | Applicable architecture decisions |
+
+## 2. Three role bindings (Human Owner approved)
+
+| Role | Environment | Strategy | Model selector | Reasoning/capability selector | Permission boundary |
+|---|---|---|---|---|---|
+| Orchestrator | OpenCode human-facing session | `human-selected-session` | `session-selected` | `session-selected` | Read-only investigation, planning, coordination, integration; no implementation or Verdict |
+| Executor | OpenCode subagent | `fixed` | `opencode/big-pickle` | `not-applicable` | Packet-authorized `.worktrees/{slice}` implementation workspace write; no merge or acceptance |
+| Reviewer | Independent OpenCode subagent | `fixed` | `opencode/big-pickle` | `not-applicable` | Reviewed content read-only; only packet-authorized `.scratch/review-runtime-*` writes |
+
+| Shared field | Value |
+|---|---|
+| Binding snapshot identity rule | SHA-256 of exact Q bytes plus Q locator and packet-fixed project commit; resolved identity is stored in packet evidence, not written back into Q |
+
+## 3. Stage controllers
+
+| Stage | Unique control entry | Project guide locator | Canonical output / identity | Role |
+|---|---|---|---|---|
+| Idea | Human-facing OpenCode Orchestrator self-issued packet | `spec.md` §15 and project-approved exploration | Requirements and unresolved decisions fixed in packet/work item | Orchestrator |
+| Plan | `scripts/openspec-local` proposal/change | `docs/agents/project-development.md` | `openspec/changes/{change}/` at artifacts commit | Orchestrator |
+| `review(doc)` | Controller `review-doc` / review convergence chain | `controller.py` at `a8fe80a6d64960ad1c41eed30b8e85761fc13117` (Central AIDLC-provided at pinned revision, portable — no Mac-local absolute path) | Immutable candidate, Verdict, and reviewed plan identity | Reviewer |
+| Execute | Packet-fixed `.opencode/agents/executor.md` plus `scripts/openspec-local apply` | `docs/agents/project-development.md` | Base...HEAD implementation identity | Executor |
+| `review(code)` | Controller `review-code` / review convergence chain | `controller.py` at `a8fe80a6d64960ad1c41eed30b8e85761fc13117` (Central AIDLC-provided at pinned revision, portable — no Mac-local absolute path) | Immutable candidate, Verdict, and reviewed implementation identity | Reviewer |
+| closeout | Controller `closeout` plus configured delivery controller | `controller.py` at `a8fe80a6d64960ad1c41eed30b8e85761fc13117` (Central AIDLC-provided at pinned revision, portable — no Mac-local absolute path) | Human decision, integration readback, final state | Orchestrator |
+
+| Transition | Value |
+|---|---|
+| Gate A `pass` → Execute | `direct-after-review-doc-pass` |
+
+| Gate A field | Value |
+|---|---|
+| Gate A project capability | `git-only` |
+| Assignment subject-branch selection rule | Authorized issuer fixes exactly one git branch in every immutable packet; external Gate A branch is forbidden |
+| Gate A evidence controller locator/identity | `controller.py` at `a8fe80a6d64960ad1c41eed30b8e85761fc13117` (Central AIDLC-provided at pinned revision, portable — no Mac-local absolute path); packet and receipts are content-addressed JSON |
+| External Plan locator/semantic identity rule | `not-applicable` |
+| Assignment anchor path/raw identity rule | `not-applicable` |
+| Handoff identity rule | `not-applicable` |
+| Provider-readback identity rule | `not-applicable` |
+
+## 4. Canonical records and review evidence chain
+
+| Record | Provider and stable locator | Identity rule | Semantic author | Writer | Consumers |
+|---|---|---|---|---|---|
+| Backlog | `spec.md` §15 | Non-reused backlog number plus commit | Project convention | Orchestrator | all roles |
+| Plan artifacts | `openspec/changes/{change}/` | Change name plus artifacts commit | Orchestrator | Plan entry | Executor, Reviewer |
+| Review evidence/Verdict | Controller-owned `.scratch/{work}/` review chain | Content digest plus exact reviewed identity | Reviewer | Controller recorder | Orchestrator |
+| Human acceptance package and decision | Controller-owned `.scratch/{work}/acceptance-*.json` | Package and decision have separate content identities | package: Orchestrator; decision: Human Owner | Controller recorder | Human Owner, later sessions |
+
+| Review convergence evidence | Value |
+|---|---|
+| Candidate report locator/identity rule | Controller-owned immutable review-chain locator plus SHA-256 content identity |
+| Initial R0 Verdict locator/identity rule | Separate immutable Verdict identity bound to exact reviewed identity |
+| Orchestrator disposition ledger locator/identity rule | Controller-owned immutable ledger bound to candidate and R0 Verdict |
+| Focused R0 adjudication report locator/identity rule | One independent Reviewer report bound to the same reviewed identity and disputed Candidate IDs |
+| Superseding/effective Verdict locator/identity rule | Separate identity referencing original report, initial Verdict, ledger, and adjudication |
+| Correction Set locator/identity rule | Controller-owned immutable Correction Set bound to effective Verdict |
+| Correction Set fixer mapping | `review(doc) → plan semantic author；review(code) → implementation author／Executor` |
+| Remediation group and R0/R1/R2 state rule | Unique group identity and round state from the fixed review-convergence module |
+| Evidence surface separation rule | Review evidence remains outside the plan/implementation subject identity and cannot mutate it |
+
+## 5. Conditional external publication
+
+| Field | Value |
+|---|---|
+| Publication mode | `none` |
+| Scope configuration locator/identity | `not-applicable` |
+| External Plan lifecycle scope locator/identity | `not-applicable` |
+
+### 5A. Conditional external delivery
+
+| Field | Value |
+|---|---|
+| Delivery mode | `configured` |
+| Delivery scope locator/identity | `.github/workflows/aidlc-pilot-ci.yml` at `e8c6e02ba832a7aafa757de993e598cc5254a052`, SHA-256 `7479adf0fc376167eb5e485566f344cf93fde1e997d0bd8388c29ad82bbc7342` |
+| Closeout delivery controller locator/identity | `controller.py` at `a8fe80a6d64960ad1c41eed30b8e85761fc13117` (Central AIDLC-provided at pinned revision, portable — no Mac-local absolute path); `prepare-delivery` then Human-accepted `closeout` |
+
+Delivery is limited to repository `rulearena/ai-council`, base `main`, owner `rulearena`,
+non-force `aidlc/` branches, one exact PR, required checks `backend-tests`, `frontend-unit`,
+`frontend-build`, and PR integration after Human acceptance. No direct main mutation, deployment,
+release, tag, publication, branch deletion, automatic approval, SIEM access, or force push.
+
+## 6. Project safety and verification
+
+| Field | Value |
+|---|---|
+| Implementation workspace | `.worktrees/{slice}` inside the project repository |
+| Reviewer ephemeral runtime | `.scratch/review-runtime-*` inside the authorized checkout |
+| Outside-workspace authority | none; the local central source and Controller each require exact Human authorization per session |
+| Verification entry | `scripts/test_all.sh`, backend pytest, frontend `npm run test:unit`, `npm run build`, and packet-scoped e2e/browser checks |
+| Non-destructive rules | `docs/agents/project-development.md`; no historical data rewrite, source-unknown overwrite, bare OpenSpec, warning override, deployment, release, publication, or SIEM mutation |
+| Existing changes | Preserve; never stage, commit, modify, clean, or revert unless Human explicitly includes them |
+
+## 7. Assignment packet and conditional checkpoints
+
+| Field | Value |
+|---|---|
+| Packet provider/stable locator | `controller.py` at `a8fe80a6d64960ad1c41eed30b8e85761fc13117` (Central AIDLC-provided at pinned revision, portable — no Mac-local absolute path), command `bootstrap-to-packet` |
+| Packet identity rule | SHA-256 of canonical packet serialization; every refresh produces a new immutable identity |
+| Schema | `docs/templates/role-assignment-packet.md` at §0 fixed revision |
+| Initial read-only Idea sentinel | `unassigned-readonly-idea` |
+| Initial packet bootstrap mode | `human-facing-orchestrator-self-issue` |
+| Initial packet issuer | §2 Human-facing OpenCode Orchestrator session |
+| Launcher procedure locator/identity | `not-applicable` |
+
+Initial self-issue uses only Q, router, kernel, Orchestrator prompt, and packet schema. It stops at
+`preflight-required`; role-launch evidence must be recorded before an ordinary packet or project
+write. Every later packet refresh is performed by the same authorized issuer reading the router.

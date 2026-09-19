@@ -1,6 +1,6 @@
 ## Agent workflow
 
-AIDLC bootstrap：先讀取本專案綁定檔（`docs/agents/workflow-bindings.md`）；依其 §0 的固定 workflow source 載入中央主規範與目前角色 prompt。來源、綁定或目前角色缺漏時維持唯讀並詢問 Human Owner。
+AIDLC bootstrap：先讀本專案綁定檔（`docs/agents/workflow-bindings.md`）。消費已固定 packet 的普通角色只讀 Q、中央 runtime kernel、matching role prompt、current packet、packet 指定的專案文件及已觸發模組，不另讀 router；Human-facing Orchestrator 建立或刷新 packet 時才額外讀固定 revision 的 router。來源、角色、issuer、packet 或 controller 無法唯一解析時維持唯讀並詢問 Human Owner。
 
 ## Agent skills
 
