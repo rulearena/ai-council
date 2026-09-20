@@ -29,6 +29,40 @@ those protocols.
   only when the same environment reproduces it on main, targeted checks pass, and no new
   failure is introduced; otherwise stop.
 
+## Git workflow — automatic branch and Draft PR
+
+This section is the normative procedure behind the `AGENTS.md` Git workflow
+summary. It applies to all coding agents (Pi, OpenCode, and others) on feature,
+bug fix, refactor, test, or docs tasks, without needing a per-task "please create
+a branch" reminder. The external-human fork flow in `CONTRIBUTING.md` is unchanged.
+
+1. On task start, inspect the tree with `git status --short --branch`. This check
+   comes before any file modification.
+2. If the session is on `main` with a clean tree, run `git fetch origin main` and
+   automatically create the task branch from latest `origin/main`. Do not wait for
+   the user to ask for a branch.
+3. Name the task branch `feat/<name>`, `fix/<name>`, `refactor/<name>`,
+   `test/<name>`, or `docs/<name>`. When an AIDLC packet fixes exactly one branch,
+   the packet-fixed branch wins and no second branch is created for the same task.
+4. Reopening a session for the same task reuses the existing task branch. Verify
+   with `git status --short --branch` and `git branch --show-current` instead of
+   creating a duplicate branch.
+5. If the tree holds unrelated uncommitted changes, stop and report the status.
+   Never `reset`, `clean`, `checkout` over, stage, commit, or delete unrelated
+   changes to make the tree look clean.
+6. Never modify, commit, push, or merge directly on `main`. All changes stay on the
+   task branch (packet-authorized `.worktrees/{slice}` work follows the same rule).
+7. After the change, run the appropriate tests, commit on the task branch, push the
+   branch to `origin`, and open a GitHub Draft PR against `main`. The PR body
+   records what changed, test results, and known limitations. Required checks are
+   `backend-tests`, `frontend-unit`, and `frontend-build`; force push, direct main
+   mutation, deployment, release, tag, publication, and SIEM operations still
+   require separate authority.
+8. The Draft PR goes to the Mac ai-council AI review; only the Human Owner decides
+   whether to merge.
+9. On GitHub authentication failure, stop and report the failure clearly. Never
+   write tokens, SSH private keys, or other credentials into the repository.
+
 ## Safety and closeout
 
 - Never backfill, rewrite, or migrate historical events, meeting metadata, existing data, or
