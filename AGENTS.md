@@ -15,6 +15,29 @@
 - If no role is explicitly assigned, remain read-only and ask the Human Owner which role applies before creating artifacts, modifying files, committing, merging, archiving, or cleaning worktrees.
 - Execution and review for the same change must be performed by different agent sessions. A role override must name one exact task, does not persist to later tasks, and does not broaden filesystem or product authority.
 
+## Git workflow (automatic branch + Draft PR)
+
+All coding agents (Pi, OpenCode, and others) follow this without a per-task reminder.
+The full normative procedure lives in `docs/agents/project-development.md`.
+
+- On a new feature, bug fix, refactor, test, or docs task, first run
+  `git status --short --branch`.
+- If on `main` with a clean tree: run `git fetch origin main`, then automatically
+  create a new branch from latest `origin/main`.
+- Name branches `feat/<name>`, `fix/<name>`, `refactor/<name>`, `test/<name>`, or
+  `docs/<name>`. When an AIDLC packet fixes a branch, the packet-fixed branch wins.
+- Reopening a session for the same task reuses the existing task branch; do not
+  create a duplicate branch.
+- If the tree holds unrelated uncommitted changes: stop and report the status;
+  never `reset`, `clean`, `checkout` over, or delete them.
+- Never modify, commit, push, or merge directly on `main`.
+- After the change: run the appropriate tests, commit on the feature branch, push
+  the branch to `origin`, and open a GitHub Draft PR whose body records what
+  changed, test results, and known limitations.
+- The PR goes to the Mac ai-council AI review; only the Human Owner decides merge.
+- On GitHub auth failure, report clearly and never write tokens, SSH private keys,
+  or other credentials into the repository.
+
 ## Agent skills
 
 ### Issue tracker
